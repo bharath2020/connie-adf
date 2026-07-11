@@ -14,7 +14,7 @@ struct TablePreparerTests {
         }
     }
 
-    @Test("800-row table slices into 1 header slice + 40 row slices with stable ids")
+    @Test("800-row table slices into 1 header slice + 400 row slices with stable ids")
     func giantTableSlicing() async throws {
         let doc = try await ADFParser().parse(fixtureData("giant-table.json"))
         let blocks = preparer.prepare(doc)
@@ -23,8 +23,10 @@ struct TablePreparerTests {
         let headerSlices = tableSlices.filter(\.isHeader)
         let rowSlices = tableSlices.filter { !$0.isHeader }
         #expect(headerSlices.count == 1)
-        #expect(rowSlices.count == 40)
-        #expect(rowSlices.allSatisfy { $0.rows.count == 20 })
+        // 2 rows per slice — sized so a lazy-container materialization batch
+        // of slices fits a 60 Hz frame budget during scroll (§8 hitch gate).
+        #expect(rowSlices.count == 400)
+        #expect(rowSlices.allSatisfy { $0.rows.count == 2 })
         #expect(rowSlices.flatMap(\.rows).count == 800)
 
         let header = try #require(headerSlices.first)

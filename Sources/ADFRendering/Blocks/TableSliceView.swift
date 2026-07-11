@@ -2,8 +2,9 @@ import SwiftUI
 import ADFModel
 import ADFPreparation
 
-/// One virtualized slice of a table: the header row, or a batch of ≤20 data
-/// rows (`TablePreparer` splits big tables so they stay lazy).
+/// One virtualized slice of a table: the header row, or a small batch of
+/// data rows (`TablePreparer` splits big tables so they stay lazy and each
+/// slice materializes within one frame budget).
 ///
 /// Colspan is honored exactly by `TableRowLayout`. Rowspan is the documented
 /// v1 simplification: a spanning cell renders in its origin row only, so
@@ -83,13 +84,42 @@ struct TableRowView: View {
             ForEach(row.cells, id: \.id) { cell in
                 TableCellView(cell: cell)
                     .layoutValue(key: TableCellSpanKey.self, value: max(cell.colspan, 1))
+                    .layoutValue(key: TableCellVAlignKey.self, value: cell.valign)
             }
         }
+        // Grid lines and cell fills draw once per row in a single Canvas —
+        // keeping them out of the cell subviews lets `TableRowLayout` place
+        // every cell with the same proposal it measured with (one cached
+        // text layout per cell instead of two, §8 hitch budget).
+        .background { TableRowUnderlay(cells: decorations) }
         .accessibilityElement(children: .contain)
     }
 
     private var effectiveWidths: [CGFloat] {
         hasNumberColumn ? [TableMetrics.numberColumnWidth] + columnWidths : columnWidths
+    }
+
+    private var decorations: [TableRowUnderlay.Cell] {
+        var cells: [TableRowUnderlay.Cell] = []
+        cells.reserveCapacity(row.cells.count + 1)
+        if hasNumberColumn {
+            cells.append(.init(width: TableMetrics.numberColumnWidth, fill: Color.gray.opacity(0.06)))
+        }
+        var column = 0
+        for cell in row.cells {
+            let span = max(cell.colspan, 1)
+            let width = TableRowLayout.width(ofColumns: column, span: span, in: columnWidths)
+            cells.append(.init(width: width, fill: fillColor(for: cell)))
+            column += span
+        }
+        return cells
+    }
+
+    private func fillColor(for cell: PreparedTableCell) -> Color? {
+        if let hex = cell.backgroundHex, let color = Color(adfHex: hex) {
+            return color
+        }
+        return cell.isHeader ? Color.gray.opacity(0.08) : nil
     }
 
     /// Row ordinal parsed from the structural path ID (the row's child index
@@ -105,7 +135,8 @@ struct TableRowView: View {
     }
 }
 
-/// Read-only gutter cell for `isNumberColumnEnabled` tables.
+/// Read-only gutter cell for `isNumberColumnEnabled` tables (fill and grid
+/// lines come from the row's `TableRowUnderlay`).
 struct TableNumberCellView: View {
     let text: String
 
@@ -114,9 +145,32 @@ struct TableNumberCellView: View {
             .font(.footnote.monospacedDigit())
             .foregroundStyle(.secondary)
             .padding(6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(Color.gray.opacity(0.06))
-            .border(Color.gray.opacity(0.25), width: 0.5)
+            .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+/// One row's grid lines and cell fills, laid behind the placed cells as
+/// plain color layers (deliberately not a `Canvas`: rasterizing a bitmap per
+/// row is far more expensive than flat `Rectangle` layers). Cell content
+/// stays at its measured natural height while fills and borders always cover
+/// the full row height.
+struct TableRowUnderlay: View {
+    struct Cell {
+        let width: CGFloat
+        let fill: Color?
+    }
+
+    let cells: [Cell]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(cells.indices, id: \.self) { index in
+                Rectangle()
+                    .fill(cells[index].fill ?? Color.clear)
+                    .border(Color.gray.opacity(0.25), width: 0.5)
+                    .frame(width: cells[index].width)
+            }
+        }
     }
 }
 
@@ -128,31 +182,26 @@ struct TableCellView: View {
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: theme.spacing * 0.5) {
-            ForEach(cell.blocks) { block in
-                BlockView(block: block)
+        content
+            .fontWeight(cell.isHeader ? .semibold : nil)
+            .padding(theme.spacing)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// Most cells hold exactly one block (a paragraph); rendering it without
+    /// the stack wrapper keeps a 30-cell slice's view graph small enough to
+    /// materialize inside one frame during scroll (§8 hitch budget).
+    @ViewBuilder
+    private var content: some View {
+        if cell.blocks.count == 1, let only = cell.blocks.first {
+            BlockView(block: only)
+        } else {
+            VStack(alignment: .leading, spacing: theme.spacing * 0.5) {
+                ForEach(cell.blocks) { block in
+                    BlockView(block: block)
+                }
             }
         }
-        .fontWeight(cell.isHeader ? .semibold : nil)
-        .padding(theme.spacing)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: contentAlignment)
-        .background(backgroundColor)
-        .border(Color.gray.opacity(0.25), width: 0.5)
-    }
-
-    private var contentAlignment: Alignment {
-        switch cell.valign {
-        case .middle: return .leading
-        case .bottom: return .bottomLeading
-        case .top, nil: return .topLeading
-        }
-    }
-
-    private var backgroundColor: Color {
-        if let hex = cell.backgroundHex, let color = Color(adfHex: hex) {
-            return color
-        }
-        return cell.isHeader ? Color.gray.opacity(0.08) : .clear
     }
 }
 
@@ -161,10 +210,19 @@ struct TableCellSpanKey: LayoutValueKey {
     static let defaultValue: Int = 1
 }
 
+/// Vertical alignment of a cell subview inside `TableRowLayout` (`nil` reads
+/// as top).
+struct TableCellVAlignKey: LayoutValueKey {
+    static let defaultValue: ADFVAlign? = nil
+}
+
 /// Places one row of table cells against fixed column widths, honoring
-/// colspan: each cell's width is the sum of the columns it spans, and every
-/// cell is stretched to the row's height (tallest cell wins) so backgrounds
-/// and grid lines fill the full cell box.
+/// colspan (each cell's width is the sum of the columns it spans) and
+/// `valign` (an offset from the row top; the row height is the tallest
+/// cell's). Cells are placed with exactly the proposal they were measured
+/// with, so SwiftUI's per-proposal size cache guarantees one layout pass per
+/// cell — full-height backgrounds and grid lines come from
+/// `TableRowUnderlay`, not from stretching the cells.
 struct TableRowLayout: Layout {
     let columnWidths: [CGFloat]
 
@@ -174,7 +232,7 @@ struct TableRowLayout: Layout {
         var height: CGFloat = 0
         for subview in subviews {
             let span = max(subview[TableCellSpanKey.self], 1)
-            let cellWidth = self.cellWidth(startColumn: column, span: span)
+            let cellWidth = Self.width(ofColumns: column, span: span, in: columnWidths)
             let size = subview.sizeThatFits(ProposedViewSize(width: cellWidth, height: nil))
             width += cellWidth
             height = max(height, size.height)
@@ -188,12 +246,18 @@ struct TableRowLayout: Layout {
         var x = bounds.minX
         for subview in subviews {
             let span = max(subview[TableCellSpanKey.self], 1)
-            let cellWidth = self.cellWidth(startColumn: column, span: span)
-            subview.place(
-                at: CGPoint(x: x, y: bounds.minY),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: cellWidth, height: bounds.height)
-            )
+            let cellWidth = Self.width(ofColumns: column, span: span, in: columnWidths)
+            let cellProposal = ProposedViewSize(width: cellWidth, height: nil)
+            var y = bounds.minY
+            switch subview[TableCellVAlignKey.self] {
+            case .middle:
+                y += (bounds.height - subview.sizeThatFits(cellProposal).height) / 2
+            case .bottom:
+                y += bounds.height - subview.sizeThatFits(cellProposal).height
+            case .top, nil:
+                break
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: cellProposal)
             x += cellWidth
             column += span
         }
@@ -202,11 +266,11 @@ struct TableRowLayout: Layout {
     /// Width of a cell spanning `span` columns starting at `startColumn`.
     /// Cells past the declared column count (malformed rows) get the minimum
     /// column width so nothing collapses to zero.
-    private func cellWidth(startColumn: Int, span: Int) -> CGFloat {
+    static func width(ofColumns startColumn: Int, span: Int, in columnWidths: [CGFloat]) -> CGFloat {
         guard startColumn < columnWidths.count else {
             return TableMetrics.minColumnWidth
         }
-        let end = min(startColumn + span, columnWidths.count)
+        let end = min(startColumn + max(span, 1), columnWidths.count)
         return columnWidths[startColumn..<end].reduce(0, +)
     }
 }

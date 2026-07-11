@@ -30,8 +30,18 @@ public struct ADFParser: Sendable {
     public init() {}
 
     public func parse(_ data: Data) async throws -> ADFDocument {
-        let object = try JSONSerialization.jsonObject(with: data)
-        let json = try JSONValue(jsonObject: object)
+        let json: JSONValue
+        if let scanned = try? JSONScanner.scan(data) {
+            // Fast path: direct byte scan (~4× faster than JSONSerialization
+            // plus bridging — it decides first-chunk latency on big docs).
+            json = scanned
+        } else {
+            // Fallback keeps acceptance identical to JSONSerialization for
+            // anything the scanner rejects (and yields its error messages
+            // for genuinely malformed JSON).
+            let object = try JSONSerialization.jsonObject(with: data)
+            json = try JSONValue(jsonObject: object)
+        }
         guard case .object = json else {
             throw ParseError.rootNotAnObject
         }

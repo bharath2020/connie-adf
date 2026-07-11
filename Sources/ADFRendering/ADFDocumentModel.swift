@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 import ADFModel
 import ADFPreparation
 
@@ -33,6 +34,12 @@ public final class ADFDocumentModel {
     /// Set to a block ID (typically a `headings` entry) to ask the visible
     /// `ADFDocumentView` to scroll there; the view consumes and clears it.
     public var scrollTarget: String?
+
+    /// Animation the reader applies when honoring `scrollTarget`. Defaults
+    /// to `.snappy` (a TOC jump); hosts driving scripted scrolls can
+    /// substitute e.g. a long `.linear` for constant-velocity movement.
+    /// Configuration, not UI state — hence not observed.
+    @ObservationIgnored public var scrollTargetAnimation: Animation = .snappy
 
     let theme: ADFTheme
 

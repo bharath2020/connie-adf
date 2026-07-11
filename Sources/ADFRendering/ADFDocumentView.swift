@@ -9,50 +9,52 @@ public struct ADFDocumentView: View {
     private let model: ADFDocumentModel
     private let mediaProvider: any ADFMediaProvider
 
-    /// ID-based scroll position over `scrollTargetLayout`. The iOS 17 /
-    /// macOS 14 floor predates the `ScrollPosition` struct (iOS 18+), so TOC
-    /// jumps use the ID-based `scrollPosition(id:anchor:)` binding instead.
-    @State private var scrolledBlockID: String?
-
     public init(model: ADFDocumentModel, mediaProvider: any ADFMediaProvider) {
         self.model = model
         self.mediaProvider = mediaProvider
     }
 
+    /// TOC jumps use `ScrollViewReader.scrollTo` rather than the
+    /// `scrollPosition(id:)` binding: the binding writes the top-visible ID
+    /// back continuously while scrolling, re-evaluating this view once per
+    /// row crossed — a per-frame cost that grows with the number of rows the
+    /// lazy stack has materialized and keeps alive (measured on the §8
+    /// 5k-block hitch gate as progressively increasing frame drops).
+    /// `scrollTo` costs nothing until a jump is requested.
     public var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                // Sections are maintained incrementally by the model as
-                // chunks stream in, so body only iterates a stored value —
-                // a table's header slice pins (stays visible) while its row
-                // slices scroll beneath it.
-                ForEach(model.sections) { section in
-                    Section {
-                        ForEach(section.blocks) { block in
-                            BlockView(block: block)
-                                .padding(.vertical, block.kind.defaultVerticalPadding)
-                                .blockBreakout(block.breakout, margin: model.theme.spacing * 2)
-                        }
-                    } header: {
-                        if let header = section.header {
-                            BlockView(block: header)
-                                // Opaque backdrop so pinned headers cover the
-                                // rows scrolling underneath.
-                                .background(Rectangle().fill(.background))
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    // Sections are maintained incrementally by the model as
+                    // chunks stream in, so body only iterates a stored value —
+                    // a table's header slice pins (stays visible) while its row
+                    // slices scroll beneath it.
+                    ForEach(model.sections) { section in
+                        Section {
+                            ForEach(section.blocks) { block in
+                                DocumentRow(block: block, margin: model.theme.spacing * 2)
+                            }
+                        } header: {
+                            if let header = section.header {
+                                BlockView(block: header)
+                                    // Opaque backdrop so pinned headers cover the
+                                    // rows scrolling underneath.
+                                    .background(Rectangle().fill(.background))
+                            }
                         }
                     }
                 }
+                .padding(.horizontal, model.theme.spacing * 2)
             }
-            .scrollTargetLayout()
-            .padding(.horizontal, model.theme.spacing * 2)
-        }
-        .scrollPosition(id: $scrolledBlockID, anchor: .top)
-        .onChange(of: model.scrollTarget) { _, target in
-            guard let target else { return }
-            withAnimation(.snappy) {
-                scrolledBlockID = target
+            .background {
+                // The scroll-target observation lives in a leaf view so a
+                // `scrollTarget` write invalidates only this empty view.
+                // Observing it here would re-evaluate the whole document
+                // view per jump — and reconciling every row the lazy stack
+                // keeps alive is O(rows materialized so far), which the §8
+                // 5k-block hitch gate measures as progressive frame drops.
+                ScrollTargetConsumer(model: model, proxy: proxy)
             }
-            model.scrollTarget = nil
         }
         .environment(\.adfTheme, model.theme)
         .environment(\.adfMediaProvider, mediaProvider)
@@ -77,6 +79,68 @@ public struct ADFDocumentView: View {
         case .idle, .ready:
             EmptyView()
         }
+    }
+}
+
+/// One lazy row: the block's view while the row is inside the render
+/// region, and an exact-height spacer once it has scrolled well away.
+///
+/// Lazy stacks keep every row they ever materialized alive; on a 5,000-block
+/// document the accumulated subtrees (text layers, gesture-bearing code /
+/// table scroll views) make every subsequent layout and render commit more
+/// expensive — measured on the §8 hitch gate as frame drops that grow with
+/// scroll depth. Collapsing exited rows extends the §6.5 rule ("off-screen
+/// rows drop their decoded image state") to all block kinds: the spacer
+/// preserves the row's measured height exactly, so scroll geometry and
+/// position are unaffected, and re-entering rows rebuild from their prepared
+/// (immutable, pre-composed) `RenderBlock` just like first materialization.
+private struct DocumentRow: View {
+    let block: RenderBlock
+    let margin: CGFloat
+
+    /// Rendered height captured while the row is live; `nil` until first
+    /// materialization (a row must never collapse before it was measured).
+    @State private var measuredHeight: CGFloat?
+    @State private var isInRenderRegion = false
+
+    var body: some View {
+        Group {
+            if isInRenderRegion || measuredHeight == nil {
+                BlockView(block: block)
+                    .padding(.vertical, block.kind.defaultVerticalPadding)
+                    .blockBreakout(block.breakout, margin: margin)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        measuredHeight = height
+                    }
+            } else {
+                Color.clear
+                    .frame(height: measuredHeight ?? 0)
+            }
+        }
+        .onAppear { isInRenderRegion = true }
+        .onDisappear { isInRenderRegion = false }
+    }
+}
+
+/// Consumes `ADFDocumentModel.scrollTarget`: jumps the scroll view to the
+/// requested block ID, then clears the request. A standalone leaf view so
+/// the observation of `scrollTarget` (and the clearing write) never
+/// invalidates the document view that hosts the lazy stack.
+private struct ScrollTargetConsumer: View {
+    let model: ADFDocumentModel
+    let proxy: ScrollViewProxy
+
+    var body: some View {
+        Color.clear
+            .onChange(of: model.scrollTarget) { _, target in
+                guard let target else { return }
+                withAnimation(model.scrollTargetAnimation) {
+                    proxy.scrollTo(target, anchor: .top)
+                }
+                model.scrollTarget = nil
+            }
     }
 }
 

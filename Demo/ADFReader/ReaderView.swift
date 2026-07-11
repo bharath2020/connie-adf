@@ -23,7 +23,11 @@ struct ReaderView: View {
     init(fixture: Fixture, options: LaunchOptions) {
         self.fixture = fixture
         self.options = options
-        _hudVisible = State(initialValue: options.autoscroll)
+        // The HUD stays hidden during `-autoscroll` measurement runs: its
+        // material-blur backdrop re-renders over the scrolling content and
+        // would perturb the very frame pacing being measured. `FrameMetrics`
+        // is display-link driven and needs no visible HUD.
+        _hudVisible = State(initialValue: false)
     }
 
     var body: some View {

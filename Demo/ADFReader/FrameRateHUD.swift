@@ -24,6 +24,13 @@ final class FrameMetrics {
     private(set) var totalFrames = 0
     private(set) var droppedFrames = 0
 
+    /// When set (by the `-autoscroll` harness), every dropped frame records
+    /// one `HITCH t=<s> actualMs=<ms>` line so gate failures are attributable
+    /// to a position in the scroll. Lines are buffered — printing from inside
+    /// the display-link callback would itself stall the frame being measured.
+    @ObservationIgnored var recordsDrops = false
+    @ObservationIgnored private(set) var dropLog: [String] = []
+
     @ObservationIgnored private var displayLink: CADisplayLink?
     @ObservationIgnored private var lastTimestamp: CFTimeInterval?
     @ObservationIgnored private var lastExpectedDuration: CFTimeInterval?
@@ -68,6 +75,7 @@ final class FrameMetrics {
         totalFrames = 0
         droppedFrames = 0
         currentFPS = 0
+        dropLog = []
     }
 
     func snapshot() -> Snapshot {
@@ -104,6 +112,13 @@ final class FrameMetrics {
         if actual > lastExpectedDuration * 1.5 {
             dropped += 1
             hitchMilliseconds += (actual - lastExpectedDuration) * 1_000
+            if recordsDrops, let firstTimestamp {
+                dropLog.append(String(
+                    format: "HITCH t=%.2f actualMs=%.1f",
+                    link.timestamp - firstTimestamp,
+                    actual * 1_000
+                ))
+            }
         }
         if let windowStart, link.timestamp - windowStart >= 0.25 {
             currentFPS = Double(windowFrames) / (link.timestamp - windowStart)

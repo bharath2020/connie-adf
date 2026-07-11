@@ -2,12 +2,18 @@ import Foundation
 import ADFModel
 
 /// Table slicing: a table becomes one header slice (when the first row is
-/// all header cells) plus row slices of at most 20 rows, so a 2,000-row
-/// table still virtualizes inside the lazy scroll container. All slices
-/// share one `PreparedTableLayout`.
+/// all header cells) plus row slices of at most `tableRowsPerSlice` rows, so
+/// a 2,000-row table still virtualizes inside the lazy scroll container. All
+/// slices share one `PreparedTableLayout`.
 extension BlockPreparer {
-    /// Rows per non-header slice.
-    static let tableRowsPerSlice = 20
+    /// Rows per non-header slice. Slices are what the lazy container
+    /// materializes while scrolling — and it materializes them in batches
+    /// (~16 rows at a time), so a batch of slices must build inside one
+    /// 60 Hz frame budget. Measured on the §8 giant-table hitch gate
+    /// (6 columns): 20-row slices ≈ 45 ms per single slice (hitch ratio 63),
+    /// 5-row slices ≈ 45 ms per batch (ratio ~5.5), 2-row slices fit the
+    /// budget (ratio < 5).
+    static let tableRowsPerSlice = 2
 
     func tableSlices(for node: ADFNode, attrs: TableAttrs, rows: [ADFNode]) -> [RenderBlock] {
         let layout = tableLayout(attrs: attrs, rows: rows)
