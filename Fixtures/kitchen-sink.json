@@ -1,0 +1,413 @@
+{
+  "version": 1,
+  "type": "doc",
+  "content": [
+    {
+      "type": "heading",
+      "attrs": { "level": 1 },
+      "content": [{ "type": "text", "text": "ADF Kitchen Sink" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "bold", "marks": [{ "type": "strong" }] },
+        { "type": "text", "text": " italic", "marks": [{ "type": "em" }] },
+        { "type": "text", "text": " underline", "marks": [{ "type": "underline" }] },
+        { "type": "text", "text": " strike", "marks": [{ "type": "strike" }] },
+        { "type": "text", "text": " let x = 1", "marks": [{ "type": "code" }] },
+        { "type": "text", "text": " H" },
+        { "type": "text", "text": "2", "marks": [{ "type": "subsup", "attrs": { "type": "sub" } }] },
+        { "type": "text", "text": "O and x" },
+        { "type": "text", "text": "2", "marks": [{ "type": "subsup", "attrs": { "type": "sup" } }] },
+        { "type": "text", "text": " colored", "marks": [{ "type": "textColor", "attrs": { "color": "#ff5630" } }] },
+        { "type": "text", "text": " highlighted", "marks": [{ "type": "backgroundColor", "attrs": { "color": "#fedec8" } }] },
+        { "type": "text", "text": " small", "marks": [{ "type": "fontSize", "attrs": { "size": "small" } }] },
+        { "type": "text", "text": " a link", "marks": [{ "type": "link", "attrs": { "href": "https://example.com", "title": "Example" } }] },
+        { "type": "text", "text": " annotated", "marks": [{ "type": "annotation", "attrs": { "id": "anno-1", "annotationType": "inlineComment" } }] },
+        { "type": "hardBreak" },
+        { "type": "text", "text": "after the break" }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "marks": [{ "type": "alignment", "attrs": { "align": "center" } }],
+      "content": [{ "type": "text", "text": "Centered paragraph" }]
+    },
+    {
+      "type": "paragraph",
+      "marks": [{ "type": "indentation", "attrs": { "level": 2 } }],
+      "content": [{ "type": "text", "text": "Indented paragraph" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "Heading two" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 3 },
+      "content": [{ "type": "text", "text": "Heading three" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 4 },
+      "content": [{ "type": "text", "text": "Heading four" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 5 },
+      "content": [{ "type": "text", "text": "Heading five" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 6 },
+      "content": [{ "type": "text", "text": "Heading six" }]
+    },
+    {
+      "type": "blockquote",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "text", "text": "A wise quotation." }]
+        }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "First bullet" }] }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Second bullet" }] },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Nested bullet" }] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "orderedList",
+      "attrs": { "order": 4 },
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Fourth item" }] }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Fifth item" }] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "swift" },
+      "marks": [{ "type": "breakout", "attrs": { "mode": "wide", "width": 1200 } }],
+      "content": [
+        { "type": "text", "text": "let greeting = \"Hello, ADF!\"\nprint(greeting)" }
+      ]
+    },
+    { "type": "rule" },
+    {
+      "type": "panel",
+      "attrs": { "panelType": "info" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Info panel" }] }
+      ]
+    },
+    {
+      "type": "panel",
+      "attrs": { "panelType": "note" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Note panel" }] }
+      ]
+    },
+    {
+      "type": "panel",
+      "attrs": { "panelType": "tip" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Tip panel" }] }
+      ]
+    },
+    {
+      "type": "panel",
+      "attrs": { "panelType": "success" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Success panel" }] }
+      ]
+    },
+    {
+      "type": "panel",
+      "attrs": { "panelType": "warning" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Warning panel" }] }
+      ]
+    },
+    {
+      "type": "panel",
+      "attrs": { "panelType": "error" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Error panel" }] }
+      ]
+    },
+    {
+      "type": "panel",
+      "attrs": { "panelType": "custom", "panelIcon": ":rocket:", "panelIconId": "1f680", "panelIconText": "🚀", "panelColor": "#8270DB" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Custom panel" }] }
+      ]
+    },
+    {
+      "type": "table",
+      "attrs": { "isNumberColumnEnabled": true, "layout": "default", "displayMode": "default" },
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 1, "rowspan": 1, "colwidth": [200], "background": "#f4f5f7" },
+              "content": [
+                { "type": "paragraph", "content": [{ "type": "text", "text": "Name" }] }
+              ]
+            },
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 1, "rowspan": 1 },
+              "content": [
+                { "type": "paragraph", "content": [{ "type": "text", "text": "Role" }] }
+              ]
+            },
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 1, "rowspan": 1 },
+              "content": [
+                { "type": "paragraph", "content": [{ "type": "text", "text": "Status" }] }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 2, "rowspan": 1, "background": "#deebff", "valign": "top" },
+              "content": [
+                { "type": "paragraph", "content": [{ "type": "text", "text": "Spans two columns" }] }
+              ]
+            },
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 2, "valign": "middle" },
+              "content": [
+                { "type": "paragraph", "content": [{ "type": "text", "text": "Spans two rows" }] }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 2, "rowspan": 1, "valign": "bottom" },
+              "content": [
+                { "type": "paragraph", "content": [{ "type": "text", "text": "Bottom-aligned cell" }] }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "expand",
+      "attrs": { "title": "Click to expand" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Hidden detail" }] },
+        {
+          "type": "nestedExpand",
+          "attrs": { "title": "Nested details" },
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Deeper detail" }] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "mediaSingle",
+      "attrs": { "layout": "center", "width": 66.66, "widthType": "percentage" },
+      "content": [
+        {
+          "type": "media",
+          "attrs": { "type": "file", "id": "media-file-1", "collection": "contentId-123", "width": 800, "height": 600, "alt": "A sunset" },
+          "marks": [
+            { "type": "border", "attrs": { "size": 2, "color": "#091e4224" } },
+            { "type": "link", "attrs": { "href": "https://example.com/full.png" } }
+          ]
+        },
+        {
+          "type": "caption",
+          "content": [{ "type": "text", "text": "A captioned sunset" }]
+        }
+      ]
+    },
+    {
+      "type": "mediaSingle",
+      "attrs": { "layout": "wide", "width": 400, "widthType": "pixel" },
+      "content": [
+        {
+          "type": "media",
+          "attrs": { "type": "external", "url": "https://example.com/image.png", "width": 400, "height": 300 }
+        }
+      ]
+    },
+    {
+      "type": "mediaGroup",
+      "content": [
+        {
+          "type": "media",
+          "attrs": { "type": "file", "id": "media-file-2", "collection": "contentId-123" }
+        },
+        {
+          "type": "media",
+          "attrs": { "type": "file", "id": "media-file-3", "collection": "contentId-123" }
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Ping " },
+        { "type": "mention", "attrs": { "id": "user-123", "text": "@Bharath", "accessLevel": "CONTAINER", "userType": "DEFAULT" } },
+        { "type": "text", "text": " " },
+        { "type": "emoji", "attrs": { "shortName": ":smile:", "id": "1f604", "text": "😄" } },
+        { "type": "text", "text": " due " },
+        { "type": "date", "attrs": { "timestamp": "1720569600000" } },
+        { "type": "text", "text": " see " },
+        { "type": "inlineCard", "attrs": { "url": "https://example.atlassian.net/wiki/spaces/DOC/pages/1" } },
+        { "type": "text", "text": " " },
+        { "type": "placeholder", "attrs": { "text": "Type something" } },
+        { "type": "text", "text": " " },
+        { "type": "mediaInline", "attrs": { "type": "file", "id": "media-inline-1", "collection": "contentId-123" } },
+        { "type": "text", "text": " " },
+        { "type": "inlineExtension", "attrs": { "extensionType": "com.atlassian.confluence.macro.core", "extensionKey": "status-macro", "text": "Inline macro", "parameters": { "macroParams": {} } } }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "status", "attrs": { "text": "NEUTRAL", "color": "neutral", "localId": "st-1" } },
+        { "type": "text", "text": " " },
+        { "type": "status", "attrs": { "text": "PURPLE", "color": "purple", "localId": "st-2" } },
+        { "type": "text", "text": " " },
+        { "type": "status", "attrs": { "text": "BLUE", "color": "blue", "localId": "st-3" } },
+        { "type": "text", "text": " " },
+        { "type": "status", "attrs": { "text": "RED", "color": "red", "localId": "st-4" } },
+        { "type": "text", "text": " " },
+        { "type": "status", "attrs": { "text": "YELLOW", "color": "yellow", "localId": "st-5" } },
+        { "type": "text", "text": " " },
+        { "type": "status", "attrs": { "text": "GREEN", "color": "green", "localId": "st-6" } }
+      ]
+    },
+    {
+      "type": "taskList",
+      "attrs": { "localId": "task-list-1" },
+      "content": [
+        {
+          "type": "taskItem",
+          "attrs": { "localId": "task-1", "state": "TODO" },
+          "content": [{ "type": "text", "text": "Write the parser" }]
+        },
+        {
+          "type": "taskItem",
+          "attrs": { "localId": "task-2", "state": "DONE" },
+          "content": [{ "type": "text", "text": "Design the schema" }]
+        }
+      ]
+    },
+    {
+      "type": "decisionList",
+      "attrs": { "localId": "decision-list-1" },
+      "content": [
+        {
+          "type": "decisionItem",
+          "attrs": { "localId": "decision-1", "state": "DECIDED" },
+          "content": [{ "type": "text", "text": "Use Swift 6 strict concurrency" }]
+        }
+      ]
+    },
+    {
+      "type": "layoutSection",
+      "content": [
+        {
+          "type": "layoutColumn",
+          "attrs": { "width": 50 },
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Left column" }] }
+          ]
+        },
+        {
+          "type": "layoutColumn",
+          "attrs": { "width": 50 },
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Right column" }] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "blockCard",
+      "attrs": { "url": "https://example.atlassian.net/browse/ADF-1" }
+    },
+    {
+      "type": "embedCard",
+      "attrs": { "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "layout": "center", "width": 100, "originalWidth": 640, "originalHeight": 360 }
+    },
+    {
+      "type": "extension",
+      "attrs": { "extensionType": "com.atlassian.confluence.macro.core", "extensionKey": "toc", "text": "Table of contents", "parameters": { "macroParams": { "maxLevel": { "value": "3" } } }, "layout": "default", "localId": "ext-1" }
+    },
+    {
+      "type": "bodiedExtension",
+      "attrs": { "extensionType": "com.atlassian.confluence.macro.core", "extensionKey": "excerpt", "text": "Excerpt", "parameters": { "macroParams": {} }, "layout": "default", "localId": "ext-2" },
+      "marks": [
+        { "type": "dataConsumer", "attrs": { "sources": ["ari:cloud:confluence::page/123"] } },
+        { "type": "fragment", "attrs": { "localId": "frag-1", "name": "My fragment" } }
+      ],
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Bodied extension content" }] }
+      ]
+    },
+    {
+      "type": "syncBlock",
+      "attrs": { "resourceId": "ari:cloud:confluence:site/sync-1", "localId": "sync-local-1" }
+    },
+    {
+      "type": "bodiedSyncBlock",
+      "attrs": { "resourceId": "ari:cloud:confluence:site/sync-2", "localId": "sync-local-2" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Synced content body" }] }
+      ]
+    }
+  ]
+}
