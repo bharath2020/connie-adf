@@ -174,6 +174,47 @@ struct InlineComposerTests {
         #expect(text[SUI.FontAttribute.self] != theme.body)
     }
 
+    @Test("light backgroundColor mark derives a dark foreground for contrast")
+    func lightBackgroundMarkGetsContrastingForeground() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[{"type":"paragraph","content":[
+          {"type":"text","text":"highlighted","marks":[{"type":"backgroundColor","attrs":{"color":"#fedec8"}}]}
+        ]}]}
+        """)
+        let segments = composer.compose(try inlineContent(of: doc))
+        guard case .text(let text) = try #require(segments.first) else {
+            throw TestFailure("segment is not text")
+        }
+        #expect(text[SUI.BackgroundColorAttribute.self] == Color(adfHex: "#fedec8"))
+        #expect(text[SUI.ForegroundColorAttribute.self] == .black)
+    }
+
+    @Test("explicit textColor mark wins over the background-derived foreground")
+    func textColorMarkWinsOverDerivedForeground() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[{"type":"paragraph","content":[
+          {"type":"text","text":"styled","marks":[
+            {"type":"backgroundColor","attrs":{"color":"#fedec8"}},
+            {"type":"textColor","attrs":{"color":"#ff5630"}}
+          ]}
+        ]}]}
+        """)
+        let segments = composer.compose(try inlineContent(of: doc))
+        guard case .text(let text) = try #require(segments.first) else {
+            throw TestFailure("segment is not text")
+        }
+        #expect(text[SUI.ForegroundColorAttribute.self] == Color(adfHex: "#ff5630"))
+    }
+
+    @Test("contrasting foreground picks black over light fills, white over dark, none over transparent")
+    func contrastingForegroundChoices() {
+        #expect(ADFHexColor("#f4f5f7")?.contrastingForeground == .black)
+        #expect(ADFHexColor("#deebff")?.contrastingForeground == .black)
+        #expect(ADFHexColor("#172b4d")?.contrastingForeground == .white)
+        // 8-digit hex with low alpha: fill too transparent to dominate.
+        #expect(ADFHexColor("#091e4224")?.contrastingForeground == nil)
+    }
+
     @Test("plainAttributed renders atoms as text fallbacks")
     func plainAttributedFallbacks() async throws {
         let doc = try await parseDoc("""

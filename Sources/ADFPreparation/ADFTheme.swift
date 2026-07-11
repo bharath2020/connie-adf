@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import ADFModel
 
@@ -101,12 +102,36 @@ extension Color {
     /// Parses an ADF hex color string (`#RGB`, `#RRGGBB`, or `#RRGGBBAA`,
     /// leading `#` optional). Returns `nil` for malformed input.
     public init?(adfHex: String) {
+        guard let parsed = ADFHexColor(adfHex) else { return nil }
+        self.init(
+            .sRGB,
+            red: parsed.red,
+            green: parsed.green,
+            blue: parsed.blue,
+            opacity: parsed.opacity
+        )
+    }
+}
+
+/// Parsed sRGB components of an ADF hex color, plus the contrast math that
+/// keeps text legible over author-supplied fills. Author hexes are fixed
+/// colors (Confluence palettes are authored for light mode), so in dark mode
+/// the scheme's default white text can land on a near-white fill; anything
+/// rendered over such a fill derives its foreground from the fill's
+/// luminance instead of the color scheme.
+package struct ADFHexColor: Sendable, Hashable {
+    package let red: Double
+    package let green: Double
+    package let blue: Double
+    package let opacity: Double
+
+    /// Accepts `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (leading `#` optional).
+    package init?(_ adfHex: String) {
         var hex = adfHex.trimmingCharacters(in: .whitespacesAndNewlines)
         if hex.hasPrefix("#") { hex.removeFirst() }
         guard !hex.isEmpty, hex.allSatisfy(\.isHexDigit), let value = UInt64(hex, radix: 16) else {
             return nil
         }
-        let red: Double, green: Double, blue: Double, opacity: Double
         switch hex.count {
         case 3:
             red = Double((value >> 8) & 0xF) / 15
@@ -126,6 +151,22 @@ extension Color {
         default:
             return nil
         }
-        self.init(.sRGB, red: red, green: green, blue: blue, opacity: opacity)
+    }
+
+    /// WCAG 2.x relative luminance (linearized sRGB; ignores opacity).
+    package var relativeLuminance: Double {
+        func linearized(_ channel: Double) -> Double {
+            channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linearized(red) + 0.7152 * linearized(green) + 0.0722 * linearized(blue)
+    }
+
+    /// The text color with the higher WCAG contrast ratio over this fill —
+    /// black above luminance 0.179 (where black's ratio overtakes white's),
+    /// white below. `nil` when the fill is too transparent to dominate
+    /// whatever renders beneath it (the scheme default stays correct then).
+    package var contrastingForeground: Color? {
+        guard opacity >= 0.6 else { return nil }
+        return relativeLuminance >= 0.179 ? .black : .white
     }
 }

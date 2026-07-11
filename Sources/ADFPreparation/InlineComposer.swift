@@ -183,6 +183,7 @@ public struct InlineComposer: Sendable {
         var strike = false
         var foreground: Color?
         var background: Color?
+        var backgroundMarkHex: String?
         var linkURL: URL?
 
         for mark in marks {
@@ -205,6 +206,7 @@ public struct InlineComposer: Sendable {
                 foreground = Color(adfHex: hex)
             case .backgroundColor(let hex):
                 background = Color(adfHex: hex)
+                backgroundMarkHex = hex
             case .link(let href, _):
                 linkURL = URL(string: href)
                 underline = true
@@ -230,6 +232,13 @@ public struct InlineComposer: Sendable {
         if bold { font = font.bold() }
         if italic { font = font.italic() }
         if code, background == nil { background = theme.codeBackground }
+        // Author highlight fills are fixed colors (typically light pastels);
+        // without a textColor mark the scheme default (white in dark mode)
+        // can be illegible on them, so derive the run's foreground from the
+        // fill's luminance instead.
+        if foreground == nil, let backgroundMarkHex {
+            foreground = ADFHexColor(backgroundMarkHex)?.contrastingForeground
+        }
 
         run[SwiftUIAttrs.FontAttribute.self] = font
         if let foreground {

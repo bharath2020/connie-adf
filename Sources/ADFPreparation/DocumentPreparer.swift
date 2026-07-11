@@ -153,7 +153,16 @@ struct BlockPreparer: Sendable {
             )]
 
         case .syncBlock(_, let children):
-            // Transparent container: render its content in place.
+            // Transparent container: render its content in place. A
+            // reference-only sync block (no inline copy of the remote
+            // content) renders a placeholder chip — §7: nothing silently
+            // disappears.
+            guard !children.isEmpty else {
+                return [RenderBlock(
+                    id: node.id,
+                    kind: .extensionPlaceholder(title: "Synced block", body: [])
+                )]
+            }
             return children.flatMap(blocks(for:))
 
         case .caption(let content):

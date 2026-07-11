@@ -49,8 +49,8 @@ struct MediaBlockView: View {
     private var mediaBox: some View {
         boxContent
             .modifier(MediaAspectBox(ratio: aspectRatio))
-            .frame(width: explicitWidth)
-            .frame(maxWidth: naturalWidthCap)
+            .frame(width: fractionWidth)
+            .frame(maxWidth: maxWidthCap)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay {
                 if let borderHex = media.borderHex, let color = Color(adfHex: borderHex) {
@@ -107,23 +107,27 @@ struct MediaBlockView: View {
         return CGFloat(width / height)
     }
 
-    /// Width from the `mediaSingle` attrs: exact pixels (capped to the
-    /// container) or a fraction of the measured container width.
-    private var explicitWidth: CGFloat? {
-        if let pixel = media.pixelWidth {
-            let width = CGFloat(pixel)
-            return containerWidth > 0 ? min(width, containerWidth) : width
-        }
-        if let fraction = media.widthFraction, containerWidth > 0 {
-            return containerWidth * CGFloat(fraction)
-        }
-        return nil
+    /// Fixed width for percentage `mediaSingle` attrs: a fraction of the
+    /// measured container width (a fraction can never exceed the container,
+    /// so it cannot inflate the measurement it derives from).
+    private var fractionWidth: CGFloat? {
+        guard media.pixelWidth == nil, let fraction = media.widthFraction,
+              containerWidth > 0 else { return nil }
+        return containerWidth * CGFloat(fraction)
     }
 
-    /// Without an explicit width, never upscale past the intrinsic pixel
-    /// width from the attrs.
-    private var naturalWidthCap: CGFloat? {
-        guard explicitWidth == nil else { return nil }
+    /// Width cap for the box: an exact pixel width, or (without an explicit
+    /// width) the intrinsic pixel width from the attrs so the media never
+    /// upscales. Expressed as `maxWidth` — not a fixed width — so the layout
+    /// proposal clamps oversized media to the viewport. (A fixed `width:`
+    /// bypasses the proposal and, worse, inflates the measured container
+    /// width it would need for clamping, so a 400 pt image on a 370 pt
+    /// column ran off the screen edge.)
+    private var maxWidthCap: CGFloat? {
+        if let pixel = media.pixelWidth {
+            return CGFloat(pixel)
+        }
+        guard media.widthFraction == nil else { return nil }
         return media.attrs.width.map { CGFloat($0) }
     }
 

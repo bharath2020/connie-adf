@@ -205,6 +205,27 @@ struct PreparerTests {
         #expect(typeName == "whiteboard")
     }
 
+    @Test("content-less syncBlock renders a placeholder chip, never disappears")
+    func emptySyncBlockBecomesPlaceholder() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[
+          {"type":"syncBlock","attrs":{"resourceId":"ari:cloud:confluence:site/sync-1","localId":"s1"}},
+          {"type":"bodiedSyncBlock","attrs":{"resourceId":"ari:cloud:confluence:site/sync-2","localId":"s2"},
+           "content":[{"type":"paragraph","content":[{"type":"text","text":"inline copy"}]}]}
+        ]}
+        """)
+        let blocks = preparer.prepare(doc)
+        #expect(blocks.count == 2)
+        guard case .extensionPlaceholder(let title, let body) = try #require(blocks.first).kind else {
+            throw TestFailure("empty syncBlock is not a placeholder block")
+        }
+        #expect(title == "Synced block")
+        #expect(body.isEmpty)
+        guard case .richText = try #require(blocks.last).kind else {
+            throw TestFailure("bodied syncBlock did not render its content")
+        }
+    }
+
     @Test("preparation output is stable across runs")
     func prepareIsDeterministic() async throws {
         let doc = try await ADFParser().parse(fixtureData("kitchen-sink.json"))

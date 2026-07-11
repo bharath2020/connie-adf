@@ -182,6 +182,19 @@ struct TableCellView: View {
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
+        // An author-supplied cell fill is a fixed color (Confluence palettes
+        // are light pastels), while the default text color follows the color
+        // scheme — white text on `#f4f5f7` in dark mode is illegible. Derive
+        // the cell's foreground from the fill's luminance instead; runs with
+        // explicit `textColor` marks keep their own attribute.
+        if let contrast = cell.backgroundHex.flatMap({ ADFHexColor($0)?.contrastingForeground }) {
+            styledContent.foregroundStyle(contrast)
+        } else {
+            styledContent
+        }
+    }
+
+    private var styledContent: some View {
         content
             .fontWeight(cell.isHeader ? .semibold : nil)
             .padding(theme.spacing)
