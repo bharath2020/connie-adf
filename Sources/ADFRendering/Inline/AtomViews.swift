@@ -1,0 +1,135 @@
+import SwiftUI
+import ADFModel
+import ADFPreparation
+
+/// Inline pill/chip for one non-text atom, interleaved with text by
+/// `WrappingInlineLayout`.
+struct AtomView: View {
+    let atom: InlineAtom
+
+    var body: some View {
+        switch atom {
+        case .mention(let text):
+            AtomCapsule(text: AtomFormatting.mentionText(text), tint: .blue)
+        case .status(let text, let color):
+            AtomCapsule(text: text.uppercased(), tint: color.tint)
+        case .date(let timestampMS):
+            AtomCapsule(text: AtomFormatting.dateText(timestampMS), tint: .gray)
+        case .emoji(let shortName):
+            Text(":\(shortName):")
+                .foregroundStyle(.secondary)
+        case .inlineCard(let url):
+            InlineCardChip(url: url)
+        case .mediaInline(let attrs):
+            AtomChip(icon: "paperclip", text: attrs.alt ?? "attachment")
+        case .inlineExtension(let name):
+            AtomChip(icon: "puzzlepiece.extension", text: name)
+        }
+    }
+}
+
+/// Rounded capsule with tinted text over a soft tinted background.
+struct AtomCapsule: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        Text(text)
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(tint.opacity(0.18)))
+            .foregroundStyle(tint)
+    }
+}
+
+/// Neutral icon + text chip (inline card fallback, attachments, extensions).
+struct AtomChip: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .imageScale(.small)
+            Text(text)
+                .lineLimit(1)
+        }
+        .font(.callout)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.14)))
+    }
+}
+
+/// Smart-link chip: unresolved cards show the URL host immediately (title
+/// resolution arrives with the smart-link resolver in a later milestone).
+struct InlineCardChip: View {
+    let url: String?
+
+    var body: some View {
+        if let url, let destination = URL(string: url) {
+            Link(destination: destination) {
+                AtomChip(icon: "link", text: displayText)
+            }
+        } else {
+            AtomChip(icon: "link", text: displayText)
+        }
+    }
+
+    private var displayText: String {
+        guard let url, !url.isEmpty else { return "link" }
+        return URL(string: url)?.host ?? url
+    }
+}
+
+/// Nonisolated plain-text formatting shared by atom views, TOC titles, and
+/// accessibility fallbacks.
+enum AtomFormatting {
+    static func dateText(_ timestampMS: Double) -> String {
+        Date(timeIntervalSince1970: timestampMS / 1000)
+            .formatted(date: .abbreviated, time: .omitted)
+    }
+
+    static func mentionText(_ text: String) -> String {
+        text.hasPrefix("@") ? text : "@\(text)"
+    }
+}
+
+extension ADFStatusColor {
+    /// Capsule tint per schema color. `yellow` maps to orange for legible
+    /// text on the tinted background.
+    var tint: Color {
+        switch self {
+        case .neutral: return .gray
+        case .purple: return .purple
+        case .blue: return .blue
+        case .red: return .red
+        case .yellow: return .orange
+        case .green: return .green
+        }
+    }
+}
+
+extension InlineAtom {
+    /// Plain-text stand-in used for TOC titles and accessibility labels.
+    var fallbackText: String {
+        switch self {
+        case .mention(let text):
+            return AtomFormatting.mentionText(text)
+        case .status(let text, _):
+            return text
+        case .date(let timestampMS):
+            return AtomFormatting.dateText(timestampMS)
+        case .emoji(let shortName):
+            return ":\(shortName):"
+        case .inlineCard(let url):
+            return url ?? "link"
+        case .mediaInline(let attrs):
+            return attrs.alt ?? "attachment"
+        case .inlineExtension(let name):
+            return name
+        }
+    }
+}
