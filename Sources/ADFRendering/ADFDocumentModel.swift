@@ -21,6 +21,14 @@ public final class ADFDocumentModel {
     /// Top-level headings (block ID, plain-text title, level 1–6) in document
     /// order — the data source for table-of-contents menus.
     public private(set) var headings: [(id: String, title: String, level: Int)] = []
+    /// Lazy-stack sections over `blocks`, maintained incrementally in
+    /// `append` so `ADFDocumentView.body` never rebuilds the section
+    /// structure during scroll (§8: no O(document) work in `body`). A table's
+    /// header slice starts a section (as its pinned header) containing the
+    /// row slices of the same table; every other run of blocks is a
+    /// headerless section. Section IDs are stable as chunks stream in,
+    /// because blocks only ever append at the end.
+    private(set) var sections: [BlockSection] = []
 
     /// Set to a block ID (typically a `headings` entry) to ask the visible
     /// `ADFDocumentView` to scroll there; the view consumes and clears it.
@@ -35,17 +43,30 @@ public final class ADFDocumentModel {
         self.theme = theme
     }
 
+    deinit {
+        // The load task captures `self` weakly, so releasing the model can
+        // reach deinit mid-stream; cancelling here stops the detached
+        // preparer promptly instead of at the next chunk boundary.
+        loadTask?.cancel()
+    }
+
     /// Parses `data` and streams prepared blocks in chunks of 50. Safe to
     /// call again: a previous in-flight load is cancelled first.
     public func load(data: Data) {
         loadTask?.cancel()
         blocks = []
+        sections = []
         headings = []
         scrollTarget = nil
         phase = .parsing
 
         let parser = self.parser
         let preparer = DocumentPreparer(theme: theme)
+        // `self` stays weak for the whole stream: holding it strongly across
+        // the loop would keep the model (and the detached preparer feeding
+        // it) alive after the owner releases it. Each iteration re-checks;
+        // when the model is gone the loop exits, ending the stream and
+        // cancelling its producer.
         loadTask = Task { [weak self] in
             let document: ADFDocument
             do {
@@ -56,14 +77,14 @@ public final class ADFDocumentModel {
                 }
                 return
             }
-            guard let self, !Task.isCancelled else { return }
-            self.phase = .preparing
+            guard self != nil, !Task.isCancelled else { return }
+            self?.phase = .preparing
             for await chunk in preparer.prepareStream(document, chunkSize: 50) {
-                if Task.isCancelled { return }
+                guard let self, !Task.isCancelled else { return }
                 self.append(chunk)
             }
             if !Task.isCancelled {
-                self.phase = .ready
+                self?.phase = .ready
             }
         }
     }
@@ -71,12 +92,36 @@ public final class ADFDocumentModel {
     private func append(_ chunk: [RenderBlock]) {
         blocks.append(contentsOf: chunk)
         for block in chunk {
+            appendToSections(block)
             guard case .richText(let segments, let style) = block.kind, style.isHeading else {
                 continue
             }
             headings.append(
                 (id: block.id, title: Self.plainTitle(of: segments), level: style.headingLevel ?? 1)
             )
+        }
+    }
+
+    /// Extends `sections` with one appended block in O(1): a table header
+    /// slice opens a new section, row slices join the table section they
+    /// follow contiguously (header slice IDs are `"<tableID>#header"`, row
+    /// slices `"<tableID>#rows<n>"`), and everything else joins the trailing
+    /// headerless section.
+    private func appendToSections(_ block: RenderBlock) {
+        if case .tableSlice(_, _, isHeaderSlice: true) = block.kind {
+            sections.append(BlockSection(id: block.id, header: block, blocks: []))
+            return
+        }
+        if case .tableSlice(_, _, isHeaderSlice: false) = block.kind,
+           let last = sections.last, let header = last.header,
+           block.id.hasPrefix(String(header.id.prefix(while: { $0 != "#" })) + "#") {
+            sections[sections.count - 1].blocks.append(block)
+            return
+        }
+        if let last = sections.last, last.header == nil {
+            sections[sections.count - 1].blocks.append(block)
+        } else {
+            sections.append(BlockSection(id: "plain-\(block.id)", header: nil, blocks: [block]))
         }
     }
 
@@ -93,4 +138,12 @@ public final class ADFDocumentModel {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled heading" : trimmed
     }
+}
+
+/// One lazy-stack section: an optional pinned header (a table's header
+/// slice) plus its content blocks.
+struct BlockSection: Identifiable, Sendable {
+    let id: String
+    let header: RenderBlock?
+    var blocks: [RenderBlock]
 }

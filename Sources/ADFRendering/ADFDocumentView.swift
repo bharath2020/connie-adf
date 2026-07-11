@@ -22,13 +22,16 @@ public struct ADFDocumentView: View {
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                // Blocks group into sections so a table's header slice pins
-                // (stays visible) while its row slices scroll beneath it.
-                ForEach(Self.sections(from: model.blocks)) { section in
+                // Sections are maintained incrementally by the model as
+                // chunks stream in, so body only iterates a stored value —
+                // a table's header slice pins (stays visible) while its row
+                // slices scroll beneath it.
+                ForEach(model.sections) { section in
                     Section {
                         ForEach(section.blocks) { block in
                             BlockView(block: block)
                                 .padding(.vertical, block.kind.defaultVerticalPadding)
+                                .blockBreakout(block.breakout, margin: model.theme.spacing * 2)
                         }
                     } header: {
                         if let header = section.header {
@@ -56,49 +59,6 @@ public struct ADFDocumentView: View {
         .overlay { statusOverlay }
     }
 
-    /// Groups the flat block list into lazy-stack sections: a table header
-    /// slice starts a section (as its pinned header) that contains the row
-    /// slices of the same table; every other run of blocks is a headerless
-    /// section. Section IDs are stable as chunks stream in, because blocks
-    /// only ever append at the end.
-    static func sections(from blocks: [RenderBlock]) -> [BlockSection] {
-        var sections: [BlockSection] = []
-        var plain: [RenderBlock] = []
-
-        func flushPlain() {
-            guard !plain.isEmpty else { return }
-            sections.append(BlockSection(id: "plain-\(plain[0].id)", header: nil, blocks: plain))
-            plain.removeAll()
-        }
-
-        var index = 0
-        while index < blocks.count {
-            let block = blocks[index]
-            guard case .tableSlice(_, _, isHeaderSlice: true) = block.kind else {
-                plain.append(block)
-                index += 1
-                continue
-            }
-            flushPlain()
-            // Header slice IDs are "<tableID>#header"; its row slices are
-            // "<tableID>#rows<n>" and follow contiguously.
-            let tablePrefix = String(block.id.prefix(while: { $0 != "#" })) + "#"
-            var rows: [RenderBlock] = []
-            var next = index + 1
-            while next < blocks.count {
-                let candidate = blocks[next]
-                guard case .tableSlice(_, _, isHeaderSlice: false) = candidate.kind,
-                      candidate.id.hasPrefix(tablePrefix) else { break }
-                rows.append(candidate)
-                next += 1
-            }
-            sections.append(BlockSection(id: block.id, header: block, blocks: rows))
-            index = next
-        }
-        flushPlain()
-        return sections
-    }
-
     @ViewBuilder
     private var statusOverlay: some View {
         switch model.phase {
@@ -120,10 +80,22 @@ public struct ADFDocumentView: View {
     }
 }
 
-/// One lazy-stack section: an optional pinned header (a table's header
-/// slice) plus its content blocks.
-struct BlockSection: Identifiable {
-    let id: String
-    let header: RenderBlock?
-    let blocks: [RenderBlock]
+extension View {
+    /// Applies a root-level block's `breakout` mark: the block widens into
+    /// the document's horizontal margin (`wide` reclaims half of it,
+    /// `full-width` all of it), and a custom width caps the block at that
+    /// many points, centered.
+    @ViewBuilder
+    func blockBreakout(_ breakout: BlockBreakout?, margin: CGFloat) -> some View {
+        switch breakout?.mode {
+        case nil:
+            self
+        case .wide:
+            frame(maxWidth: breakout?.width.map { CGFloat($0) })
+                .padding(.horizontal, -margin / 2)
+        case .fullWidth:
+            frame(maxWidth: breakout?.width.map { CGFloat($0) })
+                .padding(.horizontal, -margin)
+        }
+    }
 }

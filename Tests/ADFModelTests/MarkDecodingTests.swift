@@ -102,6 +102,36 @@ struct MarkDecodingTests {
         #expect(doc.root.children[2].marks == [.breakout(mode: .fullWidth, width: nil)])
     }
 
+    @Test("expand parses its marks instead of silently dropping them")
+    func expandMarksParsed() async throws {
+        let doc = try await parseJSON(#"""
+        {"version":1,"type":"doc","content":[
+          {"type":"expand","attrs":{"title":"Wide details"},
+           "marks":[{"type":"breakout","attrs":{"mode":"wide","width":1024}}],
+           "content":[{"type":"paragraph","content":[{"type":"text","text":"body"}]}]}
+        ]}
+        """#)
+        #expect(doc.issues.isEmpty)
+        let expand = try #require(doc.root.children.first)
+        guard case .expand(_, _, _, let marks) = expand.kind else {
+            Issue.record("expected .expand, got \(expand.kind)")
+            return
+        }
+        #expect(marks == [.breakout(mode: .wide, width: 1024)])
+        #expect(expand.marks == [.breakout(mode: .wide, width: 1024)])
+    }
+
+    @Test("unknown mark on expand is dropped with an issue")
+    func unknownExpandMarkLogged() async throws {
+        let doc = try await parseJSON(#"""
+        {"version":1,"type":"doc","content":[
+          {"type":"expand","attrs":{"title":"t"},"marks":[{"type":"glitter"}],"content":[]}
+        ]}
+        """#)
+        #expect(doc.issues.count == 1)
+        #expect(doc.issues.first?.message.contains("glitter") == true)
+    }
+
     @Test("border and link marks on media")
     func mediaMarks() async throws {
         let doc = try await parseFixture("kitchen-sink.json")

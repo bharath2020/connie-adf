@@ -12,10 +12,15 @@ public struct RenderBlock: Identifiable, Hashable, Sendable {
     /// `#header` / `#rows<n>` suffix so every block stays unique and stable).
     public let id: String
     public let kind: Kind
+    /// Block-level `breakout` mark (§3: breakout applies to the block).
+    /// Carried on the block itself so every kind that can legally hold the
+    /// mark (codeBlock, layoutSection, expand, …) widens uniformly.
+    public let breakout: BlockBreakout?
 
-    public init(id: String, kind: Kind) {
+    public init(id: String, kind: Kind, breakout: BlockBreakout? = nil) {
         self.id = id
         self.kind = kind
+        self.breakout = breakout
     }
 
     public indirect enum Kind: Hashable, Sendable {
@@ -35,6 +40,19 @@ public struct RenderBlock: Identifiable, Hashable, Sendable {
         case card(url: String?, title: String?, isEmbed: Bool)
         case extensionPlaceholder(title: String, body: [RenderBlock])
         case unknown(typeName: String)
+    }
+}
+
+/// Prepared payload of a block-level `breakout` mark: the mode plus the
+/// optional custom pixel width some producers attach.
+public struct BlockBreakout: Sendable, Hashable {
+    public let mode: ADFBreakoutMode
+    /// Custom breakout width in points, when the mark carries one.
+    public let width: Double?
+
+    public init(mode: ADFBreakoutMode, width: Double?) {
+        self.mode = mode
+        self.width = width
     }
 }
 
@@ -89,6 +107,10 @@ public enum ListMarker: Sendable, Hashable {
     case ordered(String)
     case task(done: Bool)
     case decision
+    /// Continuation of an item whose content resumes after a nested list:
+    /// renders an empty marker column so the content stays aligned under the
+    /// item's first line, preserving document order.
+    case continuation
 }
 
 /// Column metadata shared by all slices of one table.

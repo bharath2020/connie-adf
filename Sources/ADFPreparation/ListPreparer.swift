@@ -66,35 +66,60 @@ extension BlockPreparer {
         }
     }
 
-    /// Rows for one `listItem`: the item's leading paragraph becomes the row
-    /// content, nested lists become deeper rows, and any other block children
-    /// become the row's trailing blocks.
+    /// Rows for one `listItem`, preserving document order: a *leading*
+    /// paragraph becomes the marker row's content, nested lists become deeper
+    /// rows at exactly the point they appear, and blocks that follow a nested
+    /// list start a marker-less continuation row at the item's depth so
+    /// nothing renders out of order.
     private func itemRows(_ item: ADFNode, marker: ListMarker, depth: Int) -> [PreparedListRow] {
+        var rows: [PreparedListRow] = []
         var segments: [InlineSegment] = []
         var trailing: [RenderBlock] = []
-        var nestedRows: [PreparedListRow] = []
-        var consumedLeadingParagraph = false
+        var emittedMarkerRow = false
+        var continuationCount = 0
 
+        // Emits the pending row: the item's marker row first (always, even
+        // when empty — the marker must precede any nested rows), then
+        // marker-less continuation rows for content after nested lists.
+        func flushRow() {
+            if !emittedMarkerRow {
+                rows.append(PreparedListRow(
+                    id: item.id,
+                    depth: depth,
+                    marker: marker,
+                    segments: segments,
+                    trailingBlocks: trailing
+                ))
+                emittedMarkerRow = true
+            } else if !segments.isEmpty || !trailing.isEmpty {
+                continuationCount += 1
+                rows.append(PreparedListRow(
+                    id: "\(item.id)#cont\(continuationCount)",
+                    depth: depth,
+                    marker: .continuation,
+                    segments: segments,
+                    trailingBlocks: trailing
+                ))
+            }
+            segments = []
+            trailing = []
+        }
+
+        var isFirstChild = true
         for child in item.children {
             switch child.kind {
-            case .paragraph(let content, _) where !consumedLeadingParagraph:
+            case .paragraph(let content, _) where isFirstChild:
                 segments = composer.compose(content)
-                consumedLeadingParagraph = true
             case .bulletList, .orderedList, .taskList, .decisionList:
-                nestedRows.append(contentsOf: listRows(for: child, depth: depth + 1))
+                flushRow()
+                rows.append(contentsOf: listRows(for: child, depth: depth + 1))
             default:
                 trailing.append(contentsOf: blocks(for: child))
             }
+            isFirstChild = false
         }
-
-        let row = PreparedListRow(
-            id: item.id,
-            depth: depth,
-            marker: marker,
-            segments: segments,
-            trailingBlocks: trailing
-        )
-        return [row] + nestedRows
+        flushRow()
+        return rows
     }
 
     // MARK: - Ordered markers

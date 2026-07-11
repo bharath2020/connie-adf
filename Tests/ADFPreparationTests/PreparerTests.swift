@@ -56,6 +56,106 @@ struct PreparerTests {
         #expect(rows.map(\.marker) == [.bullet(depth: 0), .bullet(depth: 1)])
     }
 
+    @Test("listItem children preserve document order: code block before its explanation paragraph")
+    func listItemCodeBlockBeforeParagraphKeepsOrder() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[
+          {"type":"bulletList","content":[
+            {"type":"listItem","content":[
+              {"type":"codeBlock","attrs":{"language":"swift"},"content":[{"type":"text","text":"let x = 1"}]},
+              {"type":"paragraph","content":[{"type":"text","text":"Explanation"}]}
+            ]}
+          ]}
+        ]}
+        """)
+        let blocks = preparer.prepare(doc)
+        guard case .listRows(let rows) = try #require(blocks.first).kind else {
+            throw TestFailure("block is not listRows")
+        }
+        #expect(rows.count == 1)
+        let row = try #require(rows.first)
+        // The paragraph is not the leading child, so it must NOT be hoisted
+        // beside the marker; both children stay in authored order.
+        #expect(row.segments.isEmpty)
+        #expect(row.trailingBlocks.count == 2)
+        guard case .codeBlock = row.trailingBlocks[0].kind else {
+            throw TestFailure("first trailing block is not the code block")
+        }
+        guard case .richText(let segments, _) = row.trailingBlocks[1].kind,
+              case .text(let text) = try #require(segments.first) else {
+            throw TestFailure("second trailing block is not the paragraph")
+        }
+        #expect(String(text.characters) == "Explanation")
+    }
+
+    @Test("paragraph after a nested list becomes a continuation row below the nested rows")
+    func paragraphAfterNestedListKeepsOrder() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[
+          {"type":"bulletList","content":[
+            {"type":"listItem","content":[
+              {"type":"paragraph","content":[{"type":"text","text":"Intro"}]},
+              {"type":"bulletList","content":[
+                {"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"nested"}]}]}
+              ]},
+              {"type":"paragraph","content":[{"type":"text","text":"Outro"}]}
+            ]}
+          ]}
+        ]}
+        """)
+        let blocks = preparer.prepare(doc)
+        guard case .listRows(let rows) = try #require(blocks.first).kind else {
+            throw TestFailure("block is not listRows")
+        }
+        #expect(rows.count == 3)
+        // Row 0: the item's marker row carries only the intro paragraph.
+        #expect(rows[0].marker == .bullet(depth: 0))
+        #expect(rows[0].trailingBlocks.isEmpty)
+        // Row 1: the nested list renders between intro and outro.
+        #expect(rows[1].marker == .bullet(depth: 1))
+        // Row 2: "Outro" follows the nested list as a marker-less
+        // continuation row at the item's own depth.
+        #expect(rows[2].marker == .continuation)
+        #expect(rows[2].depth == 0)
+        guard case .richText(let segments, _) = try #require(rows[2].trailingBlocks.first).kind,
+              case .text(let text) = try #require(segments.first) else {
+            throw TestFailure("continuation row does not carry the outro paragraph")
+        }
+        #expect(String(text.characters) == "Outro")
+        // IDs stay unique so SwiftUI identity holds.
+        let ids = rows.map(\.id)
+        #expect(Set(ids).count == ids.count)
+    }
+
+    @Test("breakout marks reach the prepared block for codeBlock, layoutSection, and expand")
+    func breakoutReachesPreparedBlocks() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[
+          {"type":"codeBlock","attrs":{"language":"swift"},
+           "marks":[{"type":"breakout","attrs":{"mode":"full-width"}}],
+           "content":[{"type":"text","text":"let x = 1"}]},
+          {"type":"layoutSection",
+           "marks":[{"type":"breakout","attrs":{"mode":"wide","width":1024}}],
+           "content":[
+             {"type":"layoutColumn","attrs":{"width":50},"content":[{"type":"paragraph","content":[{"type":"text","text":"L"}]}]},
+             {"type":"layoutColumn","attrs":{"width":50},"content":[{"type":"paragraph","content":[{"type":"text","text":"R"}]}]}
+           ]},
+          {"type":"expand","attrs":{"title":"Wide"},
+           "marks":[{"type":"breakout","attrs":{"mode":"wide"}}],
+           "content":[{"type":"paragraph","content":[{"type":"text","text":"body"}]}]},
+          {"type":"paragraph","content":[{"type":"text","text":"plain"}]}
+        ]}
+        """)
+        #expect(doc.issues.isEmpty)
+        let blocks = preparer.prepare(doc)
+        #expect(blocks.count == 4)
+        #expect(blocks[0].breakout == BlockBreakout(mode: .fullWidth, width: nil))
+        // The optional custom width survives preparation.
+        #expect(blocks[1].breakout == BlockBreakout(mode: .wide, width: 1024))
+        #expect(blocks[2].breakout == BlockBreakout(mode: .wide, width: nil))
+        #expect(blocks[3].breakout == nil)
+    }
+
     @Test("kitchen sink prepares with zero unknown kinds")
     func kitchenSinkZeroUnknownKinds() async throws {
         let doc = try await ADFParser().parse(fixtureData("kitchen-sink.json"))

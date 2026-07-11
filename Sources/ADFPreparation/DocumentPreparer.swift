@@ -64,7 +64,8 @@ struct BlockPreparer: Sendable {
                 kind: .richText(
                     segments: composer.compose(content),
                     style: textStyle(font: theme.body, isHeading: false, level: nil, marks: marks)
-                )
+                ),
+                breakout: blockBreakout(of: marks)
             )]
 
         case .heading(let level, let content, let marks):
@@ -74,7 +75,8 @@ struct BlockPreparer: Sendable {
                 kind: .richText(
                     segments: composer.compose(content, baseFont: font),
                     style: textStyle(font: font, isHeading: true, level: level, marks: marks)
-                )
+                ),
+                breakout: blockBreakout(of: marks)
             )]
 
         case .blockquote(let children):
@@ -83,10 +85,14 @@ struct BlockPreparer: Sendable {
         case .bulletList, .orderedList, .taskList, .decisionList:
             return [RenderBlock(id: node.id, kind: .listRows(listRows(for: node, depth: 0)))]
 
-        case .codeBlock(let language, let text, _):
+        case .codeBlock(let language, let text, let marks):
             var code = AttributedString(text)
             code[AttributeScopes.SwiftUIAttributes.FontAttribute.self] = theme.code
-            return [RenderBlock(id: node.id, kind: .codeBlock(language: language, code: code))]
+            return [RenderBlock(
+                id: node.id,
+                kind: .codeBlock(language: language, code: code),
+                breakout: blockBreakout(of: marks)
+            )]
 
         case .rule:
             return [RenderBlock(id: node.id, kind: .divider)]
@@ -100,9 +106,13 @@ struct BlockPreparer: Sendable {
         case .table(let attrs, let rows):
             return tableSlices(for: node, attrs: attrs, rows: rows)
 
-        case .expand(let title, let body, let isNested):
+        case .expand(let title, let body, let isNested, let marks):
             // Body deliberately unprepared: prepared on first expansion.
-            return [RenderBlock(id: node.id, kind: .expand(title: title, body: body, isNested: isNested))]
+            return [RenderBlock(
+                id: node.id,
+                kind: .expand(title: title, body: body, isNested: isNested),
+                breakout: blockBreakout(of: marks)
+            )]
 
         case .mediaSingle(let layout, let width, let widthType, let children):
             return mediaSingleBlocks(for: node, layout: layout, width: width, widthType: widthType, children: children)
@@ -116,12 +126,16 @@ struct BlockPreparer: Sendable {
             guard let prepared = preparedMedia(from: node) else { return [] }
             return [RenderBlock(id: node.id, kind: .media(prepared))]
 
-        case .layoutSection(let columns, _):
+        case .layoutSection(let columns, let marks):
             let prepared = columns.compactMap { column -> PreparedColumn? in
                 guard case .layoutColumn(let width, let children) = column.kind else { return nil }
                 return PreparedColumn(id: column.id, widthPercent: width, blocks: children.flatMap(blocks(for:)))
             }
-            return [RenderBlock(id: node.id, kind: .layoutColumns(prepared))]
+            return [RenderBlock(
+                id: node.id,
+                kind: .layoutColumns(prepared),
+                breakout: blockBreakout(of: marks)
+            )]
 
         case .blockCard(let url, let data):
             return [RenderBlock(id: node.id, kind: .card(url: url ?? data?["url"]?.stringValue, title: nil, isEmbed: false))]
@@ -253,6 +267,16 @@ struct BlockPreparer: Sendable {
             borderHex: borderHex(of: marks),
             linkHref: linkHref(of: marks)
         )
+    }
+
+    /// First `breakout` mark, with its optional custom width preserved.
+    private func blockBreakout(of marks: [ADFMark]) -> BlockBreakout? {
+        for mark in marks {
+            if case .breakout(let mode, let width) = mark {
+                return BlockBreakout(mode: mode, width: width)
+            }
+        }
+        return nil
     }
 
     private func borderHex(of marks: [ADFMark]) -> String? {

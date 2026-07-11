@@ -65,17 +65,22 @@ struct ExpandBlockView: View {
     }
 
     /// Flattens the body nodes off-main on first open; the result is cached
-    /// so later expansions render immediately. Collapsing mid-prepare cancels
-    /// the task and the next open retries.
+    /// so later expansions render immediately. Preparation streams through
+    /// `prepareStream`, whose producer checks cancellation between nodes, so
+    /// collapsing or scrolling away mid-prepare cancels the `.task`, the
+    /// chunk loop exits, the stream's termination cancels the producer, and
+    /// the next open retries.
     private func prepareBodyIfNeeded() async {
         guard preparedBody == nil else { return }
-        let nodes = bodyNodes
-        let theme = self.theme
-        let blocks = await Task.detached(priority: .userInitiated) {
-            let root = ADFNode(id: "expand", type: "doc", kind: .doc(nodes))
-            let document = ADFDocument(version: 1, root: root, issues: [])
-            return DocumentPreparer(theme: theme).prepare(document)
-        }.value
+        let root = ADFNode(id: "expand", type: "doc", kind: .doc(bodyNodes))
+        let document = ADFDocument(version: 1, root: root, issues: [])
+        let preparer = DocumentPreparer(theme: theme)
+        var blocks: [RenderBlock] = []
+        for await chunk in preparer.prepareStream(document, chunkSize: 50) {
+            blocks.append(contentsOf: chunk)
+        }
+        // Never cache a partial flatten from a cancelled run.
+        guard !Task.isCancelled else { return }
         preparedBody = blocks
     }
 }

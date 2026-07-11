@@ -33,8 +33,10 @@ struct ListRowView: View {
             markerView
                 .frame(width: markerWidth, alignment: .trailing)
             VStack(alignment: .leading, spacing: theme.spacing * 0.5) {
-                SegmentedTextView(segments: row.segments)
-                    .textSelection(.enabled)
+                if !row.segments.isEmpty {
+                    SegmentedTextView(segments: row.segments)
+                        .textSelection(.enabled)
+                }
                 ForEach(row.trailingBlocks) { block in
                     BlockView(block: block)
                 }
@@ -75,6 +77,12 @@ struct ListRowView: View {
             Text(Image(systemName: "diamond"))
                 .foregroundStyle(Color.orange)
                 .accessibilityLabel("Decision")
+        case .continuation:
+            // Item content resuming after a nested list: empty marker column
+            // keeps the content aligned under the item's first line.
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
         }
     }
 

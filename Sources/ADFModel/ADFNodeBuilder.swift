@@ -152,7 +152,8 @@ struct ADFNodeBuilder {
         case "expand", "nestedExpand":
             kind = .expand(title: attrs?["title"]?.stringValue ?? "",
                            children(json["content"], parentPath: path),
-                           isNested: type == "nestedExpand")
+                           isNested: type == "nestedExpand",
+                           marks: marks(json["marks"], path: path))
 
         case "mediaSingle":
             let layout: ADFMediaLayout

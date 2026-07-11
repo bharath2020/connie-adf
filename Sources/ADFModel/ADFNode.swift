@@ -34,7 +34,7 @@ public struct ADFNode: Sendable, Hashable, Identifiable {
         case table(attrs: TableAttrs, rows: [ADFNode])
         case tableRow([ADFNode])
         case tableCell(attrs: CellAttrs, [ADFNode], isHeader: Bool)
-        case expand(title: String, [ADFNode], isNested: Bool)
+        case expand(title: String, [ADFNode], isNested: Bool, marks: [ADFMark])
         case mediaSingle(layout: ADFMediaLayout, width: Double?, widthType: ADFWidthType?, [ADFNode])
         case mediaGroup([ADFNode])
         case media(MediaAttrs, marks: [ADFMark])
@@ -81,7 +81,7 @@ extension ADFNode {
              .table(_, let content),
              .tableRow(let content),
              .tableCell(_, let content, _),
-             .expand(_, let content, _),
+             .expand(_, let content, _, _),
              .mediaSingle(_, _, _, let content),
              .mediaGroup(let content),
              .caption(let content),
@@ -110,6 +110,7 @@ extension ADFNode {
              .bulletList(_, let marks),
              .orderedList(_, _, let marks),
              .codeBlock(_, _, let marks),
+             .expand(_, _, _, let marks),
              .media(_, let marks),
              .mediaInline(_, let marks),
              .layoutSection(_, let marks),
@@ -118,7 +119,7 @@ extension ADFNode {
              .inlineExtension(_, let marks):
             return marks
         case .doc, .hardBreak, .blockquote, .listItem, .rule, .panel, .table,
-             .tableRow, .tableCell, .expand, .mediaSingle, .mediaGroup,
+             .tableRow, .tableCell, .mediaSingle, .mediaGroup,
              .caption, .taskList, .taskItem, .decisionList, .decisionItem,
              .layoutColumn, .blockCard, .embedCard, .inlineCard, .mention,
              .emoji, .date, .status, .placeholder, .syncBlock, .unknown:

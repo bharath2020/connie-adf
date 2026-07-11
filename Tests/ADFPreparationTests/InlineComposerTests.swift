@@ -110,12 +110,52 @@ struct InlineComposerTests {
         ]}]}
         """)
         let segments = composer.compose(try inlineContent(of: doc))
-        #expect(segments.count == 3)
+        // Atom-bearing content is pre-split into word chunks at preparation
+        // time: ["state ", atom, " ", "today"].
+        #expect(segments.count == 4)
         guard case .atom(let atom, let id) = segments[1] else {
-            throw TestFailure("middle segment is not an atom")
+            throw TestFailure("second segment is not an atom")
         }
         #expect(atom == .status(text: "ON TRACK", color: .green))
         #expect(id == "0.0.1")
+    }
+
+    @Test("atom-bearing content pre-splits text into word chunks with attributes preserved")
+    func atomContentPreSplitsWordChunks() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[{"type":"paragraph","content":[
+          {"type":"text","text":"alpha beta","marks":[{"type":"strong"}]},
+          {"type":"mention","attrs":{"id":"u1","text":"@maria"}},
+          {"type":"text","text":"gamma"},
+          {"type":"hardBreak"},
+          {"type":"text","text":"delta"}
+        ]}]}
+        """)
+        let segments = composer.compose(try inlineContent(of: doc))
+        let texts = segments.map { segment -> String in
+            switch segment {
+            case .text(let text): return String(text.characters)
+            case .atom: return "<atom>"
+            }
+        }
+        // Word chunks keep their trailing whitespace; "\\n" is standalone so
+        // the wrapping layout maps it to a line break without scanning.
+        #expect(texts == ["alpha ", "beta", "<atom>", "gamma", "\n", "delta"])
+        guard case .text(let bold) = segments[0] else {
+            throw TestFailure("first segment is not text")
+        }
+        #expect(bold[SUI.FontAttribute.self] == theme.body.bold())
+    }
+
+    @Test("all-text content stays one merged segment (no word splitting)")
+    func allTextContentStaysMerged() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[{"type":"paragraph","content":[
+          {"type":"text","text":"several words in one run"}
+        ]}]}
+        """)
+        let segments = composer.compose(try inlineContent(of: doc))
+        #expect(segments.count == 1)
     }
 
     @Test("subsup shifts the baseline and shrinks the font")

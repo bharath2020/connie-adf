@@ -22,9 +22,14 @@ struct SegmentedTextView: View {
         }
     }
 
-    /// Concatenates all segments into one `AttributedString`, or `nil` when
-    /// any segment is an atom.
+    /// The pre-merged text run for all-text content, or `nil` when any
+    /// segment is an atom. The preparer emits one merged run per gap, so the
+    /// common case returns the existing value without building or copying an
+    /// `AttributedString` inside `body` (§5.3).
     static func mergedText(_ segments: [InlineSegment]) -> AttributedString? {
+        if segments.count == 1, case .text(let only) = segments[0] {
+            return only
+        }
         var merged = AttributedString()
         for segment in segments {
             guard case .text(let text) = segment else { return nil }
@@ -33,53 +38,33 @@ struct SegmentedTextView: View {
         return merged
     }
 
-    /// Splits segments into layout tokens: word-level text chunks (so lines
-    /// wrap), atoms, and explicit line breaks (hard breaks).
+    /// Maps segments 1:1 to layout tokens. Word-level chunking already
+    /// happened at preparation time (`InlineComposer.splitForWrappingLayout`),
+    /// so no character scanning or attributed-string slicing runs here — a
+    /// standalone `"\n"` chunk becomes an explicit line break.
     static func tokens(for segments: [InlineSegment]) -> [InlineToken] {
         var tokens: [InlineToken] = []
+        tokens.reserveCapacity(segments.count)
         for segment in segments {
             switch segment {
             case .atom(let atom, _):
                 tokens.append(InlineToken(id: tokens.count, kind: .atom(atom)))
             case .text(let text):
-                appendTextTokens(text, to: &tokens)
+                if isLineBreak(text) {
+                    tokens.append(InlineToken(id: tokens.count, kind: .lineBreak))
+                } else {
+                    tokens.append(InlineToken(id: tokens.count, kind: .text(text)))
+                }
             }
         }
         return tokens
     }
 
-    /// Chunks an attributed run into word tokens (a word plus its trailing
-    /// whitespace, attributes preserved) and line-break tokens for `\n`.
-    private static func appendTextTokens(_ text: AttributedString, to tokens: inout [InlineToken]) {
+    /// True for a chunk that is exactly one `"\n"` (O(1), no full scan).
+    private static func isLineBreak(_ text: AttributedString) -> Bool {
         let characters = text.characters
-        var chunkStart = text.startIndex
-        var previousWasSpace = false
-        var index = text.startIndex
-
-        func flush(upTo end: AttributedString.Index) {
-            guard chunkStart < end else { return }
-            let chunk = AttributedString(text[chunkStart..<end])
-            tokens.append(InlineToken(id: tokens.count, kind: .text(chunk)))
-        }
-
-        while index < text.endIndex {
-            let character = characters[index]
-            let next = characters.index(after: index)
-            if character == "\n" {
-                flush(upTo: index)
-                tokens.append(InlineToken(id: tokens.count, kind: .lineBreak))
-                chunkStart = next
-                previousWasSpace = false
-            } else if previousWasSpace, !character.isWhitespace {
-                flush(upTo: index)
-                chunkStart = index
-                previousWasSpace = false
-            } else {
-                previousWasSpace = character.isWhitespace
-            }
-            index = next
-        }
-        flush(upTo: text.endIndex)
+        guard let first = characters.first, first == "\n" else { return false }
+        return characters.index(after: characters.startIndex) == characters.endIndex
     }
 }
 

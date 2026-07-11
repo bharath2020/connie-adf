@@ -233,7 +233,7 @@ struct ParserTests {
     func nestedExpandCollapses() async throws {
         let doc = try await parseFixture("kitchen-sink.json")
         let nested = try #require(allNodes(in: doc.root).first { $0.type == "nestedExpand" })
-        guard case .expand(let title, _, let isNested) = nested.kind else {
+        guard case .expand(let title, _, let isNested, _) = nested.kind else {
             Issue.record("expected .expand, got \(nested.kind)")
             return
         }

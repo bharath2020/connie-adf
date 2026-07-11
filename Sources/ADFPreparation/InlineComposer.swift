@@ -35,7 +35,10 @@ public struct InlineComposer: Sendable {
 
     /// Composes inline nodes using the theme body font as the base.
     /// Adjacent text runs (including hard breaks and text-representable
-    /// emoji) merge into a single `AttributedString` segment.
+    /// emoji) merge into a single `AttributedString` segment. When the
+    /// sequence contains atoms, text runs are pre-split into word-level
+    /// chunks here — at preparation time — so the view layer's wrapping
+    /// layout never scans or slices attributed strings inside `body` (§5.3).
     public func compose(_ inline: [ADFNode]) -> [InlineSegment] {
         compose(inline, baseFont: theme.body)
     }
@@ -91,7 +94,62 @@ public struct InlineComposer: Sendable {
             }
         }
         flush()
-        return segments
+
+        // Atoms force the view onto the wrapping-layout path, which places
+        // word-level chunks. Do that expensive split once, off-main, here.
+        let containsAtom = segments.contains { segment in
+            if case .atom = segment { return true }
+            return false
+        }
+        return containsAtom ? Self.splitForWrappingLayout(segments) : segments
+    }
+
+    /// Splits every text segment into word chunks (a word plus its trailing
+    /// whitespace, attributes preserved) and standalone `"\n"` chunks, so the
+    /// wrapping layout consumes pre-computed values only.
+    static func splitForWrappingLayout(_ segments: [InlineSegment]) -> [InlineSegment] {
+        var result: [InlineSegment] = []
+        result.reserveCapacity(segments.count)
+        for segment in segments {
+            switch segment {
+            case .atom:
+                result.append(segment)
+            case .text(let text):
+                appendWordChunks(of: text, to: &result)
+            }
+        }
+        return result
+    }
+
+    private static func appendWordChunks(of text: AttributedString, to result: inout [InlineSegment]) {
+        let characters = text.characters
+        var chunkStart = text.startIndex
+        var previousWasSpace = false
+        var index = text.startIndex
+
+        func flush(upTo end: AttributedString.Index) {
+            guard chunkStart < end else { return }
+            result.append(.text(AttributedString(text[chunkStart..<end])))
+        }
+
+        while index < text.endIndex {
+            let character = characters[index]
+            let next = characters.index(after: index)
+            if character == "\n" {
+                flush(upTo: index)
+                result.append(.text(AttributedString(text[index..<next])))
+                chunkStart = next
+                previousWasSpace = false
+            } else if previousWasSpace, !character.isWhitespace {
+                flush(upTo: index)
+                chunkStart = index
+                previousWasSpace = false
+            } else {
+                previousWasSpace = character.isWhitespace
+            }
+            index = next
+        }
+        flush(upTo: text.endIndex)
     }
 
     /// Fully text-only composition: atoms are replaced by plain-text

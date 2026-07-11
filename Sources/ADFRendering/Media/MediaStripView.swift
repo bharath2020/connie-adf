@@ -78,7 +78,13 @@ struct MediaThumbnailView: View {
     }
 
     private func loadIfNeeded() async {
-        guard isVisible, loadedImage == nil, !loadFailed, let provider else { return }
+        guard isVisible else {
+            // §6.5: off-screen thumbnails drop their decoded image, holding
+            // only the ref (see MediaBlockView.loadIfNeeded).
+            loadedImage = nil
+            return
+        }
+        guard loadedImage == nil, !loadFailed, let provider else { return }
         do {
             loadedImage = try await provider.image(
                 for: media.attrs,

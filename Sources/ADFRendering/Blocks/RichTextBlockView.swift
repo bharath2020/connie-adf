@@ -16,7 +16,6 @@ struct RichTextBlockView: View {
             .textSelection(.enabled)
             .padding(.leading, indentationPadding)
             .frame(maxWidth: .infinity, alignment: frameAlignment)
-            .padding(.horizontal, breakoutCompensation)
             .accessibilityAddTraits(style.isHeading ? .isHeader : [])
             .accessibilityHeading(accessibilityHeadingLevel)
     }
@@ -42,16 +41,10 @@ struct RichTextBlockView: View {
         CGFloat(max(style.indentation, 0)) * theme.spacing * 3
     }
 
-    /// Breakout marks widen the block into the document's horizontal margin
-    /// (`ADFDocumentView` pads content by `theme.spacing * 2`): `wide`
-    /// reclaims half of it, `full-width` all of it.
-    private var breakoutCompensation: CGFloat {
-        switch style.breakout {
-        case .wide: return -theme.spacing
-        case .fullWidth: return -theme.spacing * 2
-        case nil: return 0
-        }
-    }
+    // Breakout is applied centrally by `ADFDocumentView` from
+    // `RenderBlock.breakout` (root-level blocks only, per schema), so this
+    // view no longer compensates — `style.breakout` remains available as
+    // prepared data.
 
     private var accessibilityHeadingLevel: AccessibilityHeadingLevel {
         guard style.isHeading else { return .unspecified }

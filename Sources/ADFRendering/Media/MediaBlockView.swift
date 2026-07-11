@@ -162,7 +162,15 @@ struct MediaBlockView: View {
     }
 
     private func loadIfNeeded() async {
-        guard isVisible, loadedImage == nil, !loadFailed,
+        guard isVisible else {
+            // §6.5: off-screen rows drop their decoded image state, holding
+            // only the ref — lazy stacks keep rows alive, so without this
+            // eviction every bitmap ever loaded would stay resident.
+            // Re-approaching reloads (typically from the provider's cache).
+            loadedImage = nil
+            return
+        }
+        guard loadedImage == nil, !loadFailed,
               boxSize.width > 0, boxSize.height > 0,
               let provider else { return }
         do {
