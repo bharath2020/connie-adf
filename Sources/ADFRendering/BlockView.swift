@@ -25,7 +25,14 @@ struct BlockView: View {
         case .listRows(let rows):
             ListBlockView(rows: rows)
         case .tableSlice(let layout, let rows, let isHeaderSlice):
-            TableSliceView(layout: layout, rows: rows, isHeaderSlice: isHeaderSlice)
+            // Slices of one table share a table-ID prefix ("<tableID>#…"), the
+            // key their horizontal offset syncs on.
+            TableSliceView(
+                tableID: String(block.id.prefix { $0 != "#" }),
+                layout: layout,
+                rows: rows,
+                isHeaderSlice: isHeaderSlice
+            )
         case .media(let media):
             MediaBlockView(media: media)
         case .mediaStrip(let items):

@@ -19,6 +19,14 @@ private struct ADFThemeKey: EnvironmentKey {
     static let defaultValue: ADFTheme = .default
 }
 
+private struct ADFTableScrollSyncKey: EnvironmentKey {
+    // Optional (not a shared default instance): the default must be
+    // constructible from a nonisolated context, and a document that renders
+    // outside `ADFDocumentView` (previews) should get no cross-document
+    // registry. `ADFDocumentView` always injects a per-document instance.
+    static let defaultValue: TableScrollSync? = nil
+}
+
 extension EnvironmentValues {
     /// Media provider injected by `ADFDocumentView`; consumed by the media
     /// block views (Task 5).
@@ -33,5 +41,13 @@ extension EnvironmentValues {
     var adfTheme: ADFTheme {
         get { self[ADFThemeKey.self] }
         set { self[ADFThemeKey.self] = newValue }
+    }
+
+    /// Per-document shared horizontal-offset registry for table slices,
+    /// injected by `ADFDocumentView`. `nil` outside it (previews) — slices
+    /// then pan independently.
+    var adfTableScrollSync: TableScrollSync? {
+        get { self[ADFTableScrollSyncKey.self] }
+        set { self[ADFTableScrollSyncKey.self] = newValue }
     }
 }

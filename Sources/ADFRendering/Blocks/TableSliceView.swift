@@ -11,16 +11,56 @@ import ADFPreparation
 /// content is never lost but the geometry doesn't merge vertically.
 ///
 /// The slice wraps in a horizontal `ScrollView` sized to the resolved column
-/// widths, so wide tables pan instead of squeezing. Each slice scrolls
-/// independently (slices are separate lazy rows; shared offset is a
-/// non-goal for v1).
+/// widths, so wide tables pan instead of squeezing. Slices of one table must
+/// pan together (they are separate lazy rows, yet read as one table): on
+/// iOS 18+ they share a horizontal offset through `TableScrollSync`. iOS 17
+/// lacks the `ScrollPosition` content-offset API, so there each slice pans
+/// independently (documented floor).
 struct TableSliceView: View {
+    let tableID: String
     let layout: PreparedTableLayout
     let rows: [PreparedTableRow]
     let isHeaderSlice: Bool
 
-    @Environment(\.adfTheme) private var theme
+    @Environment(\.adfTableScrollSync) private var scrollSync
+
+    var body: some View {
+        if #available(iOS 18.0, macOS 15.0, *), let scrollSync {
+            SynchronizedTableSlice(
+                tableID: tableID,
+                layout: layout,
+                rows: rows,
+                isHeaderSlice: isHeaderSlice,
+                scrollSync: scrollSync
+            )
+        } else {
+            TableSliceScrollView(layout: layout, rows: rows, isHeaderSlice: isHeaderSlice)
+        }
+    }
+}
+
+/// The horizontal scroll view and its row content, without any cross-slice
+/// synchronization. This is the whole slice on iOS 17, and the body that the
+/// iOS 18+ synchronized slice layers offset-sharing modifiers onto.
+private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
+    let layout: PreparedTableLayout
+    let rows: [PreparedTableRow]
+    let isHeaderSlice: Bool
+    let scrollModifiers: Modifiers
+
     @State private var containerWidth = CGFloat.zero
+
+    init(
+        layout: PreparedTableLayout,
+        rows: [PreparedTableRow],
+        isHeaderSlice: Bool,
+        scrollModifiers: Modifiers = EmptyModifier()
+    ) {
+        self.layout = layout
+        self.rows = rows
+        self.isHeaderSlice = isHeaderSlice
+        self.scrollModifiers = scrollModifiers
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -35,6 +75,7 @@ struct TableSliceView: View {
                 }
             }
         }
+        .modifier(scrollModifiers)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -56,6 +97,89 @@ struct TableSliceView: View {
         let available = max(containerWidth - gutter, 0)
         let equal = available / CGFloat(count)
         return Array(repeating: max(equal, TableMetrics.minColumnWidth), count: count)
+    }
+}
+
+/// iOS 18+ slice that keeps its horizontal offset in lockstep with the other
+/// visible slices of the same table.
+///
+/// Only the slice the user is actively dragging or that is decelerating
+/// publishes its `contentOffset.x` to the shared `TableScrollSync`; every
+/// other visible slice follows via `ScrollPosition.scrollTo(x:)`. Two guards
+/// break feedback loops: a follower never publishes (it isn't the driver),
+/// and it only scrolls when the shared offset differs from its own by more
+/// than half a point — so a value never scrolls its own author back. A slice
+/// re-materializing into an already-panned table adopts the shared offset on
+/// appear, lining up with the pinned header instead of resetting to column 0.
+@available(iOS 18.0, macOS 15.0, *)
+private struct SynchronizedTableSlice: View {
+    let tableID: String
+    let layout: PreparedTableLayout
+    let rows: [PreparedTableRow]
+    let isHeaderSlice: Bool
+    let scrollSync: TableScrollSync
+
+    @State private var position = ScrollPosition()
+    @State private var currentX: CGFloat = 0
+    @State private var isDriving = false
+
+    var body: some View {
+        TableSliceScrollView(
+            layout: layout,
+            rows: rows,
+            isHeaderSlice: isHeaderSlice,
+            scrollModifiers: SyncModifiers(
+                position: $position,
+                onOffsetChange: { x in
+                    currentX = x
+                    if isDriving { scrollSync.publish(x, for: tableID) }
+                },
+                onPhaseChange: { phase in
+                    // A user-driven slice publishes; programmatic follows
+                    // (`.animating`) and idle slices must not.
+                    isDriving = phase == .interacting || phase == .decelerating
+                }
+            )
+        )
+        .onChange(of: scrollSync.sharedOffset(for: tableID)) { _, target in
+            follow(target)
+        }
+        .onAppear {
+            scrollSync.retain(tableID)
+            follow(scrollSync.sharedOffset(for: tableID))
+        }
+        .onDisappear {
+            scrollSync.release(tableID)
+        }
+    }
+
+    private func follow(_ target: CGFloat?) {
+        guard !isDriving, let target, abs(target - currentX) > 0.5 else { return }
+        position.scrollTo(x: target)
+    }
+}
+
+/// The offset-sharing modifiers layered onto a slice's scroll view: binds its
+/// `ScrollPosition`, reports its content offset and scroll phase. Isolated in
+/// a modifier gated to iOS 18 so `TableSliceScrollView` (and its iOS 17 use)
+/// need not store an iOS-18-only `ScrollPosition`.
+@available(iOS 18.0, macOS 15.0, *)
+private struct SyncModifiers: ViewModifier {
+    @Binding var position: ScrollPosition
+    let onOffsetChange: (CGFloat) -> Void
+    let onPhaseChange: (ScrollPhase) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onScrollPhaseChange { _, phase, _ in
+                onPhaseChange(phase)
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.x
+            } action: { _, x in
+                onOffsetChange(x)
+            }
     }
 }
 

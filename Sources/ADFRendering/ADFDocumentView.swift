@@ -9,6 +9,11 @@ public struct ADFDocumentView: View {
     private let model: ADFDocumentModel
     private let mediaProvider: any ADFMediaProvider
 
+    /// One registry per document (per view identity), so a table's shared
+    /// horizontal offset never leaks into another document and is released
+    /// when this view is torn down.
+    @State private var tableScrollSync = TableScrollSync()
+
     public init(model: ADFDocumentModel, mediaProvider: any ADFMediaProvider) {
         self.model = model
         self.mediaProvider = mediaProvider
@@ -58,6 +63,7 @@ public struct ADFDocumentView: View {
         }
         .environment(\.adfTheme, model.theme)
         .environment(\.adfMediaProvider, mediaProvider)
+        .environment(\.adfTableScrollSync, tableScrollSync)
         .overlay { statusOverlay }
     }
 
