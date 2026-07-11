@@ -22,23 +22,22 @@ struct BlockView: View {
         case .unknown(let typeName):
             UnknownBlockView(typeName: typeName)
 
-        // MARK: Task 5 kinds — temporary stubs (see Blocks/Task5Stubs.swift)
         case .listRows(let rows):
-            Task5StubView(label: "List · \(rows.count) row(s)")
-        case .tableSlice(_, let rows, let isHeaderSlice):
-            Task5StubView(label: isHeaderSlice ? "Table header" : "Table · \(rows.count) row(s)")
-        case .media:
-            Task5StubView(label: "Media")
+            ListBlockView(rows: rows)
+        case .tableSlice(let layout, let rows, let isHeaderSlice):
+            TableSliceView(layout: layout, rows: rows, isHeaderSlice: isHeaderSlice)
+        case .media(let media):
+            MediaBlockView(media: media)
         case .mediaStrip(let items):
-            Task5StubView(label: "Media strip · \(items.count) item(s)")
-        case .expand(let title, _, _):
-            Task5StubView(label: "Expand · \(title.isEmpty ? "untitled" : title)")
+            MediaStripView(items: items)
+        case .expand(let title, let bodyNodes, let isNested):
+            ExpandBlockView(title: title, bodyNodes: bodyNodes, isNested: isNested)
         case .layoutColumns(let columns):
-            Task5StubView(label: "Layout · \(columns.count) column(s)")
-        case .card(let url, _, _):
-            Task5StubView(label: "Card · \(url ?? "no URL")")
-        case .extensionPlaceholder(let title, _):
-            Task5StubView(label: "Extension · \(title)")
+            LayoutColumnsView(columns: columns)
+        case .card(let url, let title, let isEmbed):
+            CardBlockView(url: url, title: title, isEmbed: isEmbed)
+        case .extensionPlaceholder(let title, let body):
+            ExtensionPlaceholderBlockView(title: title, blocks: body)
         }
     }
 }
@@ -56,7 +55,11 @@ extension RenderBlock.Kind {
             return 6
         case .divider:
             return 8
-        case .codeBlock, .panel, .quote, .tableSlice, .media, .mediaStrip,
+        case .tableSlice:
+            // Slices of one table must abut seamlessly (a batched table is
+            // one visual unit), so slices carry no vertical padding.
+            return 0
+        case .codeBlock, .panel, .quote, .media, .mediaStrip,
              .expand, .layoutColumns, .card, .extensionPlaceholder:
             return 8
         }

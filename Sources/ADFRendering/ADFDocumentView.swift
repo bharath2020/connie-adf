@@ -22,9 +22,22 @@ public struct ADFDocumentView: View {
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                ForEach(model.blocks) { block in
-                    BlockView(block: block)
-                        .padding(.vertical, block.kind.defaultVerticalPadding)
+                // Blocks group into sections so a table's header slice pins
+                // (stays visible) while its row slices scroll beneath it.
+                ForEach(Self.sections(from: model.blocks)) { section in
+                    Section {
+                        ForEach(section.blocks) { block in
+                            BlockView(block: block)
+                                .padding(.vertical, block.kind.defaultVerticalPadding)
+                        }
+                    } header: {
+                        if let header = section.header {
+                            BlockView(block: header)
+                                // Opaque backdrop so pinned headers cover the
+                                // rows scrolling underneath.
+                                .background(Rectangle().fill(.background))
+                        }
+                    }
                 }
             }
             .scrollTargetLayout()
@@ -41,6 +54,49 @@ public struct ADFDocumentView: View {
         .environment(\.adfTheme, model.theme)
         .environment(\.adfMediaProvider, mediaProvider)
         .overlay { statusOverlay }
+    }
+
+    /// Groups the flat block list into lazy-stack sections: a table header
+    /// slice starts a section (as its pinned header) that contains the row
+    /// slices of the same table; every other run of blocks is a headerless
+    /// section. Section IDs are stable as chunks stream in, because blocks
+    /// only ever append at the end.
+    static func sections(from blocks: [RenderBlock]) -> [BlockSection] {
+        var sections: [BlockSection] = []
+        var plain: [RenderBlock] = []
+
+        func flushPlain() {
+            guard !plain.isEmpty else { return }
+            sections.append(BlockSection(id: "plain-\(plain[0].id)", header: nil, blocks: plain))
+            plain.removeAll()
+        }
+
+        var index = 0
+        while index < blocks.count {
+            let block = blocks[index]
+            guard case .tableSlice(_, _, isHeaderSlice: true) = block.kind else {
+                plain.append(block)
+                index += 1
+                continue
+            }
+            flushPlain()
+            // Header slice IDs are "<tableID>#header"; its row slices are
+            // "<tableID>#rows<n>" and follow contiguously.
+            let tablePrefix = String(block.id.prefix(while: { $0 != "#" })) + "#"
+            var rows: [RenderBlock] = []
+            var next = index + 1
+            while next < blocks.count {
+                let candidate = blocks[next]
+                guard case .tableSlice(_, _, isHeaderSlice: false) = candidate.kind,
+                      candidate.id.hasPrefix(tablePrefix) else { break }
+                rows.append(candidate)
+                next += 1
+            }
+            sections.append(BlockSection(id: block.id, header: block, blocks: rows))
+            index = next
+        }
+        flushPlain()
+        return sections
     }
 
     @ViewBuilder
@@ -62,4 +118,12 @@ public struct ADFDocumentView: View {
             EmptyView()
         }
     }
+}
+
+/// One lazy-stack section: an optional pinned header (a table's header
+/// slice) plus its content blocks.
+struct BlockSection: Identifiable {
+    let id: String
+    let header: RenderBlock?
+    let blocks: [RenderBlock]
 }
