@@ -12,6 +12,6 @@ let package = Package(
         .target(name: "ADFPreparation", dependencies: ["ADFModel"]),
         .target(name: "ADFRendering", dependencies: ["ADFModel", "ADFPreparation"]),
         .testTarget(name: "ADFModelTests", dependencies: ["ADFModel"]),
-        .testTarget(name: "ADFPreparationTests", dependencies: ["ADFPreparation"]),
+        .testTarget(name: "ADFPreparationTests", dependencies: ["ADFPreparation", "ADFModel"]),
     ]
 )
