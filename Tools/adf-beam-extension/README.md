@@ -51,6 +51,30 @@ Clicking the toolbar action again closes the overlay. On a non-Confluence
 page, an unrecognized URL, or a failed API fetch, the overlay shows an error
 message instead of a QR.
 
+## No-extension mode (`beam.html`)
+
+Where a managed browser blocks extensions (a corporate `ExtensionSettings`
+policy), `beam.html` does the same job with no install and no scripting of the
+Confluence page:
+
+1. On the Confluence page, open this in the address bar (it uses your existing
+   logged-in session — no token, no auth flow):
+   `https://<site>.atlassian.net/wiki/api/v2/pages/<PAGE_ID>?body-format=atlas_doc_format`
+   (the `<PAGE_ID>` is the number in the page URL's `/pages/<id>/` segment).
+2. Select all, copy the JSON it shows.
+3. Open `beam.html` in any browser, paste, press **Beam**. It renders the same
+   cycling QR with fps + chunk-size controls and "Copy all frames".
+4. Scan with ADFReader (or use Copy all frames → Scan → Paste).
+
+`beam.html` accepts either the full API response (it unwraps
+`body.atlas_doc_format.value`) or a bare ADF document. It runs entirely
+locally — the same `shared/protocol.js` + vendored `pako`/`qrcode`, no
+extension APIs — so it works from a `file://` path on a locked-down browser.
+
+Note: this is for content you're entitled to move. On a managed device the
+extension block often reflects a deliberate data-handling policy; clear
+corp-Confluence use with IT rather than routing around it.
+
 ## Protocol
 
 Each frame payload is a single line:

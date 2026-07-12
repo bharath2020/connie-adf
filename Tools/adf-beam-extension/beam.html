@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ADF Beam — standalone</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0; padding: 24px; display: flex; flex-direction: column;
+      align-items: center; gap: 16px; background: #091e42; color: #fff;
+    }
+    h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    .intro { max-width: 640px; font-size: 13px; line-height: 1.5; opacity: 0.85; text-align: center; }
+    .intro code { background: rgba(255,255,255,0.15); padding: 1px 5px; border-radius: 4px; }
+    #input { width: min(92vw, 640px); }
+    textarea {
+      width: 100%; height: 130px; font: 12px/1.4 ui-monospace, monospace;
+      border-radius: 8px; border: none; padding: 10px; box-sizing: border-box; resize: vertical;
+    }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
+    button {
+      border: none; border-radius: 6px; padding: 9px 16px; font-size: 13px;
+      font-weight: 500; cursor: pointer; background: #0c66e4; color: #fff;
+    }
+    button.secondary { background: rgba(255,255,255,0.16); }
+    button:hover { filter: brightness(1.1); }
+    #stage { display: none; flex-direction: column; align-items: center; gap: 10px; }
+    #stage.visible { display: flex; }
+    .panel { background: #fff; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    #title { color: #172b4d; font-size: 15px; font-weight: 600; max-width: 78vmin; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    canvas#qr { width: min(78vmin, 620px); height: min(78vmin, 620px); image-rendering: pixelated; }
+    #counter { color: #44546f; font-variant-numeric: tabular-nums; font-size: 14px; }
+    #controls { color: #44546f; font-size: 13px; }
+    #controls label { display: inline-flex; align-items: center; gap: 6px; }
+    #error { color: #ffb4a8; font-size: 14px; max-width: 640px; text-align: center; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <h1>ADF Beam — standalone</h1>
+  <p class="intro">
+    No extension needed. On a Confluence page, open
+    <code>/wiki/api/v2/pages/&lt;id&gt;?body-format=atlas_doc_format</code>
+    in the address bar (it uses your logged-in session), copy the JSON it shows,
+    paste it below, and press <b>Beam</b>. Scan the animated QR with ADFReader.
+    A bare ADF document (starting with <code>{"type":"doc"</code>) works too.
+  </p>
+  <div id="input">
+    <textarea id="json" placeholder="Paste the Confluence API JSON (or a bare ADF doc) here…" autocomplete="off" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:10px;">
+      <button id="beam">Beam</button>
+      <button id="paste" class="secondary">Paste from clipboard</button>
+    </div>
+  </div>
+  <div id="error"></div>
+  <div id="stage">
+    <div class="panel">
+      <div id="title">ADF Beam</div>
+      <canvas id="qr" width="640" height="640"></canvas>
+      <div id="counter"></div>
+    </div>
+    <div id="controls" class="row">
+      <label>Speed <input type="range" id="fps" min="1" max="15" step="1" value="5"><span id="fpsv">5 fps</span></label>
+      <label>Chunk size
+        <select id="chunk">
+          <option value="300">300 B</option>
+          <option value="500">500 B</option>
+          <option value="800" selected>800 B</option>
+          <option value="1200">1200 B</option>
+        </select>
+      </label>
+      <button id="copy" class="secondary">Copy all frames</button>
+    </div>
+  </div>
+
+  <script src="lib/pako.min.js"></script>
+  <script src="lib/qrcode.js"></script>
+  <script src="shared/protocol.js"></script>
+  <script>
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const state = { json: null, docId: null, frames: [], index: 0, fps: 5, chunkSize: 800, timer: null };
+
+    function showError(msg) { $('error').textContent = msg || ''; }
+
+    // Accept either the full API response or a bare ADF doc; return the ADF
+    // document JSON *string* the frames should carry, plus a docId.
+    function extractADF(raw) {
+      const parsed = JSON.parse(raw); // throws -> caught by caller
+      if (parsed && parsed.type === 'doc') {
+        return { json: JSON.stringify(parsed), docId: 'pasted-' + Date.now(), title: 'Pasted ADF' };
+      }
+      const value = parsed && parsed.body && parsed.body.atlas_doc_format && parsed.body.atlas_doc_format.value;
+      if (typeof value === 'string' && value.length > 0) {
+        const id = parsed.id || 'page';
+        const version = (parsed.version && parsed.version.number) || 0;
+        return { json: value, docId: `${id}-${version}`, title: parsed.title || 'Confluence page' };
+      }
+      throw new Error('Not a Confluence page response or an ADF document.');
+    }
+
+    function drawFrame() {
+      if (state.frames.length === 0) return;
+      const qr = qrcode(0, 'L');
+      qr.addData(state.frames[state.index], 'Byte');
+      qr.make();
+      const modules = qr.getModuleCount();
+      const quiet = 4;
+      const canvas = $('qr');
+      const scale = Math.max(1, Math.floor(canvas.width / (modules + quiet * 2)));
+      const size = (modules + quiet * 2) * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#000';
+      const origin = Math.floor((canvas.width - size) / 2) + quiet * scale;
+      for (let r = 0; r < modules; r++) {
+        for (let c = 0; c < modules; c++) {
+          if (qr.isDark(r, c)) ctx.fillRect(origin + c * scale, origin + r * scale, scale, scale);
+        }
+      }
+      $('counter').textContent = `Frame ${state.index + 1} / ${state.frames.length}`;
+      state.index = (state.index + 1) % state.frames.length;
+    }
+
+    function restart() {
+      if (state.timer) clearInterval(state.timer);
+      state.index = 0;
+      drawFrame();
+      state.timer = setInterval(drawFrame, 1000 / state.fps);
+    }
+
+    function rebuild() {
+      state.frames = ADFBeamProtocol.encodeFrames(state.json, state.docId, state.chunkSize);
+      restart();
+    }
+
+    $('beam').addEventListener('click', () => {
+      showError('');
+      const raw = $('json').value.trim();
+      if (!raw) { showError('Paste some JSON first.'); return; }
+      let extracted;
+      try { extracted = extractADF(raw); }
+      catch (e) { showError('Could not read that JSON: ' + e.message); return; }
+      state.json = extracted.json;
+      state.docId = extracted.docId;
+      $('title').textContent = extracted.title;
+      $('stage').classList.add('visible');
+      rebuild();
+    });
+
+    $('paste').addEventListener('click', async () => {
+      try { $('json').value = await navigator.clipboard.readText(); }
+      catch (e) { showError('Clipboard read blocked — paste manually with Cmd/Ctrl+V.'); }
+    });
+
+    $('fps').addEventListener('input', (e) => {
+      state.fps = Number(e.target.value);
+      $('fpsv').textContent = state.fps + ' fps';
+      if (state.frames.length) restart();
+    });
+    $('chunk').addEventListener('change', (e) => {
+      state.chunkSize = Number(e.target.value);
+      if (state.json) rebuild();
+    });
+    $('copy').addEventListener('click', async () => {
+      const btn = $('copy');
+      try { await navigator.clipboard.writeText(state.frames.join('\n')); btn.textContent = `Copied ${state.frames.length} frames`; }
+      catch (e) { btn.textContent = 'Copy failed'; }
+      setTimeout(() => { btn.textContent = 'Copy all frames'; }, 2000);
+    });
+  </script>
+</body>
+</html>
