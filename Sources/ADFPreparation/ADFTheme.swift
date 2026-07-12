@@ -56,17 +56,24 @@ public struct ADFTheme: Sendable, Hashable {
         }
     }
 
-    /// Derived font for `fontSize: "small"` runs (0.85× body).
+    /// Font for `fontSize: "small"` runs. A semantic text style (not a fixed
+    /// point size) so the run scales with Dynamic Type alongside body text —
+    /// `.subheadline` is ~0.88× body, matching the intended "slightly smaller".
     var smallFont: Font {
-        .system(size: bodyPointSize * 0.85)
+        .subheadline
     }
 
-    /// Derived font for sub/superscript runs (0.75× body).
+    /// Font for sub/superscript runs. `.footnote` (~0.76× body) as a semantic
+    /// style so it tracks Dynamic Type; a fixed `.system(size:)` would freeze
+    /// while the surrounding body text grew.
     func subsupFont(monospaced: Bool) -> Font {
-        .system(size: bodyPointSize * 0.75, design: monospaced ? .monospaced : .default)
+        .system(.footnote, design: monospaced ? .monospaced : .default)
     }
 
-    /// Baseline shift for sub/superscript runs (±30% of body size).
+    /// Baseline shift for sub/superscript runs at the default text size
+    /// (±30% of body). The view scales this by the live Dynamic Type factor
+    /// (`SegmentedTextView`), so the raise tracks the growing font rather than
+    /// staying a fixed point value.
     func subsupBaselineOffset(isSup: Bool) -> CGFloat {
         (isSup ? 1 : -1) * bodyPointSize * 0.3
     }

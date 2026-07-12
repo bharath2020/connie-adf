@@ -14,16 +14,38 @@ struct SegmentedTextView: View {
     /// tracks the text size it separates.
     @ScaledMetric(relativeTo: .body) private var lineSpacing: CGFloat = 3
 
+    /// The live Dynamic Type factor: `1` at the default size, growing with
+    /// larger accessibility sizes. Used to scale sub/superscript baseline
+    /// offsets, which are baked as fixed points at preparation time and would
+    /// otherwise stay put while the font grew.
+    @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
+
     var body: some View {
         if let merged = Self.mergedText(segments) {
-            Text(merged)
+            Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
         } else {
             WrappingInlineLayout(lineSpacing: lineSpacing) {
                 ForEach(Self.tokens(for: segments)) { token in
-                    InlineTokenView(token: token)
+                    InlineTokenView(token: token, typeScale: typeScale)
                 }
             }
         }
+    }
+
+    /// Multiplies any baked sub/superscript baseline offsets by the Dynamic
+    /// Type factor so the raise/drop tracks the font size. Returns the input
+    /// untouched at the default size (factor `1`) — the overwhelmingly common
+    /// case does zero work and never walks the runs.
+    static func scalingBaselineOffsets(in text: AttributedString, by factor: CGFloat) -> AttributedString {
+        guard factor != 1 else { return text }
+        var scaled = text
+        let edits: [(Range<AttributedString.Index>, CGFloat)] = scaled.runs.compactMap { run in
+            run.baselineOffset.map { (run.range, $0 * factor) }
+        }
+        for (range, offset) in edits {
+            scaled[range].baselineOffset = offset
+        }
+        return scaled
     }
 
     /// The pre-merged text run for all-text content, or `nil` when any
@@ -86,11 +108,14 @@ struct InlineToken: Identifiable, Hashable {
 
 struct InlineTokenView: View {
     let token: InlineToken
+    /// Live Dynamic Type factor for scaling sub/superscript baseline offsets
+    /// on word-chunk text tokens (see `SegmentedTextView`).
+    var typeScale: CGFloat = 1
 
     var body: some View {
         switch token.kind {
         case .text(let text):
-            Text(text)
+            Text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale))
         case .atom(let atom):
             AtomView(atom: atom)
         case .lineBreak:
