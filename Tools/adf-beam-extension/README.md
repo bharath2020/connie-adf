@@ -8,9 +8,22 @@ cycles it as QR frames; ADFReader's **Scan** screen collects the frames
 
 ## Install (unpacked, dev mode)
 
+Fetch the extension (the repo is private, so use an authenticated `gh` CLI —
+`brew install gh && gh auth login` — and ask for collaborator access):
+
+```bash
+gh api repos/bharath2020/connie-adf/tarball/main | tar xz --strip-components=2 "*/Tools/adf-beam-extension"
+```
+
+This leaves an `adf-beam-extension/` folder. Then, one time:
+
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top right).
-3. Click **Load unpacked** and select this directory (`Tools/adf-beam-extension`).
+3. Click **Load unpacked** and select the `adf-beam-extension` folder
+   (or `Tools/adf-beam-extension` if you cloned the repo).
+
+To update later, re-run the fetch command in the same place and press the
+reload arrow on the extension's card in `chrome://extensions`.
 
 ## Usage
 
