@@ -154,6 +154,19 @@ Validated in the simulator matrix: iPhone 16 Plus portrait/landscape, iPad Pro 1
 
 ---
 
+## 17. ADF Beam: animated-QR transfer with a raw-deflate frame protocol
+
+**Chosen (2026-07-11):** Confluence-page-to-ADFReader transfer works server-lessly through a dev-mode Chrome extension that fetches the page's ADF over the browser's existing session (`/wiki/api/v2/pages/{id}?body-format=atlas_doc_format`) and cycles it as animated QR frames; the app's Scan screen collects frames via camera or pasted payloads.
+
+- **Frame protocol:** `ADF1|<docId>|<index>|<total>|<data>`, where `data` is a base64 slice (default 800 bytes) of the compressed document. Pipes cannot appear in base64, so a plain split parses it; index/total make frames self-describing, letting the collector accept any order, drop duplicates, and reset on a docId or total change (a new copy of the page mid-scan restarts cleanly).
+- **Raw deflate, asserted cross-implementation.** pako's default `deflate()` emits zlib-wrapped data, but Apple's `Compression` framework `COMPRESSION_ZLIB` is *raw* deflate — the two silently disagree. Both sides use raw deflate (`pako.deflateRaw`/`inflateRaw` ↔ `COMPRESSION_ZLIB`), and a shared fixture (`make-fixture.mjs` → `kitchen-sink.chunks.txt`) is decoded by a Swift test (`CrossImplementationTests`) to prove byte-identical agreement between the JS encoder and Swift decoder.
+- **The protocol core is a Foundation-only SPM target (`ADFBeam`)**, so parsing/collection/decompression are `swift test`-able on macOS; the app layer (`ScanView`) adds only camera plumbing, haptics, and navigation into the existing `ReaderView` via a temp-file `Fixture`.
+- **Paste is a first-class ingestion path**, not a debug hack: the paste sheet feeds the identical collector/assembler pipeline as the camera, which is what makes the end-to-end acceptance automatable on the simulator (no camera there).
+
+The extension is MV3 with no build step (`pako`/`qrcode-generator` vendored; CSP-safe), injecting the overlay via `chrome.scripting` on toolbar click with `activeTab` + `*.atlassian.net` host permissions.
+
+---
+
 ## Summary of measurement-driven reversals
 
 | Initial choice | Measured problem | Final choice |
