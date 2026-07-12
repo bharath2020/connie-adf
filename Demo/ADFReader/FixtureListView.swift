@@ -32,14 +32,24 @@ struct FixtureListView: View {
     private let fixtures = Fixture.all
 
     var body: some View {
-        List(fixtures) { fixture in
-            NavigationLink(value: fixture) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(fixture.name)
-                        .font(.headline)
-                    Text(sizeDescription(of: fixture.url))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        List {
+            NavigationLink {
+                ScanView()
+            } label: {
+                Label("Scan", systemImage: "qrcode.viewfinder")
+                    .font(.headline)
+            }
+            Section("Fixtures") {
+                ForEach(fixtures) { fixture in
+                    NavigationLink(value: fixture) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(fixture.name)
+                                .font(.headline)
+                            Text(sizeDescription(of: fixture.url))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
         }

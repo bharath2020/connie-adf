@@ -18,12 +18,15 @@ targets:
     dependencies:
       - package: ADFKit
         product: ADFKit
+      - package: ADFKit
+        product: ADFBeam
     info:
       path: ADFReader/Info.plist
       properties:
         CFBundleDisplayName: ADFReader
         CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: {}
+        NSCameraUsageDescription: Scans ADF Beam QR codes to import documents.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
