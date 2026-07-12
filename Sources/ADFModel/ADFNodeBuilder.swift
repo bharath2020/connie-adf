@@ -254,7 +254,13 @@ struct ADFNodeBuilder {
                 shortName = ""
                 issues.append(ADFParseIssue(path: path, message: "Emoji missing 'shortName'"))
             }
-            kind = .emoji(shortName: shortName, text: attrs?["text"]?.stringValue)
+            kind = .emoji(
+                shortName: shortName,
+                text: Self.normalizedEmojiText(
+                    text: attrs?["text"]?.stringValue,
+                    id: attrs?["id"]?.stringValue
+                )
+            )
 
         case "date":
             // Schema: `timestamp` is a STRING of epoch milliseconds.
@@ -386,5 +392,57 @@ struct ADFNodeBuilder {
                               extensionKey: extensionKey,
                               text: attrs?["text"]?.stringValue,
                               parameters: attrs?["parameters"])
+    }
+
+    // MARK: - Emoji text normalization
+
+    /// Confluence Cloud's atlas_doc_format delivers emoji `text` as literal
+    /// `\uXXXX` escape text (the backslash survives JSON decoding), with the
+    /// character's hex codepoints in `id` (dash-separated for ZWJ sequences).
+    private static func normalizedEmojiText(text: String?, id: String?) -> String? {
+        if let text, text.isEmpty == false {
+            return decodingUnicodeEscapes(text)
+        }
+        if let id, let fromId = emojiString(hexCodepoints: id) {
+            return fromId
+        }
+        return nil
+    }
+
+    /// Decodes literal `\uXXXX` sequences, pairing UTF-16 surrogates.
+    private static func decodingUnicodeEscapes(_ string: String) -> String {
+        guard string.contains("\\u") else { return string }
+        var units: [UInt16] = []
+        var result = ""
+        var index = string.startIndex
+        func flushUnits() {
+            guard units.isEmpty == false else { return }
+            result += String(decoding: units, as: UTF16.self)
+            units.removeAll()
+        }
+        while index < string.endIndex {
+            if string[index] == "\\",
+               let end = string.index(index, offsetBy: 6, limitedBy: string.endIndex),
+               string[string.index(after: index)] == "u",
+               let unit = UInt16(string[string.index(index, offsetBy: 2)..<end], radix: 16) {
+                units.append(unit)
+                index = end
+            } else {
+                flushUnits()
+                result.append(string[index])
+                index = string.index(after: index)
+            }
+        }
+        flushUnits()
+        return result
+    }
+
+    /// "1f5d3" or "1f468-200d-1f4bb" → the character; nil for non-hex ids
+    /// (custom workspace emojis), which fall back to the `:shortName:` atom.
+    private static func emojiString(hexCodepoints id: String) -> String? {
+        let parts = id.split(separator: "-")
+        let scalars = parts.compactMap { UInt32($0, radix: 16).flatMap(Unicode.Scalar.init) }
+        guard parts.isEmpty == false, scalars.count == parts.count else { return nil }
+        return String(String.UnicodeScalarView(scalars))
     }
 }

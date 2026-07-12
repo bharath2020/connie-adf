@@ -1,0 +1,73 @@
+{
+  "stage": "interview",
+  "title": "ADF Beam: Confluence QR to ADFReader",
+  "goalSlug": "adf-beam",
+  "questions": [
+    {
+      "id": "acceptance-bar",
+      "prompt": "What is the end-to-end acceptance bar — the demo that proves this goal is done?",
+      "description": "This becomes the top-line validation fact.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "On a physical iPhone running ADFReader, scan the animated QR shown by the extension on a real Confluence page (e.g., the 2026-06-03 meeting notes page) and see it rendered correctly in the app.",
+      "recommendedOptionIds": ["real-device-real-page"],
+      "options": [
+        { "id": "real-device-real-page", "label": "Real iPhone + real Confluence page, end-to-end scan and render" },
+        { "id": "simulator-paste", "label": "Simulator with pasted chunk payloads is enough (no device required)" },
+        { "id": "both", "label": "Both: automated round-trip tests must pass AND real-device scan must work" }
+      ],
+      "required": true
+    },
+    {
+      "id": "automated-validation",
+      "prompt": "Which automated checks should gate completion?",
+      "answerMode": "multi-custom",
+      "recommendedAnswer": "Swift unit tests for chunk reassembly + inflate round-trip against fixtures; an extension-side round-trip test page proving chunk → QR → decode → reassemble equals the original ADF.",
+      "recommendedOptionIds": ["swift-roundtrip", "ext-roundtrip"],
+      "options": [
+        { "id": "swift-roundtrip", "label": "Swift tests: chunk reassembly + decompress round-trip on fixtures" },
+        { "id": "ext-roundtrip", "label": "Extension test page: compress/chunk/encode round-trip in browser" },
+        { "id": "protocol-fixtures", "label": "Shared protocol fixtures: same chunk payloads verified on both sides" }
+      ],
+      "required": true
+    },
+    {
+      "id": "scan-performance",
+      "prompt": "Should scan time be part of acceptance criteria, and at what bar?",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "A typical (~50 KB ADF) page completes a scan in under 10 seconds under normal conditions.",
+      "recommendedOptionIds": ["typical-10s"],
+      "options": [
+        { "id": "typical-10s", "label": "Typical page scans in under 10 seconds" },
+        { "id": "no-perf-gate", "label": "No timing criteria — correctness and feedback only" },
+        { "id": "strict", "label": "Stricter: typical page under 5 seconds, include large-page bar too" }
+      ],
+      "required": true
+    },
+    {
+      "id": "tuning-controls",
+      "prompt": "Include live tuning controls (fps / chunk size) in the extension overlay for v1?",
+      "answerMode": "single",
+      "recommendedAnswer": "Yes to fps slider (cheap, helps find reliable scan rate on your monitor); fixed 800-byte chunk size for v1.",
+      "recommendedOptionIds": ["fps-only"],
+      "options": [
+        { "id": "fps-only", "label": "fps control only, fixed chunk size" },
+        { "id": "both-controls", "label": "Both fps and chunk-size controls" },
+        { "id": "none", "label": "No controls — fixed defaults" }
+      ],
+      "required": true
+    },
+    {
+      "id": "scope-confirm",
+      "prompt": "Confirm scope boundaries (inferred from our design discussion).",
+      "description": "In: MV3 unpacked extension under Tools/, Confluence Cloud only (*.atlassian.net), toolbar-triggered overlay, ADFReader scan entry with progress/haptics/success, simulator paste-injection dev path. Out: Chrome Web Store publishing, Confluence Data Center/Server, auth flows, fountain codes, Android.",
+      "answerMode": "single-custom",
+      "recommendedAnswer": "Scope as stated.",
+      "recommendedOptionIds": ["as-stated"],
+      "options": [
+        { "id": "as-stated", "label": "Scope as stated" },
+        { "id": "adjust", "label": "Adjust (add a note)" }
+      ],
+      "required": true
+    }
+  ]
+}

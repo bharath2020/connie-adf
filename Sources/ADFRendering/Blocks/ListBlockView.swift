@@ -47,7 +47,7 @@ struct ListRowView: View {
         .padding(isDecision ? theme.spacing : 0)
         .background {
             if isDecision {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                     .fill(Color.gray.opacity(0.08))
             }
         }
@@ -86,7 +86,8 @@ struct ListRowView: View {
         }
     }
 
-    /// Bullet glyph per nesting depth: • ◦ ▪ cycling every three levels.
+    /// Bullet glyph per bullet-list nesting level (ordered-list ancestors
+    /// don't count): • ◦ ▪ cycling every three levels.
     static func bulletGlyph(depth: Int) -> String {
         switch max(depth, 0) % 3 {
         case 0: return "•"

@@ -1,0 +1,112 @@
+#adf-beam-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(9, 30, 66, 0.88);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#adf-beam-overlay .adf-beam-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  max-width: min(92vw, 720px);
+}
+
+#adf-beam-overlay .adf-beam-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+#adf-beam-overlay .adf-beam-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #172b4d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#adf-beam-overlay .adf-beam-close {
+  border: none;
+  background: #f4f5f7;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  cursor: pointer;
+  color: #42526e;
+}
+
+#adf-beam-overlay .adf-beam-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+#adf-beam-overlay .adf-beam-qr {
+  width: min(78vmin, 640px);
+  height: min(78vmin, 640px);
+  image-rendering: pixelated;
+}
+
+#adf-beam-overlay .adf-beam-status {
+  padding: 24px;
+  font-size: 15px;
+  color: #172b4d;
+  max-width: 480px;
+  text-align: center;
+}
+
+#adf-beam-overlay .adf-beam-status.adf-beam-error {
+  color: #ae2a19;
+  background: #ffedeb;
+  border-radius: 8px;
+}
+
+#adf-beam-overlay .adf-beam-counter {
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  color: #44546f;
+}
+
+#adf-beam-overlay .adf-beam-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+  color: #44546f;
+}
+
+#adf-beam-overlay .adf-beam-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#adf-beam-overlay .adf-beam-copy {
+  border: none;
+  background: #0c66e4;
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+#adf-beam-overlay .adf-beam-copy:hover {
+  background: #0055cc;
+}

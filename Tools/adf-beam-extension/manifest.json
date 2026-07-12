@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "ADF Beam",
+  "version": "0.1.0",
+  "description": "Beam the current Confluence Cloud page's ADF to ADFReader via an animated QR overlay.",
+  "action": {
+    "default_title": "Beam this page's ADF"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": ["https://*.atlassian.net/*"]
+}

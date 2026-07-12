@@ -15,17 +15,31 @@ public struct ADFTheme: Sendable, Hashable {
     /// Point size backing `body`. Used to derive metrics that need numbers
     /// (sub/superscript offset and size, the `fontSize: "small"` mark).
     public var bodyPointSize: CGFloat
+    /// Corner radius for chip-scale elements (inline atoms, unknown-content
+    /// pills, card icon wells).
+    public var chipCornerRadius: CGFloat
+    /// Corner radius for block containers (panels, code blocks, expands,
+    /// media boxes, decision rows).
+    public var containerCornerRadius: CGFloat
+    /// Corner radius for interactive cards (smart-link block/embed cards).
+    public var cardCornerRadius: CGFloat
 
     public init(
         body: Font = .body,
         code: Font = .system(.body, design: .monospaced),
         spacing: CGFloat = 8,
-        bodyPointSize: CGFloat = 17
+        bodyPointSize: CGFloat = 17,
+        chipCornerRadius: CGFloat = 6,
+        containerCornerRadius: CGFloat = 8,
+        cardCornerRadius: CGFloat = 10
     ) {
         self.body = body
         self.code = code
         self.spacing = spacing
         self.bodyPointSize = bodyPointSize
+        self.chipCornerRadius = chipCornerRadius
+        self.containerCornerRadius = containerCornerRadius
+        self.cardCornerRadius = cardCornerRadius
     }
 
     public static let `default` = ADFTheme()
