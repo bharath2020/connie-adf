@@ -24,6 +24,11 @@ targets:
       path: ADFReader/Info.plist
       properties:
         CFBundleDisplayName: ADFReader
+        # Keep the packaged plist in lockstep with the build settings —
+        # xcodegen writes literal values, so without these the generated
+        # Info.plist stays frozen at its first-generation numbers.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: {}
         NSCameraUsageDescription: Scans ADF Beam QR codes to import documents.
@@ -47,7 +52,7 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "4"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
         # The app defines no App Intents; skipping extraction silences the
