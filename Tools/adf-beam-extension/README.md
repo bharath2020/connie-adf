@@ -8,22 +8,30 @@ cycles it as QR frames; ADFReader's **Scan** screen collects the frames
 
 ## Install (unpacked, dev mode)
 
-Fetch the extension (the repo is private, so use an authenticated `gh` CLI —
-`brew install gh && gh auth login` — and ask for collaborator access):
+Fetch the extension (no account or auth needed — it's mirrored to a public
+repo, https://github.com/bharath2020/adf-beam-extension):
 
 ```bash
-gh api repos/bharath2020/connie-adf/tarball/main | tar xz --strip-components=2 "*/Tools/adf-beam-extension"
+curl -sL https://github.com/bharath2020/adf-beam-extension/archive/main.tar.gz | tar xz
 ```
 
-This leaves an `adf-beam-extension/` folder. Then, one time:
+This leaves an `adf-beam-extension-main/` folder. Then, one time:
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top right).
-3. Click **Load unpacked** and select the `adf-beam-extension` folder
-   (or `Tools/adf-beam-extension` if you cloned the repo).
+3. Click **Load unpacked** and select the `adf-beam-extension-main` folder
+   (or `Tools/adf-beam-extension` if you work in the main repo).
 
 To update later, re-run the fetch command in the same place and press the
 reload arrow on the extension's card in `chrome://extensions`.
+
+Maintainers: this directory lives in the (private) `connie-adf` repo and is
+mirrored to the public repo with
+
+```bash
+git subtree split --prefix=Tools/adf-beam-extension -b extension-public main
+git push https://github.com/bharath2020/adf-beam-extension.git extension-public:main
+```
 
 ## Usage
 
