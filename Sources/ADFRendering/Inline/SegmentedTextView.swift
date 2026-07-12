@@ -10,11 +10,15 @@ import ADFPreparation
 struct SegmentedTextView: View {
     let segments: [InlineSegment]
 
+    /// Gap between wrapped lines, scaled with Dynamic Type so line rhythm
+    /// tracks the text size it separates.
+    @ScaledMetric(relativeTo: .body) private var lineSpacing: CGFloat = 3
+
     var body: some View {
         if let merged = Self.mergedText(segments) {
             Text(merged)
         } else {
-            WrappingInlineLayout(lineSpacing: 3) {
+            WrappingInlineLayout(lineSpacing: lineSpacing) {
                 ForEach(Self.tokens(for: segments)) { token in
                     InlineTokenView(token: token)
                 }
@@ -104,14 +108,30 @@ struct LineBreakLayoutKey: LayoutValueKey {
 
 /// Flow layout: places subviews left-to-right, wrapping to a new line when
 /// the proposed width is exhausted (or on an explicit line-break subview).
-/// Items on a line are vertically centered against the line's height.
+/// Items on a line share one text baseline — mixed font sizes (small marks,
+/// sub/superscript) and atom pills sit on the same line as the prose around
+/// them, exactly as `Text` would place them. Centering against the line
+/// height instead makes baselines diverge by half the height difference.
 struct WrappingInlineLayout: Layout {
     var lineSpacing: CGFloat = 3
 
+    private struct Item {
+        let index: Int
+        let size: CGSize
+        /// Distance from the item's top edge to its first text baseline.
+        /// Views without text report their bottom edge, which keeps pills
+        /// whose baseline doesn't propagate resting on the line's baseline.
+        let ascent: CGFloat
+    }
+
     private struct Row {
-        var items: [(index: Int, size: CGSize)] = []
+        var items: [Item] = []
         var width: CGFloat = 0
-        var height: CGFloat = 0
+        /// Tallest top-to-baseline distance on the row.
+        var ascent: CGFloat = 0
+        /// Deepest baseline-to-bottom distance on the row.
+        var descent: CGFloat = 0
+        var height: CGFloat { ascent + descent }
     }
 
     private func rows(subviews: Subviews, maxWidth: CGFloat) -> [Row] {
@@ -119,19 +139,22 @@ struct WrappingInlineLayout: Layout {
         var current = Row()
         for (index, subview) in subviews.enumerated() {
             if subview[LineBreakLayoutKey.self] {
-                current.items.append((index: index, size: .zero))
+                current.items.append(Item(index: index, size: .zero, ascent: 0))
                 rows.append(current)
                 current = Row()
                 continue
             }
-            let size = subview.sizeThatFits(.unspecified)
+            let dimensions = subview.dimensions(in: .unspecified)
+            let size = CGSize(width: dimensions.width, height: dimensions.height)
+            let ascent = dimensions[VerticalAlignment.firstTextBaseline]
             if !current.items.isEmpty, current.width + size.width > maxWidth {
                 rows.append(current)
                 current = Row()
             }
-            current.items.append((index: index, size: size))
+            current.items.append(Item(index: index, size: size, ascent: ascent))
             current.width += size.width
-            current.height = max(current.height, size.height)
+            current.ascent = max(current.ascent, ascent)
+            current.descent = max(current.descent, size.height - ascent)
         }
         if !current.items.isEmpty {
             rows.append(current)
@@ -154,15 +177,40 @@ struct WrappingInlineLayout: Layout {
         for row in rows(subviews: subviews, maxWidth: bounds.width) {
             var x = bounds.minX
             for item in row.items {
-                let yOffset = (row.height - item.size.height) / 2
                 subviews[item.index].place(
-                    at: CGPoint(x: x, y: y + yOffset),
+                    at: CGPoint(x: x, y: y + row.ascent - item.ascent),
                     anchor: .topLeading,
                     proposal: ProposedViewSize(item.size)
                 )
                 x += item.size.width
             }
             y += row.height + lineSpacing
+        }
+    }
+
+    /// A `Layout`'s default text baselines are its bottom edge; without real
+    /// ones, a baseline-aligned container (list rows, panels) would hang the
+    /// whole first line's height below its neighbor's baseline. Report the
+    /// first row's and last row's baselines.
+    func explicitAlignment(
+        of guide: VerticalAlignment,
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGFloat? {
+        switch guide {
+        case .firstTextBaseline:
+            let rows = rows(subviews: subviews, maxWidth: bounds.width)
+            guard let first = rows.first else { return nil }
+            return bounds.minY + first.ascent
+        case .lastTextBaseline:
+            let rows = rows(subviews: subviews, maxWidth: bounds.width)
+            guard let last = rows.last else { return nil }
+            let lastRowTop = rows.dropLast().reduce(CGFloat.zero) { $0 + $1.height + lineSpacing }
+            return bounds.minY + lastRowTop + last.ascent
+        default:
+            return nil
         }
     }
 }
