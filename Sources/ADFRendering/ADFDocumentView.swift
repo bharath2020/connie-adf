@@ -14,6 +14,17 @@ public struct ADFDocumentView: View {
     /// when this view is torn down.
     @State private var tableScrollSync = TableScrollSync()
 
+    /// Readable measure: the column of text is capped near UIKit's readable
+    /// content width and centered, so full-screen iPad and landscape layouts
+    /// don't run body text to unreadable line lengths. Scaled with Dynamic
+    /// Type — larger text earns a proportionally wider column.
+    @ScaledMetric(relativeTo: .body) private var readableWidth: CGFloat = 672
+
+    /// Current content-column width, observed once at the document level and
+    /// passed to every row so collapsed spacers can tell when their cached
+    /// height was measured at a different width (rotation, Split View).
+    @State private var containerWidth = CGFloat.zero
+
     public init(model: ADFDocumentModel, mediaProvider: any ADFMediaProvider) {
         self.model = model
         self.mediaProvider = mediaProvider
@@ -37,7 +48,11 @@ public struct ADFDocumentView: View {
                     ForEach(model.sections) { section in
                         Section {
                             ForEach(section.blocks) { block in
-                                DocumentRow(block: block, margin: model.theme.spacing * 2)
+                                DocumentRow(
+                                    block: block,
+                                    margin: model.theme.spacing * 2,
+                                    containerWidth: containerWidth
+                                )
                             }
                         } header: {
                             if let header = section.header {
@@ -50,6 +65,13 @@ public struct ADFDocumentView: View {
                     }
                 }
                 .padding(.horizontal, model.theme.spacing * 2)
+                .frame(maxWidth: readableWidth)
+                .frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.width
+                } action: { width in
+                    containerWidth = width
+                }
             }
             .background {
                 // The scroll-target observation lives in a leaf view so a
@@ -103,26 +125,55 @@ public struct ADFDocumentView: View {
 private struct DocumentRow: View {
     let block: RenderBlock
     let margin: CGFloat
+    /// The document's current content-column width (observed once by
+    /// `ADFDocumentView`, constant during scroll).
+    let containerWidth: CGFloat
 
     /// Rendered height captured while the row is live; `nil` until first
     /// materialization (a row must never collapse before it was measured).
-    @State private var measuredHeight: CGFloat?
+    /// The height is exact only for the container width it was measured at.
+    /// After a window resize (rotation, iPad Split View) a collapsed row
+    /// must NOT re-materialize to re-measure: mass-materializing every
+    /// stale row changes hundreds of row sizes at once, the lazy stack's
+    /// scroll-offset compensation shifts the render region, appear/disappear
+    /// states flip, and the feedback loop livelocks layout at 100% CPU
+    /// (observed on entering Split View, `makeSizeChangeTranslation` hot in
+    /// every sample). Instead the spacer scales its cached height by the
+    /// width ratio — text reflow is roughly inverse in width — keeping
+    /// spacer height a pure function of stored state with no layout
+    /// feedback. The exact height is re-measured when the row naturally
+    /// re-enters the render region, like first materialization.
+    @State private var measured: MeasuredSize?
     @State private var isInRenderRegion = false
+
+    private struct MeasuredSize: Equatable {
+        var containerWidth: CGFloat
+        var height: CGFloat
+    }
+
+    private var spacerHeight: CGFloat? {
+        guard let measured else { return nil }
+        guard measured.containerWidth > 0, containerWidth > 0,
+              abs(measured.containerWidth - containerWidth) > 0.5 else {
+            return measured.height
+        }
+        return measured.height * measured.containerWidth / containerWidth
+    }
 
     var body: some View {
         Group {
-            if isInRenderRegion || measuredHeight == nil {
+            if isInRenderRegion || measured == nil {
                 BlockView(block: block)
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
                     .onGeometryChange(for: CGFloat.self) { proxy in
                         proxy.size.height
                     } action: { height in
-                        measuredHeight = height
+                        measured = MeasuredSize(containerWidth: containerWidth, height: height)
                     }
             } else {
                 Color.clear
-                    .frame(height: measuredHeight ?? 0)
+                    .frame(height: spacerHeight ?? 0)
             }
         }
         .onAppear { isInRenderRegion = true }
