@@ -57,14 +57,33 @@ Where a managed browser blocks extensions (a corporate `ExtensionSettings`
 policy), `beam.html` does the same job with no install and no scripting of the
 Confluence page:
 
-1. On the Confluence page, open this in the address bar (it uses your existing
-   logged-in session — no token, no auth flow):
-   `https://<site>.atlassian.net/wiki/api/v2/pages/<PAGE_ID>?body-format=atlas_doc_format`
-   (the `<PAGE_ID>` is the number in the page URL's `/pages/<id>/` segment).
-2. Select all, copy the JSON it shows.
-3. Open `beam.html` in any browser, paste, press **Beam**. It renders the same
-   cycling QR with fps + chunk-size controls and "Copy all frames".
-4. Scan with ADFReader (or use Copy all frames → Scan → Paste).
+1. Get the page's ADF onto your clipboard. Either:
+   - **One click (bookmarklet):** drag `bookmarklet.txt`'s contents onto your
+     bookmarks bar (see *Bookmarklet* below). On any Confluence page, click it
+     — it fetches that page's ADF under your session and copies it. Or
+   - **Manual:** open
+     `https://<site>.atlassian.net/wiki/api/v2/pages/<PAGE_ID>?body-format=atlas_doc_format`
+     in the address bar (uses your session — no token, no auth flow;
+     `<PAGE_ID>` is the number in the page URL's `/pages/<id>/` segment), then
+     select all and copy.
+2. Open `beam.html` in any browser, press **Paste from clipboard** (or paste
+   manually), then **Beam**. It renders the same cycling QR with fps +
+   chunk-size controls and "Copy all frames".
+3. Scan with ADFReader (or use Copy all frames → Scan → Paste).
+
+### Bookmarklet
+
+`bookmarklet.js` is the readable source; `bookmarklet.txt` is the built,
+draggable `javascript:` URL (regenerate with `node build-bookmarklet.mjs`).
+To install: create a new bookmark and paste the `bookmarklet.txt` line as its
+URL. One click on a Confluence page fetches that page's ADF and copies it —
+then paste into `beam.html`.
+
+Why it works where the extension is blocked: a bookmarklet is not an
+extension, so a corporate `ExtensionSettings` policy doesn't restrict it, and
+Chrome exempts bookmarklets from the page's CSP. Its `fetch` is same-origin,
+so it rides your existing Confluence session. (Same data-handling caveat as
+above — use it for content you're entitled to move.)
 
 `beam.html` accepts either the full API response (it unwraps
 `body.atlas_doc_format.value`) or a bare ADF document. It runs entirely
