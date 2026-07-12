@@ -26,6 +26,15 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # iPad multitasking (Split View / Slide Over) requires all four
+        # orientations and resizable scenes (no UIRequiresFullScreen).
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # No custom crypto and no HTTPS beyond Apple-exempt use, so the build
         # skips the Missing Compliance prompt that otherwise blocks TestFlight.
         ITSAppUsesNonExemptEncryption: false
@@ -36,7 +45,7 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
         # The app defines no App Intents; skipping extraction silences the
         # appintentsmetadataprocessor "no dependency found" warning.
