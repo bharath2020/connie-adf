@@ -151,6 +151,12 @@ struct ScanView: View {
                     .scrollContentBackground(.hidden)
                     .padding(6)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                Button("Paste from Clipboard", systemImage: "doc.on.clipboard") {
+                    if let text = UIPasteboard.general.string {
+                        pastedText = text
+                    }
+                }
+                .buttonStyle(.bordered)
             }
             .padding()
             .navigationTitle("Paste Frames")
