@@ -56,6 +56,47 @@ struct PreparerTests {
         #expect(rows.map(\.marker) == [.bullet(depth: 0), .bullet(depth: 1)])
     }
 
+    @Test("mixed nesting cycles marker style per same-type level, not overall depth")
+    func mixedNestingMarkerStyles() async throws {
+        // ul > ol > ul > ol — per Atlassian's renderer CSS, marker style is
+        // keyed to how many *same-type* ancestors a list has: the inner ul has
+        // one ul ancestor (circle), the inner ol one ol ancestor (lower-alpha).
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[
+          {"type":"bulletList","content":[
+            {"type":"listItem","content":[
+              {"type":"paragraph","content":[{"type":"text","text":"level 1 bullet"}]},
+              {"type":"orderedList","content":[
+                {"type":"listItem","content":[
+                  {"type":"paragraph","content":[{"type":"text","text":"level 2 ordered"}]},
+                  {"type":"bulletList","content":[
+                    {"type":"listItem","content":[
+                      {"type":"paragraph","content":[{"type":"text","text":"level 3 bullet"}]},
+                      {"type":"orderedList","content":[
+                        {"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"level 4 ordered"}]}]}
+                      ]}
+                    ]}
+                  ]}
+                ]}
+              ]}
+            ]}
+          ]}
+        ]}
+        """)
+        let blocks = preparer.prepare(doc)
+        guard case .listRows(let rows) = try #require(blocks.first).kind else {
+            throw TestFailure("block is not listRows")
+        }
+        #expect(rows.map(\.marker) == [
+            .bullet(depth: 0),   // first ul level → disc
+            .ordered("1."),      // first ol level → decimal
+            .bullet(depth: 1),   // second ul level → circle
+            .ordered("a."),      // second ol level → lower-alpha
+        ])
+        // Indentation still follows overall nesting depth.
+        #expect(rows.map(\.depth) == [0, 1, 2, 3])
+    }
+
     @Test("listItem children preserve document order: code block before its explanation paragraph")
     func listItemCodeBlockBeforeParagraphKeepsOrder() async throws {
         let doc = try await parseDoc("""
