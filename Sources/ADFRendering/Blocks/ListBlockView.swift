@@ -47,7 +47,7 @@ struct ListRowView: View {
         .padding(isDecision ? theme.spacing : 0)
         .background {
             if isDecision {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                     .fill(Color.gray.opacity(0.08))
             }
         }

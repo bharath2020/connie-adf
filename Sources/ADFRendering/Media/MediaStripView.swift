@@ -28,6 +28,7 @@ struct MediaThumbnailView: View {
     let media: PreparedMedia
     let height: CGFloat
 
+    @Environment(\.adfTheme) private var theme
     @Environment(\.adfMediaProvider) private var provider
 
     @State private var loadedImage: Image?
@@ -37,28 +38,28 @@ struct MediaThumbnailView: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                 .fill(Color.gray.opacity(0.1))
             if let loadedImage {
                 loadedImage
                     .resizable()
                     .scaledToFill()
             } else if loadFailed {
-                VStack(spacing: 4) {
+                VStack(spacing: theme.spacing * 0.5) {
                     Image(systemName: "doc")
                     Text(media.attrs.alt ?? "Attachment")
                         .font(.caption2)
                         .lineLimit(1)
                 }
                 .foregroundStyle(.secondary)
-                .padding(4)
+                .padding(theme.spacing * 0.5)
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(.tertiary)
             }
         }
         .frame(width: thumbnailWidth, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: theme.containerCornerRadius))
         .modifier(ScrollVisibilityGate(isVisible: $isVisible))
         .task(id: isVisible) { await loadIfNeeded() }
         .onTapGesture {

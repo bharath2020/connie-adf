@@ -11,6 +11,8 @@ struct CardBlockView: View {
 
     @Environment(\.adfTheme) private var theme
     @Environment(\.openURL) private var openURL
+    /// Icon well sized against the `.callout` title so it grows with type.
+    @ScaledMetric(relativeTo: .callout) private var iconWellSize: CGFloat = 28
 
     var body: some View {
         Button(action: open) {
@@ -18,9 +20,9 @@ struct CardBlockView: View {
                 Image(systemName: isEmbed ? "rectangle.on.rectangle" : "link")
                     .imageScale(.small)
                     .foregroundStyle(Color.accentColor)
-                    .frame(width: 28, height: 28)
+                    .frame(width: iconWellSize, height: iconWellSize)
                     .background(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: theme.chipCornerRadius)
                             .fill(Color.accentColor.opacity(0.12))
                     )
                     .accessibilityHidden(true)
@@ -45,9 +47,9 @@ struct CardBlockView: View {
             }
             .padding(theme.spacing * 1.5)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.gray.opacity(0.2)))
-            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .background(RoundedRectangle(cornerRadius: theme.cardCornerRadius).fill(Color.gray.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: theme.cardCornerRadius).strokeBorder(Color.gray.opacity(0.2)))
+            .contentShape(RoundedRectangle(cornerRadius: theme.cardCornerRadius))
         }
         .buttonStyle(.plain)
         .disabled(destination == nil)
@@ -107,7 +109,7 @@ struct ExtensionPlaceholderBlockView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(theme.spacing * 1.5)
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                 .strokeBorder(
                     Color.gray.opacity(0.3),
                     style: StrokeStyle(lineWidth: 1, dash: [4, 3])

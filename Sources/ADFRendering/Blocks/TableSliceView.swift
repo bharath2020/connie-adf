@@ -49,6 +49,10 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
     let scrollModifiers: Modifiers
 
     @State private var containerWidth = CGFloat.zero
+    /// Column floors scale with Dynamic Type so larger text keeps a readable
+    /// measure per cell (the table pans horizontally instead of squeezing).
+    @ScaledMetric(relativeTo: .body) private var minColumnWidth: CGFloat = TableMetrics.minColumnWidth
+    @ScaledMetric(relativeTo: .footnote) private var numberColumnWidth: CGFloat = TableMetrics.numberColumnWidth
 
     init(
         layout: PreparedTableLayout,
@@ -70,6 +74,7 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
                         row: row,
                         columnWidths: resolvedColumnWidths,
                         hasNumberColumn: layout.hasNumberColumn,
+                        numberColumnWidth: numberColumnWidth,
                         isHeaderRow: isHeaderSlice
                     )
                 }
@@ -93,10 +98,10 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
         if let widths = layout.columnWidths, widths.count == count {
             return widths.map { CGFloat($0) }
         }
-        let gutter = layout.hasNumberColumn ? TableMetrics.numberColumnWidth : 0
+        let gutter = layout.hasNumberColumn ? numberColumnWidth : 0
         let available = max(containerWidth - gutter, 0)
         let equal = available / CGFloat(count)
-        return Array(repeating: max(equal, TableMetrics.minColumnWidth), count: count)
+        return Array(repeating: max(equal, minColumnWidth), count: count)
     }
 }
 
@@ -184,7 +189,8 @@ private struct SyncModifiers: ViewModifier {
 }
 
 /// Table sizing constants, nonisolated so both the (MainActor) views and the
-/// (nonisolated) `TableRowLayout` can read them.
+/// (nonisolated) `TableRowLayout` can read them. These are base values at
+/// the default Dynamic Type size; views scale them via `@ScaledMetric`.
 enum TableMetrics {
     /// Floor for measured columns when the table carries no `colwidth` attrs.
     static let minColumnWidth: CGFloat = 96
@@ -198,6 +204,7 @@ struct TableRowView: View {
     let row: PreparedTableRow
     let columnWidths: [CGFloat]
     let hasNumberColumn: Bool
+    let numberColumnWidth: CGFloat
     let isHeaderRow: Bool
 
     var body: some View {
@@ -220,14 +227,14 @@ struct TableRowView: View {
     }
 
     private var effectiveWidths: [CGFloat] {
-        hasNumberColumn ? [TableMetrics.numberColumnWidth] + columnWidths : columnWidths
+        hasNumberColumn ? [numberColumnWidth] + columnWidths : columnWidths
     }
 
     private var decorations: [TableRowUnderlay.Cell] {
         var cells: [TableRowUnderlay.Cell] = []
         cells.reserveCapacity(row.cells.count + 1)
         if hasNumberColumn {
-            cells.append(.init(width: TableMetrics.numberColumnWidth, fill: Color.gray.opacity(0.06)))
+            cells.append(.init(width: numberColumnWidth, fill: Color.gray.opacity(0.06)))
         }
         var column = 0
         for cell in row.cells {
@@ -264,11 +271,13 @@ struct TableRowView: View {
 struct TableNumberCellView: View {
     let text: String
 
+    @Environment(\.adfTheme) private var theme
+
     var body: some View {
         Text(text)
             .font(.footnote.monospacedDigit())
             .foregroundStyle(.secondary)
-            .padding(6)
+            .padding(theme.spacing * 0.75)
             .frame(maxWidth: .infinity, alignment: .top)
     }
 }

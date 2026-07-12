@@ -51,10 +51,10 @@ struct MediaBlockView: View {
             .modifier(MediaAspectBox(ratio: aspectRatio))
             .frame(width: fractionWidth)
             .frame(maxWidth: maxWidthCap)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: theme.containerCornerRadius))
             .overlay {
                 if let borderHex = media.borderHex, let color = Color(adfHex: borderHex) {
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                         .strokeBorder(color, lineWidth: 2)
                 }
             }
@@ -72,7 +72,7 @@ struct MediaBlockView: View {
 
     private var boxContent: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                 .fill(Color.gray.opacity(0.1))
             if let loadedImage {
                 loadedImage
@@ -81,7 +81,7 @@ struct MediaBlockView: View {
             } else if loadFailed {
                 // Non-image attachments (and failed loads) render as a
                 // document chip: icon + name.
-                VStack(spacing: 4) {
+                VStack(spacing: theme.spacing * 0.5) {
                     Image(systemName: "doc")
                         .imageScale(.large)
                     Text(media.attrs.alt ?? "Attachment")
@@ -198,15 +198,19 @@ struct MediaBlockView: View {
 }
 
 /// Reserves the media box geometry before any bytes load: exact aspect ratio
-/// when the attrs carry dimensions, a fixed-height band otherwise.
+/// when the attrs carry dimensions, a band otherwise whose height scales
+/// with Dynamic Type (a dimensionless attachment renders as a document chip,
+/// so its band should track the chip's text size).
 struct MediaAspectBox: ViewModifier {
     let ratio: CGFloat?
+
+    @ScaledMetric(relativeTo: .body) private var fallbackHeight: CGFloat = 220
 
     func body(content: Content) -> some View {
         if let ratio {
             content.aspectRatio(ratio, contentMode: .fit)
         } else {
-            content.frame(height: 220)
+            content.frame(height: fallbackHeight)
         }
     }
 }

@@ -42,7 +42,7 @@ struct CodeBlockView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.1)))
+        .background(RoundedRectangle(cornerRadius: theme.containerCornerRadius).fill(Color.gray.opacity(0.1)))
     }
 
     private func copyCode() {

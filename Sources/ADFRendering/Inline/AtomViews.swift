@@ -29,16 +29,21 @@ struct AtomView: View {
 }
 
 /// Rounded capsule with tinted text over a soft tinted background.
+/// Padding scales with the `.callout` text it wraps so the pill keeps its
+/// proportions at every Dynamic Type size.
 struct AtomCapsule: View {
     let text: String
     let tint: Color
+
+    @ScaledMetric(relativeTo: .callout) private var horizontalPadding: CGFloat = 8
+    @ScaledMetric(relativeTo: .callout) private var verticalPadding: CGFloat = 2
 
     var body: some View {
         Text(text)
             .font(.callout.weight(.medium))
             .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
             .background(Capsule().fill(tint.opacity(0.18)))
             .foregroundStyle(tint)
     }
@@ -49,17 +54,22 @@ struct AtomChip: View {
     let icon: String
     let text: String
 
+    @Environment(\.adfTheme) private var theme
+    @ScaledMetric(relativeTo: .callout) private var horizontalPadding: CGFloat = 8
+    @ScaledMetric(relativeTo: .callout) private var verticalPadding: CGFloat = 2
+    @ScaledMetric(relativeTo: .callout) private var iconSpacing: CGFloat = 4
+
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: iconSpacing) {
             Image(systemName: icon)
                 .imageScale(.small)
             Text(text)
                 .lineLimit(1)
         }
         .font(.callout)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 2)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.14)))
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, verticalPadding)
+        .background(RoundedRectangle(cornerRadius: theme.chipCornerRadius).fill(Color.gray.opacity(0.14)))
     }
 }
 

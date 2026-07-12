@@ -59,7 +59,7 @@ struct ExpandBlockView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                 .strokeBorder(Color.gray.opacity(isNested ? 0.2 : 0.3))
         )
     }
