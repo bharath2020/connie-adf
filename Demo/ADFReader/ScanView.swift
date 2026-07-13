@@ -42,7 +42,7 @@ struct ScanView: View {
         }
         .sheet(isPresented: $pasteSheetVisible) { pasteSheet }
         .navigationDestination(item: $scannedFixture) { fixture in
-            ReaderView(fixture: fixture, options: .none)
+            ReaderView(source: .fixture(fixture), options: .none)
         }
         .task { await startCameraIfPossible() }
         .task(id: chunkEvent) { await updateIdleHint() }

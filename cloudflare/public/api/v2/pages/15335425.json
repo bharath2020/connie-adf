@@ -1,0 +1,12 @@
+{
+  "id": "15335425",
+  "title": "Quality",
+  "spaceId": "15171586",
+  "parentId": "15204354",
+  "body": {
+    "atlas_doc_format": {
+      "value": "{\"type\":\"doc\",\"content\":[{\"type\":\"panel\",\"attrs\":{\"panelType\":\"note\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Quality — launch workstream. \",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\"Test strategy, coverage, defect triage, performance and release sign-off.\",\"type\":\"text\"}]}]},{\"type\":\"paragraph\",\"content\":[{\"text\":\"Child pages below capture the detail. Status legend: \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"green\",\"style\":\"bold\",\"text\":\"DONE\",\"localId\":\"lid-22\"}},{\"text\":\" \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"yellow\",\"style\":\"bold\",\"text\":\"IN PROGRESS\",\"localId\":\"lid-23\"}},{\"text\":\" \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"red\",\"style\":\"bold\",\"text\":\"BLOCKED\",\"localId\":\"lid-24\"}},{\"text\":\" \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"neutral\",\"style\":\"bold\",\"text\":\"PLANNED\",\"localId\":\"lid-25\"}},{\"text\":\".\",\"type\":\"text\"}]}],\"version\":1}",
+      "representation": "atlas_doc_format"
+    }
+  }
+}

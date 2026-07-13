@@ -1,0 +1,12 @@
+{
+  "id": "14974979",
+  "title": "Product",
+  "spaceId": "15171586",
+  "parentId": "15204354",
+  "body": {
+    "atlas_doc_format": {
+      "value": "{\"type\":\"doc\",\"content\":[{\"type\":\"panel\",\"attrs\":{\"panelType\":\"note\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Product — launch workstream. \",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\"Requirements, roadmap, go-to-market and measurement for the v1.0 launch.\",\"type\":\"text\"}]}]},{\"type\":\"paragraph\",\"content\":[{\"text\":\"Child pages below capture the detail. Status legend: \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"green\",\"style\":\"bold\",\"text\":\"DONE\",\"localId\":\"lid-10\"}},{\"text\":\" \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"yellow\",\"style\":\"bold\",\"text\":\"IN PROGRESS\",\"localId\":\"lid-11\"}},{\"text\":\" \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"red\",\"style\":\"bold\",\"text\":\"BLOCKED\",\"localId\":\"lid-12\"}},{\"text\":\" \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"neutral\",\"style\":\"bold\",\"text\":\"PLANNED\",\"localId\":\"lid-13\"}},{\"text\":\".\",\"type\":\"text\"}]}],\"version\":1}",
+      "representation": "atlas_doc_format"
+    }
+  }
+}

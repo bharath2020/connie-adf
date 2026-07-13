@@ -1,0 +1,12 @@
+{
+  "id": "15335446",
+  "title": "Market Positioning & Messaging",
+  "spaceId": "15171586",
+  "parentId": "15237121",
+  "body": {
+    "atlas_doc_format": {
+      "value": "{\"type\":\"doc\",\"content\":[{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Positioning statement\",\"type\":\"text\"}]},{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"For \",\"type\":\"text\"},{\"text\":\"fast-moving product teams\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" who are drowning in scattered docs, \",\"type\":\"text\"},{\"text\":\"Meridian\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" is a collaboration workspace that keeps decisions and context in one place.\",\"type\":\"text\"}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Pillars\",\"type\":\"text\"}]},{\"type\":\"orderedList\",\"attrs\":{\"order\":1},\"content\":[{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Clarity\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" — every decision has a home.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Speed\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" — from idea to shipped in one surface.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Trust\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" — enterprise-grade from day one.\",\"type\":\"text\"}]}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Competitive framing\",\"type\":\"text\"}]},{\"type\":\"paragraph\",\"content\":[{\"text\":\"See the deep-dive: \",\"type\":\"text\"},{\"type\":\"inlineCard\",\"attrs\":{\"url\":\"https://www.notion.so\"}},{\"text\":\" and reference deck \",\"type\":\"text\"},{\"type\":\"inlineCard\",\"attrs\":{\"url\":\"https://www.figma.com\"}},{\"text\":\".\",\"type\":\"text\"}]},{\"type\":\"embedCard\",\"attrs\":{\"layout\":\"center\",\"width\":100.0,\"url\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}}],\"version\":1}",
+      "representation": "atlas_doc_format"
+    }
+  }
+}

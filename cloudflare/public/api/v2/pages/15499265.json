@@ -1,0 +1,12 @@
+{
+  "id": "15499265",
+  "title": "PRD — Onboarding Flow",
+  "spaceId": "15171586",
+  "parentId": "14974979",
+  "body": {
+    "atlas_doc_format": {
+      "value": "{\"type\":\"doc\",\"content\":[{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"PRD — Onboarding Flow. \",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\"Owner \",\"type\":\"text\"},{\"type\":\"mention\",\"attrs\":{\"id\":\"557058:56653ffc-eeec-4768-b56d-e72bbd9a3c87\",\"text\":\"@Bharath Booshan\"}},{\"text\":\". Status \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"yellow\",\"style\":\"bold\",\"text\":\"IN REVIEW\",\"localId\":\"lid-117\"}},{\"text\":\".\",\"type\":\"text\"}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Funnel\",\"type\":\"text\"}]},{\"type\":\"orderedList\",\"attrs\":{\"order\":1},\"content\":[{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Sign up\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Create first workspace\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Invite a teammate\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Create first doc\",\"type\":\"text\"}]}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Activation metric\",\"type\":\"text\"}]},{\"type\":\"paragraph\",\"content\":[{\"text\":\"Activated = created a doc \",\"type\":\"text\"},{\"text\":\"and\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" invited ≥1 teammate within 24h.\",\"type\":\"text\"}]},{\"type\":\"panel\",\"attrs\":{\"panelType\":\"warning\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Current drop-off is highest at step 3 (invite). A/B test in flight.\",\"type\":\"text\"}]}]},{\"type\":\"expand\",\"attrs\":{\"title\":\"Wireframe notes\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Empty states must show a sample doc. See design file \",\"type\":\"text\"},{\"type\":\"inlineCard\",\"attrs\":{\"url\":\"https://www.figma.com\"}},{\"text\":\".\",\"type\":\"text\"}]}]}],\"version\":1}",
+      "representation": "atlas_doc_format"
+    }
+  }
+}

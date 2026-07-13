@@ -44,7 +44,7 @@ struct ADFReaderApp: App {
             NavigationStack {
                 if let name = options.fixtureName {
                     if let fixture = Fixture(named: name) {
-                        ReaderView(fixture: fixture, options: options)
+                        ReaderView(source: .fixture(fixture), options: options)
                     } else {
                         ContentUnavailableView(
                             "Fixture Not Found",
@@ -53,7 +53,7 @@ struct ADFReaderApp: App {
                         )
                     }
                 } else {
-                    FixtureListView()
+                    SpaceListView()
                 }
             }
         }

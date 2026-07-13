@@ -8,7 +8,7 @@ import ADFRendering
 /// via the library's `scrollTarget` hook. Also implements the launch-argument
 /// automation (READY line, `-scrollToFraction`, `-autoscroll`).
 struct ReaderView: View {
-    let fixture: Fixture
+    let source: DocumentSource
     let options: LaunchOptions
 
     @State private var model = ADFDocumentModel()
@@ -20,8 +20,8 @@ struct ReaderView: View {
 
     private let mediaProvider = PlaceholderMediaProvider()
 
-    init(fixture: Fixture, options: LaunchOptions) {
-        self.fixture = fixture
+    init(source: DocumentSource, options: LaunchOptions) {
+        self.source = source
         self.options = options
         // The HUD stays hidden during `-autoscroll` measurement runs: its
         // material-blur backdrop re-renders over the scrolling content and
@@ -32,7 +32,7 @@ struct ReaderView: View {
 
     var body: some View {
         ADFDocumentView(model: model, mediaProvider: mediaProvider)
-            .navigationTitle(fixture.name)
+            .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
             .overlay(alignment: .topTrailing) {
@@ -103,12 +103,14 @@ struct ReaderView: View {
         if hudVisible {
             metrics.start()
         }
-        do {
-            let data = try Data(contentsOf: fixture.url)
-            loadStart = ContinuousClock.now
-            model.load(data: data)
-        } catch {
-            loadFailure = String(describing: error)
+        Task {
+            do {
+                let data = try await source.loadData()
+                loadStart = ContinuousClock.now
+                model.load(data: data)
+            } catch {
+                loadFailure = String(describing: error)
+            }
         }
     }
 
@@ -116,7 +118,7 @@ struct ReaderView: View {
         let totalMilliseconds = loadStart.map(Self.milliseconds(since:)) ?? 0
         let firstChunk = firstChunkMilliseconds ?? totalMilliseconds
         print(
-            "READY fixture=\(fixture.name) blocks=\(model.blocks.count) "
+            "READY fixture=\(source.title) blocks=\(model.blocks.count) "
                 + "firstChunkMs=\(Int(firstChunk.rounded()))"
         )
         fflush(stdout)
@@ -125,7 +127,7 @@ struct ReaderView: View {
         }
         if options.autoscroll {
             Task {
-                await AutoScroller.run(model: model, metrics: metrics, fixtureName: fixture.name)
+                await AutoScroller.run(model: model, metrics: metrics, fixtureName: source.title)
             }
         }
     }
