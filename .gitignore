@@ -3,3 +3,7 @@
 DerivedData/
 .DS_Store
 xcuserdata/
+Demo/build/
+.playwright-mcp/
+.wrangler/
+.superpowers/
