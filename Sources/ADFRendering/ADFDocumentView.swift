@@ -23,9 +23,12 @@ public struct ADFDocumentView: View {
     /// Type — larger text earns a proportionally wider column.
     @ScaledMetric(relativeTo: .body) private var readableWidth: CGFloat = 672
 
-    /// Current content-column width, observed once at the document level and
-    /// passed to every row so collapsed spacers can tell when their cached
-    /// height was measured at a different width (rotation, Split View).
+    /// Current content-column width — the readable-capped column the text
+    /// actually wraps in, not the full window — observed once at the document
+    /// level and passed to every row so collapsed spacers can tell when their
+    /// cached height was measured at a different width (rotation, Split View).
+    /// Keyed on the wrap width so a rotation that only widens the window past
+    /// the readable cap (no reflow) leaves it unchanged and holds position.
     @State private var containerWidth = CGFloat.zero
 
     public init(model: ADFDocumentModel,
@@ -76,12 +79,23 @@ public struct ADFDocumentView: View {
                 }
                 .padding(.horizontal, model.theme.spacing * 2)
                 .frame(maxWidth: readableWidth)
-                .frame(maxWidth: .infinity)
+                // Observe the readable-capped column, not the full window:
+                // text wraps inside this frame, so this is the width the row
+                // cache is keyed on. Reading it after the outer
+                // `.frame(maxWidth: .infinity)` would report the whole screen
+                // instead — and on any window wider than the cap (iPad, large
+                // iPhone landscape) the text column stays pinned at
+                // `readableWidth` and never reflows on rotation, yet that
+                // screen-width value still changes. Collapsed rows would then
+                // rescale their spacers for a reflow that never happened,
+                // shifting every off-screen row's reserved height and jumping
+                // the reading position on orientation change.
                 .onGeometryChange(for: CGFloat.self) { proxy in
                     proxy.size.width
                 } action: { width in
                     containerWidth = width
                 }
+                .frame(maxWidth: .infinity)
             }
             .background {
                 // The scroll-target observation lives in a leaf view so a
