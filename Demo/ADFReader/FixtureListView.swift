@@ -55,7 +55,7 @@ struct FixtureListView: View {
         }
         .navigationTitle("ADF Fixtures")
         .navigationDestination(for: Fixture.self) { fixture in
-            ReaderView(fixture: fixture, options: .none)
+            ReaderView(source: .fixture(fixture), options: .none)
         }
         .overlay {
             if fixtures.isEmpty {
