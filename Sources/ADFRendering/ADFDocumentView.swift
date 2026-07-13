@@ -10,6 +10,7 @@ public struct ADFDocumentView: View {
     private let mediaProvider: any ADFMediaProvider
     private let interactionHandler: (@MainActor (ADFInteraction) -> Void)?
     private let taskStates: [String: Bool]
+    private let mentionContent: (@MainActor (String) -> AnyView)?
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -30,11 +31,13 @@ public struct ADFDocumentView: View {
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
-                taskStates: [String: Bool] = [:]) {
+                taskStates: [String: Bool] = [:],
+                mentionContent: (@MainActor (String) -> AnyView)? = nil) {
         self.model = model
         self.mediaProvider = mediaProvider
         self.interactionHandler = interactionHandler
         self.taskStates = taskStates
+        self.mentionContent = mentionContent
     }
 
     /// TOC jumps use `ScrollViewReader.scrollTo` rather than the
@@ -95,6 +98,7 @@ public struct ADFDocumentView: View {
         .environment(\.adfTableScrollSync, tableScrollSync)
         .environment(\.adfInteractionHandler, interactionHandler)
         .environment(\.adfTaskStates, taskStates)
+        .environment(\.adfMentionContent, mentionContent)
         .overlay { statusOverlay }
     }
 
