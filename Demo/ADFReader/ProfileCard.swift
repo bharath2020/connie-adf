@@ -1,14 +1,45 @@
 import SwiftUI
 
-/// A sample profile card for a tapped mention. Fully fabricated; no network.
-/// Self-sizing so it fits a popover on iPad (and adapts to a sheet on iPhone,
-/// where the detent applies).
+/// A sample profile for a tapped mention. Fully fabricated; no network.
+///
+/// Adapts to how it's presented: in a regular size class (iPad) it's a compact,
+/// fixed-width card shown in a popover anchored to the mention; in a compact
+/// size class (iPhone) it's a full, native sheet — nav title, Done, drag
+/// indicator, and a medium detent.
 struct ProfileCard: View {
     let name: String
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dismiss) private var dismiss
 
     private var profile: FakeProfile { FakeProfile(name: name) }
 
     var body: some View {
+        if sizeClass == .compact {
+            NavigationStack {
+                content
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .navigationTitle("Profile")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { dismiss() }
+                        }
+                    }
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        } else {
+            content
+                .frame(width: 300)
+                .padding(20)
+        }
+    }
+
+    /// The shared card body — avatar, identity, contact block, footnote.
+    private var content: some View {
         VStack(spacing: 16) {
             Circle()
                 .fill(profile.color.gradient)
@@ -37,9 +68,6 @@ struct ProfileCard: View {
             Text("Sample profile — generated for demo purposes.")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
-        .padding(20)
-        .frame(width: 300)
-        .presentationDetents([.medium])   // applies only when adapted to a sheet
     }
 
     private func row(icon: String, text: String, tint: Color = .secondary) -> some View {
