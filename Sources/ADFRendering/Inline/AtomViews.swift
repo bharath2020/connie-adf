@@ -28,18 +28,23 @@ struct AtomView: View {
     }
 }
 
-/// Mention capsule that fires `.mentionTapped` when a host handler is present;
-/// read-only otherwise.
+/// Mention capsule that, when the host injects `adfMentionContent`, presents
+/// that content in a popover anchored to the capsule (a sheet in a compact
+/// size class). Read-only otherwise.
 private struct MentionAtomView: View {
     let text: String
-    @Environment(\.adfInteractionHandler) private var handler
+    @Environment(\.adfMentionContent) private var mentionContent
+    @State private var isPresented = false
 
     var body: some View {
         let name = AtomFormatting.mentionText(text)
         AtomCapsule(text: name, tint: .blue)
             .contentShape(Capsule())
-            .onTapGesture { handler?(.mentionTapped(name: name)) }
-            .accessibilityAddTraits(handler == nil ? [] : .isButton)
+            .onTapGesture { if mentionContent != nil { isPresented = true } }
+            .accessibilityAddTraits(mentionContent == nil ? [] : .isButton)
+            .popover(isPresented: $isPresented) {
+                if let mentionContent { mentionContent(name) }
+            }
     }
 }
 

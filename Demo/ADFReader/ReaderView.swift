@@ -18,7 +18,6 @@ struct ReaderView: View {
     @State private var firstChunkMilliseconds: Double?
     @State private var loadFailure: String?
     @State private var taskStates: [String: Bool] = [:]
-    @State private var selectedProfile: MentionProfile?
 
     private let mediaProvider = PlaceholderMediaProvider()
     private let taskStore = TaskStateStore()
@@ -37,7 +36,8 @@ struct ReaderView: View {
         ADFDocumentView(model: model,
                         mediaProvider: mediaProvider,
                         interactionHandler: handle,
-                        taskStates: taskStates)
+                        taskStates: taskStates,
+                        mentionContent: { AnyView(ProfileCard(name: $0)) })
             .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
@@ -67,7 +67,6 @@ struct ReaderView: View {
                 documentDidBecomeReady()
             }
             .onDisappear { metrics.stop() }
-            .sheet(item: $selectedProfile) { ProfileSheet(name: $0.name) }
     }
 
     @ToolbarContentBuilder
@@ -107,8 +106,6 @@ struct ReaderView: View {
 
     private func handle(_ interaction: ADFInteraction) {
         switch interaction {
-        case .mentionTapped(let name):
-            selectedProfile = MentionProfile(name: name)
         case .taskToggled(let id, let isDone):
             taskStore.setState(isDone, taskId: id, docKey: source.storageKey)
             taskStates[id] = isDone
@@ -169,8 +166,3 @@ struct ReaderView: View {
     }
 }
 
-/// Identifiable wrapper so a tapped mention name can drive `.sheet(item:)`.
-private struct MentionProfile: Identifiable {
-    let id = UUID()
-    let name: String
-}
