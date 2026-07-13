@@ -12,6 +12,14 @@ enum DocumentSource: Hashable {
         }
     }
 
+    /// Stable key for persisting per-document state (task toggles).
+    var storageKey: String {
+        switch self {
+        case .fixture(let fixture): return "fixture:\(fixture.name)"
+        case .remotePage(let id, _): return "page:\(id)"
+        }
+    }
+
     func loadData() async throws -> Data {
         switch self {
         case .fixture(let f):

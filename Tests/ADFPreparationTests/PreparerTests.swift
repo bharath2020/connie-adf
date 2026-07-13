@@ -288,6 +288,30 @@ struct PreparerTests {
         #expect(streamed == preparer.prepare(doc))
     }
 
+    @Test("task list rows carry a stable non-empty task id")
+    func taskRowsCarryID() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[
+          {"type":"taskList","attrs":{"localId":"tl"},"content":[
+            {"type":"taskItem","attrs":{"localId":"t1","state":"DONE"},"content":[{"type":"text","text":"done one"}]},
+            {"type":"taskItem","attrs":{"localId":"t2","state":"TODO"},"content":[{"type":"text","text":"todo two"}]}
+          ]}
+        ]}
+        """)
+        let blocks = preparer.prepare(doc)
+        guard case .listRows(let rows) = try #require(blocks.first).kind else {
+            throw TestFailure("block is not listRows")
+        }
+        let taskRows: [(String, Bool)] = rows.compactMap { row in
+            guard case .task(let id, let done) = row.marker else { return nil }
+            return (id, done)
+        }
+        #expect(taskRows.count == 2)
+        for (id, _) in taskRows { #expect(!id.isEmpty) }
+        #expect(taskRows.contains { $0.1 == true })
+        #expect(taskRows.contains { $0.1 == false })
+    }
+
     @Test("stress fixture (5k blocks) prepares in under two seconds")
     func stress5kPreparesUnderTwoSeconds() async throws {
         let doc = try await ADFParser().parse(fixtureData("stress-5k.json"))

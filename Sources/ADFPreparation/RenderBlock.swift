@@ -105,7 +105,7 @@ public enum ListMarker: Sendable, Hashable {
     case bullet(depth: Int)
     /// Fully formatted ordered marker, e.g. `"4."`, `"a."`, `"iv."`.
     case ordered(String)
-    case task(done: Bool)
+    case task(id: String, done: Bool)
     case decision
     /// Continuation of an item whose content resumes after a nested list:
     /// renders an empty marker column so the content stays aligned under the

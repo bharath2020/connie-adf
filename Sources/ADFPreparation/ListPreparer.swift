@@ -49,7 +49,7 @@ extension BlockPreparer {
                     rows.append(PreparedListRow(
                         id: item.id,
                         depth: depth,
-                        marker: .task(done: state == .done),
+                        marker: .task(id: item.id, done: state == .done),
                         segments: composer.compose(inline),
                         trailingBlocks: []
                     ))
@@ -57,7 +57,7 @@ extension BlockPreparer {
                     // Schema nests task lists as siblings of task items.
                     rows.append(contentsOf: listRows(for: item, depth: depth + 1, levels: levels))
                 default:
-                    rows.append(contentsOf: itemRows(item, marker: .task(done: false), depth: depth, nestedLevels: levels))
+                    rows.append(contentsOf: itemRows(item, marker: .task(id: item.id, done: false), depth: depth, nestedLevels: levels))
                 }
             }
             return rows

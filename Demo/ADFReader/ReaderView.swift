@@ -17,8 +17,11 @@ struct ReaderView: View {
     @State private var loadStart: ContinuousClock.Instant?
     @State private var firstChunkMilliseconds: Double?
     @State private var loadFailure: String?
+    @State private var taskStates: [String: Bool] = [:]
+    @State private var selectedProfile: MentionProfile?
 
     private let mediaProvider = PlaceholderMediaProvider()
+    private let taskStore = TaskStateStore()
 
     init(source: DocumentSource, options: LaunchOptions) {
         self.source = source
@@ -31,7 +34,10 @@ struct ReaderView: View {
     }
 
     var body: some View {
-        ADFDocumentView(model: model, mediaProvider: mediaProvider)
+        ADFDocumentView(model: model,
+                        mediaProvider: mediaProvider,
+                        interactionHandler: handle,
+                        taskStates: taskStates)
             .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
@@ -61,6 +67,7 @@ struct ReaderView: View {
                 documentDidBecomeReady()
             }
             .onDisappear { metrics.stop() }
+            .sheet(item: $selectedProfile) { ProfileSheet(name: $0.name) }
     }
 
     @ToolbarContentBuilder
@@ -98,8 +105,19 @@ struct ReaderView: View {
         }
     }
 
+    private func handle(_ interaction: ADFInteraction) {
+        switch interaction {
+        case .mentionTapped(let name):
+            selectedProfile = MentionProfile(name: name)
+        case .taskToggled(let id, let isDone):
+            taskStore.setState(isDone, taskId: id, docKey: source.storageKey)
+            taskStates[id] = isDone
+        }
+    }
+
     private func load() {
         guard model.phase == .idle else { return }
+        taskStates = taskStore.states(for: source.storageKey)
         if hudVisible {
             metrics.start()
         }
@@ -149,4 +167,10 @@ struct ReaderView: View {
         let (seconds, attoseconds) = elapsed.components
         return Double(seconds) * 1_000 + Double(attoseconds) / 1e15
     }
+}
+
+/// Identifiable wrapper so a tapped mention name can drive `.sheet(item:)`.
+private struct MentionProfile: Identifiable {
+    let id = UUID()
+    let name: String
 }
