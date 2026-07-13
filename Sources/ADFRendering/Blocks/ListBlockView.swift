@@ -67,7 +67,7 @@ struct ListRowView: View {
         case .ordered(let text):
             Text(text)
                 .monospacedDigit()
-        case .task(let done):
+        case .task(_, let done):
             // Read-only checkbox glyph per spec (§6.3).
             Text(Image(systemName: done ? "checkmark.square.fill" : "square"))
                 .foregroundStyle(done ? Color.accentColor : Color.secondary)

@@ -8,6 +8,8 @@ import ADFPreparation
 public struct ADFDocumentView: View {
     private let model: ADFDocumentModel
     private let mediaProvider: any ADFMediaProvider
+    private let interactionHandler: (@Sendable (ADFInteraction) -> Void)?
+    private let taskStates: [String: Bool]
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -25,9 +27,14 @@ public struct ADFDocumentView: View {
     /// height was measured at a different width (rotation, Split View).
     @State private var containerWidth = CGFloat.zero
 
-    public init(model: ADFDocumentModel, mediaProvider: any ADFMediaProvider) {
+    public init(model: ADFDocumentModel,
+                mediaProvider: any ADFMediaProvider,
+                interactionHandler: (@Sendable (ADFInteraction) -> Void)? = nil,
+                taskStates: [String: Bool] = [:]) {
         self.model = model
         self.mediaProvider = mediaProvider
+        self.interactionHandler = interactionHandler
+        self.taskStates = taskStates
     }
 
     /// TOC jumps use `ScrollViewReader.scrollTo` rather than the
@@ -86,6 +93,8 @@ public struct ADFDocumentView: View {
         .environment(\.adfTheme, model.theme)
         .environment(\.adfMediaProvider, mediaProvider)
         .environment(\.adfTableScrollSync, tableScrollSync)
+        .environment(\.adfInteractionHandler, interactionHandler)
+        .environment(\.adfTaskStates, taskStates)
         .overlay { statusOverlay }
     }
 
