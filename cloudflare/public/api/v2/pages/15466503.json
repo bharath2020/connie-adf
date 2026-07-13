@@ -1,0 +1,12 @@
+{
+  "id": "15466503",
+  "title": "Observability & Tracing Plan",
+  "spaceId": "15171586",
+  "parentId": "14975000",
+  "body": {
+    "atlas_doc_format": {
+      "value": "{\"type\":\"doc\",\"content\":[{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Observability & Tracing Plan. \",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\"Logs, metrics, traces — the three pillars.\",\"type\":\"text\"}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Standards\",\"type\":\"text\"}]},{\"type\":\"bulletList\",\"content\":[{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Structured JSON logs with a trace id.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"RED metrics per service (Rate, Errors, Duration).\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"OpenTelemetry traces end-to-end.\",\"type\":\"text\"}]}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Dashboards\",\"type\":\"text\"}]},{\"type\":\"paragraph\",\"content\":[{\"text\":\"Golden signals dashboard linked here: \",\"type\":\"text\"},{\"type\":\"inlineCard\",\"attrs\":{\"url\":\"https://grafana.com\"}},{\"text\":\".\",\"type\":\"text\"}]},{\"type\":\"codeBlock\",\"attrs\":{\"language\":\"yaml\"},\"content\":[{\"text\":\"otel:\\n  exporter: otlp\\n  sampling: parentbased_traceidratio\\n  ratio: 0.1\",\"type\":\"text\"}]},{\"type\":\"expand\",\"attrs\":{\"title\":\"Alert catalog\"},\"content\":[{\"type\":\"taskList\",\"attrs\":{\"localId\":\"lid-182\"},\"content\":[{\"type\":\"taskItem\",\"attrs\":{\"state\":\"DONE\",\"localId\":\"lid-179\"},\"content\":[{\"text\":\"p99 latency > 500ms for 5m\",\"type\":\"text\"}]},{\"type\":\"taskItem\",\"attrs\":{\"state\":\"DONE\",\"localId\":\"lid-180\"},\"content\":[{\"text\":\"Error rate > 2%\",\"type\":\"text\"}]},{\"type\":\"taskItem\",\"attrs\":{\"state\":\"TODO\",\"localId\":\"lid-181\"},\"content\":[{\"text\":\"Saturation: pool > 90%\",\"type\":\"text\"}]}]}]}],\"version\":1}",
+      "representation": "atlas_doc_format"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "15269910",
+  "title": "Release Notes v1.0",
+  "spaceId": "15171586",
+  "parentId": "14974979",
+  "body": {
+    "atlas_doc_format": {
+      "value": "{\"type\":\"doc\",\"content\":[{\"type\":\"panel\",\"attrs\":{\"panelType\":\"success\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"emoji\",\"attrs\":{\"id\":\"2728\",\"text\":\"✨\",\"shortName\":\":sparkles:\"}},{\"text\":\" \",\"type\":\"text\"},{\"text\":\"Meridian v1.0 — Release Notes\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"New\",\"type\":\"text\"}]},{\"type\":\"bulletList\",\"content\":[{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Workspaces\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" — organise docs and tasks together.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Realtime editing\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" — collaborate live.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Search\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" — full-text across your workspace.\",\"type\":\"text\"}]}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Fixed\",\"type\":\"text\"}]},{\"type\":\"bulletList\",\"content\":[{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Resolved flicker on large tables.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Corrected timezone handling in due dates.\",\"type\":\"text\"}]}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Known issues\",\"type\":\"text\"}]},{\"type\":\"panel\",\"attrs\":{\"panelType\":\"note\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Offline editing is not yet supported; changes require a connection.\",\"type\":\"text\"}]}]},{\"type\":\"paragraph\",\"content\":[{\"text\":\"Full changelog: \",\"type\":\"text\",\"marks\":[{\"type\":\"em\"}]},{\"text\":\"changelog\",\"type\":\"text\",\"marks\":[{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com/changelog\"}}]},{\"text\":\".\",\"type\":\"text\"}]}],\"version\":1}",
+      "representation": "atlas_doc_format"
+    }
+  }
+}

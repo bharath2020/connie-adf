@@ -1,0 +1,12 @@
+{
+  "id": "15237184",
+  "title": "ADR-002 — Async Queue",
+  "spaceId": "15171586",
+  "parentId": "14975000",
+  "body": {
+    "atlas_doc_format": {
+      "value": "{\"type\":\"doc\",\"content\":[{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"ADR-002 — Async Queue. \",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\"Status \",\"type\":\"text\"},{\"type\":\"status\",\"attrs\":{\"color\":\"green\",\"style\":\"bold\",\"text\":\"ACCEPTED\",\"localId\":\"lid-176\"}},{\"text\":\".\",\"type\":\"text\"}]}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Decision\",\"type\":\"text\"}]},{\"type\":\"paragraph\",\"content\":[{\"text\":\"Adopt \",\"type\":\"text\"},{\"text\":\"Kafka\",\"type\":\"text\",\"marks\":[{\"type\":\"strong\"}]},{\"text\":\" for cross-module async messaging and event sourcing.\",\"type\":\"text\"}]},{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"text\":\"Rationale\",\"type\":\"text\"}]},{\"type\":\"orderedList\",\"attrs\":{\"order\":1},\"content\":[{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Durable, replayable log.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Decouples producers and consumers.\",\"type\":\"text\"}]}]},{\"type\":\"listItem\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Scales horizontally.\",\"type\":\"text\"}]}]}]},{\"type\":\"panel\",\"attrs\":{\"panelType\":\"note\"},\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Ordering guaranteed per partition; design keys accordingly.\",\"type\":\"text\"}]}]},{\"type\":\"decisionList\",\"attrs\":{\"localId\":\"lid-178\"},\"content\":[{\"type\":\"decisionItem\",\"attrs\":{\"state\":\"DECIDED\",\"localId\":\"lid-177\"},\"content\":[{\"type\":\"inlineExtension\",\"attrs\":{\"extensionType\":\"com.atlassian.confluence.migration\",\"extensionKey\":\"__confluenceADFMigrationUnsupportedContentInternalExtension__\",\"text\":\"\",\"parameters\":{\"nestedContent\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"text\":\"Kafka now; revisit managed alternatives if ops burden grows.\",\"type\":\"text\"}]}],\"version\":1},\"cxhtml\":\"<p>Kafka now; revisit managed alternatives if ops burden grows.</p>\"}}}]}]}],\"version\":1}",
+      "representation": "atlas_doc_format"
+    }
+  }
+}
