@@ -53,7 +53,7 @@ struct ADFReaderApp: App {
                         )
                     }
                 } else {
-                    FixtureListView()
+                    SpaceListView()
                 }
             }
         }
