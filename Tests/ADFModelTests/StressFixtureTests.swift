@@ -22,7 +22,7 @@ struct StressFixtureTests {
         #expect(doc.root.children.count == 5000)
 
         let topLevelTypes = Set(doc.root.children.map(\.type))
-        let expected: Set<String> = ["paragraph", "heading", "bulletList", "orderedList", "codeBlock", "panel", "blockquote"]
+        let expected: Set<String> = ["paragraph", "heading", "bulletList", "orderedList", "codeBlock", "panel", "blockquote", "expand"]
         #expect(expected.subtracting(topLevelTypes).isEmpty,
                 "missing block families: \(expected.subtracting(topLevelTypes).sorted())")
 
@@ -34,6 +34,52 @@ struct StressFixtureTests {
         }
         let deepest = doc.root.children.map(maxListDepth).max() ?? 0
         #expect(deepest >= 4, "expected 4-deep nested lists, got \(deepest)")
+    }
+
+    @Test("stress-5k expands arrive in groups and cover every node family")
+    func stress5KExpands() async throws {
+        let doc = try await parseFixture("stress-5k.json")
+        let children = doc.root.children
+
+        let expands = children.filter { $0.type == "expand" }
+        #expect(expands.count == 500)
+
+        // Expands come in runs of 5 consecutive top-level blocks.
+        var runs: [Int] = []
+        var run = 0
+        for child in children {
+            if child.type == "expand" {
+                run += 1
+            } else if run > 0 {
+                runs.append(run)
+                run = 0
+            }
+        }
+        if run > 0 { runs.append(run) }
+        #expect(runs.count == 100)
+        #expect(Set(runs) == [5], "expected runs of 5 expands, got \(Set(runs).sorted())")
+
+        // Union of everything nested inside expands must cover every family.
+        var inside: Set<String> = []
+        for expand in expands {
+            for node in allNodes(in: expand) where node.id != expand.id {
+                inside.insert(node.type)
+            }
+        }
+        let expected: Set<String> = [
+            "paragraph", "heading", "text", "hardBreak", "rule", "blockquote",
+            "bulletList", "orderedList", "listItem", "codeBlock", "panel",
+            "taskList", "taskItem", "decisionList", "decisionItem",
+            "table", "tableRow", "tableCell", "tableHeader", "nestedExpand",
+            "layoutSection", "layoutColumn",
+            "mediaSingle", "mediaGroup", "media", "mediaInline", "caption",
+            "blockCard", "embedCard", "inlineCard",
+            "mention", "emoji", "date", "status", "placeholder",
+            "extension", "bodiedExtension", "inlineExtension",
+            "syncBlock", "bodiedSyncBlock",
+        ]
+        #expect(expected.subtracting(inside).isEmpty,
+                "node families missing from expands: \(expected.subtracting(inside).sorted())")
     }
 
     @Test("giant-table has a header row plus 800 data rows of 6 columns with sprinkled colspans and backgrounds")

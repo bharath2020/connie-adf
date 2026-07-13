@@ -7,7 +7,12 @@
 // Emits into <repo-root>/Fixtures/:
 //   stress-5k.json      5,000 mixed top-level blocks (paragraphs with mixed
 //                       marks, headings, 4-deep lists, code blocks, panels,
-//                       a blockquote every ~10 blocks)
+//                       a blockquote every ~10 blocks, plus groups of 5
+//                       consecutive expands every 50 blocks whose bodies cycle
+//                       through 10 recipes covering every node family:
+//                       lists/tasks/decisions, tables with nestedExpand,
+//                       layout columns, media, cards, inline nodes,
+//                       extensions and sync blocks)
 //   giant-table.json    800 data rows x 6 columns, header row, sprinkled
 //                       colspans and cell backgrounds
 //   media-gallery.json  300 mediaSingle nodes with width/height attrs,
@@ -180,13 +185,282 @@ func doc(_ content: [[String: Any]]) -> [String: Any] {
     ["version": 1, "type": "doc", "content": content]
 }
 
+// MARK: - Leaf / inline builders used inside expands
+
+func rule() -> [String: Any] { ["type": "rule"] }
+
+func media(_ rng: inout LCG, index: Int) -> [String: Any] {
+    [
+        "type": "media",
+        "attrs": [
+            "type": "file",
+            "id": "media-\(index)",
+            "collection": "contentId-\(index % 7)",
+            "width": 320 + rng.int(0 ..< 9) * 80,
+            "height": 240 + rng.int(0 ..< 7) * 80,
+            "alt": "Expand image \(index)",
+        ] as [String: Any],
+    ]
+}
+
+func mediaInline(_ index: Int) -> [String: Any] {
+    ["type": "mediaInline", "attrs": ["type": "file", "id": "media-inline-\(index)", "collection": "contentId-1"]]
+}
+
+func mention(_ index: Int) -> [String: Any] {
+    ["type": "mention", "attrs": ["id": "user-\(index)", "text": "@user\(index)", "accessLevel": "CONTAINER"]]
+}
+
+func emoji(_ rng: inout LCG) -> [String: Any] {
+    let choice = rng.pick([(":smile:", "1f604", "😄"), (":rocket:", "1f680", "🚀"), (":warning:", "26a0", "⚠️")])
+    return ["type": "emoji", "attrs": ["shortName": choice.0, "id": choice.1, "text": choice.2]]
+}
+
+func date(_ index: Int) -> [String: Any] {
+    // Deterministic epoch ms (no system clock): 2024-01-01 plus index days.
+    ["type": "date", "attrs": ["timestamp": "\(1_704_067_200_000 + index * 86_400_000)"]]
+}
+
+func status(_ rng: inout LCG, index: Int) -> [String: Any] {
+    let color = rng.pick(["neutral", "purple", "blue", "red", "yellow", "green"])
+    return ["type": "status", "attrs": ["text": color.uppercased(), "color": color, "localId": "st-\(index)"]]
+}
+
+func placeholder(_ index: Int) -> [String: Any] {
+    ["type": "placeholder", "attrs": ["text": "Type something \(index)"]]
+}
+
+func inlineCard(_ index: Int) -> [String: Any] {
+    ["type": "inlineCard", "attrs": ["url": "https://example.atlassian.net/wiki/pages/\(index)"]]
+}
+
+func blockCard(_ index: Int) -> [String: Any] {
+    ["type": "blockCard", "attrs": ["url": "https://example.atlassian.net/browse/ADF-\(index)"]]
+}
+
+func embedCard(_ rng: inout LCG, index: Int) -> [String: Any] {
+    [
+        "type": "embedCard",
+        "attrs": [
+            "url": "https://example.com/embed/\(index)",
+            "layout": rng.pick(["center", "wide", "full-width"]),
+            "width": 100,
+            "originalWidth": 640,
+            "originalHeight": 360,
+        ] as [String: Any],
+    ]
+}
+
+func extensionAttrs(_ key: String, index: Int) -> [String: Any] {
+    [
+        "extensionType": "com.atlassian.confluence.macro.core",
+        "extensionKey": key,
+        "text": "\(key) \(index)",
+        "parameters": ["macroParams": ["depth": ["value": "\(index % 5)"]]],
+        "layout": "default",
+        "localId": "ext-\(index)",
+    ]
+}
+
+func taskList(_ rng: inout LCG, index: Int) -> [String: Any] {
+    var items: [[String: Any]] = []
+    for i in 0 ..< rng.int(2 ..< 5) {
+        items.append([
+            "type": "taskItem",
+            "attrs": ["localId": "task-\(index)-\(i)", "state": rng.pick(["TODO", "DONE"])] as [String: Any],
+            "content": [textNode(sentence(&rng, wordCount: rng.int(3 ..< 8)))],
+        ])
+    }
+    return ["type": "taskList", "attrs": ["localId": "task-list-\(index)"], "content": items]
+}
+
+func decisionList(_ rng: inout LCG, index: Int) -> [String: Any] {
+    var items: [[String: Any]] = []
+    for i in 0 ..< rng.int(1 ..< 4) {
+        items.append([
+            "type": "decisionItem",
+            "attrs": ["localId": "decision-\(index)-\(i)", "state": "DECIDED"] as [String: Any],
+            "content": [textNode(sentence(&rng, wordCount: rng.int(3 ..< 8)))],
+        ])
+    }
+    return ["type": "decisionList", "attrs": ["localId": "decision-list-\(index)"], "content": items]
+}
+
+/// `nestedExpand` is only schema-legal inside table cells and layout columns.
+func nestedExpand(_ rng: inout LCG, index: Int, content: [[String: Any]]) -> [String: Any] {
+    [
+        "type": "nestedExpand",
+        "attrs": ["title": "Nested \(index): \(sentence(&rng, wordCount: 2))"],
+        "content": content,
+    ]
+}
+
+/// Small table (header row + 2 data rows); one cell holds a nestedExpand.
+func smallTable(_ rng: inout LCG, index: Int) -> [String: Any] {
+    var rows: [[String: Any]] = []
+    rows.append([
+        "type": "tableRow",
+        "content": (0 ..< 3).map { c in
+            [
+                "type": "tableHeader",
+                "attrs": ["background": "#f4f5f7", "colwidth": [180]] as [String: Any],
+                "content": [paragraph([textNode("H\(c + 1)", marks: [["type": "strong"]])])],
+            ] as [String: Any]
+        },
+    ])
+    for r in 0 ..< 2 {
+        var cells: [[String: Any]] = []
+        for c in 0 ..< 3 {
+            var content: [[String: Any]] = [paragraph([textNode("r\(r)c\(c) \(sentence(&rng, wordCount: rng.int(1 ..< 4)))")])]
+            if r == 0, c == 2 {
+                content.append(nestedExpand(&rng, index: index, content: [
+                    mixedParagraph(&rng, index: index),
+                    list(&rng, depth: 2, ordered: false),
+                ]))
+            }
+            var cell: [String: Any] = ["type": "tableCell", "content": content]
+            if rng.oneIn(4) { cell["attrs"] = ["background": rng.pick(["#deebff", "#e3fcef"])] }
+            cells.append(cell)
+        }
+        rows.append(["type": "tableRow", "content": cells])
+    }
+    return ["type": "table", "attrs": ["isNumberColumnEnabled": false, "layout": "default"], "content": rows]
+}
+
+func layoutSection(_ rng: inout LCG, index: Int) -> [String: Any] {
+    let left: [String: Any] = [
+        "type": "layoutColumn",
+        "attrs": ["width": 50],
+        "content": [
+            mixedParagraph(&rng, index: index),
+            nestedExpand(&rng, index: index, content: [
+                paragraph([textNode(sentence(&rng, wordCount: 6))]),
+                codeBlock(&rng, index: index),
+            ]),
+        ],
+    ]
+    let right: [String: Any] = [
+        "type": "layoutColumn",
+        "attrs": ["width": 50],
+        "content": [panel(&rng, index: index), taskList(&rng, index: index)],
+    ]
+    return ["type": "layoutSection", "content": [left, right]]
+}
+
+// MARK: - Expand groups
+
+/// Ten content recipes; together they cover every block and inline node family
+/// the model knows about. Each expand gets one recipe.
+func expandContent(_ rng: inout LCG, recipe: Int, index: Int) -> [[String: Any]] {
+    switch recipe {
+    case 0: // text basics: marks, hard breaks, headings, rule
+        return [
+            heading(&rng, index: index),
+            paragraph([
+                textNode(sentence(&rng, wordCount: 5) + " ", marks: [["type": "strong"], ["type": "em"]]),
+                ["type": "hardBreak"],
+                textNode(sentence(&rng, wordCount: 5), marks: [["type": "code"]]),
+            ]),
+            mixedParagraph(&rng, index: index),
+            rule(),
+        ]
+    case 1: // every list family
+        return [
+            list(&rng, depth: 3, ordered: false),
+            list(&rng, depth: 2, ordered: true),
+            taskList(&rng, index: index),
+            decisionList(&rng, index: index),
+        ]
+    case 2: // code, panel, quote
+        return [codeBlock(&rng, index: index), panel(&rng, index: index), blockquote(&rng, index: index)]
+    case 3: // table with a nestedExpand inside a cell
+        return [paragraph([textNode("Table inside an expand")]), smallTable(&rng, index: index)]
+    case 4: // layout columns, one holding a nestedExpand
+        return [layoutSection(&rng, index: index)]
+    case 5: // media
+        return [
+            [
+                "type": "mediaSingle",
+                "attrs": ["layout": rng.pick(["center", "wide", "full-width", "align-start"])],
+                "content": [
+                    media(&rng, index: index),
+                    ["type": "caption", "content": [textNode("Caption \(index): \(sentence(&rng, wordCount: 3))")]],
+                ],
+            ],
+            ["type": "mediaGroup", "content": [media(&rng, index: index), media(&rng, index: index + 1)]],
+            paragraph([textNode("Inline media: "), mediaInline(index), textNode(" trailing.")]),
+        ]
+    case 6: // smart cards
+        return [
+            blockCard(index),
+            embedCard(&rng, index: index),
+            paragraph([textNode("See "), inlineCard(index), textNode(" for details.")]),
+        ]
+    case 7: // inline node zoo
+        return [
+            paragraph([
+                mention(index), textNode(" shipped on "), date(index), textNode(" "),
+                status(&rng, index: index), textNode(" "), emoji(&rng), textNode(" "),
+                placeholder(index),
+            ]),
+            paragraph([
+                textNode(sentence(&rng, wordCount: 4) + " ", marks: [["type": "link", "attrs": ["href": "https://example.com/\(index)"]]]),
+                textNode("x", marks: [["type": "subsup", "attrs": ["type": "sub"]]]),
+                textNode("2", marks: [["type": "subsup", "attrs": ["type": "sup"]]]),
+            ]),
+        ]
+    case 8: // extensions
+        return [
+            ["type": "extension", "attrs": extensionAttrs("toc", index: index)],
+            [
+                "type": "bodiedExtension",
+                "attrs": extensionAttrs("excerpt", index: index),
+                "content": [mixedParagraph(&rng, index: index), list(&rng, depth: 1, ordered: false)],
+            ],
+            paragraph([textNode("Macro: "), ["type": "inlineExtension", "attrs": extensionAttrs("status-macro", index: index)]]),
+        ]
+    default: // sync blocks + a mixed tail
+        return [
+            ["type": "syncBlock", "attrs": ["resourceId": "ari:cloud:confluence:site/sync-\(index)", "localId": "sync-\(index)"]],
+            [
+                "type": "bodiedSyncBlock",
+                "attrs": ["resourceId": "ari:cloud:confluence:site/sync-b-\(index)", "localId": "sync-b-\(index)"] as [String: Any],
+                "content": [mixedParagraph(&rng, index: index), panel(&rng, index: index)],
+            ],
+            rule(),
+        ]
+    }
+}
+
+let expandRecipeCount = 10
+
+func expand(_ rng: inout LCG, recipe: Int, index: Int) -> [String: Any] {
+    [
+        "type": "expand",
+        "attrs": ["title": "Expand \(index) [\(recipe)]: \(sentence(&rng, wordCount: 3))"],
+        "content": expandContent(&rng, recipe: recipe, index: index),
+    ]
+}
+
 // MARK: - Fixture 1: stress-5k.json
 
 func makeStress5K() -> [String: Any] {
     var rng = LCG(seed: 0x5EED_5000)
     var blocks: [[String: Any]] = []
     blocks.reserveCapacity(5000)
+    // Expands arrive in groups of 5 consecutive blocks, once every 50 blocks
+    // (100 groups, 500 expands). Recipes advance across the whole document so
+    // every node family shows up inside an expand many times over.
+    let groupSize = 5
+    let groupStride = 50
+    var expandCount = 0
+
     for i in 0 ..< 5000 {
+        if i % groupStride >= groupStride - groupSize {
+            blocks.append(expand(&rng, recipe: expandCount % expandRecipeCount, index: i))
+            expandCount += 1
+            continue
+        }
         switch i % 10 {
         case 0:
             blocks.append(heading(&rng, index: i))
