@@ -12,7 +12,7 @@ public enum ADFInteraction: Sendable {
 }
 
 private struct ADFInteractionHandlerKey: EnvironmentKey {
-    static let defaultValue: (@Sendable (ADFInteraction) -> Void)? = nil
+    static let defaultValue: (@MainActor (ADFInteraction) -> Void)? = nil
 }
 
 private struct ADFTaskStatesKey: EnvironmentKey {
@@ -22,7 +22,7 @@ private struct ADFTaskStatesKey: EnvironmentKey {
 public extension EnvironmentValues {
     /// Host-supplied sink for interactions. `nil` (the default) renders
     /// mentions and tasks read-only.
-    var adfInteractionHandler: (@Sendable (ADFInteraction) -> Void)? {
+    var adfInteractionHandler: (@MainActor (ADFInteraction) -> Void)? {
         get { self[ADFInteractionHandlerKey.self] }
         set { self[ADFInteractionHandlerKey.self] = newValue }
     }

@@ -8,7 +8,7 @@ import ADFPreparation
 public struct ADFDocumentView: View {
     private let model: ADFDocumentModel
     private let mediaProvider: any ADFMediaProvider
-    private let interactionHandler: (@Sendable (ADFInteraction) -> Void)?
+    private let interactionHandler: (@MainActor (ADFInteraction) -> Void)?
     private let taskStates: [String: Bool]
 
     /// One registry per document (per view identity), so a table's shared
@@ -29,7 +29,7 @@ public struct ADFDocumentView: View {
 
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
-                interactionHandler: (@Sendable (ADFInteraction) -> Void)? = nil,
+                interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
                 taskStates: [String: Bool] = [:]) {
         self.model = model
         self.mediaProvider = mediaProvider
