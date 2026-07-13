@@ -10,7 +10,7 @@ struct AtomView: View {
     var body: some View {
         switch atom {
         case .mention(let text):
-            AtomCapsule(text: AtomFormatting.mentionText(text), tint: .blue)
+            MentionAtomView(text: text)
         case .status(let text, let color):
             AtomCapsule(text: text.uppercased(), tint: color.tint)
         case .date(let timestampMS):
@@ -25,6 +25,21 @@ struct AtomView: View {
         case .inlineExtension(let name):
             AtomChip(icon: "puzzlepiece.extension", text: name)
         }
+    }
+}
+
+/// Mention capsule that fires `.mentionTapped` when a host handler is present;
+/// read-only otherwise.
+private struct MentionAtomView: View {
+    let text: String
+    @Environment(\.adfInteractionHandler) private var handler
+
+    var body: some View {
+        let name = AtomFormatting.mentionText(text)
+        AtomCapsule(text: name, tint: .blue)
+            .contentShape(Capsule())
+            .onTapGesture { handler?(.mentionTapped(name: name)) }
+            .accessibilityAddTraits(handler == nil ? [] : .isButton)
     }
 }
 

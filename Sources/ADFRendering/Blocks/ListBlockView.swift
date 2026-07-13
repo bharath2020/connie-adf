@@ -67,11 +67,8 @@ struct ListRowView: View {
         case .ordered(let text):
             Text(text)
                 .monospacedDigit()
-        case .task(_, let done):
-            // Read-only checkbox glyph per spec (§6.3).
-            Text(Image(systemName: done ? "checkmark.square.fill" : "square"))
-                .foregroundStyle(done ? Color.accentColor : Color.secondary)
-                .accessibilityLabel(done ? "Completed task" : "Task")
+        case .task(let id, let done):
+            TaskMarkerView(id: id, adfDone: done)
         case .decision:
             // Decision glyph; the row itself gets the tinted container.
             Text(Image(systemName: "diamond"))
@@ -93,6 +90,36 @@ struct ListRowView: View {
         case 0: return "•"
         case 1: return "◦"
         default: return "▪"
+        }
+    }
+}
+
+/// Task checkbox. Shows `adfTaskStates[id] ?? adfDone`; toggles via the host
+/// handler when present, read-only otherwise. Only the glyph is tappable.
+private struct TaskMarkerView: View {
+    let id: String
+    let adfDone: Bool
+    @Environment(\.adfInteractionHandler) private var handler
+    @Environment(\.adfTaskStates) private var taskStates
+
+    private var isDone: Bool { taskStates[id] ?? adfDone }
+
+    var body: some View {
+        let glyph = Image(systemName: isDone ? "checkmark.square.fill" : "square")
+        if let handler {
+            Button {
+                handler(.taskToggled(id: id, isDone: !isDone))
+            } label: {
+                Text(glyph).foregroundStyle(isDone ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityLabel(isDone ? "Completed task" : "Task")
+            .accessibilityHint("Toggles the task")
+        } else {
+            Text(glyph)
+                .foregroundStyle(isDone ? Color.accentColor : Color.secondary)
+                .accessibilityLabel(isDone ? "Completed task" : "Task")
         }
     }
 }
