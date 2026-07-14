@@ -107,6 +107,56 @@ The chain, in order — each step gates the next:
    ADFBeamTests` stay green, and Chrome still loads the shared folder unpacked
    and beams.
 
+## Validation results (Firefox 134.0.1, 2026-07-13)
+
+Ran end to end against `bharath2020.atlassian.net`, page *Getting started in
+Confluence* (id 163936, 19,150 bytes of ADF):
+
+- Real toolbar click in Firefox → overlay with the page title, a live QR canvas,
+  the counter cycling **Frame 1/5 → 3/5**, and **"Copied 5 frames"**.
+- The copied frames are well-formed: 5 frames, one docId (`163936-1`), indices
+  0–4 complete.
+- Those frames decode **byte-identically** (19,194 bytes) through Swift's
+  `ChunkCollector` / `BeamAssembler`.
+- ADFReader on the simulator: pasteboard → Scan → Paste → Paste from Clipboard →
+  Add Frames → the real Confluence page renders.
+- Chrome (Chrome for Testing): service worker starts, manifest parses with both
+  background keys, injection works and `encodeFrames` produces frames. No
+  regression from the shared manifest.
+
+### The `globalThis` fix was load-bearing (A/B tested)
+
+With the original `self`-based global resolution, Firefox shows the overlay and
+the correct page title, but `root.pako` is `undefined`, so deflate throws, no
+frames are built, and the QR canvas stays **blank** — a silent failure with no
+visible error. With `globalThis`, all three globals resolve and the beam works.
+Worth noting: a "canvas has dark pixels" assertion **false-passes** here, because
+an untouched canvas reads as fully transparent-black. The frame counter is the
+assertion that catches it.
+
+### Two harness traps (not extension bugs)
+
+Both cost real time and will bite the next person automating this:
+
+1. **`geckodriver`/WebDriver `installAddon` breaks file-based injection.** It
+   zips the folder into a temporary XPI, after which *every*
+   `scripting.executeScript({files})` and `insertCSS({files})` fails with
+   `Unable to load script: moz-extension://…`, while `func:`/`css:` injection and
+   `fetch()` of the same files still work. Reproduced with a 20-line stock MV3
+   extension containing none of our code. Load the extension the way users do —
+   `web-ext run` / `about:debugging` (unpacked, `rootURI` is a `file://` dir) —
+   and drive it by attaching geckodriver with `--connect-existing` to a Firefox
+   launched by `web-ext --arg=-marionette`.
+2. **The toolbar button's clickable node is not the `-browser-action` id.** That
+   id belongs to a `toolbaritem` *wrapper*; clicking it does nothing. The real
+   button is the child `toolbarbutton#adf-beam_connie-adf-BAP`. Firefox also
+   parks extension buttons in the unified-extensions panel, where the DOM node
+   does not exist until the panel opens — pin it first with
+   `CustomizableUI.addWidgetToArea(widget, CustomizableUI.AREA_NAVBAR)`.
+
+Also: stable Chrome now restricts `--load-extension` for automation; use Chrome
+for Testing.
+
 ## Success criteria
 
 - The unpacked `Tools/adf-beam-extension` folder loads in both Firefox and
