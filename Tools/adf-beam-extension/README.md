@@ -21,28 +21,37 @@ repo, https://github.com/bharath2020/adf-beam-extension):
 curl -sL https://github.com/bharath2020/adf-beam-extension/archive/main.tar.gz | tar xz
 ```
 
-This leaves an `adf-beam-extension-main/` folder. Then, one time:
+That one command is the whole install for **either** browser — it leaves an
+`adf-beam-extension-main/` folder that both load as-is. (Working in the main
+repo? Point the browser at `Tools/adf-beam-extension` instead and skip the
+fetch.) Then, one time:
+
+**Chrome**
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top right).
-3. Click **Load unpacked** and select the `adf-beam-extension-main` folder
-   (or `Tools/adf-beam-extension` if you work in the main repo).
+3. Click **Load unpacked** and select the `adf-beam-extension-main` folder.
 
 To update later, re-run the fetch command in the same place and press the
 reload arrow on the extension's card in `chrome://extensions`.
 
-### Firefox
+**Firefox** (121 or newer)
 
 1. Open `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on…** and pick the `manifest.json` inside the
-   extension folder.
-3. The **ADF Beam** button appears in the toolbar (pin it from the extensions
-   puzzle-piece menu if you don't see it).
+2. Click **Load Temporary Add-on…** and pick the `manifest.json` **inside** the
+   `adf-beam-extension-main` folder.
+3. The **ADF Beam** button lands in the extensions (puzzle-piece) menu — pin it
+   to the toolbar from there.
 
-A temporary add-on is unloaded when Firefox quits, so repeat this after a
-restart — or run `npx web-ext run --source-dir Tools/adf-beam-extension`, which
-launches Firefox with the extension installed and reloads it on file changes.
-Requires Firefox 121 or newer.
+Firefox drops temporary add-ons when it quits, so repeat step 1–2 after a
+restart. To skip the re-adding while developing, run
+
+```bash
+npx web-ext run --source-dir adf-beam-extension-main
+```
+
+which launches Firefox with the extension already loaded and reloads it on file
+changes.
 
 Maintainers: this directory lives in the (private) `connie-adf` repo and is
 mirrored to the public repo with
