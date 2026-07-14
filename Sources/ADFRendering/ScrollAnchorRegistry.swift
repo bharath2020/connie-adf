@@ -1,5 +1,3 @@
-import CoreGraphics
-
 /// Holds the ID of the row at the top of the viewport, so the scroll view can
 /// keep the reader's place when the document reflows at a new width (rotation,
 /// iPad Split View).

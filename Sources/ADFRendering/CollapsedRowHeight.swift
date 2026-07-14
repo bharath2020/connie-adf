@@ -25,13 +25,18 @@ import ADFPreparation
 ///
 /// The estimate is provisional either way: the exact height is re-measured
 /// when the row naturally re-enters the render region.
-struct CollapsedRowHeight: Equatable {
+struct CollapsedRowHeight {
     /// How a block's height responds to a change in container width.
     enum Scaling: Equatable {
-        /// Aspect-ratio bound (media): wider means taller.
-        case proportional
+        /// Aspect-ratio bound (media): wider means taller — but only up to
+        /// `cap`, the width past which the box stops growing (media never
+        /// upscales beyond its explicit or intrinsic pixel width). `nil`
+        /// means the box tracks the column at any width (fraction-width
+        /// media).
+        case proportional(cap: CGFloat?)
         /// Fixed height, or horizontally scrollable (code, table slices,
-        /// dividers, link cards): width does not move the height.
+        /// dividers, link cards, media strips): width does not move the
+        /// height.
         case invariant
         /// Wrapping text: roughly as many fewer lines as the column gained
         /// width, so height falls as width rises.
@@ -75,29 +80,45 @@ struct CollapsedRowHeight: Equatable {
         switch scaling {
         case .invariant:
             return newest.height
-        case .proportional:
-            return newest.height * width / newest.width
+        case .proportional(let cap):
+            // Clamp both widths at the cap: past it the box no longer grows,
+            // so the height only responds to the capped portion of a width
+            // change (measured and target both above the cap ⇒ unchanged).
+            let target = min(width, cap ?? .infinity)
+            let source = min(newest.width, cap ?? .infinity)
+            guard source > 0 else { return newest.height }
+            return newest.height * target / source
         case .reflowing:
             return newest.height * newest.width / width
         }
-    }
-
-    static func == (lhs: CollapsedRowHeight, rhs: CollapsedRowHeight) -> Bool {
-        lhs.samples.count == rhs.samples.count
-            && zip(lhs.samples, rhs.samples).allSatisfy { $0 == $1 }
     }
 }
 
 extension RenderBlock.Kind {
     var heightScaling: CollapsedRowHeight.Scaling {
         switch self {
-        case .media, .mediaStrip:
-            .proportional
-        case .codeBlock, .tableSlice, .divider, .card:
+        case .media(let media):
+            .proportional(cap: media.maxWidthCap)
+        case .codeBlock, .tableSlice, .divider, .card, .mediaStrip:
+            // `mediaStrip` is a horizontally scrolling strip of fixed-height
+            // thumbnails (`MediaStripView`), so like code and table slices
+            // its height ignores the column width.
             .invariant
         case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
              .extensionPlaceholder, .unknown:
             .reflowing
         }
+    }
+}
+
+private extension PreparedMedia {
+    /// Mirrors `MediaBlockView.maxWidthCap`: the width past which the media
+    /// box stops growing — an explicit pixel width, else the intrinsic width
+    /// (media never upscales). Fraction-width media has no cap; its box is a
+    /// fraction of the column at any width.
+    var maxWidthCap: CGFloat? {
+        if let pixelWidth, pixelWidth > 0 { return CGFloat(pixelWidth) }
+        guard widthFraction == nil else { return nil }
+        return attrs.width.flatMap { $0 > 0 ? CGFloat($0) : nil }
     }
 }

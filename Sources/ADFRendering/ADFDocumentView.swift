@@ -197,10 +197,24 @@ private struct DocumentRow: View {
                 BlockView(block: block)
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
-                    .onGeometryChange(for: CGFloat.self) { proxy in
-                        proxy.size.height
-                    } action: { height in
-                        heights.record(height: height, at: containerWidth)
+                    // Full width so the size measured below reports the
+                    // column width even for rows whose content sits narrower
+                    // (the stack proposes the column width to every row).
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Width and height must come from the same geometry read.
+                    // Keying the record by the `containerWidth` property
+                    // instead would file it under a stale width: the stack's
+                    // width observation commits its `@State` write one update
+                    // pass after layout, so during a rotation a live row
+                    // would record its new-width height under the old width —
+                    // overwriting the exact sample the memo exists to replay —
+                    // and at first materialization the property is still zero,
+                    // so the record would be dropped and the row could never
+                    // collapse.
+                    .onGeometryChange(for: CGSize.self) { proxy in
+                        proxy.size
+                    } action: { size in
+                        heights.record(height: size.height, at: size.width)
                     }
             } else {
                 Color.clear

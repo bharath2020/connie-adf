@@ -49,8 +49,8 @@ That model is only right for reflowing text. It is wrong in *slope* for some kin
 
 | Block kind | How height actually answers a width change | Old rule said |
 |---|---|---|
-| `media`, `mediaStrip` | Aspect-ratio bound — grows **taller** as it widens | shorter |
-| `codeBlock`, `tableSlice`, `divider`, `card` | Scrolls horizontally / fixed — height **unchanged** | shorter |
+| `media` | Aspect-ratio bound — grows **taller** as it widens, until its width cap (media never upscales past its explicit or intrinsic pixel width) | shorter |
+| `mediaStrip`, `codeBlock`, `tableSlice`, `divider`, `card` | Scrolls horizontally / fixed — height **unchanged** | shorter |
 | `richText`, `listRows`, `panel`, `quote`, … | Reflows — height falls as width rises | ✓ |
 
 So every rotation resized the off-screen spacers wrongly, which corrupts the scroll view's content height. **That is the phantom blank space.**
@@ -61,6 +61,14 @@ So every rotation resized the off-screen spacers wrongly, which corrupts the scr
 - **Only estimate a width never seen before**, and estimate it **per block kind** using the table above.
 
 The estimate remains provisional either way: the exact height is re-measured when the row naturally re-enters the render region.
+
+Three refinements came out of review (all `CollapsedRowHeightTests`-covered):
+
+- **Record width and height from the same geometry read.** Keying the record by the document-level `containerWidth` property filed it under a *stale* width: the stack's width observation commits its `@State` write one update pass after layout, so during a rotation every live row recorded its new-width height under the old-width key — overwriting the exact sample the memo exists to replay (and the poisoned entry is authoritative, because exact matches bypass estimation). At first materialization the property is still zero, so those records were silently dropped and first-screen rows could never collapse. The row now observes its own `CGSize` on a full-width wrapper, so the key is the width the row was actually laid out at, atomically.
+- **`mediaStrip` is `invariant`, not `proportional`** — it is a horizontally scrolling strip of fixed-height thumbnails; classifying it aspect-ratio-bound inflated every collapsed strip by the width ratio on rotation.
+- **`media`'s proportional estimate clamps at the box's width cap** (explicit pixel width, else intrinsic width — media never upscales). Without the clamp, a small image's spacer kept growing with the column: a 300 pt-wide image measured in a 400 pt column was estimated 75% too tall in a 700 pt column.
+
+All gates re-ran clean after the refinements (fling-settle CPU 0.0%; autoscroll 7.5–9.7 ms/s across three runs vs 8.4 same-day baseline; media-gallery and kitchen-sink rotation round trips keep the reader's place with no trailing blank space). Rotation is now scriptable without the Simulator UI: `xcrun simctl spawn <udid> notifyutil -p com.connie.adfreader.rotate` (see `RotationHook` in the demo app) — the Device menu path needs a focused device window, which a shared/headless Mac cannot guarantee.
 
 ### 3. Nothing re-anchored the scroll view
 

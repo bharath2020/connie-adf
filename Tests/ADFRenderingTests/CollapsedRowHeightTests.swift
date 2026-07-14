@@ -57,7 +57,31 @@ struct CollapsedRowHeightTests {
     func mediaScalesWithWidth() {
         var heights = CollapsedRowHeight()
         heights.record(height: 100, at: 400)
-        #expect(heights.height(at: 800, scaling: .proportional) == 200)
+        #expect(heights.height(at: 800, scaling: .proportional(cap: nil)) == 200)
+    }
+
+    /// Media never upscales past its explicit or intrinsic pixel width, so
+    /// the estimate must stop growing at the cap rather than track the column
+    /// forever — otherwise every collapsed image overstates its height as
+    /// soon as the column outgrows the image.
+    @Test("Media stops growing at its width cap")
+    func mediaStopsGrowingAtCap() {
+        var heights = CollapsedRowHeight()
+        heights.record(height: 100, at: 400)
+        // Growth is honoured up to the cap (600), then the height holds.
+        #expect(heights.height(at: 800, scaling: .proportional(cap: 600)) == 150)
+        #expect(heights.height(at: 1200, scaling: .proportional(cap: 600)) == 150)
+        // An image already clamped when measured does not change at all.
+        #expect(heights.height(at: 800, scaling: .proportional(cap: 300)) == 100)
+    }
+
+    /// Measured on a column wider than the cap, then estimated for a narrower
+    /// one: only the width below the cap participates in the ratio.
+    @Test("A capped measurement scales down from the cap, not the column")
+    func cappedMeasurementScalesFromCap() {
+        var heights = CollapsedRowHeight()
+        heights.record(height: 90, at: 900)
+        #expect(heights.height(at: 300, scaling: .proportional(cap: 600)) == 45)
     }
 
     /// Code blocks and table slices scroll horizontally rather than wrap, so a
@@ -85,7 +109,14 @@ struct CollapsedRowHeightTests {
 
     @Test("Every block kind declares how its height answers a width change")
     func kindsMapToScaling() {
-        #expect(RenderBlock.Kind.media(.stub).heightScaling == .proportional)
+        // Media caps its estimate at the width the box stops growing at:
+        // the intrinsic width by default, an explicit pixel width when set,
+        // and no cap for fraction-width media (the box tracks the column).
+        #expect(RenderBlock.Kind.media(.stub()).heightScaling == .proportional(cap: 100))
+        #expect(RenderBlock.Kind.media(.stub(pixelWidth: 340)).heightScaling == .proportional(cap: 340))
+        #expect(RenderBlock.Kind.media(.stub(widthFraction: 0.5)).heightScaling == .proportional(cap: nil))
+        // A media strip scrolls horizontally at a fixed height, like code.
+        #expect(RenderBlock.Kind.mediaStrip([]).heightScaling == .invariant)
         #expect(RenderBlock.Kind.divider.heightScaling == .invariant)
         #expect(RenderBlock.Kind.codeBlock(language: nil, code: "").heightScaling == .invariant)
         #expect(RenderBlock.Kind.listRows([]).heightScaling == .reflowing)
@@ -93,20 +124,22 @@ struct CollapsedRowHeightTests {
 }
 
 private extension PreparedMedia {
-    static let stub = PreparedMedia(
-        id: "m",
-        attrs: MediaAttrs(
-            source: .external(url: "https://example.com/a.png"),
-            width: 100,
-            height: 50,
-            alt: nil,
-            mediaType: nil
-        ),
-        layout: .center,
-        widthFraction: nil,
-        pixelWidth: nil,
-        caption: nil,
-        borderHex: nil,
-        linkHref: nil
-    )
+    static func stub(widthFraction: Double? = nil, pixelWidth: Double? = nil) -> PreparedMedia {
+        PreparedMedia(
+            id: "m",
+            attrs: MediaAttrs(
+                source: .external(url: "https://example.com/a.png"),
+                width: 100,
+                height: 50,
+                alt: nil,
+                mediaType: nil
+            ),
+            layout: .center,
+            widthFraction: widthFraction,
+            pixelWidth: pixelWidth,
+            caption: nil,
+            borderHex: nil,
+            linkHref: nil
+        )
+    }
 }
