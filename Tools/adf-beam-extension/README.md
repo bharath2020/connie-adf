@@ -1,10 +1,16 @@
-# ADF Beam — Chrome extension
+# ADF Beam — Chrome and Firefox extension
 
 Beams the current Confluence Cloud page's ADF to the ADFReader iOS app as an
 animated QR code, with no server in between. The extension fetches the page's
 Atlas Document Format over your existing browser session, compresses it, and
 cycles it as QR frames; ADFReader's **Scan** screen collects the frames
 (camera, or pasted payloads) and renders the document.
+
+The same unpacked folder loads in both browsers — there is no build step and no
+per-browser variant. `manifest.json` declares both a `service_worker` (Chrome,
+whose MV3 has nothing else) and a `scripts` event page (Firefox, which has no
+MV3 service workers); each browser reads the key it supports and ignores the
+other.
 
 ## Install (unpacked, dev mode)
 
@@ -24,6 +30,19 @@ This leaves an `adf-beam-extension-main/` folder. Then, one time:
 
 To update later, re-run the fetch command in the same place and press the
 reload arrow on the extension's card in `chrome://extensions`.
+
+### Firefox
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Click **Load Temporary Add-on…** and pick the `manifest.json` inside the
+   extension folder.
+3. The **ADF Beam** button appears in the toolbar (pin it from the extensions
+   puzzle-piece menu if you don't see it).
+
+A temporary add-on is unloaded when Firefox quits, so repeat this after a
+restart — or run `npx web-ext run --source-dir Tools/adf-beam-extension`, which
+launches Firefox with the extension installed and reloads it on file changes.
+Requires Firefox 121 or newer.
 
 Maintainers: this directory lives in the (private) `connie-adf` repo and is
 mirrored to the public repo with

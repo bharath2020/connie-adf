@@ -5,13 +5,19 @@
 //   data = base64 of one <=chunkSize-byte slice of the RAW-deflate-compressed
 //   ADF JSON. Raw deflate (pako deflateRaw/inflateRaw) matches Apple's
 //   COMPRESSION_ZLIB, which has no zlib header.
+//
+// The global is resolved as `globalThis`, matching where pako's own UMD puts
+// itself. In a Firefox content-script sandbox `self`/`window` is an Xray proxy
+// to the *page* window, which is not the sandbox global the sibling injected
+// scripts share — resolving both libraries the same way is what lets the
+// extension's injected files see each other in Firefox as they do in Chrome.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
     module.exports = factory(require('../lib/pako.min.js'));
   } else {
     root.ADFBeamProtocol = factory(root.pako);
   }
-}(typeof self !== 'undefined' ? self : this, function (pako) {
+}(typeof globalThis !== 'undefined' ? globalThis : self, function (pako) {
   'use strict';
 
   const PREFIX = 'ADF1';

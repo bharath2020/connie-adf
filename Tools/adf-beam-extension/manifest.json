@@ -7,8 +7,15 @@
     "default_title": "Beam this page's ADF"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
-  "permissions": ["scripting", "activeTab"],
-  "host_permissions": ["https://*.atlassian.net/*"]
+  "permissions": ["scripting", "activeTab", "clipboardWrite"],
+  "host_permissions": ["https://*.atlassian.net/*"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "adf-beam@connie-adf",
+      "strict_min_version": "121.0"
+    }
+  }
 }
