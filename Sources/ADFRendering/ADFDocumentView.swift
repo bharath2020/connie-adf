@@ -28,6 +28,12 @@ public struct ADFDocumentView: View {
     /// height was measured at a different width (rotation, Split View).
     @State private var containerWidth = CGFloat.zero
 
+    /// The row at the top of the viewport, which `scrollPosition(id:)` keeps
+    /// anchored there when the document reflows at a new width. Held in a plain
+    /// reference type so SwiftUI's per-row writes to the binding invalidate
+    /// nothing — see `ScrollAnchorRegistry`.
+    @State private var anchors = ScrollAnchorRegistry()
+
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -40,49 +46,31 @@ public struct ADFDocumentView: View {
         self.mentionContent = mentionContent
     }
 
-    /// TOC jumps use `ScrollViewReader.scrollTo` rather than the
-    /// `scrollPosition(id:)` binding: the binding writes the top-visible ID
-    /// back continuously while scrolling, re-evaluating this view once per
-    /// row crossed — a per-frame cost that grows with the number of rows the
-    /// lazy stack has materialized and keeps alive (measured on the §8
-    /// 5k-block hitch gate as progressively increasing frame drops).
-    /// `scrollTo` costs nothing until a jump is requested.
+    /// TOC jumps use `ScrollViewReader.scrollTo` rather than writing the
+    /// `scrollPosition(id:)` binding: `scrollTo` costs nothing until a jump is
+    /// requested. The binding is still *read* — see `anchorBinding` — because
+    /// it is what keeps the reader's place when the document reflows at a new
+    /// width (rotation, Split View), which a retained content offset does not.
     public var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    // Sections are maintained incrementally by the model as
-                    // chunks stream in, so body only iterates a stored value —
-                    // a table's header slice pins (stays visible) while its row
-                    // slices scroll beneath it.
-                    ForEach(model.sections) { section in
-                        Section {
-                            ForEach(section.blocks) { block in
-                                DocumentRow(
-                                    block: block,
-                                    margin: model.theme.spacing * 2,
-                                    containerWidth: containerWidth
-                                )
-                            }
-                        } header: {
-                            if let header = section.header {
-                                BlockView(block: header)
-                                    // Opaque backdrop so pinned headers cover the
-                                    // rows scrolling underneath.
-                                    .background(Rectangle().fill(.background))
-                            }
-                        }
+                rows
+                    // Observed on the stack itself — the width rows are
+                    // actually laid out at. Reading it outside the
+                    // `readableWidth` cap would report the scroll view's full
+                    // width, which keeps changing (rotation, iPad) long after
+                    // the capped content column has stopped, and would rescale
+                    // every collapsed spacer by a ratio the rows never saw.
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.width
+                    } action: { width in
+                        containerWidth = width
                     }
-                }
-                .padding(.horizontal, model.theme.spacing * 2)
-                .frame(maxWidth: readableWidth)
-                .frame(maxWidth: .infinity)
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.size.width
-                } action: { width in
-                    containerWidth = width
-                }
+                    .padding(.horizontal, model.theme.spacing * 2)
+                    .frame(maxWidth: readableWidth)
+                    .frame(maxWidth: .infinity)
             }
+            .scrollPosition(id: anchorBinding, anchor: .top)
             .background {
                 // The scroll-target observation lives in a leaf view so a
                 // `scrollTarget` write invalidates only this empty view.
@@ -100,6 +88,43 @@ public struct ADFDocumentView: View {
         .environment(\.adfTaskStates, taskStates)
         .environment(\.adfMentionContent, mentionContent)
         .overlay { statusOverlay }
+    }
+
+    /// Reads and writes the top-visible row ID straight through to the
+    /// registry. `Binding` rather than `@State` on purpose: SwiftUI writes this
+    /// once per row crossed for the whole of every scroll, and a `@State` write
+    /// would re-evaluate this view — reconciling every row the lazy stack has
+    /// materialized — each time. A write to a plain reference type invalidates
+    /// nothing.
+    private var anchorBinding: Binding<String?> {
+        Binding(get: { anchors.topRow }, set: { anchors.topRow = $0 })
+    }
+
+    /// Sections are maintained incrementally by the model as chunks stream in,
+    /// so this only iterates a stored value — a table's header slice pins
+    /// (stays visible) while its row slices scroll beneath it.
+    private var rows: some View {
+        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            ForEach(model.sections) { section in
+                Section {
+                    ForEach(section.blocks) { block in
+                        DocumentRow(
+                            block: block,
+                            margin: model.theme.spacing * 2,
+                            containerWidth: containerWidth
+                        )
+                    }
+                } header: {
+                    if let header = section.header {
+                        BlockView(block: header)
+                            // Opaque backdrop so pinned headers cover the rows
+                            // scrolling underneath.
+                            .background(Rectangle().fill(.background))
+                    }
+                }
+            }
+        }
+        .scrollTargetLayout()
     }
 
     @ViewBuilder
@@ -142,47 +167,54 @@ private struct DocumentRow: View {
     /// `ADFDocumentView`, constant during scroll).
     let containerWidth: CGFloat
 
-    /// Rendered height captured while the row is live; `nil` until first
-    /// materialization (a row must never collapse before it was measured).
-    /// The height is exact only for the container width it was measured at.
-    /// After a window resize (rotation, iPad Split View) a collapsed row
-    /// must NOT re-materialize to re-measure: mass-materializing every
-    /// stale row changes hundreds of row sizes at once, the lazy stack's
-    /// scroll-offset compensation shifts the render region, appear/disappear
-    /// states flip, and the feedback loop livelocks layout at 100% CPU
-    /// (observed on entering Split View, `makeSizeChangeTranslation` hot in
-    /// every sample). Instead the spacer scales its cached height by the
-    /// width ratio — text reflow is roughly inverse in width — keeping
-    /// spacer height a pure function of stored state with no layout
-    /// feedback. The exact height is re-measured when the row naturally
-    /// re-enters the render region, like first materialization.
-    @State private var measured: MeasuredSize?
+    /// Rendered heights captured while the row is live, one per container
+    /// width; empty until first materialization (a row must never collapse
+    /// before it was measured).
+    ///
+    /// After a window resize (rotation, iPad Split View) a collapsed row must
+    /// NOT re-materialize to re-measure: mass-materializing every stale row
+    /// changes hundreds of row sizes at once, the lazy stack's scroll-offset
+    /// compensation shifts the render region, appear/disappear states flip,
+    /// and the feedback loop livelocks layout at 100% CPU (observed on
+    /// entering Split View, `makeSizeChangeTranslation` hot in every sample).
+    /// So the spacer's height stays a pure function of stored state, with no
+    /// layout feedback: `CollapsedRowHeight` replays an exact height for a
+    /// width this row has already been laid out at, and only estimates one it
+    /// has not — per block kind, since an image, a code block and a paragraph
+    /// each answer a width change differently. The exact height is
+    /// re-measured when the row naturally re-enters the render region, like
+    /// first materialization.
+    @State private var heights = CollapsedRowHeight()
     @State private var isInRenderRegion = false
 
-    private struct MeasuredSize: Equatable {
-        var containerWidth: CGFloat
-        var height: CGFloat
-    }
-
     private var spacerHeight: CGFloat? {
-        guard let measured else { return nil }
-        guard measured.containerWidth > 0, containerWidth > 0,
-              abs(measured.containerWidth - containerWidth) > 0.5 else {
-            return measured.height
-        }
-        return measured.height * measured.containerWidth / containerWidth
+        heights.height(at: containerWidth, scaling: block.kind.heightScaling)
     }
 
     var body: some View {
         Group {
-            if isInRenderRegion || measured == nil {
+            if isInRenderRegion || heights.isEmpty {
                 BlockView(block: block)
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
-                    .onGeometryChange(for: CGFloat.self) { proxy in
-                        proxy.size.height
-                    } action: { height in
-                        measured = MeasuredSize(containerWidth: containerWidth, height: height)
+                    // Full width so the size measured below reports the
+                    // column width even for rows whose content sits narrower
+                    // (the stack proposes the column width to every row).
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Width and height must come from the same geometry read.
+                    // Keying the record by the `containerWidth` property
+                    // instead would file it under a stale width: the stack's
+                    // width observation commits its `@State` write one update
+                    // pass after layout, so during a rotation a live row
+                    // would record its new-width height under the old width —
+                    // overwriting the exact sample the memo exists to replay —
+                    // and at first materialization the property is still zero,
+                    // so the record would be dropped and the row could never
+                    // collapse.
+                    .onGeometryChange(for: CGSize.self) { proxy in
+                        proxy.size
+                    } action: { size in
+                        heights.record(height: size.height, at: size.width)
                     }
             } else {
                 Color.clear
