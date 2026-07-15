@@ -78,6 +78,8 @@ A `ScrollView` retains its content **offset** across a resize. But at a new widt
 
 `scrollPosition(id:)` was originally rejected in §8 because binding it to `@State` writes the top-visible ID back once per row crossed, for the whole of every scroll, re-evaluating the document view (and reconciling every materialized row) each time. That objection is about the **binding's storage**, not the API. Backing it with a non-`@Observable` class keeps the behaviour and costs nothing: SwiftUI still writes on every row crossed, and a write to a reference type invalidates no views.
 
+> **Follow-up (see "Drift over repeated rotations" below): the binding by itself does not re-anchor on a resize.** `scrollPosition(id:)` only re-pins when its bound *value changes*, and the top-row ID does not change during a rotation. The identity has to be re-asserted explicitly on every width change; without that, this fix silently degrades back to preserving the offset.
+
 ## Rejected approach: tracking the top row with per-row geometry
 
 The first attempt at (3) found the top-visible row itself, by reading each live row's position in the scroll view's coordinate space:
@@ -121,6 +123,64 @@ Also note: **the documented `< 5 ms/s` gate is not reachable in a Debug simulato
 | `swift test` | 110 tests pass, incl. 9 new `CollapsedRowHeightTests` |
 | stress-5k autoscroll | 10.96 ms/s vs 10.29 ms/s on unmodified `main` — no regression |
 
+## Drift over repeated rotations (follow-up)
+
+**Status:** fixed.
+**Touches:** `Sources/ADFRendering/ADFDocumentView.swift`.
+**Symptom:** on a long document, rotating portrait↔landscape *repeatedly* walks the reader's place forward a fraction of a screen each cycle; after a handful of round trips it has drifted well away (reported from a stress-5k recording, Expand 45 / Section 50 region).
+
+### Root cause
+
+Fix (3) above assumed `scrollPosition(id:)` re-anchors the bound row on *any* resize. It doesn't — **it only re-anchors when the bound value *changes*.** SwiftUI writes the top-visible ID to the binding only during a scroll *gesture*; across a rotation the top row's ID is unchanged, so SwiftUI never re-pins and falls back to preserving the raw content **offset** — the very thing (3) set out to avoid.
+
+Confirmed by instrumentation: over six rotations the anchor binding is written **zero** times and the ID stays frozen, yet the content at the viewport top marches forward each cycle. Because the ID isn't re-pinned, the retained offset lands on reflowed content at the new width; the collapsed-row height *estimates* above the viewport don't round-trip portrait↔landscape, so the mismatch **compounds every cycle**. (The original verification missed it: the kitchen-sink round trip is one cycle of a short document, where no rows collapse and reflow is exact, so the offset happens to map back.)
+
+### Fix
+
+Re-assert the anchor by identity whenever the content column changes width:
+
+```swift
+.onChange(of: containerWidth) {
+    guard let anchor = anchors.topRow else { return }
+    // Snap, don't slide — the width change may carry the rotation's
+    // animation transaction, and a re-anchor should be instantaneous.
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction) { proxy.scrollTo(anchor, anchor: .top) }
+}
+```
+
+`scrollTo` re-derives the offset from the row identity — summing the *current* heights of the rows before the anchor — so it restores the reader's row no matter how those heights changed: rotation reflow, **or an Expand opened while rotated**, or a Split View reflow. Anchoring by identity (not a saved offset) is exactly what makes it robust to a content-height change between orientations.
+
+It fires only on a width change; a plain scroll gesture never changes the column width, so it stays off the §8 hitch path and touches no per-row geometry. (Rotating *mid-fling* does change width during a scroll — the one exception — and re-anchoring by identity is the right thing there too.)
+
+**The re-pin only works if `anchors.topRow` is truthful, and `scrollPosition(id:)` keeps it truthful only for scroll *gestures*.** A programmatic `proxy.scrollTo` (the TOC jump in `ScrollTargetConsumer`, `-scrollToFraction`) does *not* write the binding, so after a jump the registry still names the *pre-jump* top row. Left alone, the very next rotation would re-assert that stale row and teleport the reader back to where they were before the jump — a regression far worse than the drift. So every programmatic scroll must also set `anchors.topRow` to its target (the jump uses `anchor: .top`, so the target *is* the new top row). This is a free write — the registry is a plain reference type (§8b) — but it is mandatory, not optional; a new jump entry point that forgets it reintroduces the teleport.
+
+**Caller contract:** `ADFDocumentView` keeps the anchor in `@State`, keyed to the view's identity. Block ids are structural paths (`"0.5"`) that are stable within a document but *collide across documents*, so a host that swaps `model` while holding the view's identity constant carries a stale `topRow` into the new document. Give the reader a fresh identity per document (a new `ReaderView` per navigation, or `.id(document)`); the demo does this already.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| stress-5k, 8 portrait↔landscape cycles | Portrait frames **1–8 pixel-identical** (mean diff ≤ 0.02); drift eliminated |
+| TOC jump, then rotate (gesture-scrolled first, so the pre-jump anchor is non-nil) | Position **held at the jump target** (mean diff 0.16); no teleport back |
+| Expand a block, then rotate round trip | Position **retained** to within the sub-row residual (~28 px here), expanded content intact |
+| kitchen-sink (short doc), 3 round trips | No regression (mean diff 0.21) |
+| Fling burst on stress-5k, **instantaneous** idle CPU | **0.0%** — re-pin does not reintroduce the livelock |
+| `swift test` | 112 tests pass |
+
+**Known residuals (not addressed).** Both are one-time, bounded, non-accumulating, and share one root: `anchor: .top` can only align a row's *edge* to the viewport, so it can't represent an arbitrary sub-row position. Fixing either needs a one-shot content-offset read at rotation (`onScrollGeometryChange`), never a continuous per-row geometry read (that livelocks — see below).
+
+1. **Tall top row.** If the top-visible row is tall and you rotate while scrolled into its middle, the first rotation snaps that row's top to the viewport top — a **≤ one-row** reposition.
+2. **Bottom-clamped jump.** `scrollTo(target, .top)` clamps when `target` is within one viewport of the document end, so `target` lands mid-viewport rather than at top; the anchor is then recorded a little high. Because the landscape viewport is *shorter* than portrait, a target that clamps in one orientation may reach the top in the other, giving a **≤ one-viewport** forward reposition on the first rotation after a jump into the last screen. (Still strictly better than the pre-fix behaviour, which re-asserted the *pre-jump* row and teleported the reader clear across the document.)
+
+**Perf-gate note:** `ps -o %cpu=` is a lifetime-weighted average and reads ~10% right after a launch-parse + fling burst even when idle; it is *not* the instantaneous figure the gate wants. Confirm settle with `top -l 2 -pid <pid> -stats cpu` (reads 0.0 when truly idle) rather than trusting the `ps` average.
+
 ## Simulator automation gotcha
 
 `Rotate Left` / `Rotate Right` act on the **frontmost Simulator device window**. With several simulators booted, `AXRaise` the target window by name first or you will silently rotate someone else's device (and your own test will read as "rotation had no effect").
+
+Two more traps hit while reproducing this:
+
+- **Rotation needs settle time between toggles.** `RotationHook.toggle` reads `scene.interfaceOrientation` to decide which way to go; fire the next `notifyutil` before the geometry update lands and it reads the stale orientation and no-ops. At ~1.2 s between toggles the cycle desynced (ended landscape); ~2.2 s is reliable. A desync looks exactly like the bug — verify orientation from the `ROTATION requested=…` console line, not by counting toggles.
+- **`axe` taps use portrait-fixed coordinates.** `axe describe-ui` / `axe tap` do not map into a rotated orientation, so tapping a control *while the device is landscape* lands in the wrong place. Drive taps (expand a block, hit the TOC) in **portrait**; use the rotation hook only to change orientation.
