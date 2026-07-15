@@ -18,6 +18,7 @@ struct ReaderView: View {
     @State private var firstChunkMilliseconds: Double?
     @State private var loadFailure: String?
     @State private var taskStates: [String: Bool] = [:]
+    @State private var searchPresented = false
 
     private let mediaProvider = PlaceholderMediaProvider()
     private let taskStore = TaskStateStore()
@@ -41,6 +42,11 @@ struct ReaderView: View {
             .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if searchPresented {
+                    SearchBar(search: model.search, isPresented: $searchPresented)
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 if hudVisible {
                     FrameRateHUD(metrics: metrics)
@@ -71,6 +77,14 @@ struct ReaderView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                withAnimation(.snappy) { searchPresented.toggle() }
+                if !searchPresented { model.search.clear() }
+            } label: {
+                Label("Find in Page", systemImage: "magnifyingglass")
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 ForEach(model.headings, id: \.id) { heading in
