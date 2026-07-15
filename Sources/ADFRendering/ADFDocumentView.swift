@@ -81,6 +81,7 @@ public struct ADFDocumentView: View {
         .environment(\.adfInteractionHandler, interactionHandler)
         .environment(\.adfTaskStates, taskStates)
         .environment(\.adfMentionContent, mentionContent)
+        .environment(\.adfDocumentSearch, model.search)
         .overlay { statusOverlay }
     }
 
@@ -105,7 +106,8 @@ public struct ADFDocumentView: View {
                         DocumentRow(
                             block: block,
                             margin: model.theme.spacing * 2,
-                            containerWidth: containerWidth
+                            containerWidth: containerWidth,
+                            visibility: model.search.visibleRows
                         )
                     }
                 } header: {
@@ -160,6 +162,7 @@ private struct DocumentRow: View {
     /// The document's current content-column width (observed once by
     /// `ADFDocumentView`, constant during scroll).
     let containerWidth: CGFloat
+    let visibility: VisibleRowRegistry
 
     /// Rendered heights captured while the row is live, one per container
     /// width; empty until first materialization (a row must never collapse
@@ -216,7 +219,13 @@ private struct DocumentRow: View {
             }
         }
         .onAppear { isInRenderRegion = true }
-        .onDisappear { isInRenderRegion = false }
+        .onDisappear {
+            isInRenderRegion = false
+            // Render-region exit implies viewport exit; also covers removal
+            // paths where the visibility callback never fires a final false.
+            visibility.setVisible(block.id, false)
+        }
+        .reportScrollVisibility(id: block.id, to: visibility)
     }
 }
 
@@ -267,6 +276,24 @@ extension View {
         case .fullWidth:
             frame(maxWidth: breakout?.width.map { CGFloat($0) })
                 .padding(.horizontal, -margin)
+        }
+    }
+}
+
+extension View {
+    /// Reports genuine viewport visibility (not render-region membership) to
+    /// the registry on iOS 18+/macOS 15+. Earlier OSes report nothing, so
+    /// `VisibleRowRegistry.isVisible` stays false and search always scrolls.
+    /// The 0.95 threshold ≈ "fully visible": partially clipped matches still
+    /// get a scroll that brings them fully inside the margin.
+    @ViewBuilder
+    func reportScrollVisibility(id: String, to registry: VisibleRowRegistry) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            onScrollVisibilityChange(threshold: 0.95) { visible in
+                registry.setVisible(id, visible)
+            }
+        } else {
+            self
         }
     }
 }

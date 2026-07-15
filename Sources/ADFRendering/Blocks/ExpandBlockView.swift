@@ -8,20 +8,46 @@ import ADFPreparation
 /// it, §5.1); on first expansion it is flattened off-main by wrapping the
 /// nodes in a synthetic doc, then cached in `@State` so re-opening is free.
 struct ExpandBlockView: View {
+    /// The expand's `RenderBlock.id` — the key in `model.expandedBlocks`.
+    let id: String
     let title: String
     let bodyNodes: [ADFNode]
     let isNested: Bool
 
     @Environment(\.adfTheme) private var theme
-    @State private var isExpanded = false
+    @Environment(\.adfDocumentSearch) private var search
+    /// Fallback when rendered outside ADFDocumentView (previews): behaves
+    /// like the old private state.
+    @State private var localExpanded = false
     @State private var preparedBody: [RenderBlock]?
+
+    private var model: ADFDocumentModel? { search?.model }
+
+    /// Expansion lives on the model so it survives the row collapsing to a
+    /// spacer (fixes silent re-collapse on scroll-away) and so search
+    /// navigation can open expands programmatically.
+    private var isExpanded: Bool {
+        model?.expandedBlocks.contains(id) ?? localExpanded
+    }
+
+    private func toggle() {
+        withAnimation(.snappy) {
+            if let model {
+                if model.expandedBlocks.contains(id) {
+                    model.expandedBlocks.remove(id)
+                } else {
+                    model.expandedBlocks.insert(id)
+                }
+            } else {
+                localExpanded.toggle()
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.snappy) {
-                    isExpanded.toggle()
-                }
+                toggle()
             } label: {
                 HStack(spacing: theme.spacing) {
                     Image(systemName: "chevron.right")

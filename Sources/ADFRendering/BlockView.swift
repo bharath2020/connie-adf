@@ -38,7 +38,7 @@ struct BlockView: View {
         case .mediaStrip(let items):
             MediaStripView(items: items)
         case .expand(let title, let bodyNodes, let isNested):
-            ExpandBlockView(title: title, bodyNodes: bodyNodes, isNested: isNested)
+            ExpandBlockView(id: block.id, title: title, bodyNodes: bodyNodes, isNested: isNested)
         case .layoutColumns(let columns):
             LayoutColumnsView(columns: columns)
         case .card(let url, let title, let isEmbed):
