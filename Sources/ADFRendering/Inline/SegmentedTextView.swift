@@ -54,10 +54,15 @@ struct SegmentedTextView: View {
     /// The zero-work gate: rows without matches return the stored segments
     /// untouched (no copy, no scan) — the path every row takes while
     /// scrolling with no search active, and every unmatched row during one.
+    /// With no active session the gate reads ONE observable Bool
+    /// (`isActive`, which flips at most twice per session) and never touches
+    /// the `highlights` struct — leaf materialization during plain scrolling
+    /// is what the §8 hitch gate measures.
     private var displayedSegments: [InlineSegment] {
-        guard let ownerID, let highlights = search?.highlights, highlights.isActive else {
+        guard let ownerID, let search, search.isActive else {
             return segments
         }
+        let highlights = search.highlights
         let spans = highlights.spansByOwner[ownerID] ?? []
         let currentSpans = highlights.current?.ownerID == ownerID
             ? (highlights.current?.spans ?? []) : []
@@ -73,7 +78,8 @@ struct SegmentedTextView: View {
 
     private func atomHighlight(for token: InlineToken) -> AtomHighlightState? {
         guard ownerID != nil, case .atom(_, let id) = token.kind,
-              let highlights = search?.highlights, highlights.isActive else { return nil }
+              let search, search.isActive else { return nil }
+        let highlights = search.highlights
         if let current = highlights.current, current.atomIDs.contains(id) {
             return .current(dimmed: flashDimmed)
         }

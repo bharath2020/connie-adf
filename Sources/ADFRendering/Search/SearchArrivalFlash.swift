@@ -18,16 +18,37 @@ struct SearchArrivalFlash: ViewModifier {
         let isCurrentOwner: Bool
     }
 
+    /// With no active session this reads ONE observable Bool (`isActive`)
+    /// and skips `highlights` entirely — the leaf re-registers for
+    /// `highlights.current` the moment a session starts, so navigation still
+    /// re-evaluates the ownership branch below.
     private var trigger: Trigger {
-        let current = search?.highlights.current
+        guard let search, search.isActive, let ownerID else {
+            return Trigger(generation: 0, isCurrentOwner: false)
+        }
+        let current = search.highlights.current
         return Trigger(
             generation: current?.generation ?? 0,
-            isCurrentOwner: ownerID != nil && current?.ownerID == ownerID
+            isCurrentOwner: current?.ownerID == ownerID
         )
     }
 
+    /// The flash task attaches ONLY to the current match's owner, so the
+    /// other leaves never pay a task spawn + cancel per materialization
+    /// (idle-scroll hygiene; measured harmless but pure waste). The branch
+    /// lives INSIDE this modifier's body on purpose — resolved in the
+    /// modifier's own subgraph, it leaves the leaf's outer view type unary
+    /// and stable (see `ScrollVisibilityReporter` for the trap this avoids).
+    /// The `trigger` computation above reads the observable search state, so
+    /// a navigation re-evaluates the branch here; the identity flip when
+    /// ownership moves is fine — a fresh flash starts anyway, and `runFlash`
+    /// resets the dimmed phase first.
     func body(content: Content) -> some View {
-        content.task(id: trigger) { await runFlash() }
+        if trigger.isCurrentOwner {
+            content.task(id: trigger) { await runFlash() }
+        } else {
+            content
+        }
     }
 
     /// Runs when this view holds the current match after a navigation —

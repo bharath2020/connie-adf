@@ -61,10 +61,13 @@ struct CodeBlockView: View {
     }
 
     /// Zero-work gate: unmatched code blocks return the stored string as-is.
+    /// Idle sessions read one observable Bool, never the highlights struct
+    /// (see `SegmentedTextView.displayedSegments`).
     private var displayedCode: AttributedString {
-        guard let ownerID, let highlights = search?.highlights, highlights.isActive else {
+        guard let ownerID, let search, search.isActive else {
             return code
         }
+        let highlights = search.highlights
         let spans = highlights.spansByOwner[ownerID] ?? []
         let currentSpans = highlights.current?.ownerID == ownerID
             ? (highlights.current?.spans ?? []) : []

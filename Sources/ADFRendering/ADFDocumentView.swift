@@ -98,7 +98,33 @@ public struct ADFDocumentView: View {
     /// Sections are maintained incrementally by the model as chunks stream in,
     /// so this only iterates a stored value — a table's header slice pins
     /// (stays visible) while its row slices scroll beneath it.
+    ///
+    /// THE ONE PLACE `#available` MAY GUARD THE VISIBILITY FEED. An
+    /// `if #available` in any result builder compiles to
+    /// `buildLimitedAvailability`, which type-erases the taken branch to
+    /// `AnyView`. Erasing PER ROW — at the call site or even inside a
+    /// per-row `ViewModifier`'s body — destroys the lazy stack's unary-item
+    /// caching: it re-walks and re-measures the materialized rows on every
+    /// frame of a scroll, a cost that grows with scroll depth (§8 stress-5k
+    /// gate: 1.8 → 112–126 ms/s of hitching, in BOTH branches, with the
+    /// callbacks contributing nothing). Branching HERE erases exactly one
+    /// view — the whole stack — and each row keeps one stable, conditional-
+    /// free type; the feed itself is free (0.65 ms/s live on all 5,000 rows).
+    @ViewBuilder
     private var rows: some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            stack(reporter: { ScrollVisibilityReporter(id: $0, registry: $1) })
+        } else {
+            // Pre-18/15: no visibility feed exists, `VisibleRowRegistry`
+            // stays empty, and search navigation always scrolls (graceful
+            // degradation).
+            stack(reporter: { _, _ in EmptyModifier() })
+        }
+    }
+
+    private func stack<Reporter: ViewModifier>(
+        reporter: @escaping (String, VisibleRowRegistry) -> Reporter
+    ) -> some View {
         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(model.sections) { section in
                 Section {
@@ -109,6 +135,7 @@ public struct ADFDocumentView: View {
                             containerWidth: containerWidth,
                             visibility: model.search.visibleRows
                         )
+                        .modifier(reporter(block.id, model.search.visibleRows))
                     }
                 } header: {
                     if let header = section.header {
@@ -225,7 +252,8 @@ private struct DocumentRow: View {
             // paths where the visibility callback never fires a final false.
             visibility.setVisible(block.id, false)
         }
-        .reportScrollVisibility(id: block.id, to: visibility)
+        // The `ScrollVisibilityReporter` feed is applied by `stack(reporter:)`
+        // around this row — see `rows` for why it must not attach in here.
     }
 }
 
@@ -280,20 +308,25 @@ extension View {
     }
 }
 
-extension View {
-    /// Reports genuine viewport visibility (not render-region membership) to
-    /// the registry on iOS 18+/macOS 15+. Earlier OSes report nothing, so
-    /// `VisibleRowRegistry.isVisible` stays false and search always scrolls.
-    /// The 0.95 threshold ≈ "fully visible": partially clipped matches still
-    /// get a scroll that brings them fully inside the margin.
-    @ViewBuilder
-    func reportScrollVisibility(id: String, to registry: VisibleRowRegistry) -> some View {
-        if #available(iOS 18.0, macOS 15.0, *) {
-            onScrollVisibilityChange(threshold: 0.95) { visible in
-                registry.setVisible(id, visible)
-            }
-        } else {
-            self
+/// Reports a row's genuine viewport visibility (not render-region
+/// membership) into the `VisibleRowRegistry`. The 0.95 threshold ≈ "fully
+/// visible": partially clipped matches still get a scroll that brings them
+/// fully inside the margin.
+///
+/// `@available`-constrained ON THE TYPE, with a body containing NO
+/// conditional, deliberately: this modifier sits on every lazy row, and any
+/// `if #available` in its body (or at its call site) erases the row's
+/// subgraph to `AnyView` via `buildLimitedAvailability` — the §8-measured
+/// poison documented on `ADFDocumentView.rows`, which is the single place
+/// allowed to make the availability decision.
+@available(iOS 18.0, macOS 15.0, *)
+private struct ScrollVisibilityReporter: ViewModifier {
+    let id: String
+    let registry: VisibleRowRegistry
+
+    func body(content: Content) -> some View {
+        content.onScrollVisibilityChange(threshold: 0.95) { visible in
+            registry.setVisible(id, visible)
         }
     }
 }

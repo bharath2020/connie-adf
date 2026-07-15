@@ -18,6 +18,14 @@ public final class ADFDocumentSearch {
     public private(set) var currentIndex: Int?
     /// True while a scan (or the index build feeding it) is in flight.
     public private(set) var isSearching: Bool = false
+    /// True from the first scan of a search session until the session ends
+    /// (Done, empty query, or document reload). DELIBERATELY COARSE: the
+    /// guarded writes below flip it at most twice per session — never per
+    /// batch, navigation, or keystroke. Leaf text views read this ONE Bool
+    /// as their idle gate (`displayedSegments`/`displayedCode`/arrival-flash
+    /// trigger) so a document with no search session touches no highlight
+    /// state at all during scroll.
+    public private(set) var isActive: Bool = false
     /// Highlight payload consumed by leaf text views via the environment.
     public private(set) var highlights: ADFSearchHighlights = .none
 
@@ -159,6 +167,9 @@ public final class ADFDocumentSearch {
         baseAtoms = []
         scannedUnitCount = 0
         highlights = .none
+        if isActive {
+            isActive = false
+        }
     }
 
     private func startScan() {
@@ -171,6 +182,9 @@ public final class ADFDocumentSearch {
         scannedUnitCount = 0
         highlights = .none
         isSearching = true
+        if !isActive {
+            isActive = true // Guarded: repeat scans in one session must not re-notify.
+        }
         activeScanQuery = query
         scanTask = Task { [weak self] in
             await self?.drainScan(autoSelect: true)
