@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import ADFPreparation
 
 /// Everything leaf text views need to paint search highlights, published by
@@ -27,5 +28,19 @@ public struct ADFSearchHighlights: Equatable, Sendable {
 
     public var isActive: Bool {
         !spansByOwner.isEmpty || !matchedAtomIDs.isEmpty || current != nil
+    }
+}
+
+private struct ADFDocumentSearchKey: EnvironmentKey {
+    static let defaultValue: ADFDocumentSearch? = nil
+}
+
+extension EnvironmentValues {
+    /// The document's search controller, injected by `ADFDocumentView` so
+    /// leaf text views can observe `highlights` without the document view
+    /// ever re-evaluating (the reference itself never changes).
+    public var adfDocumentSearch: ADFDocumentSearch? {
+        get { self[ADFDocumentSearchKey.self] }
+        set { self[ADFDocumentSearchKey.self] = newValue }
     }
 }

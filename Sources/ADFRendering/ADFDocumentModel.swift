@@ -31,6 +31,15 @@ public final class ADFDocumentModel {
     /// because blocks only ever append at the end.
     private(set) var sections: [BlockSection] = []
 
+    /// Find-in-page controller for this document (`run`/`next`/`previous`/
+    /// `clear`, streamed `matchCount`, highlight payload). One per model.
+    public let search: ADFDocumentSearch
+
+    /// Expand blocks currently open, keyed by block ID. Owned here (not view
+    /// `@State`) so expansion survives rows collapsing to spacers, and so
+    /// search navigation can open expands programmatically.
+    public var expandedBlocks: Set<String> = []
+
     /// Set to a block ID (typically a `headings` entry) to ask the visible
     /// `ADFDocumentView` to scroll there; the view consumes and clears it.
     public var scrollTarget: String?
@@ -59,6 +68,8 @@ public final class ADFDocumentModel {
 
     public init(theme: ADFTheme = .default) {
         self.theme = theme
+        self.search = ADFDocumentSearch()
+        self.search.model = self
     }
 
     deinit {
@@ -76,6 +87,9 @@ public final class ADFDocumentModel {
         sections = []
         headings = []
         scrollTarget = nil
+        scrollTargetPlacement = .top
+        expandedBlocks = []
+        search.reset()
         phase = .parsing
 
         let parser = self.parser
@@ -108,6 +122,7 @@ public final class ADFDocumentModel {
     }
 
     private func append(_ chunk: [RenderBlock]) {
+        search.indexAppended(chunk, theme: theme)
         blocks.append(contentsOf: chunk)
         for block in chunk {
             appendToSections(block)
