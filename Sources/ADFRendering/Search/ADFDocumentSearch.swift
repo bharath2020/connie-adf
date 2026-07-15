@@ -66,7 +66,10 @@ public final class ADFDocumentSearch {
     @ObservationIgnored private var activeScanQuery: String? = nil
     private let scanBatchSize = 256
 
-    public init() {}
+    /// Internal: instances are only meaningful wired to a model, which
+    /// `ADFDocumentModel` does at its own init. A freestanding instance
+    /// would be inert (weak `model`).
+    init() {}
 
     deinit {
         indexTask?.cancel()

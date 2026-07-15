@@ -119,6 +119,34 @@ struct ADFDocumentSearchTests {
         #expect(model.scrollTarget == model.blocks[1].id)
     }
 
+    @Test("a table-header match scrolls to the header slice, whose ID names a section")
+    func tableHeaderMatchScrolls() async throws {
+        let model = try await readyModel("""
+        {"version":1,"type":"doc","content":[{"type":"table","content":[
+          {"type":"tableRow","content":[
+            {"type":"tableHeader","content":[{"type":"paragraph","content":[{"type":"text","text":"zebra header"}]}]}
+          ]},
+          {"type":"tableRow","content":[
+            {"type":"tableCell","content":[{"type":"paragraph","content":[{"type":"text","text":"plain one"}]}]}
+          ]},
+          {"type":"tableRow","content":[
+            {"type":"tableCell","content":[{"type":"paragraph","content":[{"type":"text","text":"plain two"}]}]}
+          ]}
+        ]}]}
+        """)
+        model.search.run("zebra") // header-only term
+        try await waitUntil("scan done") { !model.search.isSearching && model.search.matchCount == 1 }
+        // The requested scroll target is the header slice itself. That ID is
+        // resolvable by `ScrollViewProxy.scrollTo` because the header slice's
+        // ID doubles as its `BlockSection.id` — the identity `ADFDocumentView`
+        // gives the whole pinned section in the lazy stack (verified live:
+        // navigation from both directions lands the pinned header on screen).
+        let target = try #require(model.scrollTarget)
+        #expect(target.hasSuffix("#header"))
+        #expect(target == model.blocks[0].id)
+        #expect(model.sections.map(\.id).contains(target))
+    }
+
     @Test("reload resets search state")
     func reloadResets() async throws {
         let model = try await readyModel(threeFoxes)

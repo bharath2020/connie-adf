@@ -75,4 +75,12 @@ struct SearchMatcherTests {
         ])
         #expect(result.atomIDs == ["n1"])
     }
+
+    @Test("folded matches of different lengths keep Character offsets aligned")
+    func foldedLengthMismatchOffsets() {
+        // ß folds to "ss": matched range length differs from query length.
+        #expect(SearchMatcher.matchRanges(in: "Straße", query: "strasse") == [0..<6])
+        #expect(SearchMatcher.matchRanges(in: "Straße and Straße", query: "strasse") == [0..<6, 11..<17])
+        #expect(SearchMatcher.matchRanges(in: "strasse", query: "straße") == [0..<7])
+    }
 }

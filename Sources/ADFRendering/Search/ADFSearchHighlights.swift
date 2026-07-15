@@ -25,10 +25,6 @@ public struct ADFSearchHighlights: Equatable, Sendable {
     public static let none = ADFSearchHighlights(
         spansByOwner: [:], matchedAtomIDs: [], current: nil
     )
-
-    public var isActive: Bool {
-        !spansByOwner.isEmpty || !matchedAtomIDs.isEmpty || current != nil
-    }
 }
 
 private struct ADFDocumentSearchKey: EnvironmentKey {
