@@ -41,6 +41,17 @@ public final class ADFDocumentModel {
     /// Configuration, not UI state — hence not observed.
     @ObservationIgnored public var scrollTargetAnimation: Animation = .snappy
 
+    /// Placement for the next `scrollTarget` consume. Set BEFORE
+    /// `scrollTarget` (the consumer observes only `scrollTarget`); the view
+    /// resets it to `.top` together with clearing the target.
+    /// Configuration, not UI state — hence not observed.
+    @ObservationIgnored public var scrollTargetPlacement: ADFScrollTargetPlacement = .top
+
+    /// Scroll-anchoring registry the document view binds `scrollPosition(id:)`
+    /// through. Owned here (not view `@State`) so search can read the
+    /// top-visible row without any geometry. See `ScrollAnchorRegistry`.
+    @ObservationIgnored let anchors = ScrollAnchorRegistry()
+
     let theme: ADFTheme
 
     @ObservationIgnored private let parser = ADFParser()

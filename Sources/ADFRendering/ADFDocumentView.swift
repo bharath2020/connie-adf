@@ -28,12 +28,6 @@ public struct ADFDocumentView: View {
     /// height was measured at a different width (rotation, Split View).
     @State private var containerWidth = CGFloat.zero
 
-    /// The row at the top of the viewport, which `scrollPosition(id:)` keeps
-    /// anchored there when the document reflows at a new width. Held in a plain
-    /// reference type so SwiftUI's per-row writes to the binding invalidate
-    /// nothing — see `ScrollAnchorRegistry`.
-    @State private var anchors = ScrollAnchorRegistry()
-
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -97,7 +91,7 @@ public struct ADFDocumentView: View {
     /// materialized — each time. A write to a plain reference type invalidates
     /// nothing.
     private var anchorBinding: Binding<String?> {
-        Binding(get: { anchors.topRow }, set: { anchors.topRow = $0 })
+        Binding(get: { model.anchors.topRow }, set: { model.anchors.topRow = $0 })
     }
 
     /// Sections are maintained incrementally by the model as chunks stream in,
@@ -227,21 +221,32 @@ private struct DocumentRow: View {
 }
 
 /// Consumes `ADFDocumentModel.scrollTarget`: jumps the scroll view to the
-/// requested block ID, then clears the request. A standalone leaf view so
-/// the observation of `scrollTarget` (and the clearing write) never
-/// invalidates the document view that hosts the lazy stack.
+/// requested block ID with the model's placement, then clears both. A
+/// standalone leaf view so the observation (and the clearing write) never
+/// invalidates the document view that hosts the lazy stack. The viewport
+/// height is measured HERE — on the scroll view's frame, never inside lazy
+/// rows — to turn point margins into `UnitPoint` anchors.
 private struct ScrollTargetConsumer: View {
     let model: ADFDocumentModel
     let proxy: ScrollViewProxy
 
+    @State private var viewportHeight: CGFloat = 0
+
     var body: some View {
         Color.clear
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                viewportHeight = height
+            }
             .onChange(of: model.scrollTarget) { _, target in
                 guard let target else { return }
+                let anchor = model.scrollTargetPlacement.anchor(viewportHeight: viewportHeight)
                 withAnimation(model.scrollTargetAnimation) {
-                    proxy.scrollTo(target, anchor: .top)
+                    proxy.scrollTo(target, anchor: anchor)
                 }
                 model.scrollTarget = nil
+                model.scrollTargetPlacement = .top
             }
     }
 }
