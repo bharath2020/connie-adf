@@ -16,6 +16,7 @@ struct SearchBar: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 TextField("Find in page", text: $text)
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
@@ -28,6 +29,7 @@ struct SearchBar: View {
                 if search.isSearching {
                     ProgressView()
                         .controlSize(.small)
+                        .accessibilityLabel("Searching")
                 } else if !text.isEmpty {
                     Text(counterText)
                         .font(.callout.monospacedDigit())
@@ -63,6 +65,9 @@ struct SearchBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+        // Caps growth so the field, counter, chevrons, and Done stay on one
+        // row at the largest accessibility sizes, the way Safari's find bar does.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .onAppear { isFocused = true }
     }
 

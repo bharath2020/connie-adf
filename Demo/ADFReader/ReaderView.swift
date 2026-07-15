@@ -79,8 +79,10 @@ struct ReaderView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Button {
-                withAnimation(.snappy) { searchPresented.toggle() }
-                if !searchPresented { model.search.clear() }
+                withAnimation(.snappy) {
+                    searchPresented.toggle()
+                    if !searchPresented { model.search.clear() }
+                }
             } label: {
                 Label("Find in Page", systemImage: "magnifyingglass")
             }
