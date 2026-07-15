@@ -86,8 +86,18 @@ public struct SearchIndexer: Sendable {
                     }
                 }
             }
-        case .expand:
-            break // Expand bodies land in Task 3.
+        case .expand(_, let bodyNodes, _):
+            // Prepare the body EXACTLY as ExpandBlockView does on first
+            // expansion (same synthetic wrapper, same theme), so inner block
+            // IDs and segment shapes match what the expanded view renders.
+            let root = ADFNode(id: "expand", type: "doc", kind: .doc(bodyNodes))
+            let document = ADFDocument(version: 1, root: root, issues: [])
+            let bodyBlocks = DocumentPreparer(theme: theme).prepare(document)
+            let chain = expandAncestorIDs + [block.id]
+            for child in bodyBlocks {
+                collect(child, topLevelBlockID: topLevelBlockID,
+                        expandAncestorIDs: chain, into: &result)
+            }
         case .divider, .card, .unknown:
             break // No range-highlightable text (see Global Constraints).
         }

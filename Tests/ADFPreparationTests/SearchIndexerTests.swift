@@ -179,4 +179,35 @@ struct SearchIndexerTests {
             #expect(covered == unit.plainText.count, "short map in \(unit.ownerID)")
         }
     }
+
+    @Test("collapsed expand bodies are indexed with the expand as ancestor")
+    func expandBodyIndexed() async throws {
+        let blocks = try await prepared("""
+        {"version":1,"type":"doc","content":[{"type":"expand","attrs":{"title":"More"},"content":[
+          {"type":"paragraph","content":[{"type":"text","text":"hidden treasure"}]}
+        ]}]}
+        """)
+        let unit = try #require(indexer.units(for: blocks).first)
+        #expect(unit.plainText == "hidden treasure")
+        #expect(unit.expandAncestorIDs == [blocks[0].id])
+        #expect(unit.topLevelBlockID == blocks[0].id)
+        // Owner is the INNER paragraph's block id — the id the expanded view
+        // will render it under.
+        #expect(unit.ownerID != blocks[0].id)
+    }
+
+    @Test("nested expands accumulate the ancestor chain outermost-first")
+    func nestedExpandChain() async throws {
+        let blocks = try await prepared("""
+        {"version":1,"type":"doc","content":[{"type":"expand","attrs":{"title":"Outer"},"content":[
+          {"type":"nestedExpand","attrs":{"title":"Inner"},"content":[
+            {"type":"paragraph","content":[{"type":"text","text":"deep"}]}
+          ]}
+        ]}]}
+        """)
+        let unit = try #require(indexer.units(for: blocks).first { $0.plainText == "deep" })
+        #expect(unit.expandAncestorIDs.count == 2)
+        #expect(unit.expandAncestorIDs.first == blocks[0].id)
+        #expect(unit.topLevelBlockID == blocks[0].id)
+    }
 }
