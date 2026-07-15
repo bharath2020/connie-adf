@@ -71,6 +71,42 @@ public struct ADFDocumentView: View {
                     .frame(maxWidth: .infinity)
             }
             .scrollPosition(id: anchorBinding, anchor: .top)
+            // Re-assert the anchor by identity whenever the content column
+            // changes width (rotation, iPad Split View drag).
+            //
+            // `scrollPosition(id:)` only re-anchors when its bound *value*
+            // changes — not on a resize. Across a rotation the top row's id is
+            // unchanged, so SwiftUI keeps the raw content *offset* instead. At
+            // the new width the rows above have reflowed (and far-off collapsed
+            // rows report estimated heights), so the same offset lands on
+            // different content — and because the estimates don't round-trip
+            // portrait↔landscape, the error compounds every cycle. That is the
+            // progressive drift §8b's `scrollPosition(id:)` was meant to prevent
+            // but silently didn't (it verified a single short-document round
+            // trip, where no rows collapse and reflow is exact).
+            //
+            // `scrollTo` re-derives the offset from the identity — summing the
+            // current heights of the rows before the anchor — so it restores the
+            // reader's row regardless of how those heights changed (reflow, or an
+            // Expand opened above the viewport). It fires only on a width change,
+            // which a plain scroll gesture never causes (the column width is
+            // constant while scrolling); rotating mid-fling is the one exception,
+            // and re-anchoring by identity is the intended behaviour there too.
+            // So it stays off the §8 hitch path and touches no per-row geometry.
+            //
+            // `anchors.topRow` must be kept truthful by every code path that
+            // moves the scroll view programmatically — see `ScrollTargetConsumer`
+            // — otherwise this re-asserts a stale row on the next resize.
+            .onChange(of: containerWidth) {
+                guard let anchor = anchors.topRow else { return }
+                // Snap, don't slide: the width change can carry the rotation's
+                // animation transaction, and a re-anchor should be instantaneous.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(anchor, anchor: .top)
+                }
+            }
             .background {
                 // The scroll-target observation lives in a leaf view so a
                 // `scrollTarget` write invalidates only this empty view.
@@ -78,7 +114,7 @@ public struct ADFDocumentView: View {
                 // view per jump — and reconciling every row the lazy stack
                 // keeps alive is O(rows materialized so far), which the §8
                 // 5k-block hitch gate measures as progressive frame drops.
-                ScrollTargetConsumer(model: model, proxy: proxy)
+                ScrollTargetConsumer(model: model, proxy: proxy, anchors: anchors)
             }
         }
         .environment(\.adfTheme, model.theme)
@@ -233,6 +269,7 @@ private struct DocumentRow: View {
 private struct ScrollTargetConsumer: View {
     let model: ADFDocumentModel
     let proxy: ScrollViewProxy
+    let anchors: ScrollAnchorRegistry
 
     var body: some View {
         Color.clear
@@ -241,6 +278,22 @@ private struct ScrollTargetConsumer: View {
                 withAnimation(model.scrollTargetAnimation) {
                     proxy.scrollTo(target, anchor: .top)
                 }
+                // Keep the anchor truthful. `scrollPosition(id:)` writes the
+                // binding only during a scroll *gesture*, never for a
+                // programmatic `scrollTo`, so without this the registry keeps
+                // the pre-jump top row. The width-change re-pin above then
+                // re-asserts that stale row on the next rotation and teleports
+                // the reader back to where they were before the jump. The jump
+                // anchors `target` at `.top`, so `target` is the new top row —
+                // except when the target sits within one viewport of the
+                // document end and `.top` bottom-clamps; then `target` lands
+                // mid-viewport and this records it a little high. That is a
+                // bounded, one-time reposition on the next resize (the same
+                // whole-row `.top` limitation as the sub-row residual, fixable
+                // only with a one-shot post-jump offset read — see the doc), and
+                // still far better than re-asserting the pre-jump row.
+                // (A write to the reference type invalidates nothing — §8b.)
+                anchors.topRow = target
                 model.scrollTarget = nil
             }
     }
