@@ -30,7 +30,7 @@ struct MediaBlockView: View {
         VStack(alignment: stackAlignment, spacing: theme.spacing * 0.75) {
             mediaBox
             if let caption = media.caption, !caption.isEmpty {
-                SegmentedTextView(segments: caption)
+                SegmentedTextView(segments: caption, ownerID: media.id)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

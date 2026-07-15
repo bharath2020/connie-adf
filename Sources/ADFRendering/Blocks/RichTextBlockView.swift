@@ -7,11 +7,12 @@ import ADFPreparation
 struct RichTextBlockView: View {
     let segments: [InlineSegment]
     let style: TextBlockStyle
+    var ownerID: String? = nil
 
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
-        SegmentedTextView(segments: segments)
+        SegmentedTextView(segments: segments, ownerID: ownerID)
             .multilineTextAlignment(textAlignment)
             .textSelection(.enabled)
             .padding(.leading, indentationPadding)

@@ -9,6 +9,9 @@ import ADFPreparation
 /// with inline pill views.
 struct SegmentedTextView: View {
     let segments: [InlineSegment]
+    /// ID search highlights are keyed by (`RenderBlock.id`, list-row id, or
+    /// media id). `nil` opts out of search entirely (previews, chrome).
+    var ownerID: String? = nil
 
     /// Gap between wrapped lines, scaled with Dynamic Type so line rhythm
     /// tracks the text size it separates.
@@ -20,15 +23,95 @@ struct SegmentedTextView: View {
     /// otherwise stay put while the font grew.
     @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
 
+    @Environment(\.adfDocumentSearch) private var search
+    @Environment(\.adfTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Flash off-phase: while true the current match paints with the subtle
+    /// color, so alternating it blinks the accent (§ arrival flash).
+    @State private var flashDimmed = false
+
     var body: some View {
-        if let merged = Self.mergedText(segments) {
-            Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
-        } else {
-            WrappingInlineLayout(lineSpacing: lineSpacing) {
-                ForEach(Self.tokens(for: segments)) { token in
-                    InlineTokenView(token: token, typeScale: typeScale)
+        let displayed = displayedSegments
+        Group {
+            if let merged = Self.mergedText(displayed) {
+                Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+            } else {
+                WrappingInlineLayout(lineSpacing: lineSpacing) {
+                    ForEach(Self.tokens(for: displayed)) { token in
+                        InlineTokenView(
+                            token: token,
+                            typeScale: typeScale,
+                            atomHighlight: atomHighlight(for: token)
+                        )
+                    }
                 }
             }
+        }
+        .task(id: flashTrigger) { await runFlash() }
+    }
+
+    // MARK: Search highlighting
+
+    /// The zero-work gate: rows without matches return the stored segments
+    /// untouched (no copy, no scan) — the path every row takes while
+    /// scrolling with no search active, and every unmatched row during one.
+    private var displayedSegments: [InlineSegment] {
+        guard let ownerID, let highlights = search?.highlights, highlights.isActive else {
+            return segments
+        }
+        let spans = highlights.spansByOwner[ownerID] ?? []
+        let currentSpans = highlights.current?.ownerID == ownerID
+            ? (highlights.current?.spans ?? []) : []
+        guard !spans.isEmpty || !currentSpans.isEmpty else { return segments }
+        return SearchHighlightPainter.paint(
+            segments: segments,
+            spans: spans,
+            currentSpans: currentSpans,
+            theme: theme,
+            dimCurrent: flashDimmed
+        )
+    }
+
+    private func atomHighlight(for token: InlineToken) -> AtomHighlightState? {
+        guard case .atom(_, let id) = token.kind,
+              let highlights = search?.highlights, highlights.isActive else { return nil }
+        if let current = highlights.current, current.atomIDs.contains(id) {
+            return .current(dimmed: flashDimmed)
+        }
+        return highlights.matchedAtomIDs.contains(id) ? .subtle : nil
+    }
+
+    // MARK: Arrival flash
+
+    private struct FlashTrigger: Equatable {
+        let generation: Int
+        let isCurrentOwner: Bool
+    }
+
+    private var flashTrigger: FlashTrigger {
+        let current = search?.highlights.current
+        return FlashTrigger(
+            generation: current?.generation ?? 0,
+            isCurrentOwner: ownerID != nil && current?.ownerID == ownerID
+        )
+    }
+
+    /// Two accent→subtle pulses (~500 ms). Runs when this view holds the
+    /// current match after a navigation — including when the row only
+    /// materializes after the scroll lands (flash on arrival). Reduce Motion
+    /// keeps the steady accent instead.
+    private func runFlash() async {
+        flashDimmed = false
+        guard flashTrigger.isCurrentOwner, flashTrigger.generation > 0, !reduceMotion else {
+            return
+        }
+        for _ in 0..<2 {
+            try? await Task.sleep(for: .milliseconds(130))
+            guard !Task.isCancelled else { return }
+            flashDimmed = true
+            try? await Task.sleep(for: .milliseconds(130))
+            guard !Task.isCancelled else { return }
+            flashDimmed = false
         }
     }
 
@@ -73,8 +156,8 @@ struct SegmentedTextView: View {
         tokens.reserveCapacity(segments.count)
         for segment in segments {
             switch segment {
-            case .atom(let atom, _):
-                tokens.append(InlineToken(id: tokens.count, kind: .atom(atom)))
+            case .atom(let atom, let id):
+                tokens.append(InlineToken(id: tokens.count, kind: .atom(atom, id: id)))
             case .text(let text):
                 if isLineBreak(text) {
                     tokens.append(InlineToken(id: tokens.count, kind: .lineBreak))
@@ -98,7 +181,7 @@ struct SegmentedTextView: View {
 struct InlineToken: Identifiable, Hashable {
     enum Kind: Hashable {
         case text(AttributedString)
-        case atom(InlineAtom)
+        case atom(InlineAtom, id: String)
         case lineBreak
     }
 
@@ -106,22 +189,47 @@ struct InlineToken: Identifiable, Hashable {
     let kind: Kind
 }
 
+/// Whole-pill search emphasis for atoms (pills are plain `Text`, not
+/// range-highlightable, so a matched pill tints entirely).
+enum AtomHighlightState: Equatable {
+    case subtle
+    case current(dimmed: Bool)
+}
+
 struct InlineTokenView: View {
     let token: InlineToken
     /// Live Dynamic Type factor for scaling sub/superscript baseline offsets
     /// on word-chunk text tokens (see `SegmentedTextView`).
     var typeScale: CGFloat = 1
+    var atomHighlight: AtomHighlightState? = nil
+
+    @Environment(\.adfTheme) private var theme
 
     var body: some View {
         switch token.kind {
         case .text(let text):
             Text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale))
-        case .atom(let atom):
+        case .atom(let atom, _):
             AtomView(atom: atom)
+                .background {
+                    if let atomHighlight {
+                        RoundedRectangle(cornerRadius: theme.chipCornerRadius)
+                            .fill(highlightColor(atomHighlight))
+                    }
+                }
         case .lineBreak:
             Color.clear
                 .frame(width: 0, height: 0)
                 .layoutValue(key: LineBreakLayoutKey.self, value: true)
+        }
+    }
+
+    private func highlightColor(_ state: AtomHighlightState) -> Color {
+        switch state {
+        case .subtle, .current(dimmed: true):
+            return theme.searchHighlight
+        case .current(dimmed: false):
+            return theme.searchCurrentHighlight
         }
     }
 }
