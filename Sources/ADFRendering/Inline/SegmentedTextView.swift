@@ -25,7 +25,6 @@ struct SegmentedTextView: View {
 
     @Environment(\.adfDocumentSearch) private var search
     @Environment(\.adfTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Flash off-phase: while true the current match paints with the subtle
     /// color, so alternating it blinks the accent (§ arrival flash).
     @State private var flashDimmed = false
@@ -47,7 +46,7 @@ struct SegmentedTextView: View {
                 }
             }
         }
-        .task(id: flashTrigger) { await runFlash() }
+        .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
     }
 
     // MARK: Search highlighting
@@ -73,46 +72,12 @@ struct SegmentedTextView: View {
     }
 
     private func atomHighlight(for token: InlineToken) -> AtomHighlightState? {
-        guard case .atom(_, let id) = token.kind,
+        guard ownerID != nil, case .atom(_, let id) = token.kind,
               let highlights = search?.highlights, highlights.isActive else { return nil }
         if let current = highlights.current, current.atomIDs.contains(id) {
             return .current(dimmed: flashDimmed)
         }
         return highlights.matchedAtomIDs.contains(id) ? .subtle : nil
-    }
-
-    // MARK: Arrival flash
-
-    private struct FlashTrigger: Equatable {
-        let generation: Int
-        let isCurrentOwner: Bool
-    }
-
-    private var flashTrigger: FlashTrigger {
-        let current = search?.highlights.current
-        return FlashTrigger(
-            generation: current?.generation ?? 0,
-            isCurrentOwner: ownerID != nil && current?.ownerID == ownerID
-        )
-    }
-
-    /// Two accent→subtle pulses (~500 ms). Runs when this view holds the
-    /// current match after a navigation — including when the row only
-    /// materializes after the scroll lands (flash on arrival). Reduce Motion
-    /// keeps the steady accent instead.
-    private func runFlash() async {
-        flashDimmed = false
-        guard flashTrigger.isCurrentOwner, flashTrigger.generation > 0, !reduceMotion else {
-            return
-        }
-        for _ in 0..<2 {
-            try? await Task.sleep(for: .milliseconds(130))
-            guard !Task.isCancelled else { return }
-            flashDimmed = true
-            try? await Task.sleep(for: .milliseconds(130))
-            guard !Task.isCancelled else { return }
-            flashDimmed = false
-        }
     }
 
     /// Multiplies any baked sub/superscript baseline offsets by the Dynamic

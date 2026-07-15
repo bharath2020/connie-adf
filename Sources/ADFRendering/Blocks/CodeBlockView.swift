@@ -16,7 +16,6 @@ struct CodeBlockView: View {
 
     @Environment(\.adfTheme) private var theme
     @Environment(\.adfDocumentSearch) private var search
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var flashDimmed = false
 
     var body: some View {
@@ -48,7 +47,7 @@ struct CodeBlockView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: theme.containerCornerRadius).fill(Color.gray.opacity(0.1)))
-        .task(id: flashTrigger) { await runFlash() }
+        .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
     }
 
     private func copyCode() {
@@ -74,33 +73,5 @@ struct CodeBlockView: View {
             text: code, spans: spans, currentSpans: currentSpans,
             theme: theme, dimCurrent: flashDimmed
         )
-    }
-
-    private struct FlashTrigger: Equatable {
-        let generation: Int
-        let isCurrentOwner: Bool
-    }
-
-    private var flashTrigger: FlashTrigger {
-        let current = search?.highlights.current
-        return FlashTrigger(
-            generation: current?.generation ?? 0,
-            isCurrentOwner: ownerID != nil && current?.ownerID == ownerID
-        )
-    }
-
-    private func runFlash() async {
-        flashDimmed = false
-        guard flashTrigger.isCurrentOwner, flashTrigger.generation > 0, !reduceMotion else {
-            return
-        }
-        for _ in 0..<2 {
-            try? await Task.sleep(for: .milliseconds(130))
-            guard !Task.isCancelled else { return }
-            flashDimmed = true
-            try? await Task.sleep(for: .milliseconds(130))
-            guard !Task.isCancelled else { return }
-            flashDimmed = false
-        }
     }
 }
