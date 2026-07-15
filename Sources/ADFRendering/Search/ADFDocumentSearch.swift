@@ -43,6 +43,19 @@ public final class ADFDocumentSearch {
     @ObservationIgnored private var indexTask: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
+    /// Bumped by every `reset()`. Each chained index task captures the epoch
+    /// in effect when it was scheduled and, after its awaits, only applies
+    /// its units if the epoch is still current — this is what makes a stale
+    /// chain link from a document that was replaced mid-stream inert, even
+    /// though only the newest link in the chain is ever cancelled directly.
+    @ObservationIgnored private var indexEpoch = 0
+    /// The query a running (or about to run) scan is scanning for, set once
+    /// in `startScan()` and cleared in `clearResults()`. `drainScan` reads
+    /// this instead of `self.query` per batch so one scan never mixes two
+    /// queries, and `scanAppendedUnitsIfNeeded` only ever resumes a scan
+    /// whose query has actually started — never the query still sitting in
+    /// the debounce window.
+    @ObservationIgnored private var activeScanQuery: String? = nil
     private let scanBatchSize = 256
 
     public init() {}
@@ -102,6 +115,7 @@ public final class ADFDocumentSearch {
             blockOrder[block.id] = blockOrder.count
         }
         let previous = indexTask
+        let epoch = indexEpoch
         indexTask = Task { [weak self] in
             _ = await previous?.value
             guard !Task.isCancelled else { return }
@@ -109,7 +123,7 @@ public final class ADFDocumentSearch {
             let newUnits = await Task.detached(priority: .userInitiated) {
                 indexer.units(for: chunk)
             }.value
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, self.indexEpoch == epoch else { return }
             self.units.append(contentsOf: newUnits)
             self.scanAppendedUnitsIfNeeded()
         }
@@ -119,6 +133,7 @@ public final class ADFDocumentSearch {
     func reset() {
         indexTask?.cancel()
         indexTask = nil
+        indexEpoch += 1
         query = ""
         debounceTask?.cancel()
         units = []
@@ -135,6 +150,7 @@ public final class ADFDocumentSearch {
     private func clearResults() {
         scanTask?.cancel()
         scanTask = nil
+        activeScanQuery = nil
         matches = []
         matchCount = 0
         currentIndex = nil
@@ -155,6 +171,7 @@ public final class ADFDocumentSearch {
         scannedUnitCount = 0
         highlights = .none
         isSearching = true
+        activeScanQuery = query
         scanTask = Task { [weak self] in
             await self?.drainScan(autoSelect: true)
         }
@@ -162,9 +179,12 @@ public final class ADFDocumentSearch {
 
     /// New units arrived while a query is active: resume scanning the tail.
     /// If a scan loop is already running it re-checks `units.count` each
-    /// iteration and picks the tail up itself.
+    /// iteration and picks the tail up itself. Only resumes a scan that has
+    /// actually started for the current query — a query still sitting in the
+    /// debounce window has no `activeScanQuery` yet and must not be scanned
+    /// early.
     private func scanAppendedUnitsIfNeeded() {
-        guard !query.isEmpty, !isSearching else { return }
+        guard let active = activeScanQuery, active == query, !isSearching else { return }
         isSearching = true
         scanTask = Task { [weak self] in
             await self?.drainScan(autoSelect: false)
@@ -173,12 +193,15 @@ public final class ADFDocumentSearch {
 
     /// Scans units in batches; matching runs detached, results append on the
     /// main actor between batches — that is the "streamed counts" surface.
+    /// The query is captured once, at the top, from `activeScanQuery` (set
+    /// by `startScan()`) so every batch of one scan searches for the same
+    /// text even if `self.query` moves on to a newer, still-debouncing value.
     private func drainScan(autoSelect: Bool) async {
+        guard let query = activeScanQuery else { return }
         while scannedUnitCount < units.count {
             let start = scannedUnitCount
             let end = min(start + scanBatchSize, units.count)
             let batch = Array(units[start..<end])
-            let query = self.query
             let found = await Task.detached(priority: .userInitiated) {
                 SearchMatcher.matches(in: batch, unitIndexOffset: start, query: query)
             }.value

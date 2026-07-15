@@ -139,4 +139,46 @@ struct ADFDocumentSearchTests {
         #expect(model.search.matchCount == 0)
         #expect(model.search.highlights == .none)
     }
+
+    @Test("querying a still-loading document streams counts to the full total")
+    func streamedLoadCounts() async throws {
+        var paragraphs: [String] = []
+        for index in 0..<300 {
+            let text = index % 2 == 0 ? "needle alpha \(index)" : "plain filler \(index)"
+            paragraphs.append(#"{"type":"paragraph","content":[{"type":"text","text":"\#(text)"}]}"#)
+        }
+        let json = #"{"version":1,"type":"doc","content":[\#(paragraphs.joined(separator: ","))]}"#
+        let model = ADFDocumentModel()
+        model.search.debounceInterval = .zero
+        model.load(data: Data(json.utf8))
+        model.search.run("needle")   // query while chunks are still streaming in
+        try await waitUntil("ready") { model.phase == .ready }
+        try await waitUntil("scan drains to full total") {
+            !model.search.isSearching && model.search.matchCount == 150
+        }
+        #expect(model.search.matchCount == 150)   // no double-counted, no skipped units
+    }
+
+    @Test("reloading mid-stream never leaks the previous document's units")
+    func reloadMidStreamLeaksNothing() async throws {
+        var paragraphs: [String] = []
+        for index in 0..<300 {
+            paragraphs.append(#"{"type":"paragraph","content":[{"type":"text","text":"stale needle \#(index)"}]}"#)
+        }
+        let bigJson = #"{"version":1,"type":"doc","content":[\#(paragraphs.joined(separator: ","))]}"#
+        let model = ADFDocumentModel()
+        model.search.debounceInterval = .zero
+        model.load(data: Data(bigJson.utf8))
+        try await waitUntil("first chunk lands") { !model.blocks.isEmpty }
+        // Reload immediately, while index tasks for the big doc may still be in flight.
+        model.load(data: Data(#"{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"fresh only"}]}]}"#.utf8))
+        try await waitUntil("second doc ready") { model.phase == .ready }
+        model.search.run("needle")
+        try await waitUntil("scan settles") { !model.search.isSearching }
+        // Let any straggler index tasks from the first document complete, then re-check.
+        try? await Task.sleep(for: .milliseconds(200))
+        try await waitUntil("still settled") { !model.search.isSearching }
+        #expect(model.search.matchCount == 0)
+        #expect(model.search.highlights == .none)
+    }
 }
