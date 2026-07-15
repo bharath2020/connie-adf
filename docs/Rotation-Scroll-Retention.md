@@ -176,6 +176,39 @@ It fires only on a width change; a plain scroll gesture never changes the column
 
 **Perf-gate note:** `ps -o %cpu=` is a lifetime-weighted average and reads ~10% right after a launch-parse + fling burst even when idle; it is *not* the instantaneous figure the gate wants. Confirm settle with `top -l 2 -pid <pid> -stats cpu` (reads 0.0 when truly idle) rather than trusting the `ps` average.
 
+## The "jump back" bug: `scrollPosition(id:)` snaps to a remembered row on any content resize (device-only)
+
+**Status:** fixed.
+**Touches:** `Sources/ADFRendering/ADFDocumentView.swift` (`anchorBinding`).
+**Symptom (device, not simulator):** scroll to §30, rotate to landscape and back, scroll down to an Expand, tap it — instead of opening in place the reader snaps **back to §30**. Reproduced on an iPhone 17 Pro; does **not** reproduce in the simulator.
+
+### Root cause
+
+`scrollPosition(id:)` was bound to a getter that returned the tracked top row. That gives SwiftUI a **standing programmatic target**, and `scrollPosition(id:)` re-applies that target whenever content resizes *under* the reader — an Expand opening, an image finishing decode. The target is the row SwiftUI last committed, **not** the current top row, and it is not refreshed by scrolling (the registry is non-`@Observable`, §8b) — so after you rotate (which commits a target) and then scroll away, tapping an Expand snaps you back to the rotation-time row.
+
+Confirmed by on-device `print` tracing over `--console`: the top row tracked correctly to the Expand as the reader scrolled (`topRow=0.45`), yet the tap produced **no anchor write and no re-pin** — SwiftUI scrolled to a *remembered* row on its own. Forcing a body re-evaluation so the getter re-reads the current row did **not** help (the target is not refreshed from the getter). An A/B with the width re-pin disabled still jumped, proving the re-pin was not the cause — it is inherent to giving `scrollPosition(id:)` a getter value at all.
+
+### Fix
+
+Make the binding **tracking-only**: setter records the top row, **getter returns `nil`**.
+
+```swift
+Binding(get: { nil }, set: { anchors.topRow = $0 })
+```
+
+With no target, `scrollPosition(id:)` cannot re-apply anything on a resize; it only reports the top row. Re-anchoring across a rotation is then done *solely* by the width-change re-pin (`scrollTo`), which is a one-shot, not a standing target. Verified on device: Expand opens in place, repeatedly, with no jump; and the 8-cycle drift regression stays clean (anchor row identical every cycle — the `nil` getter does **not** reintroduce drift; a legacy-getter A/B shows the identical rotation behaviour).
+
+### Device-debugging notes (for next time)
+
+- `print()` does not surface on a physical device via `os_log`; capture it with `xcrun devicectl device process launch --console --terminate-existing -- <bundle-id> <args…>`. Pass app args after `--`.
+- `print()` to that pipe is **block-buffered** — post-tap events sit unflushed until the buffer fills. Either `setvbuf(stdout, nil, _IONBF, 0)` at launch or `fflush(stdout)` per line, or you will conclude "nothing happened after the tap" when plenty did.
+- xcodebuild may fail to match a network device destination (`ddiServicesAvailable: false`); build `generic/platform=iOS` and install with `xcrun devicectl device install app`. Debug builds need an explicit dev profile: `PROVISIONING_PROFILE_SPECIFIER="ADFReader Development"` + `CODE_SIGN_IDENTITY="Apple Development…"`.
+- The device tunnel goes stale (`tunnelState: unavailable`); a one-time USB connect re-establishes it, then unlock keeps it alive. `argent` only enumerates simulators, so physical-device gestures are manual.
+
+### Still open: the ~one-row rotation jitter
+
+Independent of the above, the anchor's **sub-row** alignment is not preserved across a rotation: the anchor row is held (identity stable every cycle) but its exact top offset varies by up to ~one row, so a heading can sit exactly at the top on one rotation and one row down on the next. It is bounded and non-accumulating, present equally in the pre-`nil`-getter code, and reproduces in the **simulator** (so it is fixable without a device). It is the "Tall top row" residual above, made more visible by §8 collapsed-spacer height estimates shifting between cycles. Fixing it (pixel-locking the anchor) is deferred sub-row-precision work.
+
 ## Simulator automation gotcha
 
 `Rotate Left` / `Rotate Right` act on the **frontmost Simulator device window**. With several simulators booted, `AXRaise` the target window by name first or you will silently rotate someone else's device (and your own test will read as "rotation had no effect").

@@ -71,19 +71,17 @@ public struct ADFDocumentView: View {
                     .frame(maxWidth: .infinity)
             }
             .scrollPosition(id: anchorBinding, anchor: .top)
-            // Re-assert the anchor by identity whenever the content column
-            // changes width (rotation, iPad Split View drag).
+            // The *sole* re-anchor authority: re-assert the reader's row by
+            // identity whenever the content column changes width (rotation, iPad
+            // Split View drag). `scrollPosition(id:)` above is tracking-only (its
+            // getter is `nil`, see `anchorBinding`), so nothing else re-anchors.
             //
-            // `scrollPosition(id:)` only re-anchors when its bound *value*
-            // changes — not on a resize. Across a rotation the top row's id is
-            // unchanged, so SwiftUI keeps the raw content *offset* instead. At
-            // the new width the rows above have reflowed (and far-off collapsed
-            // rows report estimated heights), so the same offset lands on
-            // different content — and because the estimates don't round-trip
+            // Without this, a `ScrollView` keeps the raw content *offset* across a
+            // resize. At the new width the rows above have reflowed (and far-off
+            // collapsed rows report estimated heights), so the same offset lands
+            // on different content — and because the estimates don't round-trip
             // portrait↔landscape, the error compounds every cycle. That is the
-            // progressive drift §8b's `scrollPosition(id:)` was meant to prevent
-            // but silently didn't (it verified a single short-document round
-            // trip, where no rows collapse and reflow is exact).
+            // progressive drift this fix removes.
             //
             // `scrollTo` re-derives the offset from the identity — summing the
             // current heights of the rows before the anchor — so it restores the
@@ -93,6 +91,11 @@ public struct ADFDocumentView: View {
             // constant while scrolling); rotating mid-fling is the one exception,
             // and re-anchoring by identity is the intended behaviour there too.
             // So it stays off the §8 hitch path and touches no per-row geometry.
+            //
+            // Known residual: `scrollTo(_, anchor: .top)` aligns the row's *top*
+            // edge, so the sub-row offset the reader was at is lost — a bounded,
+            // non-accumulating ~one-row jitter across rotations. Fixing it needs a
+            // one-shot capture/restore of the sub-row offset (deferred).
             //
             // `anchors.topRow` must be kept truthful by every code path that
             // moves the scroll view programmatically — see `ScrollTargetConsumer`
@@ -126,14 +129,26 @@ public struct ADFDocumentView: View {
         .overlay { statusOverlay }
     }
 
-    /// Reads and writes the top-visible row ID straight through to the
-    /// registry. `Binding` rather than `@State` on purpose: SwiftUI writes this
-    /// once per row crossed for the whole of every scroll, and a `@State` write
-    /// would re-evaluate this view — reconciling every row the lazy stack has
-    /// materialized — each time. A write to a plain reference type invalidates
-    /// nothing.
+    /// Backs `scrollPosition(id:)` as a **tracker only**: the setter records the
+    /// top-visible row into the registry (once per row crossed, for the whole of
+    /// every scroll), and the getter always returns `nil`.
+    ///
+    /// The `nil` getter is deliberate. `scrollPosition(id:)` otherwise remembers
+    /// the last row it was told to hold and silently re-applies it whenever
+    /// content resizes *under* the reader — an Expand opening, an image
+    /// finishing — yanking them back to where that row now sits. (Reproduced on
+    /// device: scroll to §30, rotate, scroll down to an Expand, tap it → snapped
+    /// back to §30. It re-applies a *remembered* row, so forcing a re-read of the
+    /// registry does not help — only withholding the target does.) With no
+    /// target, `scrollPosition` can only track. Re-anchoring across a resize is
+    /// done solely by the width-change re-pin above, which reads `anchors.topRow`
+    /// and drives `scrollTo` — a one-shot, not a standing target.
+    ///
+    /// `Binding` rather than `@State` so the per-row setter writes into a plain
+    /// reference type and invalidates no views (a `@State` write would
+    /// re-evaluate this view — reconciling every materialized row — each time).
     private var anchorBinding: Binding<String?> {
-        Binding(get: { anchors.topRow }, set: { anchors.topRow = $0 })
+        Binding(get: { nil }, set: { anchors.topRow = $0 })
     }
 
     /// Sections are maintained incrementally by the model as chunks stream in,
