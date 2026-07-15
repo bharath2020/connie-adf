@@ -55,8 +55,37 @@ public struct SearchIndexer: Sendable {
                 appendCaption(media, topLevelBlockID: topLevelBlockID,
                               expandAncestorIDs: expandAncestorIDs, into: &result)
             }
-        case .panel, .quote, .tableSlice, .layoutColumns, .extensionPlaceholder:
-            break // Container recursion lands in Task 2.
+        case .panel(_, let children):
+            for child in children {
+                collect(child, topLevelBlockID: topLevelBlockID,
+                        expandAncestorIDs: expandAncestorIDs, into: &result)
+            }
+        case .quote(let children):
+            for child in children {
+                collect(child, topLevelBlockID: topLevelBlockID,
+                        expandAncestorIDs: expandAncestorIDs, into: &result)
+            }
+        case .extensionPlaceholder(_, let body):
+            for child in body {
+                collect(child, topLevelBlockID: topLevelBlockID,
+                        expandAncestorIDs: expandAncestorIDs, into: &result)
+            }
+        case .layoutColumns(let columns):
+            for column in columns {
+                for child in column.blocks {
+                    collect(child, topLevelBlockID: topLevelBlockID,
+                            expandAncestorIDs: expandAncestorIDs, into: &result)
+                }
+            }
+        case .tableSlice(_, let rows, _):
+            for row in rows {
+                for cell in row.cells {
+                    for child in cell.blocks {
+                        collect(child, topLevelBlockID: topLevelBlockID,
+                                expandAncestorIDs: expandAncestorIDs, into: &result)
+                    }
+                }
+            }
         case .expand:
             break // Expand bodies land in Task 3.
         case .divider, .card, .unknown:

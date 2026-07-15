@@ -101,4 +101,82 @@ struct SearchIndexerTests {
         """)
         #expect(indexer.units(for: blocks).isEmpty)
     }
+
+    @Test("panel and quote children yield units addressed to the top-level container")
+    func containerRecursion() async throws {
+        let blocks = try await prepared("""
+        {"version":1,"type":"doc","content":[
+          {"type":"panel","attrs":{"panelType":"info"},"content":[
+            {"type":"paragraph","content":[{"type":"text","text":"inside panel"}]}
+          ]},
+          {"type":"blockquote","content":[
+            {"type":"paragraph","content":[{"type":"text","text":"inside quote"}]}
+          ]}
+        ]}
+        """)
+        let units = indexer.units(for: blocks)
+        #expect(units.map(\.plainText) == ["inside panel", "inside quote"])
+        #expect(units[0].topLevelBlockID == blocks[0].id)
+        #expect(units[1].topLevelBlockID == blocks[1].id)
+        // The owner is the INNER paragraph block (what the view keys on),
+        // not the container.
+        #expect(units[0].ownerID != blocks[0].id)
+    }
+
+    @Test("table cell text maps to the enclosing slice for scrolling")
+    func tableCellUnits() async throws {
+        let blocks = try await prepared("""
+        {"version":1,"type":"doc","content":[{"type":"table","content":[
+          {"type":"tableRow","content":[
+            {"type":"tableHeader","content":[{"type":"paragraph","content":[{"type":"text","text":"head"}]}]}
+          ]},
+          {"type":"tableRow","content":[
+            {"type":"tableCell","content":[{"type":"paragraph","content":[{"type":"text","text":"body cell"}]}]}
+          ]}
+        ]}]}
+        """)
+        // Preparer slices: [<id>#header, <id>#rows0].
+        #expect(blocks.count == 2)
+        let units = indexer.units(for: blocks)
+        #expect(units.map(\.plainText) == ["head", "body cell"])
+        #expect(units[0].topLevelBlockID == blocks[0].id)
+        #expect(units[0].topLevelBlockID.hasSuffix("#header"))
+        #expect(units[1].topLevelBlockID == blocks[1].id)
+        #expect(units[1].topLevelBlockID.hasSuffix("#rows0"))
+    }
+
+    @Test("layout columns and extension bodies recurse")
+    func layoutAndExtensionRecursion() async throws {
+        let blocks = try await prepared("""
+        {"version":1,"type":"doc","content":[
+          {"type":"layoutSection","content":[
+            {"type":"layoutColumn","attrs":{"width":50},"content":[
+              {"type":"paragraph","content":[{"type":"text","text":"left col"}]}
+            ]},
+            {"type":"layoutColumn","attrs":{"width":50},"content":[
+              {"type":"paragraph","content":[{"type":"text","text":"right col"}]}
+            ]}
+          ]}
+        ]}
+        """)
+        let units = indexer.units(for: blocks)
+        #expect(units.map(\.plainText) == ["left col", "right col"])
+        #expect(units.allSatisfy { $0.topLevelBlockID == blocks[0].id })
+    }
+
+    @Test("kitchen-sink fixture indexes without gaps in any unit's part map")
+    func fixtureIndexesGapFree() async throws {
+        let doc = try await ADFParser().parse(fixtureData("kitchen-sink.json"))
+        let blocks = DocumentPreparer(theme: theme).prepare(doc)
+        let units = indexer.units(for: blocks)
+        #expect(units.count > 10)
+        for unit in units {
+            var covered = 0
+            for part in unit.parts {
+                #expect(part.range.lowerBound == covered, "gap in \(unit.ownerID)")
+                covered = part.range.upperBound
+            }
+            #expect(covered == unit.plainText.count, "short map in \(unit.ownerID)")
+        }
+    }
 }
