@@ -185,6 +185,8 @@ struct ADFDocumentSearchTests {
             !model.search.isSearching && model.search.matchCount == 150
         }
         #expect(model.search.matchCount == 150)   // no double-counted, no skipped units
+        #expect(model.search.currentIndex == 0)   // first late-arriving result auto-selects
+        #expect(model.search.highlights.current != nil)
     }
 
     @Test("reloading mid-stream never leaks the previous document's units")
@@ -208,5 +210,117 @@ struct ADFDocumentSearchTests {
         try await waitUntil("still settled") { !model.search.isSearching }
         #expect(model.search.matchCount == 0)
         #expect(model.search.highlights == .none)
+    }
+
+    @Test("replacing one logical item updates only its active-query result")
+    func incrementalReplacementUpdatesSearch() async throws {
+        let model = try await readyModel(threeFoxes)
+        model.search.run("needle")
+        try await waitUntil("empty scan settles") {
+            model.search.isActive && !model.search.isSearching
+        }
+        #expect(model.search.matchCount == 0)
+
+        let itemID = model.blocks[1].id
+        let replacement = try richTextBlock(
+            basedOn: model.blocks[1],
+            id: "replacement-render-id",
+            text: "needle one and needle two"
+        )
+        let storeBefore = try #require(
+            model.sections.flatMap(\.blocks).first(where: { $0.id == itemID })
+        )
+        try await model.apply(
+            [.replace(itemID: itemID, block: replacement)],
+            revision: 1
+        )
+
+        #expect(model.documentRevision == 1)
+        #expect(model.blocks[1].id == "replacement-render-id")
+        #expect(model.search.matchCount == 2)
+        #expect(model.search.currentIndex == 0)
+        #expect(model.search.highlights.spansByOwner.keys.contains("replacement-render-id"))
+        #expect(model.scrollTarget == itemID)
+        let storeAfter = try #require(
+            model.sections.flatMap(\.blocks).first(where: { $0.id == itemID })
+        )
+        #expect(storeBefore === storeAfter)
+
+        let noMatch = try richTextBlock(
+            basedOn: replacement,
+            id: "replacement-render-id",
+            text: "nothing here"
+        )
+        try await model.apply(
+            [.replace(itemID: itemID, block: noMatch)],
+            revision: 2
+        )
+        #expect(model.search.matchCount == 0)
+        #expect(model.search.ownerHighlights(for: "replacement-render-id").currentGeneration == nil)
+    }
+
+    @Test("insert, move, and remove use stable logical identity")
+    func documentMutationsPreserveLogicalIdentity() async throws {
+        let model = try await readyModel(threeFoxes)
+        let firstID = model.blocks[0].id
+        let inserted = try richTextBlock(
+            basedOn: model.blocks[0],
+            id: "inserted-render-id",
+            text: "inserted"
+        )
+
+        try await model.apply(
+            [.insert(ADFDocumentItem(id: "stable-insert", block: inserted), afterID: nil)],
+            revision: 1
+        )
+        #expect(model.blocks.first?.id == "inserted-render-id")
+
+        try await model.apply(
+            [.move(itemID: "stable-insert", afterID: firstID)],
+            revision: 2
+        )
+        #expect(model.blocks[1].id == "inserted-render-id")
+
+        try await model.apply([.remove(itemID: "stable-insert")], revision: 3)
+        #expect(model.blocks.count == 3)
+        #expect(model.blocks.contains(where: { $0.id == "inserted-render-id" }) == false)
+        #expect(model.documentRevision == 3)
+    }
+
+    @Test("stale revisions and invalid identities are rejected atomically")
+    func invalidMutationsAreAtomic() async throws {
+        let model = try await readyModel(threeFoxes)
+        let original = model.blocks
+        try await model.apply([], revision: 1)
+
+        await #expect(throws: ADFDocumentMutationError.staleRevision(current: 1, received: 1)) {
+            try await model.apply([], revision: 1)
+        }
+        await #expect(throws: ADFDocumentMutationError.missingItemID("missing")) {
+            try await model.apply([.remove(itemID: "missing")], revision: 2)
+        }
+        await #expect(throws: ADFDocumentMutationError.duplicateBlockID(original[0].id)) {
+            try await model.apply(
+                [.replace(itemID: original[1].id, block: original[0])],
+                revision: 2
+            )
+        }
+        #expect(model.blocks == original)
+        #expect(model.documentRevision == 1)
+    }
+
+    private func richTextBlock(
+        basedOn block: RenderBlock,
+        id: String,
+        text: String
+    ) throws -> RenderBlock {
+        guard case .richText(_, let style) = block.kind else {
+            throw TestFailure("expected rich text")
+        }
+        return RenderBlock(
+            id: id,
+            kind: .richText(segments: [.text(AttributedString(text))], style: style),
+            breakout: block.breakout
+        )
     }
 }

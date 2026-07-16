@@ -19,6 +19,7 @@ struct ReaderView: View {
     @State private var loadFailure: String?
     @State private var taskStates: [String: Bool] = [:]
     @State private var searchPresented = false
+    @State private var automationStarted = false
 
     private let mediaProvider = PlaceholderMediaProvider()
     private let taskStore = TaskStateStore()
@@ -146,6 +147,8 @@ struct ReaderView: View {
     }
 
     private func documentDidBecomeReady() {
+        guard !automationStarted else { return }
+        automationStarted = true
         let totalMilliseconds = loadStart.map(Self.milliseconds(since:)) ?? 0
         let firstChunk = firstChunkMilliseconds ?? totalMilliseconds
         print(
@@ -156,9 +159,22 @@ struct ReaderView: View {
         if let fraction = options.scrollToFraction {
             Task { await scrollToFraction(fraction) }
         }
-        if options.autoscroll {
+        if options.searchQuery != nil || options.autoscroll {
             Task {
-                await AutoScroller.run(model: model, metrics: metrics, fixtureName: source.title)
+                if let query = options.searchQuery {
+                    await SearchAutomation.run(
+                        model: model,
+                        query: query,
+                        updateCount: options.searchUpdates,
+                        fixtureName: source.title
+                    )
+                }
+                if options.autoscroll {
+                    await AutoScroller.run(model: model, metrics: metrics, fixtureName: source.title)
+                } else {
+                    try? await Task.sleep(for: .seconds(1))
+                    exit(0)
+                }
             }
         }
     }
@@ -181,4 +197,3 @@ struct ReaderView: View {
         return Double(seconds) * 1_000 + Double(attoseconds) / 1e15
     }
 }
-

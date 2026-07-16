@@ -94,6 +94,25 @@ struct SearchHighlightPainterTests {
         )
         #expect(painted[0] == segments[0])
     }
+
+    @Test("many edits use the forward offset path and paint every range")
+    func manyEditsPaintEveryRange() {
+        let text = AttributedString("a0a1a2a3a4a5")
+        let spans = stride(from: 0, through: 10, by: 2).map {
+            SearchHighlightSpan(segmentIndex: 0, range: $0..<($0 + 1))
+        }
+        let painted = SearchHighlightPainter.paint(
+            text: text,
+            spans: spans,
+            currentSpans: [],
+            theme: theme,
+            dimCurrent: false
+        )
+        let highlighted = backgrounds(of: painted).filter {
+            $0.0 == "a" && $0.1 == theme.searchHighlight
+        }
+        #expect(highlighted.count == 6)
+    }
 }
 
 struct TestFailure: Error { let message: String; init(_ message: String) { self.message = message } }

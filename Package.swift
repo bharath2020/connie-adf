@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "ADFKit", targets: ["ADFModel", "ADFPreparation", "ADFRendering", "ADFConfluence"]),
         .library(name: "ADFBeam", targets: ["ADFBeam"]),
+        .executable(name: "ADFSearchBench", targets: ["ADFSearchBench"]),
     ],
     targets: [
         .target(name: "ADFModel"),
@@ -15,6 +16,7 @@ let package = Package(
         .target(name: "ADFPreparation", dependencies: ["ADFModel"]),
         .target(name: "ADFRendering", dependencies: ["ADFModel", "ADFPreparation"]),
         .target(name: "ADFConfluence", dependencies: ["ADFModel"]),
+        .executableTarget(name: "ADFSearchBench", dependencies: ["ADFModel", "ADFPreparation"]),
         .testTarget(name: "ADFModelTests", dependencies: ["ADFModel"]),
         .testTarget(name: "ADFPreparationTests", dependencies: ["ADFPreparation", "ADFModel"]),
         .testTarget(name: "ADFRenderingTests", dependencies: ["ADFRendering", "ADFPreparation", "ADFModel"]),

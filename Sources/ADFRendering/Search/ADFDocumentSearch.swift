@@ -3,72 +3,87 @@ import Observation
 import SwiftUI
 import ADFPreparation
 
-/// Find-in-page controller for one `ADFDocumentModel`, exposed as
-/// `model.search`. Indexing and matching run OFF the main actor over the
-/// `Sendable` prepared blocks; only compact results are published back here.
-/// Match counts stream: they keep climbing while the scan (or the document
-/// itself) is still loading.
+/// Find-in-page controller for one `ADFDocumentModel`. Text indexing,
+/// matching, and span generation run off-main. Results are retained per
+/// stable top-level item so a document mutation only rescans changed items.
 @Observable @MainActor
 public final class ADFDocumentSearch {
-    // MARK: Observable metadata (the embedder's UI surface)
-
     public private(set) var query: String = ""
     public private(set) var matchCount: Int = 0
-    /// 0-based position of the current match in document order; nil = none.
     public private(set) var currentIndex: Int?
-    /// True while a scan (or the index build feeding it) is in flight.
     public private(set) var isSearching: Bool = false
-    /// True from the first scan of a search session until the session ends
-    /// (Done, empty query, or document reload). DELIBERATELY COARSE: the
-    /// guarded writes below flip it at most twice per session — never per
-    /// batch, navigation, or keystroke. Leaf text views read this ONE Bool
-    /// as their idle gate (`displayedSegments`/`displayedCode`/arrival-flash
-    /// trigger) so a document with no search session touches no highlight
-    /// state at all during scroll.
     public private(set) var isActive: Bool = false
-    /// Highlight payload consumed by leaf text views via the environment.
-    public private(set) var highlights: ADFSearchHighlights = .none
 
-    // MARK: Configuration
+    /// Compatibility/debug snapshot. Rendering leaves consume stable
+    /// owner-scoped stores instead, so observing one owner's highlights does
+    /// not subscribe it to every result in the document.
+    public var highlights: ADFSearchHighlights {
+        _ = resultsVersion
+        var spansByOwner: [String: [SearchHighlightSpan]] = [:]
+        var matchedAtomIDs: Set<String> = []
+        for result in resultsByItem.values {
+            for (owner, spans) in result.spansByOwner {
+                spansByOwner[owner, default: []].append(contentsOf: spans)
+            }
+            for atomIDs in result.atomIDsByOwner.values {
+                matchedAtomIDs.formUnion(atomIDs)
+            }
+        }
+        let current: ADFSearchHighlights.Current?
+        if let location = currentLocation,
+           let result = resultsByItem[location.itemID],
+           result.matches.indices.contains(location.matchIndex),
+           let item = index.item(id: location.itemID) {
+            let match = result.matches[location.matchIndex]
+            let unit = item.units[match.unitIndex]
+            current = .init(
+                ownerID: unit.ownerID,
+                spans: match.painting.textSpans,
+                atomIDs: Set(match.painting.atomIDs),
+                generation: generation
+            )
+        } else {
+            current = nil
+        }
+        return ADFSearchHighlights(
+            spansByOwner: spansByOwner,
+            matchedAtomIDs: matchedAtomIDs,
+            current: current
+        )
+    }
 
-    /// Viewport inset (points) left above/below a match when scrolling to it.
     @ObservationIgnored public var scrollMargin: CGFloat = 40
-    /// Delay between `run(_:)` and the scan starting. `.zero` scans at once.
     @ObservationIgnored public var debounceInterval: Duration = .milliseconds(200)
-
-    // MARK: Internal state (never observed — doctrine: high-frequency data
-    // lives outside the observation graph)
 
     @ObservationIgnored internal weak var model: ADFDocumentModel?
     @ObservationIgnored internal let visibleRows = VisibleRowRegistry()
-    @ObservationIgnored private var units: [SearchTextUnit] = []
-    @ObservationIgnored private var matches: [SearchMatch] = []
+    @ObservationIgnored private var index = IncrementalSearchIndex()
+    @ObservationIgnored private var resultsByItem: [String: SearchIndexedItemResult] = [:]
+    @ObservationIgnored private var ownerStores: [String: SearchOwnerHighlights] = [:]
+    @ObservationIgnored private var activeOwnerIDs: Set<String> = []
+    @ObservationIgnored private var currentLocation: MatchLocation?
     @ObservationIgnored private var blockOrder: [String: Int] = [:]
-    @ObservationIgnored private var baseSpans: [String: [SearchHighlightSpan]] = [:]
-    @ObservationIgnored private var baseAtoms: Set<String> = []
-    @ObservationIgnored private var scannedUnitCount = 0
+    @ObservationIgnored private var scannedItemCount = 0
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var indexTask: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
-    /// Bumped by every `reset()`. Each chained index task captures the epoch
-    /// in effect when it was scheduled and, after its awaits, only applies
-    /// its units if the epoch is still current — this is what makes a stale
-    /// chain link from a document that was replaced mid-stream inert, even
-    /// though only the newest link in the chain is ever cancelled directly.
     @ObservationIgnored private var indexEpoch = 0
-    /// The query a running (or about to run) scan is scanning for, set once
-    /// in `startScan()` and cleared in `clearResults()`. `drainScan` reads
-    /// this instead of `self.query` per batch so one scan never mixes two
-    /// queries, and `scanAppendedUnitsIfNeeded` only ever resumes a scan
-    /// whose query has actually started — never the query still sitting in
-    /// the debounce window.
-    @ObservationIgnored private var activeScanQuery: String? = nil
+    @ObservationIgnored private var scanGeneration = 0
+    @ObservationIgnored private var activeScanQuery: String?
+    private var resultsVersion = 0
     private let scanBatchSize = 256
 
-    /// Internal: instances are only meaningful wired to a model, which
-    /// `ADFDocumentModel` does at its own init. A freestanding instance
-    /// would be inert (weak `model`).
+    private struct MatchLocation: Equatable {
+        let itemID: String
+        let matchIndex: Int
+    }
+
+    struct ItemUpsert: Sendable {
+        let id: String
+        let block: RenderBlock
+    }
+
     init() {}
 
     deinit {
@@ -77,10 +92,6 @@ public final class ADFDocumentSearch {
         debounceTask?.cancel()
     }
 
-    // MARK: Public API
-
-    /// Sets the query and (after the debounce) restarts the scan. Re-running
-    /// the current query is a no-op; an empty query clears.
     public func run(_ query: String) {
         guard query != self.query else { return }
         self.query = query
@@ -91,8 +102,8 @@ public final class ADFDocumentSearch {
         }
         debounceTask = Task { [weak self] in
             guard let self else { return }
-            if let interval = self.debounceIntervalIfPositive() {
-                try? await Task.sleep(for: interval)
+            if self.debounceInterval > .zero {
+                try? await Task.sleep(for: self.debounceInterval)
             }
             guard !Task.isCancelled else { return }
             self.startScan()
@@ -100,198 +111,311 @@ public final class ADFDocumentSearch {
     }
 
     public func next() {
-        guard !matches.isEmpty else { return }
-        navigate(to: ((currentIndex ?? -1) + 1) % matches.count)
+        guard matchCount > 0 else { return }
+        navigate(toGlobalIndex: ((currentIndex ?? -1) + 1) % matchCount)
     }
 
     public func previous() {
-        guard !matches.isEmpty else { return }
-        navigate(to: ((currentIndex ?? 0) - 1 + matches.count) % matches.count)
+        guard matchCount > 0 else { return }
+        navigate(toGlobalIndex: ((currentIndex ?? 0) - 1 + matchCount) % matchCount)
     }
 
-    /// Ends the search: clears query, results, and every highlight.
     public func clear() {
         query = ""
         debounceTask?.cancel()
         clearResults()
     }
 
-    // MARK: Model hooks (internal)
+    // MARK: Index lifecycle
 
-    /// Called by the model for every appended chunk of top-level blocks.
-    /// Index building chains sequentially off-main; an active query scans
-    /// the new units as they land, so counts stream during document load.
     func indexAppended(_ chunk: [RenderBlock], theme: ADFTheme) {
-        for block in chunk where blockOrder[block.id] == nil {
-            blockOrder[block.id] = blockOrder.count
-        }
         let previous = indexTask
         let epoch = indexEpoch
         indexTask = Task { [weak self] in
             _ = await previous?.value
             guard !Task.isCancelled else { return }
             let indexer = SearchIndexer(theme: theme)
-            let newUnits = await Task.detached(priority: .userInitiated) {
-                indexer.units(for: chunk)
+            let newItems = await Task.detached(priority: .userInitiated) {
+                chunk.map { block in
+                    SearchIndexedItem(
+                        id: block.id,
+                        topLevelBlockID: block.id,
+                        units: indexer.units(for: [block])
+                    )
+                }
             }.value
             guard let self, !Task.isCancelled, self.indexEpoch == epoch else { return }
-            self.units.append(contentsOf: newUnits)
-            self.scanAppendedUnitsIfNeeded()
+            for item in newItems {
+                try? self.index.append(item)
+            }
+            self.rebuildBlockOrder()
+            self.scanAppendedItemsIfNeeded()
         }
     }
 
-    /// Called on document (re)load: drops the index and every result.
+    /// Applies a prepared-block delta after the model has atomically committed
+    /// its corresponding row update. Only upserted items are re-indexed and,
+    /// when a query is settled, re-scanned.
+    func applyIndexChanges(
+        upserts: [ItemUpsert],
+        removedIDs: [String],
+        order: [String]?,
+        theme: ADFTheme
+    ) async {
+        _ = await indexTask?.value
+        let wasSearching = isSearching
+        scanTask?.cancel()
+        scanGeneration += 1
+        isSearching = false
+
+        let indexer = SearchIndexer(theme: theme)
+        let indexed = await Task.detached(priority: .userInitiated) {
+            upserts.map { upsert in
+                SearchIndexedItem(
+                    id: upsert.id,
+                    topLevelBlockID: upsert.id,
+                    units: indexer.units(for: [upsert.block])
+                )
+            }
+        }.value
+
+        for id in removedIDs {
+            _ = try? index.remove(id: id)
+            removeResult(for: id)
+        }
+        for item in indexed {
+            if index.item(id: item.id) == nil {
+                try? index.append(item)
+            } else {
+                try? index.replace(item)
+                removeResult(for: item.id)
+            }
+        }
+        if let order {
+            try? index.setOrder(order)
+            rebuildBlockOrder()
+        }
+        scannedItemCount = index.count
+
+        guard let activeQuery = activeScanQuery, activeQuery == query else {
+            resultsVersion &+= 1
+            return
+        }
+        if wasSearching {
+            startScan()
+            return
+        }
+
+        isSearching = true
+        let changedResults = await Task.detached(priority: .userInitiated) {
+            indexed.map { IncrementalSearchIndex.result(for: $0, query: activeQuery) }
+        }.value
+        applyResults(changedResults)
+        isSearching = false
+        restoreSelectionAfterMutation()
+    }
+
     func reset() {
         indexTask?.cancel()
         indexTask = nil
         indexEpoch += 1
+        index = IncrementalSearchIndex()
+        blockOrder = [:]
         query = ""
         debounceTask?.cancel()
-        units = []
-        blockOrder = [:]
         clearResults()
     }
 
     // MARK: Scanning
 
-    private func debounceIntervalIfPositive() -> Duration? {
-        debounceInterval > .zero ? debounceInterval : nil
-    }
-
     private func clearResults() {
         scanTask?.cancel()
         scanTask = nil
+        scanGeneration += 1
         activeScanQuery = nil
-        matches = []
+        resetMatches()
+        isSearching = false
+        if isActive { isActive = false }
+    }
+
+    private func resetMatches() {
+        for ownerID in activeOwnerIDs {
+            ownerStores[ownerID]?.clear()
+        }
+        activeOwnerIDs = []
+        resultsByItem = [:]
         matchCount = 0
         currentIndex = nil
-        isSearching = false
-        baseSpans = [:]
-        baseAtoms = []
-        scannedUnitCount = 0
-        highlights = .none
-        if isActive {
-            isActive = false
-        }
+        currentLocation = nil
+        scannedItemCount = 0
+        resultsVersion &+= 1
     }
 
     private func startScan() {
         scanTask?.cancel()
-        matches = []
-        matchCount = 0
-        currentIndex = nil
-        baseSpans = [:]
-        baseAtoms = []
-        scannedUnitCount = 0
-        highlights = .none
+        scanGeneration += 1
+        resetMatches()
         isSearching = true
-        if !isActive {
-            isActive = true // Guarded: repeat scans in one session must not re-notify.
-        }
+        if !isActive { isActive = true }
         activeScanQuery = query
+        let scanID = scanGeneration
         scanTask = Task { [weak self] in
-            await self?.drainScan(autoSelect: true)
+            await self?.drainScan(scanID: scanID)
         }
     }
 
-    /// New units arrived while a query is active: resume scanning the tail.
-    /// If a scan loop is already running it re-checks `units.count` each
-    /// iteration and picks the tail up itself. Only resumes a scan that has
-    /// actually started for the current query — a query still sitting in the
-    /// debounce window has no `activeScanQuery` yet and must not be scanned
-    /// early.
-    private func scanAppendedUnitsIfNeeded() {
+    private func scanAppendedItemsIfNeeded() {
         guard let active = activeScanQuery, active == query, !isSearching else { return }
         isSearching = true
+        let scanID = scanGeneration
         scanTask = Task { [weak self] in
-            await self?.drainScan(autoSelect: false)
+            await self?.drainScan(scanID: scanID)
         }
     }
 
-    /// Scans units in batches; matching runs detached, results append on the
-    /// main actor between batches — that is the "streamed counts" surface.
-    /// The query is captured once, at the top, from `activeScanQuery` (set
-    /// by `startScan()`) so every batch of one scan searches for the same
-    /// text even if `self.query` moves on to a newer, still-debouncing value.
-    private func drainScan(autoSelect: Bool) async {
+    private func drainScan(scanID: Int) async {
         guard let query = activeScanQuery else { return }
-        while scannedUnitCount < units.count {
-            let start = scannedUnitCount
-            let end = min(start + scanBatchSize, units.count)
-            let batch = Array(units[start..<end])
+        while scannedItemCount < index.count {
+            let start = scannedItemCount
+            let end = min(start + scanBatchSize, index.count)
+            let ids = Array(index.itemOrder[start..<end])
+            let items = ids.compactMap { index.item(id: $0) }
             let found = await Task.detached(priority: .userInitiated) {
-                SearchMatcher.matches(in: batch, unitIndexOffset: start, query: query)
+                items.map { IncrementalSearchIndex.result(for: $0, query: query) }
             }.value
-            guard !Task.isCancelled else { return }
-            scannedUnitCount = end
-            appendMatches(found)
+            guard !Task.isCancelled, scanGeneration == scanID, activeScanQuery == query else {
+                return
+            }
+            scannedItemCount = end
+            applyResults(found)
         }
         isSearching = false
-        if autoSelect, currentIndex == nil, !matches.isEmpty {
-            navigate(to: initialSelectionIndex())
+        // Auto-select whenever the first result exists, including a result
+        // that arrived in a tail index batch after an empty initial scan.
+        if currentLocation == nil, matchCount > 0 {
+            navigate(toGlobalIndex: initialSelectionIndex())
         }
     }
 
-    private func appendMatches(_ found: [SearchMatch]) {
+    private func applyResults(_ found: [SearchIndexedItemResult]) {
         guard !found.isEmpty else { return }
-        matches.append(contentsOf: found)
-        matchCount = matches.count
-        for match in found {
-            let unit = units[match.unitIndex]
-            let painted = SearchMatcher.spans(for: match.range, in: unit)
-            if !painted.textSpans.isEmpty {
-                baseSpans[unit.ownerID, default: []].append(contentsOf: painted.textSpans)
+        var total = matchCount
+        for result in found {
+            if let previous = resultsByItem[result.itemID] {
+                total -= previous.matches.count
+                clearBaseHighlights(for: previous)
             }
-            baseAtoms.formUnion(painted.atomIDs)
+            resultsByItem[result.itemID] = result
+            total += result.matches.count
+            publishBaseHighlights(for: result)
         }
-        highlights = ADFSearchHighlights(
-            spansByOwner: baseSpans,
-            matchedAtomIDs: baseAtoms,
-            current: highlights.current
-        )
+        matchCount = total
+        resultsVersion &+= 1
+    }
+
+    private func removeResult(for itemID: String) {
+        guard let old = resultsByItem[itemID] else { return }
+        if currentLocation?.itemID == itemID {
+            clearCurrentOwner()
+        }
+        resultsByItem.removeValue(forKey: itemID)
+        clearBaseHighlights(for: old)
+        matchCount -= old.matches.count
+        if currentLocation?.itemID == itemID {
+            currentLocation = nil
+            currentIndex = nil
+        }
+        resultsVersion &+= 1
+    }
+
+    private func publishBaseHighlights(for result: SearchIndexedItemResult) {
+        let owners = Set(result.spansByOwner.keys).union(result.atomIDsByOwner.keys)
+        for ownerID in owners {
+            let store = ownerHighlights(for: ownerID)
+            store.setBase(
+                spans: result.spansByOwner[ownerID] ?? [],
+                atomIDs: result.atomIDsByOwner[ownerID] ?? []
+            )
+            activeOwnerIDs.insert(ownerID)
+        }
+    }
+
+    private func clearBaseHighlights(for result: SearchIndexedItemResult) {
+        let owners = Set(result.spansByOwner.keys).union(result.atomIDsByOwner.keys)
+        for ownerID in owners {
+            ownerHighlights(for: ownerID).setBase(spans: [], atomIDs: [])
+        }
     }
 
     // MARK: Navigation
 
-    /// Browser behavior: the first match at/after the current viewport top.
     private func initialSelectionIndex() -> Int {
-        guard let topRow = model?.anchors.topRow, let topOrder = blockOrder[topRow] else {
-            return 0
+        guard let topRow = model?.anchors.topRow,
+              let topOrder = blockOrder[topRow] else { return 0 }
+        var prefix = 0
+        for (itemIndex, itemID) in index.itemOrder.enumerated() {
+            let count = resultsByItem[itemID]?.matches.count ?? 0
+            if itemIndex >= topOrder, count > 0 { return prefix }
+            prefix += count
         }
-        return matches.firstIndex { match in
-            (blockOrder[units[match.unitIndex].topLevelBlockID] ?? .max) >= topOrder
-        } ?? 0
+        return 0
     }
 
-    private func navigate(to index: Int) {
-        guard let model, matches.indices.contains(index) else { return }
-        currentIndex = index
-        let match = matches[index]
-        let unit = units[match.unitIndex]
-        let painted = SearchMatcher.spans(for: match.range, in: unit)
-        generation += 1
-        highlights = ADFSearchHighlights(
-            spansByOwner: baseSpans,
-            matchedAtomIDs: baseAtoms,
-            current: .init(
-                ownerID: unit.ownerID,
-                spans: painted.textSpans,
-                atomIDs: Set(painted.atomIDs),
-                generation: generation
-            )
-        )
+    private func location(atGlobalIndex target: Int) -> MatchLocation? {
+        guard target >= 0, target < matchCount else { return nil }
+        var remaining = target
+        for itemID in index.itemOrder {
+            let count = resultsByItem[itemID]?.matches.count ?? 0
+            if remaining < count {
+                return MatchLocation(itemID: itemID, matchIndex: remaining)
+            }
+            remaining -= count
+        }
+        return nil
+    }
 
-        // Matches inside collapsed expands: open every ancestor first. The
-        // expand needs a layout pass to reveal the body, so always scroll.
+    private func globalIndex(of location: MatchLocation) -> Int? {
+        var prefix = 0
+        for itemID in index.itemOrder {
+            if itemID == location.itemID {
+                guard let result = resultsByItem[itemID],
+                      result.matches.indices.contains(location.matchIndex) else { return nil }
+                return prefix + location.matchIndex
+            }
+            prefix += resultsByItem[itemID]?.matches.count ?? 0
+        }
+        return nil
+    }
+
+    private func navigate(toGlobalIndex index: Int) {
+        guard let location = location(atGlobalIndex: index),
+              let model,
+              let result = resultsByItem[location.itemID],
+              let item = self.index.item(id: location.itemID),
+              result.matches.indices.contains(location.matchIndex) else { return }
+
+        clearCurrentOwner()
+        currentLocation = location
+        currentIndex = index
+        let match = result.matches[location.matchIndex]
+        let unit = item.units[match.unitIndex]
+        generation += 1
+        let store = ownerHighlights(for: unit.ownerID)
+        store.setCurrent(
+            spans: match.painting.textSpans,
+            atomIDs: Set(match.painting.atomIDs),
+            generation: generation
+        )
+        activeOwnerIDs.insert(unit.ownerID)
+        resultsVersion &+= 1
+
         let needsExpansion = !unit.expandAncestorIDs.allSatisfy(model.expandedBlocks.contains)
         if needsExpansion {
             model.expandedBlocks.formUnion(unit.expandAncestorIDs)
         }
-
         let target = unit.topLevelBlockID
-        if !needsExpansion, visibleRows.isVisible(target) {
-            return // On screen: restyle + flash only, no scroll.
-        }
+        if !needsExpansion, visibleRows.isVisible(target) { return }
+
         let placement: ADFScrollTargetPlacement
         if let topRow = model.anchors.topRow,
            let topOrder = blockOrder[topRow],
@@ -303,7 +427,47 @@ public final class ADFDocumentSearch {
         } else {
             placement = .nearBottom(margin: scrollMargin)
         }
-        model.scrollTargetPlacement = placement // BEFORE scrollTarget (observed).
+        model.scrollTargetPlacement = placement
         model.scrollTarget = target
+    }
+
+    private func clearCurrentOwner() {
+        guard let location = currentLocation,
+              let result = resultsByItem[location.itemID],
+              result.matches.indices.contains(location.matchIndex),
+              let item = index.item(id: location.itemID) else { return }
+        let match = result.matches[location.matchIndex]
+        ownerStores[item.units[match.unitIndex].ownerID]?.clearCurrent()
+    }
+
+    private func restoreSelectionAfterMutation() {
+        if let location = currentLocation,
+           let global = globalIndex(of: location) {
+            currentIndex = global
+            resultsVersion &+= 1
+            return
+        }
+        currentLocation = nil
+        currentIndex = nil
+        if matchCount > 0 {
+            navigate(toGlobalIndex: initialSelectionIndex())
+        }
+    }
+
+    private func rebuildBlockOrder() {
+        blockOrder = [:]
+        for (position, itemID) in index.itemOrder.enumerated() {
+            guard let item = index.item(id: itemID) else { continue }
+            blockOrder[item.topLevelBlockID] = position
+        }
+    }
+
+    // MARK: Leaf state
+
+    func ownerHighlights(for ownerID: String) -> SearchOwnerHighlights {
+        if let existing = ownerStores[ownerID] { return existing }
+        let store = SearchOwnerHighlights()
+        ownerStores[ownerID] = store
+        return store
     }
 }

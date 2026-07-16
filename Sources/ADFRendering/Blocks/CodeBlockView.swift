@@ -67,10 +67,9 @@ struct CodeBlockView: View {
         guard let ownerID, let search, search.isActive else {
             return code
         }
-        let highlights = search.highlights
-        let spans = highlights.spansByOwner[ownerID] ?? []
-        let currentSpans = highlights.current?.ownerID == ownerID
-            ? (highlights.current?.spans ?? []) : []
+        let highlights = search.ownerHighlights(for: ownerID)
+        let spans = highlights.spans
+        let currentSpans = highlights.currentSpans
         guard !spans.isEmpty || !currentSpans.isEmpty else { return code }
         return SearchHighlightPainter.paint(
             text: code, spans: spans, currentSpans: currentSpans,

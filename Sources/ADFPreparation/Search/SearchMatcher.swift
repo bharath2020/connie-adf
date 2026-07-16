@@ -52,19 +52,56 @@ public enum SearchMatcher {
         for range: Range<Int>,
         in unit: SearchTextUnit
     ) -> (textSpans: [SearchHighlightSpan], atomIDs: [String]) {
-        var textSpans: [SearchHighlightSpan] = []
-        var atomIDs: [String] = []
-        for part in unit.parts where part.range.overlaps(range) {
-            switch part.source {
-            case .textSegment(let segmentIndex):
-                let lower = max(range.lowerBound, part.range.lowerBound) - part.range.lowerBound
-                let upper = min(range.upperBound, part.range.upperBound) - part.range.lowerBound
-                guard lower < upper else { continue }
-                textSpans.append(SearchHighlightSpan(segmentIndex: segmentIndex, range: lower..<upper))
-            case .atom(let id):
-                atomIDs.append(id)
+        let painting = spans(for: [range], in: unit).first
+            ?? SearchMatchPainting(textSpans: [], atomIDs: [])
+        return (painting.textSpans, painting.atomIDs)
+    }
+
+    /// Slices sorted, non-overlapping match ranges in one forward merge with
+    /// the unit's sorted part map. This is O(parts + matches + output), unlike
+    /// calling the single-range form for every match (O(parts * matches)).
+    public static func spans(
+        for ranges: [Range<Int>],
+        in unit: SearchTextUnit
+    ) -> [SearchMatchPainting] {
+        guard !ranges.isEmpty else { return [] }
+        var result: [SearchMatchPainting] = []
+        result.reserveCapacity(ranges.count)
+        var firstCandidate = 0
+
+        for range in ranges {
+            while firstCandidate < unit.parts.count,
+                  unit.parts[firstCandidate].range.upperBound <= range.lowerBound {
+                firstCandidate += 1
             }
+
+            var textSpans: [SearchHighlightSpan] = []
+            var atomIDs: [String] = []
+            var partIndex = firstCandidate
+            while partIndex < unit.parts.count {
+                let part = unit.parts[partIndex]
+                if part.range.lowerBound >= range.upperBound { break }
+                guard part.range.overlaps(range) else {
+                    partIndex += 1
+                    continue
+                }
+                switch part.source {
+                case .textSegment(let segmentIndex):
+                    let lower = max(range.lowerBound, part.range.lowerBound) - part.range.lowerBound
+                    let upper = min(range.upperBound, part.range.upperBound) - part.range.lowerBound
+                    if lower < upper {
+                        textSpans.append(SearchHighlightSpan(
+                            segmentIndex: segmentIndex,
+                            range: lower..<upper
+                        ))
+                    }
+                case .atom(let id):
+                    atomIDs.append(id)
+                }
+                partIndex += 1
+            }
+            result.append(SearchMatchPainting(textSpans: textSpans, atomIDs: atomIDs))
         }
-        return (textSpans, atomIDs)
+        return result
     }
 }

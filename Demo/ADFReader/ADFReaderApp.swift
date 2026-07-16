@@ -9,6 +9,8 @@ import UIKit
 /// - `-autoscroll` waits 1s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
 ///   `SCROLL_METRICS …` line, then exits after 2s.
+/// - `-searchQuery <text>` runs a settled find-in-page query after loading.
+/// - `-searchUpdates <n>` measures `n` replacements while that query is active.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -17,6 +19,8 @@ struct LaunchOptions: Sendable {
     var fixtureName: String?
     var scrollToFraction: Double?
     var autoscroll = false
+    var searchQuery: String?
+    var searchUpdates = 0
 
     static let none = LaunchOptions(arguments: [])
 
@@ -32,6 +36,12 @@ struct LaunchOptions: Sendable {
                 scrollToFraction = Double(arguments[index])
             case "-autoscroll":
                 autoscroll = true
+            case "-searchQuery" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                searchQuery = arguments[index]
+            case "-searchUpdates" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                searchUpdates = max(Int(arguments[index]) ?? 0, 0)
             default:
                 break
             }

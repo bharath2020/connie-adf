@@ -62,10 +62,9 @@ struct SegmentedTextView: View {
         guard let ownerID, let search, search.isActive else {
             return segments
         }
-        let highlights = search.highlights
-        let spans = highlights.spansByOwner[ownerID] ?? []
-        let currentSpans = highlights.current?.ownerID == ownerID
-            ? (highlights.current?.spans ?? []) : []
+        let highlights = search.ownerHighlights(for: ownerID)
+        let spans = highlights.spans
+        let currentSpans = highlights.currentSpans
         guard !spans.isEmpty || !currentSpans.isEmpty else { return segments }
         return SearchHighlightPainter.paint(
             segments: segments,
@@ -77,13 +76,13 @@ struct SegmentedTextView: View {
     }
 
     private func atomHighlight(for token: InlineToken) -> AtomHighlightState? {
-        guard ownerID != nil, case .atom(_, let id) = token.kind,
-              let search, search.isActive else { return nil }
-        let highlights = search.highlights
-        if let current = highlights.current, current.atomIDs.contains(id) {
+        guard case .atom(_, let id) = token.kind,
+              let ownerID, let search, search.isActive else { return nil }
+        let highlights = search.ownerHighlights(for: ownerID)
+        if highlights.currentAtomIDs.contains(id) {
             return .current(dimmed: flashDimmed)
         }
-        return highlights.matchedAtomIDs.contains(id) ? .subtle : nil
+        return highlights.atomIDs.contains(id) ? .subtle : nil
     }
 
     /// Multiplies any baked sub/superscript baseline offsets by the Dynamic

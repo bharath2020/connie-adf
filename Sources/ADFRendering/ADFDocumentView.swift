@@ -179,21 +179,18 @@ public struct ADFDocumentView: View {
         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(model.sections) { section in
                 Section {
-                    ForEach(section.blocks) { block in
+                    ForEach(section.blocks) { item in
                         DocumentRow(
-                            block: block,
+                            item: item,
                             margin: model.theme.spacing * 2,
                             containerWidth: containerWidth,
                             visibility: model.search.visibleRows
                         )
-                        .modifier(reporter(block.id, model.search.visibleRows))
+                        .modifier(reporter(item.id, model.search.visibleRows))
                     }
                 } header: {
-                    if let header = section.header {
-                        BlockView(block: header)
-                            // Opaque backdrop so pinned headers cover the rows
-                            // scrolling underneath.
-                            .background(Rectangle().fill(.background))
+                    if let item = section.header {
+                        DocumentHeader(item: item)
                     }
                 }
             }
@@ -235,7 +232,7 @@ public struct ADFDocumentView: View {
 /// position are unaffected, and re-entering rows rebuild from their prepared
 /// (immutable, pre-composed) `RenderBlock` just like first materialization.
 private struct DocumentRow: View {
-    let block: RenderBlock
+    let item: DocumentBlockStore
     let margin: CGFloat
     /// The document's current content-column width (observed once by
     /// `ADFDocumentView`, constant during scroll).
@@ -261,6 +258,8 @@ private struct DocumentRow: View {
     /// first materialization.
     @State private var heights = CollapsedRowHeight()
     @State private var isInRenderRegion = false
+
+    private var block: RenderBlock { item.block }
 
     private var spacerHeight: CGFloat? {
         heights.height(at: containerWidth, scaling: block.kind.heightScaling)
@@ -296,20 +295,39 @@ private struct DocumentRow: View {
                     .frame(height: spacerHeight ?? 0)
             }
         }
+        .onChange(of: item.revision) { _, _ in
+            // Prepared content changed under a stable logical row identity;
+            // a collapsed row must discard its old spacer measurement. A
+            // live row stays materialized and its geometry callback replaces
+            // the sample if the rendered height actually changes.
+            if !isInRenderRegion {
+                heights = CollapsedRowHeight()
+            }
+        }
         .onAppear { isInRenderRegion = true }
         .onDisappear {
             isInRenderRegion = false
             // Render-region exit implies viewport exit; also covers removal
             // paths where the visibility callback never fires a final false.
-            visibility.setVisible(block.id, false)
+            visibility.setVisible(item.id, false)
         }
         // The `ScrollVisibilityReporter` feed is applied by `stack(reporter:)`
         // around this row — see `rows` for why it must not attach in here.
     }
 }
 
+private struct DocumentHeader: View {
+    let item: DocumentBlockStore
+
+    var body: some View {
+        BlockView(block: item.block)
+            // Opaque backdrop so pinned headers cover the rows underneath.
+            .background(Rectangle().fill(.background))
+    }
+}
+
 /// Consumes `ADFDocumentModel.scrollTarget`: jumps the scroll view to the
-/// requested block ID with the model's placement, then clears both. A
+/// requested logical row ID with the model's placement, then clears both. A
 /// standalone leaf view so the observation (and the clearing write) never
 /// invalidates the document view that hosts the lazy stack. The viewport
 /// height is measured HERE — on the scroll view's frame, never inside lazy

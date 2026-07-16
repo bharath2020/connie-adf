@@ -53,14 +53,41 @@ enum SearchHighlightPainter {
     ) -> AttributedString {
         var painted = text
         let count = painted.characters.count
-        // Subtle first, current last, so the accent wins on overlap.
-        for (range, isCurrent) in edits.sorted(by: { !$0.1 && $1.1 }) {
+        let clamped = edits.compactMap { range, isCurrent -> (Range<Int>, Bool)? in
             let lower = min(max(range.lowerBound, 0), count)
             let upper = min(max(range.upperBound, 0), count)
-            guard lower < upper else { continue }
-            let characters = painted.characters
-            let start = characters.index(painted.startIndex, offsetBy: lower)
-            let end = characters.index(start, offsetBy: upper - lower)
+            return lower < upper ? (lower..<upper, isCurrent) : nil
+        }
+
+        // A fixed-size direct path avoids a full character walk for the
+        // overwhelmingly common one-to-four-edit case. The threshold is a
+        // constant, so this remains O(text length + edits); larger edit sets
+        // resolve every Character offset in one forward walk.
+        let offsets = Set(clamped.flatMap { [$0.0.lowerBound, $0.0.upperBound] })
+        var indices: [Int: AttributedString.Index] = [:]
+        indices.reserveCapacity(offsets.count)
+        let characters = painted.characters
+        if clamped.count <= 4 {
+            for offset in offsets {
+                indices[offset] = characters.index(painted.startIndex, offsetBy: offset)
+            }
+        } else {
+            var cursor = painted.startIndex
+            for offset in 0...count {
+                if offsets.contains(offset) {
+                    indices[offset] = cursor
+                }
+                if offset < count {
+                    cursor = characters.index(after: cursor)
+                }
+            }
+        }
+
+        // Callers append subtle edits first, so current accent edits overwrite.
+        for (range, isCurrent) in clamped {
+            guard let start = indices[range.lowerBound], let end = indices[range.upperBound] else {
+                continue
+            }
             let accent = isCurrent && !dimCurrent
             painted[start..<end][SUI.BackgroundColorAttribute.self] =
                 accent ? theme.searchCurrentHighlight : theme.searchHighlight

@@ -26,10 +26,10 @@ struct SearchArrivalFlash: ViewModifier {
         guard let search, search.isActive, let ownerID else {
             return Trigger(generation: 0, isCurrentOwner: false)
         }
-        let current = search.highlights.current
+        let owner = search.ownerHighlights(for: ownerID)
         return Trigger(
-            generation: current?.generation ?? 0,
-            isCurrentOwner: current?.ownerID == ownerID
+            generation: owner.currentGeneration ?? 0,
+            isCurrentOwner: owner.currentGeneration != nil
         )
     }
 

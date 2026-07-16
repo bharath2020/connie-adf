@@ -80,3 +80,16 @@ public struct SearchHighlightSpan: Sendable, Hashable {
         self.range = range
     }
 }
+
+/// Paint payload for one match after slicing it through a text unit's part
+/// map. Keeping this as a value lets matching and span generation finish on a
+/// background executor before the rendering controller publishes anything.
+public struct SearchMatchPainting: Sendable, Hashable {
+    public let textSpans: [SearchHighlightSpan]
+    public let atomIDs: [String]
+
+    public init(textSpans: [SearchHighlightSpan], atomIDs: [String]) {
+        self.textSpans = textSpans
+        self.atomIDs = atomIDs
+    }
+}
