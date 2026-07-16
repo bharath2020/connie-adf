@@ -67,6 +67,28 @@ struct CollapsedRowHeight {
         }
     }
 
+    /// Carries every remembered height across a Dynamic Type size change as
+    /// an estimate: text reflows at the same width to roughly
+    /// `factor = newBodyPointSize / oldBodyPointSize` times the height.
+    ///
+    /// Rescaling — never clearing — is load-bearing: an empty memo makes
+    /// `DocumentRow` re-materialize the row to measure it, and a type-size
+    /// change hits every collapsed row at once (see §16: mass
+    /// re-materialization livelocks layout). The estimate is provisional,
+    /// like the per-kind width estimates: the exact height is re-measured
+    /// when the row naturally re-enters the render region.
+    ///
+    /// When the readable measure also moves with the type size (full-screen
+    /// iPad, where the column is capped by a `@ScaledMetric` width), this
+    /// rescale composes with the per-kind width carry-across in `height(at:)`
+    /// — the reflowing carry divides one point-size ratio back out, which is
+    /// why wrapping kinds rescale by the ratio squared (see
+    /// `RenderBlock.Kind.typeSizeRescaleFactor`).
+    mutating func rescale(by factor: CGFloat) {
+        guard factor > 0, factor != 1 else { return }
+        samples = samples.map { ($0.width, $0.height * factor) }
+    }
+
     /// The height to report at `width`: the measured one when this row has
     /// been laid out at that width before, otherwise the newest measurement
     /// carried across by `scaling`.
@@ -107,6 +129,42 @@ extension RenderBlock.Kind {
         case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
              .extensionPlaceholder, .unknown:
             .reflowing
+        }
+    }
+
+    /// The factor a collapsed row's remembered heights scale by when the
+    /// body point size changes by `ratio` (new ÷ old). Exhaustive on
+    /// purpose, like `heightScaling` above: a new block kind must declare
+    /// how its height answers the text size, or it doesn't compile.
+    ///
+    /// Wrapping text roughly follows `height ∝ pointSize² ÷ width` (each
+    /// line gets taller AND fits fewer characters), so reflowing kinds scale
+    /// by `ratio²` — which also keeps the estimate honest on full-screen
+    /// iPad, where the `@ScaledMetric` readable column widens by ~`ratio`
+    /// and `height(at:)`'s reflowing carry-across divides one `ratio` back
+    /// out. Non-wrapping text (code, table slices, cards, media strips —
+    /// the strip height is itself `@ScaledMetric`) keeps its line structure
+    /// and scales linearly. Media boxes are pixel- or fraction-sized and a
+    /// divider is a hairline plus fixed padding — neither tracks the text
+    /// size. (Captioned media and `@ScaledMetric` fallback boxes make the
+    /// media `1` a slight understatement — the same self-correcting-estimate
+    /// class as the width heuristics; exact on natural re-entry.)
+    ///
+    /// The factor applies to a row's WHOLE remembered height, so a collapsed
+    /// OPEN expand whose body is dominated by media or code is over-scaled
+    /// by up to `ratio²` — the largest error this estimate class can carry,
+    /// since expand bodies are unbounded in height. Position is unaffected
+    /// (the re-anchor holds the top row by identity); only content height
+    /// and scrollbar proportions are off until the row re-enters (ADR §19).
+    func typeSizeRescaleFactor(bodyPointRatio ratio: CGFloat) -> CGFloat {
+        switch self {
+        case .media, .divider:
+            1
+        case .codeBlock, .tableSlice, .card, .mediaStrip:
+            ratio
+        case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
+             .extensionPlaceholder, .unknown:
+            ratio * ratio
         }
     }
 }

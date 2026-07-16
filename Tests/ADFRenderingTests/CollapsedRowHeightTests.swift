@@ -121,6 +121,66 @@ struct CollapsedRowHeightTests {
         #expect(RenderBlock.Kind.codeBlock(language: nil, code: "").heightScaling == .invariant)
         #expect(RenderBlock.Kind.listRows([]).heightScaling == .reflowing)
     }
+
+    /// A Dynamic Type change resizes every collapsed row at an unchanged
+    /// width. Samples must NOT be dropped — an empty memo re-materializes
+    /// the row, and re-materializing thousands at once livelocks layout
+    /// (§16). Instead the remembered heights are carried across as scaled
+    /// estimates, corrected when the row naturally re-enters.
+    @Test("A type-size change rescales remembered heights in place")
+    func rescaleScalesEverySample() {
+        var heights = CollapsedRowHeight()
+        heights.record(height: 100, at: 400)
+        heights.record(height: 60, at: 800)
+        heights.rescale(by: 28.0 / 17.0)
+        #expect(!heights.isEmpty)
+        #expect(heights.height(at: 400, scaling: .reflowing) == 100 * (28.0 / 17.0))
+        #expect(heights.height(at: 800, scaling: .reflowing) == 60 * (28.0 / 17.0))
+    }
+
+    @Test("Rescaling by 1 or on an empty memo is a no-op")
+    func rescaleDegenerateCases() {
+        var empty = CollapsedRowHeight()
+        empty.rescale(by: 2)
+        #expect(empty.isEmpty)
+
+        var heights = CollapsedRowHeight()
+        heights.record(height: 100, at: 400)
+        heights.rescale(by: 1)
+        #expect(heights.height(at: 400, scaling: .reflowing) == 100)
+    }
+
+    /// Media boxes are pixel- or fraction-sized and a divider is a hairline
+    /// plus fixed padding — neither tracks the text size. Non-wrapping kinds
+    /// (code, table slices, strips) scale linearly with the body point size;
+    /// wrapping text scales ~quadratically at constant width (taller lines
+    /// AND fewer characters per line).
+    @Test("Every block kind declares how its height answers a type-size change")
+    func kindsDeclareTypeSizeFactor() {
+        #expect(RenderBlock.Kind.media(.stub()).typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1)
+        #expect(RenderBlock.Kind.divider.typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1)
+        #expect(RenderBlock.Kind.codeBlock(language: nil, code: "").typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1.5)
+        #expect(RenderBlock.Kind.mediaStrip([]).typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1.5)
+        #expect(RenderBlock.Kind.listRows([]).typeSizeRescaleFactor(bodyPointRatio: 1.5) == 2.25)
+    }
+
+    /// The full-screen iPad composition: the readable column widens by the
+    /// same ratio the text grew, so the reflowing width carry-across divides
+    /// one ratio back out of the rescaled sample. A linear rescale would
+    /// cancel to the OLD height; the quadratic reflowing factor must leave
+    /// the net estimate one ratio taller.
+    @Test("Reflowing rescale survives the column widening by the same ratio")
+    func reflowingRescaleSurvivesScaledColumn() {
+        var heights = CollapsedRowHeight()
+        heights.record(height: 100, at: 400)
+        let ratio: CGFloat = 28.0 / 17.0
+        heights.rescale(by: RenderBlock.Kind.listRows([]).typeSizeRescaleFactor(bodyPointRatio: ratio))
+        let estimate = heights.height(at: 400 * ratio, scaling: .reflowing)
+        #expect(estimate != nil)
+        // 0.5 tolerance absorbs the memo's half-point width-key rounding;
+        // a linear rescale would miss by ~65 points here, not fractions.
+        #expect(abs((estimate ?? 0) - 100 * ratio) < 0.5)
+    }
 }
 
 private extension PreparedMedia {
