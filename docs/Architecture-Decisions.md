@@ -193,6 +193,17 @@ The extension is MV3 with no build step (`pako`/`qrcode-generator` vendored; CSP
 
 ---
 
+## 19. Per-document text size: scoped Dynamic Type override, rescaled (never cleared) spacer heights
+
+**Chosen (2026-07-16):** The reader's per-document text-size control is a step offset on the `DynamicTypeSize` ladder, applied by the host as `.dynamicTypeSize(system.shifted(by: step))` on `ADFDocumentView` alone (innermost modifier, so navigation chrome and the search bar keep the app's size). Persistence is host-side (`FontSizeStore`, UserDefaults keyed by `DocumentSource.storageKey`, the `TaskStateStore` pattern); `DynamicTypeSize.shifted(by:)`/`approximateBodyPointSize` live in `ADFRendering` as public helpers. `-fontSizeStep <n>` joins the launch-argument harness so gates can run at any size.
+
+- **Why an environment override and not a theme change:** every library font is a semantic text style baked per-run into prepared `AttributedString`s, and SwiftUI re-resolves semantic fonts at draw time — so the override rescales all text with **zero re-preparation**, and every `@ScaledMetric` layout metric (readable measure, list markers, table column floors, pill paddings, sub/superscript `typeScale`) follows the same environment value. A point-size `ADFTheme` would instead force a full re-prepare per adjustment and desynchronize every `@ScaledMetric` (they track the environment, not the theme). Composes with accessibility rather than fighting it: the device setting is the baseline the step shifts from.
+- **Collapsed spacers RESCALE in place; they are never cleared.** A type-size change resizes every collapsed row at an unchanged width — the one invalidation `CollapsedRowHeight`'s width-keyed memo cannot see. Clearing samples (the `item.revision` pattern) would flip every collapsed row into the `heights.isEmpty` re-materialization branch at once — exactly the §16 mass-re-materialization livelock. Instead `rescale(by: newBodyPt/oldBodyPt)` carries the remembered heights across as estimates (media excluded — pixel/fraction-sized boxes don't track text), corrected on natural re-entry like every other estimate.
+- **A type-size change is a re-anchor trigger, sibling to width change.** On iPhone the column width doesn't move when text grows, so the width-change re-pin never fires; a second `.onChange(of: dynamicTypeSize)` re-asserts `anchors.topRow` through the same one-shot, animations-disabled `scrollTo`. (On iPad both fire — `readableWidth` is `@ScaledMetric` — and double-asserting the same anchor is harmless.) This also fixes the latent stale-spacer/no-re-pin bug for *system* Dynamic Type changes mid-session.
+- **Measured (2026-07-16, iPhone 16 sim, iOS 18.2, Debug):** stress-5k autoscroll — baseline 2.64/2.41 ms/s, feature at step 0 3.89/1.39 (noise-equivalent), at +3 8.15/4.56 (bigger glyph runs; pacing estimator assumes default size, so indicative only). Fling-burst CPU settles 0.0–0.3 at +3, including immediately after a mid-scroll size change across collapsed regions — the gate that catches livelocks. Search at +3: 2,557 matches / ~115 ms (spans are Character-offset based, size-independent). Mid-scroll +3 via the popover holds the reader's content; rotation round-trip at 135% re-anchors cleanly.
+
+---
+
 ## Summary of measurement-driven reversals
 
 | Initial choice | Measured problem | Final choice |
