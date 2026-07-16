@@ -23,6 +23,15 @@ public struct ADFTheme: Sendable, Hashable {
     public var containerCornerRadius: CGFloat
     /// Corner radius for interactive cards (smart-link block/embed cards).
     public var cardCornerRadius: CGFloat
+    /// Background for every search match (subtle, translucent).
+    public var searchHighlight: Color
+    /// Background for the CURRENT search match (accent). The default is an
+    /// opaque bright yellow-orange; pair a custom value with a suitable
+    /// `searchCurrentForeground`.
+    public var searchCurrentHighlight: Color
+    /// Foreground forced over `searchCurrentHighlight` so the current match
+    /// stays legible in both schemes. `nil` keeps the run's own foreground.
+    public var searchCurrentForeground: Color?
 
     public init(
         body: Font = .body,
@@ -31,7 +40,10 @@ public struct ADFTheme: Sendable, Hashable {
         bodyPointSize: CGFloat = 17,
         chipCornerRadius: CGFloat = 6,
         containerCornerRadius: CGFloat = 8,
-        cardCornerRadius: CGFloat = 10
+        cardCornerRadius: CGFloat = 10,
+        searchHighlight: Color = .yellow.opacity(0.3),
+        searchCurrentHighlight: Color = Color(red: 1.0, green: 0.78, blue: 0.16),
+        searchCurrentForeground: Color? = .black
     ) {
         self.body = body
         self.code = code
@@ -40,6 +52,9 @@ public struct ADFTheme: Sendable, Hashable {
         self.chipCornerRadius = chipCornerRadius
         self.containerCornerRadius = containerCornerRadius
         self.cardCornerRadius = cardCornerRadius
+        self.searchHighlight = searchHighlight
+        self.searchCurrentHighlight = searchCurrentHighlight
+        self.searchCurrentForeground = searchCurrentForeground
     }
 
     public static let `default` = ADFTheme()

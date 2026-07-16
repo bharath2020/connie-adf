@@ -34,7 +34,7 @@ struct ListRowView: View {
                 .frame(width: markerWidth, alignment: .trailing)
             VStack(alignment: .leading, spacing: theme.spacing * 0.5) {
                 if !row.segments.isEmpty {
-                    SegmentedTextView(segments: row.segments)
+                    SegmentedTextView(segments: row.segments, ownerID: row.id)
                         .textSelection(.enabled)
                 }
                 ForEach(row.trailingBlocks) { block in

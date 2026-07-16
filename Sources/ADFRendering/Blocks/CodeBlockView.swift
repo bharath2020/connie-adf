@@ -11,8 +11,12 @@ import AppKit
 struct CodeBlockView: View {
     let language: String?
     let code: AttributedString
+    /// `RenderBlock.id`; nil opts out of search (previews).
+    var ownerID: String? = nil
 
     @Environment(\.adfTheme) private var theme
+    @Environment(\.adfDocumentSearch) private var search
+    @State private var flashDimmed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -36,13 +40,14 @@ struct CodeBlockView: View {
             .padding(.top, theme.spacing)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
+                Text(displayedCode)
                     .textSelection(.enabled)
                     .padding(theme.spacing * 1.5)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: theme.containerCornerRadius).fill(Color.gray.opacity(0.1)))
+        .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
     }
 
     private func copyCode() {
@@ -53,5 +58,23 @@ struct CodeBlockView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         #endif
+    }
+
+    /// Zero-work gate: unmatched code blocks return the stored string as-is.
+    /// Idle sessions read one observable Bool, never the highlights struct
+    /// (see `SegmentedTextView.displayedSegments`).
+    private var displayedCode: AttributedString {
+        guard let ownerID, let search, search.isActive else {
+            return code
+        }
+        let highlights = search.highlights
+        let spans = highlights.spansByOwner[ownerID] ?? []
+        let currentSpans = highlights.current?.ownerID == ownerID
+            ? (highlights.current?.spans ?? []) : []
+        guard !spans.isEmpty || !currentSpans.isEmpty else { return code }
+        return SearchHighlightPainter.paint(
+            text: code, spans: spans, currentSpans: currentSpans,
+            theme: theme, dimCurrent: flashDimmed
+        )
     }
 }

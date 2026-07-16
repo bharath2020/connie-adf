@@ -28,12 +28,6 @@ public struct ADFDocumentView: View {
     /// height was measured at a different width (rotation, Split View).
     @State private var containerWidth = CGFloat.zero
 
-    /// The row at the top of the viewport, which `scrollPosition(id:)` keeps
-    /// anchored there when the document reflows at a new width. Held in a plain
-    /// reference type so SwiftUI's per-row writes to the binding invalidate
-    /// nothing — see `ScrollAnchorRegistry`.
-    @State private var anchors = ScrollAnchorRegistry()
-
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -101,7 +95,7 @@ public struct ADFDocumentView: View {
             // moves the scroll view programmatically — see `ScrollTargetConsumer`
             // — otherwise this re-asserts a stale row on the next resize.
             .onChange(of: containerWidth) {
-                guard let anchor = anchors.topRow else { return }
+                guard let anchor = model.anchors.topRow else { return }
                 // Snap, don't slide: the width change can carry the rotation's
                 // animation transaction, and a re-anchor should be instantaneous.
                 var transaction = Transaction()
@@ -117,7 +111,7 @@ public struct ADFDocumentView: View {
                 // view per jump — and reconciling every row the lazy stack
                 // keeps alive is O(rows materialized so far), which the §8
                 // 5k-block hitch gate measures as progressive frame drops.
-                ScrollTargetConsumer(model: model, proxy: proxy, anchors: anchors)
+                ScrollTargetConsumer(model: model, proxy: proxy)
             }
         }
         .environment(\.adfTheme, model.theme)
@@ -126,6 +120,7 @@ public struct ADFDocumentView: View {
         .environment(\.adfInteractionHandler, interactionHandler)
         .environment(\.adfTaskStates, taskStates)
         .environment(\.adfMentionContent, mentionContent)
+        .environment(\.adfDocumentSearch, model.search)
         .overlay { statusOverlay }
     }
 
@@ -148,13 +143,39 @@ public struct ADFDocumentView: View {
     /// reference type and invalidates no views (a `@State` write would
     /// re-evaluate this view — reconciling every materialized row — each time).
     private var anchorBinding: Binding<String?> {
-        Binding(get: { nil }, set: { anchors.topRow = $0 })
+        Binding(get: { nil }, set: { model.anchors.topRow = $0 })
     }
 
     /// Sections are maintained incrementally by the model as chunks stream in,
     /// so this only iterates a stored value — a table's header slice pins
     /// (stays visible) while its row slices scroll beneath it.
+    ///
+    /// THE ONE PLACE `#available` MAY GUARD THE VISIBILITY FEED. An
+    /// `if #available` in any result builder compiles to
+    /// `buildLimitedAvailability`, which type-erases the taken branch to
+    /// `AnyView`. Erasing PER ROW — at the call site or even inside a
+    /// per-row `ViewModifier`'s body — destroys the lazy stack's unary-item
+    /// caching: it re-walks and re-measures the materialized rows on every
+    /// frame of a scroll, a cost that grows with scroll depth (§8 stress-5k
+    /// gate: 1.8 → 112–126 ms/s of hitching, in BOTH branches, with the
+    /// callbacks contributing nothing). Branching HERE erases exactly one
+    /// view — the whole stack — and each row keeps one stable, conditional-
+    /// free type; the feed itself is free (0.65 ms/s live on all 5,000 rows).
+    @ViewBuilder
     private var rows: some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            stack(reporter: { ScrollVisibilityReporter(id: $0, registry: $1) })
+        } else {
+            // Pre-18/15: no visibility feed exists, `VisibleRowRegistry`
+            // stays empty, and search navigation always scrolls (graceful
+            // degradation).
+            stack(reporter: { _, _ in EmptyModifier() })
+        }
+    }
+
+    private func stack<Reporter: ViewModifier>(
+        reporter: @escaping (String, VisibleRowRegistry) -> Reporter
+    ) -> some View {
         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(model.sections) { section in
                 Section {
@@ -162,8 +183,10 @@ public struct ADFDocumentView: View {
                         DocumentRow(
                             block: block,
                             margin: model.theme.spacing * 2,
-                            containerWidth: containerWidth
+                            containerWidth: containerWidth,
+                            visibility: model.search.visibleRows
                         )
+                        .modifier(reporter(block.id, model.search.visibleRows))
                     }
                 } header: {
                     if let header = section.header {
@@ -217,6 +240,7 @@ private struct DocumentRow: View {
     /// The document's current content-column width (observed once by
     /// `ADFDocumentView`, constant during scroll).
     let containerWidth: CGFloat
+    let visibility: VisibleRowRegistry
 
     /// Rendered heights captured while the row is live, one per container
     /// width; empty until first materialization (a row must never collapse
@@ -273,25 +297,41 @@ private struct DocumentRow: View {
             }
         }
         .onAppear { isInRenderRegion = true }
-        .onDisappear { isInRenderRegion = false }
+        .onDisappear {
+            isInRenderRegion = false
+            // Render-region exit implies viewport exit; also covers removal
+            // paths where the visibility callback never fires a final false.
+            visibility.setVisible(block.id, false)
+        }
+        // The `ScrollVisibilityReporter` feed is applied by `stack(reporter:)`
+        // around this row — see `rows` for why it must not attach in here.
     }
 }
 
 /// Consumes `ADFDocumentModel.scrollTarget`: jumps the scroll view to the
-/// requested block ID, then clears the request. A standalone leaf view so
-/// the observation of `scrollTarget` (and the clearing write) never
-/// invalidates the document view that hosts the lazy stack.
+/// requested block ID with the model's placement, then clears both. A
+/// standalone leaf view so the observation (and the clearing write) never
+/// invalidates the document view that hosts the lazy stack. The viewport
+/// height is measured HERE — on the scroll view's frame, never inside lazy
+/// rows — to turn point margins into `UnitPoint` anchors.
 private struct ScrollTargetConsumer: View {
     let model: ADFDocumentModel
     let proxy: ScrollViewProxy
-    let anchors: ScrollAnchorRegistry
+
+    @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
         Color.clear
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                viewportHeight = height
+            }
             .onChange(of: model.scrollTarget) { _, target in
                 guard let target else { return }
+                let anchor = model.scrollTargetPlacement.anchor(viewportHeight: viewportHeight)
                 withAnimation(model.scrollTargetAnimation) {
-                    proxy.scrollTo(target, anchor: .top)
+                    proxy.scrollTo(target, anchor: anchor)
                 }
                 // Keep the anchor truthful. `scrollPosition(id:)` writes the
                 // binding only during a scroll *gesture*, never for a
@@ -306,10 +346,13 @@ private struct ScrollTargetConsumer: View {
                 // bounded, one-time reposition on the next resize (the same
                 // whole-row `.top` limitation as the sub-row residual, fixable
                 // only with a one-shot post-jump offset read — see the doc), and
-                // still far better than re-asserting the pre-jump row.
+                // still far better than re-asserting the pre-jump row. Search
+                // navigation's `nearBottom` placement lands the target low in
+                // the viewport — the same bounded, one-time class.
                 // (A write to the reference type invalidates nothing — §8b.)
-                anchors.topRow = target
+                model.anchors.topRow = target
                 model.scrollTarget = nil
+                model.scrollTargetPlacement = .top
             }
     }
 }
@@ -330,6 +373,29 @@ extension View {
         case .fullWidth:
             frame(maxWidth: breakout?.width.map { CGFloat($0) })
                 .padding(.horizontal, -margin)
+        }
+    }
+}
+
+/// Reports a row's genuine viewport visibility (not render-region
+/// membership) into the `VisibleRowRegistry`. The 0.95 threshold ≈ "fully
+/// visible": partially clipped matches still get a scroll that brings them
+/// fully inside the margin.
+///
+/// `@available`-constrained ON THE TYPE, with a body containing NO
+/// conditional, deliberately: this modifier sits on every lazy row, and any
+/// `if #available` in its body (or at its call site) erases the row's
+/// subgraph to `AnyView` via `buildLimitedAvailability` — the §8-measured
+/// poison documented on `ADFDocumentView.rows`, which is the single place
+/// allowed to make the availability decision.
+@available(iOS 18.0, macOS 15.0, *)
+private struct ScrollVisibilityReporter: ViewModifier {
+    let id: String
+    let registry: VisibleRowRegistry
+
+    func body(content: Content) -> some View {
+        content.onScrollVisibilityChange(threshold: 0.95) { visible in
+            registry.setVisible(id, visible)
         }
     }
 }
