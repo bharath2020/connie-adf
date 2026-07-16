@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Pulses the current search match's accent highlight on arrival: two
-/// accent→subtle blinks (~130 ms steps) driven off the navigation
-/// generation, steady accent under Reduce Motion. The pulse phase is
+/// Flashes the current search match's accent highlight on arrival: one
+/// accent→subtle blink (~130 ms steps) driven off the navigation
+/// generation, steady accent under Reduce Motion. The blink phase is
 /// delivered to the content via `dimmed` so the view can swap which theme
 /// token it paints with — attribute colors can't animate, so the flash is
 /// a discrete toggle by design.
@@ -57,14 +57,12 @@ struct SearchArrivalFlash: ViewModifier {
     private func runFlash() async {
         dimmed.wrappedValue = false
         guard trigger.isCurrentOwner, trigger.generation > 0, !reduceMotion else { return }
-        for _ in 0..<2 {
-            try? await Task.sleep(for: .milliseconds(130))
-            guard !Task.isCancelled else { return }
-            dimmed.wrappedValue = true
-            try? await Task.sleep(for: .milliseconds(130))
-            guard !Task.isCancelled else { return }
-            dimmed.wrappedValue = false
-        }
+        try? await Task.sleep(for: .milliseconds(130))
+        guard !Task.isCancelled else { return }
+        dimmed.wrappedValue = true
+        try? await Task.sleep(for: .milliseconds(130))
+        guard !Task.isCancelled else { return }
+        dimmed.wrappedValue = false
     }
 }
 

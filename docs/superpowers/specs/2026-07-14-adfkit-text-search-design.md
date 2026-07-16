@@ -153,7 +153,7 @@ navigation happens — never per keystroke mid-debounce. Off-region rows are spa
 ### Flash on navigation
 
 The leaf rendering the current match runs `.task(id: selectionGeneration)` pulsing the
-current-match background accent → bright → accent (2 pulses, ~500 ms total) by toggling
+current-match background accent → subtle → accent (one blink, ~260 ms) by toggling
 the applied token. No geometry, no external timers. If the target row was collapsed far
 away, the task runs when the row materializes after the scroll — flash on arrival.
 `accessibilityReduceMotion` → steady accent highlight, no pulse.
