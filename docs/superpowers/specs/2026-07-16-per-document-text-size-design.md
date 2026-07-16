@@ -60,11 +60,14 @@ control composes with it (a user at `xxLarge` gets "+2 relative to *their* norma
 
 `ADFDocumentView` reacts to a runtime change of the environment `dynamicTypeSize`:
 
-1. **Invalidate the collapsed-row height cache** (`CollapsedRowHeight`), exactly the way
-   the existing `item.revision` reset does: stored samples clear, spacers fall back to
-   per-kind estimates, rows re-measure only on natural re-entry. Never mass
-   re-materialize rows to re-measure — that is the documented layout-livelock trap
-   (Architecture-Decisions §16).
+1. **Rescale the collapsed-row height cache in place** (`CollapsedRowHeight.rescale(by:)`,
+   factor = ratio of body point sizes; media excluded — pixel-sized boxes don't track
+   text). *Correction over the first draft:* clearing samples the way the
+   `item.revision` reset does would empty the memo, and `DocumentRow` re-materializes
+   any row whose memo is empty — doing that to every collapsed row at once is the
+   documented layout-livelock trap (Architecture-Decisions §16). Rescaled heights are
+   provisional estimates, like the per-kind width estimates: exact heights re-measure
+   when rows naturally re-enter the render region.
 2. **Re-assert the scroll anchor**: `proxy.scrollTo(anchors.topRow, anchor: .top)` with
    animations disabled, mirroring the existing `containerWidth` re-anchor. Needed
    because a type-size change reflows heights without changing width (the only existing
@@ -78,10 +81,12 @@ leaves stale spacer heights and no re-anchor.
 - **`FontSizeStore`** — UserDefaults JSON `[storageKey: Int]` under one key, mirroring
   `TaskStateStore` (read at load, write-through on change, decode failure → empty).
 - **Pure helpers** — `DynamicTypeSize.shifted(by:)` (index shift on the ladder, clamped
-  to bounds) and a step→percentage mapping for the indicator label, computed from
-  Apple's body point sizes as `pt(effective) / pt(system baseline)` — step 0 always
-  reads 100%, i.e. the percentage is relative to the user's own baseline, not to
-  `.large`.
+  to bounds) and `approximateBodyPointSize` for the percentage label, computed as
+  `pt(effective) / pt(system baseline)` — step 0 always reads 100%, i.e. the percentage
+  is relative to the user's own baseline, not to `.large`. These live in `ADFRendering`
+  as public `DynamicTypeSize` extensions (not app-side as first drafted): the app has no
+  test target, the package tests do, and the library's spacer-rescale needs the same
+  point-size table.
 - **`ReaderView`** — fourth `.topBarTrailing` toolbar item (`textformat.size`,
   accessibility label "Text Size") presenting a **popover**
   (`presentationCompactAdaptation(.popover)`), not a `Menu` — menu buttons dismiss on
