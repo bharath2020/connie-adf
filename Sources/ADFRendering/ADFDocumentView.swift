@@ -28,6 +28,12 @@ public struct ADFDocumentView: View {
     /// height was measured at a different width (rotation, Split View).
     @State private var containerWidth = CGFloat.zero
 
+    /// Watched so a runtime type-size change (host override or the system
+    /// setting) can re-assert the scroll anchor: it reflows every row's
+    /// height at an unchanged column width on iPhone, so the width-change
+    /// re-pin below never fires for it.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -95,14 +101,16 @@ public struct ADFDocumentView: View {
             // moves the scroll view programmatically — see `ScrollTargetConsumer`
             // — otherwise this re-asserts a stale row on the next resize.
             .onChange(of: containerWidth) {
-                guard let anchor = model.anchors.topRow else { return }
-                // Snap, don't slide: the width change can carry the rotation's
-                // animation transaction, and a re-anchor should be instantaneous.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(anchor, anchor: .top)
-                }
+                reassertAnchor(proxy)
+            }
+            // A Dynamic Type change is the width change's sibling: every row
+            // reflows to a new height while the column width stays the same
+            // (on iPhone — on iPad `readableWidth` is @ScaledMetric, so the
+            // width re-pin above fires too; double-asserting the same anchor
+            // is harmless). Same one-shot, identity-based re-pin, same
+            // reasons — see the comment above.
+            .onChange(of: dynamicTypeSize) {
+                reassertAnchor(proxy)
             }
             .background {
                 // The scroll-target observation lives in a leaf view so a
@@ -144,6 +152,19 @@ public struct ADFDocumentView: View {
     /// re-evaluate this view — reconciling every materialized row — each time).
     private var anchorBinding: Binding<String?> {
         Binding(get: { nil }, set: { model.anchors.topRow = $0 })
+    }
+
+    /// One-shot, identity-based scroll re-pin: re-derives the offset for the
+    /// remembered top row from current row heights. Snap, don't slide: the
+    /// triggering change can carry an animation transaction, and a re-anchor
+    /// should be instantaneous.
+    private func reassertAnchor(_ proxy: ScrollViewProxy) {
+        guard let anchor = model.anchors.topRow else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(anchor, anchor: .top)
+        }
     }
 
     /// Sections are maintained incrementally by the model as chunks stream in,
@@ -239,6 +260,8 @@ private struct DocumentRow: View {
     let containerWidth: CGFloat
     let visibility: VisibleRowRegistry
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// Rendered heights captured while the row is live, one per container
     /// width; empty until first materialization (a row must never collapse
     /// before it was measured).
@@ -303,6 +326,18 @@ private struct DocumentRow: View {
             if !isInRenderRegion {
                 heights = CollapsedRowHeight()
             }
+        }
+        .onChange(of: dynamicTypeSize) { old, new in
+            // The text size changed under a collapsed row. Its remembered
+            // heights must move with the text — but the row must NOT
+            // re-materialize to re-measure (mass re-materialization
+            // livelocks layout, see `heights`), and emptying the memo would
+            // do exactly that via the `heights.isEmpty` branch above. So
+            // the samples are rescaled in place: an estimate, corrected on
+            // natural re-entry. A live row stays materialized and its
+            // geometry callback re-records the exact height.
+            guard !isInRenderRegion, block.kind.scalesWithTypeSize else { return }
+            heights.rescale(by: new.approximateBodyPointSize / old.approximateBodyPointSize)
         }
         .onAppear { isInRenderRegion = true }
         .onDisappear {
