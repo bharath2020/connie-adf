@@ -150,15 +150,36 @@ struct CollapsedRowHeightTests {
         #expect(heights.height(at: 400, scaling: .reflowing) == 100)
     }
 
-    /// Media boxes are sized from pixel attributes or column fractions —
-    /// text size does not move them, so their spacers must not rescale.
-    @Test("Every block kind declares whether its height tracks the type size")
-    func kindsDeclareTypeSizeResponse() {
-        #expect(!RenderBlock.Kind.media(.stub()).scalesWithTypeSize)
-        #expect(RenderBlock.Kind.codeBlock(language: nil, code: "").scalesWithTypeSize)
-        #expect(RenderBlock.Kind.listRows([]).scalesWithTypeSize)
-        #expect(RenderBlock.Kind.divider.scalesWithTypeSize)
-        #expect(RenderBlock.Kind.mediaStrip([]).scalesWithTypeSize)
+    /// Media boxes are pixel- or fraction-sized and a divider is a hairline
+    /// plus fixed padding — neither tracks the text size. Non-wrapping kinds
+    /// (code, table slices, strips) scale linearly with the body point size;
+    /// wrapping text scales ~quadratically at constant width (taller lines
+    /// AND fewer characters per line).
+    @Test("Every block kind declares how its height answers a type-size change")
+    func kindsDeclareTypeSizeFactor() {
+        #expect(RenderBlock.Kind.media(.stub()).typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1)
+        #expect(RenderBlock.Kind.divider.typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1)
+        #expect(RenderBlock.Kind.codeBlock(language: nil, code: "").typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1.5)
+        #expect(RenderBlock.Kind.mediaStrip([]).typeSizeRescaleFactor(bodyPointRatio: 1.5) == 1.5)
+        #expect(RenderBlock.Kind.listRows([]).typeSizeRescaleFactor(bodyPointRatio: 1.5) == 2.25)
+    }
+
+    /// The full-screen iPad composition: the readable column widens by the
+    /// same ratio the text grew, so the reflowing width carry-across divides
+    /// one ratio back out of the rescaled sample. A linear rescale would
+    /// cancel to the OLD height; the quadratic reflowing factor must leave
+    /// the net estimate one ratio taller.
+    @Test("Reflowing rescale survives the column widening by the same ratio")
+    func reflowingRescaleSurvivesScaledColumn() {
+        var heights = CollapsedRowHeight()
+        heights.record(height: 100, at: 400)
+        let ratio: CGFloat = 28.0 / 17.0
+        heights.rescale(by: RenderBlock.Kind.listRows([]).typeSizeRescaleFactor(bodyPointRatio: ratio))
+        let estimate = heights.height(at: 400 * ratio, scaling: .reflowing)
+        #expect(estimate != nil)
+        // 0.5 tolerance absorbs the memo's half-point width-key rounding;
+        // a linear rescale would miss by ~65 points here, not fractions.
+        #expect(abs((estimate ?? 0) - 100 * ratio) < 0.5)
     }
 }
 

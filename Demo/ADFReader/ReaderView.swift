@@ -106,6 +106,10 @@ struct ReaderView: View {
                     step: $fontSizeStep,
                     systemTypeSize: systemTypeSize
                 ) { newStep in
+                    // The -fontSizeStep bypass never writes: an automation
+                    // run that taps the control must not overwrite the
+                    // user's persisted per-document choice.
+                    guard options.fontSizeStep == nil else { return }
                     fontSizeStore.setStep(newStep, docKey: source.storageKey)
                 }
                 .presentationCompactAdaptation(.popover)

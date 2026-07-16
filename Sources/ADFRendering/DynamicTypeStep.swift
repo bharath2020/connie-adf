@@ -37,7 +37,12 @@ public extension DynamicTypeSize {
         case .accessibility3: 40
         case .accessibility4: 47
         case .accessibility5: 53
-        @unknown default: 17
+        // A future case lands above the current ladder top (SwiftUI's
+        // runtime `allCases` will include it, so `shifted(by:)` can reach
+        // it). Falling back to the .large value would compute a SHRINK
+        // factor (17/53) for a size that grew — clamp to the ladder top so
+        // both the rescale factor and the percent label stay monotonic.
+        @unknown default: 53
         }
     }
 }

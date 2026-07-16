@@ -104,10 +104,14 @@ public struct ADFDocumentView: View {
                 reassertAnchor(proxy)
             }
             // A Dynamic Type change is the width change's sibling: every row
-            // reflows to a new height while the column width stays the same
-            // (on iPhone — on iPad `readableWidth` is @ScaledMetric, so the
-            // width re-pin above fires too; double-asserting the same anchor
-            // is harmless). Same one-shot, identity-based re-pin, same
+            // reflows to a new height while the column width usually stays
+            // the same — always on iPhone, and on iPad whenever the pane
+            // (Split View, Slide Over, Stage Manager) is narrower than the
+            // scaled readable cap, so this re-pin is the only corrective in
+            // all of those layouts. Only a full-screen-class iPad column
+            // moves `readableWidth` (@ScaledMetric) and fires the width
+            // re-pin above as well; double-asserting the same anchor there
+            // is harmless. Same one-shot, identity-based re-pin, same
             // reasons — see the comment above.
             .onChange(of: dynamicTypeSize) {
                 reassertAnchor(proxy)
@@ -328,16 +332,20 @@ private struct DocumentRow: View {
             }
         }
         .onChange(of: dynamicTypeSize) { old, new in
-            // The text size changed under a collapsed row. Its remembered
-            // heights must move with the text — but the row must NOT
-            // re-materialize to re-measure (mass re-materialization
-            // livelocks layout, see `heights`), and emptying the memo would
-            // do exactly that via the `heights.isEmpty` branch above. So
-            // the samples are rescaled in place: an estimate, corrected on
-            // natural re-entry. A live row stays materialized and its
-            // geometry callback re-records the exact height.
-            guard !isInRenderRegion, block.kind.scalesWithTypeSize else { return }
-            heights.rescale(by: new.approximateBodyPointSize / old.approximateBodyPointSize)
+            // The text size changed under this row. Its remembered heights
+            // must move with the text — but the row must NOT re-materialize
+            // to re-measure (mass re-materialization livelocks layout, see
+            // `heights`), and emptying the memo would do exactly that via
+            // the `heights.isEmpty` branch above. So the samples are
+            // rescaled in place: an estimate, corrected on natural re-entry.
+            //
+            // Live rows rescale too: their samples for OTHER widths (from
+            // past rotations) would otherwise stay at the old text size and
+            // replay as "exact" on the next rotation. The current width's
+            // sample is re-recorded exactly by the geometry callback as soon
+            // as the live row reflows, overwriting its estimate.
+            let ratio = new.approximateBodyPointSize / old.approximateBodyPointSize
+            heights.rescale(by: block.kind.typeSizeRescaleFactor(bodyPointRatio: ratio))
         }
         .onAppear { isInRenderRegion = true }
         .onDisappear {

@@ -78,11 +78,12 @@ struct CollapsedRowHeight {
     /// like the per-kind width estimates: the exact height is re-measured
     /// when the row naturally re-enters the render region.
     ///
-    /// When the readable measure also moves with the type size (iPad, where
-    /// the column is capped by a `@ScaledMetric` width), this rescale
-    /// composes with the per-kind width carry-across in `height(at:)` — two
-    /// stacked estimates. That is accepted: both are provisional, and the
-    /// spacer height stays a pure function of stored state either way.
+    /// When the readable measure also moves with the type size (full-screen
+    /// iPad, where the column is capped by a `@ScaledMetric` width), this
+    /// rescale composes with the per-kind width carry-across in `height(at:)`
+    /// — the reflowing carry divides one point-size ratio back out, which is
+    /// why wrapping kinds rescale by the ratio squared (see
+    /// `RenderBlock.Kind.typeSizeRescaleFactor`).
     mutating func rescale(by factor: CGFloat) {
         guard factor > 0, factor != 1 else { return }
         samples = samples.map { ($0.width, $0.height * factor) }
@@ -131,20 +132,33 @@ extension RenderBlock.Kind {
         }
     }
 
-    /// Whether this block's rendered height tracks the text size. Media
-    /// boxes are sized from pixel attributes or column fractions, so a
-    /// Dynamic Type change leaves them alone; everything else contains
-    /// text that grows (`mediaStrip`'s fixed height is itself a
-    /// `@ScaledMetric`, so it moves too).
+    /// The factor a collapsed row's remembered heights scale by when the
+    /// body point size changes by `ratio` (new ÷ old). Exhaustive on
+    /// purpose, like `heightScaling` above: a new block kind must declare
+    /// how its height answers the text size, or it doesn't compile.
     ///
-    /// Approximate at the margins, by choice: a captioned media block's
-    /// caption grows with the type size, and dimensionless media uses a
-    /// `@ScaledMetric` fallback height — so `false` slightly understates
-    /// those rows after a size change. Same self-correcting-estimate class
-    /// as the width heuristics; exact on natural re-entry.
-    var scalesWithTypeSize: Bool {
-        if case .media = self { return false }
-        return true
+    /// Wrapping text roughly follows `height ∝ pointSize² ÷ width` (each
+    /// line gets taller AND fits fewer characters), so reflowing kinds scale
+    /// by `ratio²` — which also keeps the estimate honest on full-screen
+    /// iPad, where the `@ScaledMetric` readable column widens by ~`ratio`
+    /// and `height(at:)`'s reflowing carry-across divides one `ratio` back
+    /// out. Non-wrapping text (code, table slices, cards, media strips —
+    /// the strip height is itself `@ScaledMetric`) keeps its line structure
+    /// and scales linearly. Media boxes are pixel- or fraction-sized and a
+    /// divider is a hairline plus fixed padding — neither tracks the text
+    /// size. (Captioned media and `@ScaledMetric` fallback boxes make the
+    /// media `1` a slight understatement — the same self-correcting-estimate
+    /// class as the width heuristics; exact on natural re-entry.)
+    func typeSizeRescaleFactor(bodyPointRatio ratio: CGFloat) -> CGFloat {
+        switch self {
+        case .media, .divider:
+            1
+        case .codeBlock, .tableSlice, .card, .mediaStrip:
+            ratio
+        case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
+             .extensionPlaceholder, .unknown:
+            ratio * ratio
+        }
     }
 }
 
