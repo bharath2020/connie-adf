@@ -149,6 +149,13 @@ extension RenderBlock.Kind {
     /// size. (Captioned media and `@ScaledMetric` fallback boxes make the
     /// media `1` a slight understatement — the same self-correcting-estimate
     /// class as the width heuristics; exact on natural re-entry.)
+    ///
+    /// The factor applies to a row's WHOLE remembered height, so a collapsed
+    /// OPEN expand whose body is dominated by media or code is over-scaled
+    /// by up to `ratio²` — the largest error this estimate class can carry,
+    /// since expand bodies are unbounded in height. Position is unaffected
+    /// (the re-anchor holds the top row by identity); only content height
+    /// and scrollbar proportions are off until the row re-enters (ADR §19).
     func typeSizeRescaleFactor(bodyPointRatio ratio: CGFloat) -> CGFloat {
         switch self {
         case .media, .divider:
