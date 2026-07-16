@@ -11,6 +11,9 @@ import UIKit
 ///   `SCROLL_METRICS …` line, then exits after 2s.
 /// - `-searchQuery <text>` runs a settled find-in-page query after loading.
 /// - `-searchUpdates <n>` measures `n` replacements while that query is active.
+/// - `-fontSizeStep <n>` opens the reader with the text-size control at
+///   step `n` (ladder steps relative to the system size), bypassing the
+///   persisted per-document value — so perf gates can run at large sizes.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -21,6 +24,7 @@ struct LaunchOptions: Sendable {
     var autoscroll = false
     var searchQuery: String?
     var searchUpdates = 0
+    var fontSizeStep: Int?
 
     static let none = LaunchOptions(arguments: [])
 
@@ -42,6 +46,9 @@ struct LaunchOptions: Sendable {
             case "-searchUpdates" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 searchUpdates = max(Int(arguments[index]) ?? 0, 0)
+            case "-fontSizeStep" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                fontSizeStep = Int(arguments[index])
             default:
                 break
             }
