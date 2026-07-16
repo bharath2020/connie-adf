@@ -20,9 +20,15 @@ struct ReaderView: View {
     @State private var taskStates: [String: Bool] = [:]
     @State private var searchPresented = false
     @State private var automationStarted = false
+    @State private var fontSizeStep = 0
+    @State private var textSizePresented = false
+    /// The un-overridden size — the override is applied deeper, on
+    /// `ADFDocumentView` only, so this reads the system/app baseline.
+    @Environment(\.dynamicTypeSize) private var systemTypeSize
 
     private let mediaProvider = PlaceholderMediaProvider()
     private let taskStore = TaskStateStore()
+    private let fontSizeStore = FontSizeStore()
 
     init(source: DocumentSource, options: LaunchOptions) {
         self.source = source
@@ -40,6 +46,7 @@ struct ReaderView: View {
                         interactionHandler: handle,
                         taskStates: taskStates,
                         mentionContent: { AnyView(ProfileCard(name: $0)) })
+            .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
             .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
@@ -89,6 +96,22 @@ struct ReaderView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                textSizePresented.toggle()
+            } label: {
+                Label("Text Size", systemImage: "textformat.size")
+            }
+            .popover(isPresented: $textSizePresented) {
+                TextSizeControl(
+                    step: $fontSizeStep,
+                    systemTypeSize: systemTypeSize
+                ) { newStep in
+                    fontSizeStore.setStep(newStep, docKey: source.storageKey)
+                }
+                .presentationCompactAdaptation(.popover)
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 ForEach(model.headings, id: \.id) { heading in
                     Button {
@@ -132,6 +155,9 @@ struct ReaderView: View {
     private func load() {
         guard model.phase == .idle else { return }
         taskStates = taskStore.states(for: source.storageKey)
+        // A launch-argument step bypasses (and never writes) the persisted
+        // value, so automation runs don't disturb the user's choice.
+        fontSizeStep = options.fontSizeStep ?? fontSizeStore.step(for: source.storageKey)
         if hudVisible {
             metrics.start()
         }
