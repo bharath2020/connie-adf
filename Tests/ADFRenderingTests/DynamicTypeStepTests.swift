@@ -28,6 +28,14 @@ struct DynamicTypeStepTests {
         }
     }
 
+    /// `steps` can arrive from unvalidated input (`-fontSizeStep`, a
+    /// persisted value) — extreme values must clamp, not trap.
+    @Test("Extreme step values clamp instead of overflowing")
+    func extremeStepsClamp() {
+        #expect(DynamicTypeSize.large.shifted(by: Int.max) == .accessibility5)
+        #expect(DynamicTypeSize.large.shifted(by: Int.min) == .xSmall)
+    }
+
     @Test("Body point sizes grow strictly along the ladder, 17pt at .large")
     func pointSizesAreMonotonic() {
         let sizes = DynamicTypeSize.allCases.map(\.approximateBodyPointSize)

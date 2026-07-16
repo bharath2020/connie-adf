@@ -77,6 +77,12 @@ struct CollapsedRowHeight {
     /// re-materialization livelocks layout). The estimate is provisional,
     /// like the per-kind width estimates: the exact height is re-measured
     /// when the row naturally re-enters the render region.
+    ///
+    /// When the readable measure also moves with the type size (iPad, where
+    /// the column is capped by a `@ScaledMetric` width), this rescale
+    /// composes with the per-kind width carry-across in `height(at:)` — two
+    /// stacked estimates. That is accepted: both are provisional, and the
+    /// spacer height stays a pure function of stored state either way.
     mutating func rescale(by factor: CGFloat) {
         guard factor > 0, factor != 1 else { return }
         samples = samples.map { ($0.width, $0.height * factor) }
@@ -130,6 +136,12 @@ extension RenderBlock.Kind {
     /// Dynamic Type change leaves them alone; everything else contains
     /// text that grows (`mediaStrip`'s fixed height is itself a
     /// `@ScaledMetric`, so it moves too).
+    ///
+    /// Approximate at the margins, by choice: a captioned media block's
+    /// caption grows with the type size, and dimensionless media uses a
+    /// `@ScaledMetric` fallback height — so `false` slightly understates
+    /// those rows after a size change. Same self-correcting-estimate class
+    /// as the width heuristics; exact on natural re-entry.
     var scalesWithTypeSize: Bool {
         if case .media = self { return false }
         return true

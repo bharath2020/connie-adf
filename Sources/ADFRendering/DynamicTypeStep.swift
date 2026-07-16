@@ -14,6 +14,9 @@ public extension DynamicTypeSize {
     func shifted(by steps: Int) -> DynamicTypeSize {
         let ladder = DynamicTypeSize.allCases
         guard let index = ladder.firstIndex(of: self) else { return self }
+        // Pre-clamp `steps` itself: it can arrive from unvalidated input (a
+        // launch argument, a persisted value), and `index + Int.max` traps.
+        let steps = min(max(steps, -ladder.count), ladder.count)
         return ladder[min(max(index + steps, 0), ladder.count - 1)]
     }
 
