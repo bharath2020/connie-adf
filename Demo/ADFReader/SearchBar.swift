@@ -22,9 +22,15 @@ struct SearchBar: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .focused($isFocused)
-                    .onSubmit { search.next() }
-                    .onChange(of: text) { _, newValue in
-                        search.run(newValue)
+                    // Search only on submit (Return). Re-submitting the same
+                    // query advances to the next match, the way Safari's find
+                    // bar does; a changed query starts a fresh scan.
+                    .onSubmit {
+                        if text == search.query {
+                            search.next()
+                        } else {
+                            search.run(text)
+                        }
                     }
                 if search.isSearching {
                     ProgressView()
@@ -68,7 +74,12 @@ struct SearchBar: View {
         // Caps growth so the field, counter, chevrons, and Done stay on one
         // row at the largest accessibility sizes, the way Safari's find bar does.
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-        .onAppear { isFocused = true }
+        .onAppear {
+            // No keystroke coalescing needed now that search runs on submit;
+            // scan immediately when the user hits Return.
+            search.debounceInterval = .zero
+            isFocused = true
+        }
     }
 
     private var counterText: String {
