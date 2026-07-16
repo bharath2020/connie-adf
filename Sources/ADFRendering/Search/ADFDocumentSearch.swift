@@ -128,13 +128,12 @@ public final class ADFDocumentSearch {
 
     // MARK: Index lifecycle
 
-    func indexAppended(_ chunk: [RenderBlock], theme: ADFTheme) {
+    func indexAppended(_ chunk: [RenderBlock], indexer: SearchIndexer) {
         let previous = indexTask
         let epoch = indexEpoch
         indexTask = Task { [weak self] in
             _ = await previous?.value
             guard !Task.isCancelled else { return }
-            let indexer = SearchIndexer(theme: theme)
             let newItems = await Task.detached(priority: .userInitiated) {
                 chunk.map { block in
                     SearchIndexedItem(
@@ -160,7 +159,7 @@ public final class ADFDocumentSearch {
         upserts: [ItemUpsert],
         removedIDs: [String],
         order: [String]?,
-        theme: ADFTheme
+        indexer: SearchIndexer
     ) async {
         _ = await indexTask?.value
         let wasSearching = isSearching
@@ -168,7 +167,6 @@ public final class ADFDocumentSearch {
         scanGeneration += 1
         isSearching = false
 
-        let indexer = SearchIndexer(theme: theme)
         let indexed = await Task.detached(priority: .userInitiated) {
             upserts.map { upsert in
                 SearchIndexedItem(

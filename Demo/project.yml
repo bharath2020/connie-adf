@@ -19,6 +19,8 @@ targets:
       - package: ADFKit
         product: ADFKit
       - package: ADFKit
+        product: ADFYouTube
+      - package: ADFKit
         product: ADFBeam
     info:
       path: ADFReader/Info.plist

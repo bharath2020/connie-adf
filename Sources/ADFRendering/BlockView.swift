@@ -45,6 +45,8 @@ struct BlockView: View {
             CardBlockView(url: url, title: title, isEmbed: isEmbed)
         case .extensionPlaceholder(let title, let body):
             ExtensionPlaceholderBlockView(title: title, blocks: body)
+        case .custom(let custom):
+            CustomBlockView(block: custom, ownerID: block.id)
         }
     }
 }
@@ -67,7 +69,7 @@ extension RenderBlock.Kind {
             // one visual unit), so slices carry no vertical padding.
             return 0
         case .codeBlock, .panel, .quote, .media, .mediaStrip,
-             .expand, .layoutColumns, .card, .extensionPlaceholder:
+             .expand, .layoutColumns, .card, .extensionPlaceholder, .custom:
             return 8
         }
     }

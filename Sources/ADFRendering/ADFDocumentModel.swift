@@ -67,6 +67,10 @@ public final class ADFDocumentModel {
     @ObservationIgnored let anchors = ScrollAnchorRegistry()
 
     let theme: ADFTheme
+    /// Registered block plugins: matching during preparation (in registration
+    /// order) and view resolution during rendering both read from here — one
+    /// source of truth, so the two can never disagree.
+    @ObservationIgnored let customRenderers: ADFCustomRendererRegistry
 
     @ObservationIgnored private let parser = ADFParser()
     @ObservationIgnored private var loadTask: Task<Void, Never>?
@@ -75,10 +79,21 @@ public final class ADFDocumentModel {
     @ObservationIgnored private var itemPositionByID: [String: Int] = [:]
     @ObservationIgnored private var blockOwnerByID: [String: String] = [:]
 
-    public init(theme: ADFTheme = .default) {
+    public init(
+        theme: ADFTheme = .default,
+        customRenderers: [any ADFCustomBlockRenderer] = []
+    ) {
         self.theme = theme
+        self.customRenderers = ADFCustomRendererRegistry(customRenderers)
         self.search = ADFDocumentSearch()
         self.search.model = self
+    }
+
+    /// The indexer every index build for this document must use — same theme,
+    /// same plugins as the preparer, so expand bodies index exactly what the
+    /// view renders.
+    var searchIndexer: SearchIndexer {
+        SearchIndexer(theme: theme, customPreparers: customRenderers.preparers)
     }
 
     deinit {
@@ -107,7 +122,7 @@ public final class ADFDocumentModel {
         phase = .parsing
 
         let parser = self.parser
-        let preparer = DocumentPreparer(theme: theme)
+        let preparer = DocumentPreparer(theme: theme, customPreparers: customRenderers.preparers)
         // `self` stays weak for the whole stream: holding it strongly across
         // the loop would keep the model (and the detached preparer feeding
         // it) alive after the owner releases it. Each iteration re-checks;
@@ -136,7 +151,7 @@ public final class ADFDocumentModel {
     }
 
     private func append(_ chunk: [RenderBlock]) {
-        search.indexAppended(chunk, theme: theme)
+        search.indexAppended(chunk, indexer: searchIndexer)
         blocks.append(contentsOf: chunk)
         let newIDs = chunk.map(\.id)
         let initialPosition = itemIDs.count
@@ -285,7 +300,7 @@ public final class ADFDocumentModel {
             upserts: upserts,
             removedIDs: removed,
             order: nextIDs,
-            theme: theme
+            indexer: searchIndexer
         )
     }
 
@@ -370,7 +385,7 @@ public final class ADFDocumentModel {
             upserts: upserts,
             removedIDs: [],
             order: nil,
-            theme: theme
+            indexer: searchIndexer
         )
         return true
     }

@@ -39,6 +39,9 @@ public struct RenderBlock: Identifiable, Hashable, Sendable {
         case layoutColumns([PreparedColumn])
         case card(url: String?, title: String?, isEmbed: Bool)
         case extensionPlaceholder(title: String, body: [RenderBlock])
+        /// A node claimed by a registered `ADFCustomBlockPreparer`; drawn by
+        /// the consumer-provided renderer with the matching `rendererID`.
+        case custom(ADFCustomBlock)
         case unknown(typeName: String)
     }
 }

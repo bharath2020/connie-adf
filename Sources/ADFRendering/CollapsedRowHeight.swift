@@ -129,6 +129,17 @@ extension RenderBlock.Kind {
         case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
              .extensionPlaceholder, .unknown:
             .reflowing
+        case .custom(let custom):
+            // The plugin declared its profile at preparation time; map it
+            // onto the same three behaviors the built-in kinds use.
+            switch custom.sizing {
+            case .aspectRatio(_, _, let maxWidth):
+                .proportional(cap: maxWidth.map { CGFloat($0) })
+            case .scaledChrome:
+                .invariant
+            case .reflowingText:
+                .reflowing
+            }
         }
     }
 
@@ -165,6 +176,12 @@ extension RenderBlock.Kind {
         case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
              .extensionPlaceholder, .unknown:
             ratio * ratio
+        case .custom(let custom):
+            switch custom.sizing {
+            case .aspectRatio: 1
+            case .scaledChrome: ratio
+            case .reflowingText: ratio * ratio
+            }
         }
     }
 }
