@@ -67,6 +67,21 @@ struct CollapsedRowHeight {
         }
     }
 
+    /// Carries every remembered height across a Dynamic Type size change as
+    /// an estimate: text reflows at the same width to roughly
+    /// `factor = newBodyPointSize / oldBodyPointSize` times the height.
+    ///
+    /// Rescaling — never clearing — is load-bearing: an empty memo makes
+    /// `DocumentRow` re-materialize the row to measure it, and a type-size
+    /// change hits every collapsed row at once (see §16: mass
+    /// re-materialization livelocks layout). The estimate is provisional,
+    /// like the per-kind width estimates: the exact height is re-measured
+    /// when the row naturally re-enters the render region.
+    mutating func rescale(by factor: CGFloat) {
+        guard factor > 0, factor != 1 else { return }
+        samples = samples.map { ($0.width, $0.height * factor) }
+    }
+
     /// The height to report at `width`: the measured one when this row has
     /// been laid out at that width before, otherwise the newest measurement
     /// carried across by `scaling`.
@@ -108,6 +123,16 @@ extension RenderBlock.Kind {
              .extensionPlaceholder, .unknown:
             .reflowing
         }
+    }
+
+    /// Whether this block's rendered height tracks the text size. Media
+    /// boxes are sized from pixel attributes or column fractions, so a
+    /// Dynamic Type change leaves them alone; everything else contains
+    /// text that grows (`mediaStrip`'s fixed height is itself a
+    /// `@ScaledMetric`, so it moves too).
+    var scalesWithTypeSize: Bool {
+        if case .media = self { return false }
+        return true
     }
 }
 

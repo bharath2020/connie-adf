@@ -121,6 +121,45 @@ struct CollapsedRowHeightTests {
         #expect(RenderBlock.Kind.codeBlock(language: nil, code: "").heightScaling == .invariant)
         #expect(RenderBlock.Kind.listRows([]).heightScaling == .reflowing)
     }
+
+    /// A Dynamic Type change resizes every collapsed row at an unchanged
+    /// width. Samples must NOT be dropped — an empty memo re-materializes
+    /// the row, and re-materializing thousands at once livelocks layout
+    /// (§16). Instead the remembered heights are carried across as scaled
+    /// estimates, corrected when the row naturally re-enters.
+    @Test("A type-size change rescales remembered heights in place")
+    func rescaleScalesEverySample() {
+        var heights = CollapsedRowHeight()
+        heights.record(height: 100, at: 400)
+        heights.record(height: 60, at: 800)
+        heights.rescale(by: 28.0 / 17.0)
+        #expect(!heights.isEmpty)
+        #expect(heights.height(at: 400, scaling: .reflowing) == 100 * (28.0 / 17.0))
+        #expect(heights.height(at: 800, scaling: .reflowing) == 60 * (28.0 / 17.0))
+    }
+
+    @Test("Rescaling by 1 or on an empty memo is a no-op")
+    func rescaleDegenerateCases() {
+        var empty = CollapsedRowHeight()
+        empty.rescale(by: 2)
+        #expect(empty.isEmpty)
+
+        var heights = CollapsedRowHeight()
+        heights.record(height: 100, at: 400)
+        heights.rescale(by: 1)
+        #expect(heights.height(at: 400, scaling: .reflowing) == 100)
+    }
+
+    /// Media boxes are sized from pixel attributes or column fractions —
+    /// text size does not move them, so their spacers must not rescale.
+    @Test("Every block kind declares whether its height tracks the type size")
+    func kindsDeclareTypeSizeResponse() {
+        #expect(!RenderBlock.Kind.media(.stub()).scalesWithTypeSize)
+        #expect(RenderBlock.Kind.codeBlock(language: nil, code: "").scalesWithTypeSize)
+        #expect(RenderBlock.Kind.listRows([]).scalesWithTypeSize)
+        #expect(RenderBlock.Kind.divider.scalesWithTypeSize)
+        #expect(RenderBlock.Kind.mediaStrip([]).scalesWithTypeSize)
+    }
 }
 
 private extension PreparedMedia {
