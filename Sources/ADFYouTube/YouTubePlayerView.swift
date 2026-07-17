@@ -106,20 +106,40 @@ struct YouTubePlayerView: View {
 }
 
 /// Flips `isVisible` as the block enters/leaves the visible scroll region —
-/// same shape as the media views' gate: `.onScrollVisibilityChange` where
-/// available, appear/disappear on the lazy row below iOS 18 / macOS 15.
+/// `.onScrollVisibilityChange` where available, appear/disappear on the lazy
+/// row below iOS 18 / macOS 15.
+///
+/// The write is DEFERRED off the current transaction, never made inline:
+/// visibility callbacks fire during layout passes, and a system scene
+/// snapshot (Home press, app switcher, lock) lays the scene out at alternate
+/// geometry inside ONE CoreAnimation commit — an inline `@State` write from
+/// this callback queues a new SwiftUI transaction into that commit, layout
+/// re-runs, rows shift, visibility flips again, and the commit never
+/// converges (observed live: main thread pinned in
+/// `_performSystemSnapshotWithActions` → `flushTransactions` with
+/// `OnScrollVisibilityGeometryActionBinder` firing every pass). Deferring
+/// lets each commit finish; the equality guard ends the churn once settled.
 private struct VisibilityGate: ViewModifier {
     @Binding var isVisible: Bool
 
     func body(content: Content) -> some View {
         if #available(iOS 18.0, macOS 15.0, *) {
             content.onScrollVisibilityChange(threshold: 0.01) { visible in
-                isVisible = visible
+                deferredSet(visible)
             }
         } else {
             content
-                .onAppear { isVisible = true }
-                .onDisappear { isVisible = false }
+                .onAppear { deferredSet(true) }
+                .onDisappear { deferredSet(false) }
+        }
+    }
+
+    private func deferredSet(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        Task { @MainActor in
+            if isVisible != visible {
+                isVisible = visible
+            }
         }
     }
 }
