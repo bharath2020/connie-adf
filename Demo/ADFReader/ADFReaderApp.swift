@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ADFRendering
 
 /// Launch-argument protocol (consumed by the Task 7 automation harness):
 /// - `-fixture <name>` opens that fixture's reader directly on launch
@@ -25,6 +26,9 @@ struct LaunchOptions: Sendable {
     var searchQuery: String?
     var searchUpdates = 0
     var fontSizeStep: Int?
+    /// PROTOTYPE (throwaway): `-selectionPrototype <fixture>` opens the
+    /// cross-block text-selection prototype screen on that fixture.
+    var selectionPrototypeFixture: String?
 
     static let none = LaunchOptions(arguments: [])
 
@@ -49,6 +53,9 @@ struct LaunchOptions: Sendable {
             case "-fontSizeStep" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 fontSizeStep = Int(arguments[index])
+            case "-selectionPrototype" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                selectionPrototypeFixture = arguments[index]
             default:
                 break
             }
@@ -68,7 +75,22 @@ struct ADFReaderApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack {
-                if let name = options.fixtureName {
+                if let name = options.selectionPrototypeFixture {
+                    // PROTOTYPE (throwaway): cross-block text selection.
+                    if let fixture = Fixture(named: name),
+                       let data = try? Data(contentsOf: fixture.url) {
+                        ADFSelectionPrototypeScreen(
+                            fixtureData: data,
+                            mediaProvider: PlaceholderMediaProvider()
+                        )
+                    } else {
+                        ContentUnavailableView(
+                            "Fixture Not Found",
+                            systemImage: "doc.questionmark",
+                            description: Text("No bundled fixture named \u{201C}\(name).json\u{201D}.")
+                        )
+                    }
+                } else if let name = options.fixtureName {
                     if let fixture = Fixture(named: name) {
                         ReaderView(source: .fixture(fixture), options: options)
                     } else {
