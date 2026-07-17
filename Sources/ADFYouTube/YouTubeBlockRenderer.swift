@@ -28,6 +28,12 @@ public struct YouTubeVideo: Hashable, Sendable {
 public struct YouTubeBlockRenderer: ADFCustomBlockRenderer {
     public let rendererID = "adfkit.youtube"
 
+    /// One coordinator per renderer instance (one per `ADFDocumentModel` in
+    /// normal use): at most one active `WKWebView` at a time — see
+    /// `YouTubePlaybackCoordinator`. A renderer shared across models shares
+    /// the limit, which only strengthens it.
+    private let playback = YouTubePlaybackCoordinator()
+
     public init() {}
 
     // MARK: Claiming (off-main, once per block-level node — stay cheap)
@@ -88,6 +94,8 @@ public struct YouTubeBlockRenderer: ADFCustomBlockRenderer {
     public func content(for value: YouTubeVideo, context: ADFCustomBlockContext) -> some View {
         YouTubePlayerView(
             videoID: value.videoID,
+            blockID: context.blockID,
+            playback: playback,
             cornerRadius: context.theme.containerCornerRadius
         )
     }

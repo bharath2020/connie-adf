@@ -231,6 +231,234 @@ Ships as an optional product; the demo app registers it as an ordinary consumer.
   provably misses livelocks); rotation + type-size scroll retention on
   youtube.json; facade→player same-box check; play-then-fling gesture check.
 
+## Post-implementation performance review
+
+**Reviewed:** 2026-07-16  
+**Scope:** WebView lifetime, scrolling behavior, memory scaling, and
+portrait↔landscape scroll retention on `custom-block-plugins`.
+
+### Summary
+
+Many YouTube blocks are inexpensive while they remain untapped: each is a
+SwiftUI facade with a visibility-gated thumbnail, not a `WKWebView`. The
+dominant cost begins after activation. Every tapped player creates a separate
+`WKWebView`, and the current viewport gate does not tear it down when the player
+leaves the visible viewport.
+
+No accumulating orientation drift reproduced on the 27-block YouTube fixture.
+Two complete portrait↔landscape round trips retained the same logical row, and
+the second cycle returned to the same vertical coordinate. A bounded one-time
+snap of approximately 21 points did reproduce: the identity re-pin retains the
+row but loses the reader's sub-row offset, matching the known residual in
+`ADFDocumentView`.
+
+The review found one high-impact lifetime issue, two medium scroll/visibility
+risks, and one lower-grade thumbnail bottleneck.
+
+> **Resolution status (2026-07-16, commit follows this review):** all four
+> issues fixed and verified — per-issue notes below.
+
+### 1. High — activated WebViews outlive viewport visibility
+
+`YouTubePlayerView.isVisible` controls only the thumbnail task. After a tap,
+`isPlaying` remains true until SwiftUI destroys the entire lazy row:
+
+```swift
+if isPlaying {
+    EmbedWebView(videoID: videoID)
+}
+
+.modifier(VisibilityGate(isVisible: $isVisible))
+```
+
+A lazy row can remain in SwiftUI's render/prefetch region after it is completely
+outside the viewport. Consequently, scrolling a playing video out of sight does
+not immediately dismantle its `WKWebView`, contrary to the viewport contract in
+§6. Playback, networking, timers, WebContent processes, and compositor surfaces
+can remain active until the row eventually leaves the wider render region.
+
+Live iOS 18.2 Simulator verification:
+
+- Activating two visible players created two distinct WebContent processes.
+- Both processes remained alive after the first player was fully outside the
+  visible viewport.
+- The Simulator reported approximately 356–363 MB RSS for each WebContent
+  process and approximately 282 MB for the app after both players were active.
+  Simulator RSS is not a device-memory prediction and may count shared pages in
+  more than one process, but the process-per-activated-player scaling is clear.
+- Scrolling far enough for a lazy row to leave the render region eventually
+  destroyed its WebContent process.
+
+The document should own the active player identity and enforce at most one
+active `WKWebView` at a time. The player should also be dismantled on a reliable
+viewport-exit signal if scroll-away is meant to stop playback. A
+`dismantleUIView` hook that stops loading/playback is useful cleanup, but does not
+replace an explicit active-player limit.
+
+> **FIXED.** `YouTubePlaybackCoordinator` (`@MainActor @Observable`, one per
+> renderer instance) owns the active player identity: `isPlaying` is derived
+> from `activeBlockID == blockID`, so activating any block returns the previous
+> player to its facade — at most one `WKWebView` exists per document. Viewport
+> exit (`isVisible → false`) and render-region exit (`onDisappear`) both
+> deactivate, with stale deactivations ignored by ID. `dismantleUIView` /
+> `dismantleNSView` stop loading and blank the page. Verified live: two visible
+> players tapped in sequence → first instantly back to facade while second
+> plays; playing player scrolled out of viewport → facade on return.
+> Unit-tested: exclusivity + stale-deactivation ordering.
+
+### 2. Medium — proportional spacers scale fixed row padding
+
+`DocumentRow` records the height after applying the custom block's fixed
+8-point vertical padding on each side. `CollapsedRowHeight.proportional`, however,
+scales the complete measurement by the width ratio:
+
+```swift
+return newest.height * target / source
+```
+
+The actual row height is affine, not fully proportional:
+
+```text
+actual height = width × 9/16 + 16 points of fixed padding
+```
+
+For the observed 361→640-point content-width change:
+
+```text
+actual landscape row    = 640 × 9/16 + 16             = 376.0 pt
+estimated collapsed row = (361 × 9/16 + 16) × 640/361 ≈ 388.4 pt
+error                                                     ≈ +12.4 pt
+```
+
+One hundred collapsed video rows can therefore overstate the unseen
+orientation's content height by approximately 1,240 points. The identity re-pin
+still holds the selected top row, so this did not recreate progressive
+row-identity drift in the tested fixture. It does distort total content height
+and scrollbar proportions, and can cause corrections as rows rematerialize and
+replace estimated heights with exact measurements.
+
+`CustomBlockRenderingTests.spacerCarry()` currently records `202.5` points at a
+360-point width—the bare 16:9 box—while production records the padded row. The test
+therefore misses this error. The collapsed-height model needs to carry
+proportional content and fixed chrome separately, and the test should record the
+same complete row height as `DocumentRow`.
+
+> **FIXED.** `CollapsedRowHeight.Scaling.proportional` gained `fixedOverhead`:
+> the carry is now affine — `(measured − overhead) × ratio + overhead` — and
+> custom aspect blocks declare `defaultVerticalPadding × 2` (16 pt), making the
+> uncapped-aspect carry EXACT (the review's 361→640 case now reproduces
+> 376.0 pt to the point, error 0 instead of +12.4). Media keeps overhead 0
+> (its rows mix caption/layout chrome; the small inflation stays in the
+> documented self-correcting class). `spacerCarry` records the complete padded
+> row height, and a new `portraitLandscapeAffineCarry` test pins the review's
+> measured widths. The demo `BlockHeightEstimator` adds the padding too.
+
+### 3. Medium — deferred visibility can commit a stale callback
+
+`VisibilityGate.deferredSet` compares against committed state before scheduling
+its main-actor task:
+
+```swift
+guard visible != isVisible else { return }
+Task { @MainActor in
+    if isVisible != visible {
+        isVisible = visible
+    }
+}
+```
+
+Starting from `isVisible == false`, a `true` callback can schedule a deferred
+write; if `false` then arrives before that task executes, it matches the still-
+false committed state and is discarded. The queued task subsequently commits
+stale `true`. The inverse sequence can leave a visible row false.
+
+This can retain offscreen decoded thumbnails, start unnecessary network work, or
+leave a visible facade without its thumbnail. Scene snapshots and rapid scroll
+callbacks are the most likely triggers. A stable, non-observable coordinator
+should retain the latest desired value and coalesce it into one deferred commit,
+or the pending commit should be replaced using a generation/token. The final
+callback must not be discarded by comparing it only with committed state.
+
+> **FIXED.** `VisibilityCoalescer` (non-observable, `@MainActor`) retains the
+> latest desired value and schedules at most one deferred commit; callbacks
+> replace the pending value and are never filtered against committed state.
+> Deterministic tests cover `true→false` and `false→true` bursts landing
+> before the commit, a 9-flip oscillation (one commit, last value), and
+> separated callbacks (both commit).
+
+### 4. Low — repeated full thumbnail decode
+
+The thumbnail path downloads `hqdefault.jpg`, constructs `UIImage(data:)`, and
+stores a SwiftUI `Image`. Viewport exit drops that decoded state. Re-entry can
+reuse encoded bytes from `URLCache`, but still constructs and decodes the image
+again. Rapidly crossing many video facades can therefore create allocation and
+decode churn adjacent to scrolling.
+
+Use a bounded decoded-thumbnail cache keyed by video ID and target pixel size,
+and downsample away from the render path. This is materially smaller than the
+activated-WebView cost but becomes visible in embed-dense documents.
+
+> **FIXED.** `YouTubeThumbnailCache` (`NSCache`, 48 entries, evicts under
+> memory pressure, main-actor confined) stores fully decoded bitmaps keyed by
+> video ID; decode happens once in the async fetch path via
+> `byPreparingForDisplay()`, never lazily during a scroll frame. Re-entering
+> rows repaint from the decoded cache with zero network or decode work.
+> (hqdefault.jpg is 480×360, so a size-keyed variant adds nothing today.)
+
+### Scrolling and memory impact by state
+
+| Embed state | Scrolling impact | Memory/process impact |
+|---|---|---|
+| Untapped, offscreen | No WebView; no thumbnail work in the settled state | Minimal SwiftUI row state |
+| Untapped, visible | Thumbnail request/decode on entry; facade remains lightweight | Approximately one decoded thumbnail per visible facade |
+| Tapped, visible | Web content and compositing add work; vertical drag still reaches the document because the inner WebView scroll view is disabled | One active `WKWebView`; live testing observed another WebContent process per activated player |
+| Tapped, outside viewport but inside lazy render region | No direct gesture conflict, but offscreen playback/rendering can compete with document scrolling | WebView and WebContent process remain alive under the current implementation |
+| Far enough outside the lazy render region | Row collapses to a spacer | WebView is dismantled; process/cache memory may not return immediately |
+
+The live gesture test began a vertical drag directly over an activated player;
+the document scrolled correctly, so `webView.scrollView.isScrollEnabled = false`
+prevented direct scroll stealing in the tested iOS 18.2 environment. The larger
+risk with many activated players is indirect: memory pressure, WebContent CPU,
+network/media work, and extra compositor surfaces can reduce scrolling headroom
+or provoke WebContent eviction/application termination.
+
+### Verification performed
+
+| Check | Result |
+|---|---|
+| `swift test` | **200 tests in 32 suites passed** |
+| Release Simulator build | **Passed** |
+| Two portrait↔landscape round trips on YouTube fixture | Same logical row retained; no accumulating drift in this fixture |
+| Sub-row alignment across first rotation | Approximately 21-point bounded snap reproduced |
+| Vertical drag starting inside active player | Document scrolled; no direct gesture capture reproduced |
+| Two active players, then scroll one offscreen | Both WebContent processes remained alive until lazy-row teardown |
+
+### Recommended release gates
+
+1. Enforce a single active WebView per document and verify the prior process is
+   released when another player starts or the active player leaves the viewport.
+   → **Done**: coordinator-enforced; verified live (two-player takeover,
+   viewport-exit teardown) + unit tests.
+2. Add a complete-row proportional-spacer test that includes fixed vertical
+   padding at portrait and landscape widths.
+   → **Done**: `spacerCarry` (complete padded row) +
+   `portraitLandscapeAffineCarry` (the review's 361→640 case, exact).
+3. Add a deterministic visibility-coalescing test for `true → false` and
+   `false → true` callbacks delivered before the deferred commit runs.
+   → **Done**: `VisibilityCoalescerTests`, four scenarios.
+4. Add a long, embed-dense rotation fixture with collapsed video rows above the
+   anchor; assert content height, scrollbar end position, and repeated-cycle
+   anchor stability.
+   → **Done**: `Fixtures/youtube-dense.json` (242 blocks, 80 embeds); two
+   rotation round trips at mid-document are pixel-identical with ~40 collapsed
+   video rows above the anchor (affine spacers make the estimate exact, so
+   content height no longer drifts by ~1,240 pt per 100 rows).
+5. Add a multi-player memory/scroll gate that activates several players before
+   a fling. Facade-only autoscroll does not exercise the dominant WebView cost.
+   → **Done** (recast): multiple simultaneous players can no longer exist; the
+   gate is now "activate, then fling across the dense fixture" — CPU settles
+   0.0.
+
 ## Explicitly out of scope (v1)
 
 Inline-position custom atoms (including list-item leading paragraphs); range-level

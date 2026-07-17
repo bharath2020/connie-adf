@@ -13,16 +13,26 @@ import WebKit
 /// is drawn by the library from the claim's declared sizing — this view
 /// fills whatever box it is proposed, and the facade→player swap changes
 /// nothing about the row's geometry.
+///
+/// Player lifetime is coordinator-owned, not row-owned: at most one player
+/// exists per document (activating another block returns this one to its
+/// facade), and leaving the visible viewport deactivates — the web view is
+/// dismantled at viewport exit, not at the much later render-region exit
+/// the lazy stack uses for row teardown.
 struct YouTubePlayerView: View {
     let videoID: String
+    /// The claimed block's stable ID — the playback coordinator's key.
+    let blockID: String
+    let playback: YouTubePlaybackCoordinator
     let cornerRadius: CGFloat
 
-    /// Dies when the row leaves the render region — scroll-away tears the
-    /// player down and playback stops, matching the reader's "off-screen
-    /// rows drop expensive state" rule.
-    @State private var isPlaying = false
     @State private var thumbnail: Image?
     @State private var isVisible = false
+    @State private var visibilityCoalescer = VisibilityCoalescer()
+
+    private var isPlaying: Bool {
+        playback.activeBlockID == blockID
+    }
 
     var body: some View {
         ZStack {
@@ -35,13 +45,26 @@ struct YouTubePlayerView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        .modifier(VisibilityGate(isVisible: $isVisible))
+        .modifier(VisibilityGate(isVisible: $isVisible, coalescer: visibilityCoalescer))
         .task(id: fetchKey) { await loadThumbnailIfNeeded() }
+        .onChange(of: isVisible) { _, visible in
+            // Fully off the visible viewport ⇒ stop playback and dismantle
+            // the web view now (§6: scroll-away stops playback) — the row
+            // itself stays materialized until the render-region exit.
+            if !visible {
+                playback.deactivate(blockID)
+            }
+        }
+        .onDisappear {
+            // Render-region exit destroys the row; release the coordinator
+            // slot so a stale ID can't block the next activation.
+            playback.deactivate(blockID)
+        }
     }
 
     private var facade: some View {
         Button {
-            isPlaying = true
+            playback.activate(blockID)
         } label: {
             ZStack {
                 // The overlay is bounded to the rectangle's size, so the
@@ -81,46 +104,56 @@ struct YouTubePlayerView: View {
 
     private func loadThumbnailIfNeeded() async {
         guard isVisible else {
-            // Off-screen rows drop decoded image state; re-entry reloads
-            // from the URL cache.
+            // Off-screen rows drop decoded image state (§6.5); re-entry
+            // repaints from the decoded cache below, without a re-decode.
             thumbnail = nil
             return
         }
-        guard thumbnail == nil, !isPlaying,
-              let url = YouTubeURL.thumbnailURL(videoID: videoID) else { return }
+        guard thumbnail == nil, !isPlaying else { return }
+        if let cached = YouTubeThumbnailCache.image(for: videoID) {
+            thumbnail = Self.image(from: cached)
+            return
+        }
+        guard let url = YouTubeURL.thumbnailURL(videoID: videoID) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            #if canImport(UIKit)
-            if let image = UIImage(data: data) {
-                thumbnail = Image(uiImage: image)
+            if let decoded = await Self.decodedImage(from: data) {
+                YouTubeThumbnailCache.store(decoded, for: videoID)
+                thumbnail = Self.image(from: decoded)
             }
-            #elseif canImport(AppKit)
-            if let image = NSImage(data: data) {
-                thumbnail = Image(nsImage: image)
-            }
-            #endif
         } catch {
             // Facade stays a black box with a play button — still usable.
         }
+    }
+
+    private static func image(from platformImage: YouTubeThumbnailCache.PlatformImage) -> Image {
+        #if canImport(UIKit)
+        Image(uiImage: platformImage)
+        #elseif canImport(AppKit)
+        Image(nsImage: platformImage)
+        #endif
+    }
+
+    /// Fully decoded, ready-to-draw bitmap — decoding happens here, in the
+    /// async fetch path, never lazily at first draw during a scroll frame.
+    private static func decodedImage(from data: Data) async -> YouTubeThumbnailCache.PlatformImage? {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: data) else { return nil }
+        return await image.byPreparingForDisplay() ?? image
+        #elseif canImport(AppKit)
+        return NSImage(data: data)
+        #endif
     }
 }
 
 /// Flips `isVisible` as the block enters/leaves the visible scroll region —
 /// `.onScrollVisibilityChange` where available, appear/disappear on the lazy
-/// row below iOS 18 / macOS 15.
-///
-/// The write is DEFERRED off the current transaction, never made inline:
-/// visibility callbacks fire during layout passes, and a system scene
-/// snapshot (Home press, app switcher, lock) lays the scene out at alternate
-/// geometry inside ONE CoreAnimation commit — an inline `@State` write from
-/// this callback queues a new SwiftUI transaction into that commit, layout
-/// re-runs, rows shift, visibility flips again, and the commit never
-/// converges (observed live: main thread pinned in
-/// `_performSystemSnapshotWithActions` → `flushTransactions` with
-/// `OnScrollVisibilityGeometryActionBinder` firing every pass). Deferring
-/// lets each commit finish; the equality guard ends the churn once settled.
+/// row below iOS 18 / macOS 15. All writes route through the deferred,
+/// latest-wins `VisibilityCoalescer` — see its doc for why both properties
+/// are load-bearing (snapshot-commit livelock; stale-commit race).
 private struct VisibilityGate: ViewModifier {
     @Binding var isVisible: Bool
+    let coalescer: VisibilityCoalescer
 
     func body(content: Content) -> some View {
         if #available(iOS 18.0, macOS 15.0, *) {
@@ -135,10 +168,9 @@ private struct VisibilityGate: ViewModifier {
     }
 
     private func deferredSet(_ visible: Bool) {
-        guard visible != isVisible else { return }
-        Task { @MainActor in
-            if isVisible != visible {
-                isVisible = visible
+        coalescer.set(visible) { desired in
+            if isVisible != desired {
+                isVisible = desired
             }
         }
     }
@@ -170,6 +202,13 @@ private struct EmbedWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {}
 
+    static func dismantleUIView(_ webView: WKWebView, coordinator: ()) {
+        // Stop media and networking immediately; the process teardown then
+        // isn't at the mercy of WebKit's own cleanup timing.
+        webView.stopLoading()
+        webView.loadHTMLString("", baseURL: nil)
+    }
+
     static func configuration() -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
@@ -196,6 +235,11 @@ private struct EmbedWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {}
+
+    static func dismantleNSView(_ webView: WKWebView, coordinator: ()) {
+        webView.stopLoading()
+        webView.loadHTMLString("", baseURL: nil)
+    }
 }
 #endif
 

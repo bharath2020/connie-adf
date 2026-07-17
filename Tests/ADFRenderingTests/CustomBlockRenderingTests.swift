@@ -63,14 +63,14 @@ struct CustomBlockRenderingTests {
     @Test("aspectRatio sizing maps to width-proportional spacers capped at maxWidth, ignoring text size")
     func aspectRatioMapping() async throws {
         let kind = try await customKind(sizing: .aspectRatio(width: 16, height: 9, maxWidth: 640))
-        #expect(kind.heightScaling == .proportional(cap: 640))
+        #expect(kind.heightScaling == .proportional(cap: 640, fixedOverhead: 16))
         #expect(kind.typeSizeRescaleFactor(bodyPointRatio: 1.3) == 1)
     }
 
     @Test("uncapped aspectRatio tracks the column at any width")
     func uncappedAspect() async throws {
         let kind = try await customKind(sizing: .aspectRatio(width: 16, height: 9))
-        #expect(kind.heightScaling == .proportional(cap: nil))
+        #expect(kind.heightScaling == .proportional(cap: nil, fixedOverhead: 16))
     }
 
     @Test("scaledChrome maps to width-invariant spacers that scale linearly with text")
@@ -88,16 +88,32 @@ struct CustomBlockRenderingTests {
         #expect(kind.typeSizeRescaleFactor(bodyPointRatio: ratio) == ratio * ratio)
     }
 
-    @Test("custom rows collapse like media: proportional carry across widths, exact replay at seen widths")
+    @Test("custom rows carry the COMPLETE row height affinely: the aspect box scales, the fixed padding does not")
     func spacerCarry() async throws {
         let kind = try await customKind(sizing: .aspectRatio(width: 16, height: 9))
         var heights = CollapsedRowHeight()
-        heights.record(height: 202.5, at: 360)
-        // Unseen width: carried proportionally (16:9 of the new width).
-        #expect(heights.height(at: 720, scaling: kind.heightScaling) == 405)
+        // Record what DocumentRow measures: the 16:9 box PLUS the row's
+        // 8 pt top + bottom vertical padding.
+        heights.record(height: 360 * 9 / 16 + 16, at: 360)
+        // Unseen width: only the box scales; the padding carries unchanged —
+        // the affine carry is exact for an uncapped aspect box.
+        #expect(heights.height(at: 720, scaling: kind.heightScaling) == CGFloat(720) * 9 / 16 + 16)
         // Type size change: a video box does not track the text.
         heights.rescale(by: kind.typeSizeRescaleFactor(bodyPointRatio: 1.5))
-        #expect(heights.height(at: 360, scaling: kind.heightScaling) == 202.5)
+        #expect(heights.height(at: 360, scaling: kind.heightScaling) == CGFloat(360) * 9 / 16 + 16)
+    }
+
+    @Test("the portrait-to-landscape carry matches the real landscape row height")
+    func portraitLandscapeAffineCarry() async throws {
+        // The review's measured case: 361 pt portrait column → 640 pt
+        // landscape column. A whole-measurement proportional carry
+        // overstated the landscape row by ~12.4 pt per collapsed video row.
+        let kind = try await customKind(sizing: .aspectRatio(width: 16, height: 9))
+        var heights = CollapsedRowHeight()
+        heights.record(height: CGFloat(361) * 9 / 16 + 16, at: 361)
+        let carried = try #require(heights.height(at: 640, scaling: kind.heightScaling))
+        let actualLandscapeRow = CGFloat(640) * 9 / 16 + 16
+        #expect(abs(carried - actualLandscapeRow) < 0.001)
     }
 }
 

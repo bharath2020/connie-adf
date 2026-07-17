@@ -1,0 +1,2507 @@
+{
+ "version": 1,
+ "type": "doc",
+ "content": [
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 1
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Embed-dense rotation gauntlet"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Eighty sections, each with prose and a 16:9 video embed \u2014 collapsed video rows above and below every anchor position, for rotation/content-height verification."
+    }
+   ]
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 1"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 1: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 2"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 2: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 3"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 3: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 4"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 4: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 5"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 5: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 6"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 6: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 7"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 7: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 8"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 8: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 9"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 9: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 10"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 10: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 11"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 11: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 12"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 12: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 13"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 13: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 14"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 14: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 15"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 15: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 16"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 16: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 17"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 17: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 18"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 18: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 19"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 19: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 20"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 20: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 21"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 21: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 22"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 22: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 23"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 23: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 24"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 24: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 25"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 25: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 26"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 26: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 27"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 27: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 28"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 28: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 29"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 29: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 30"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 30: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 31"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 31: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 32"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 32: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 33"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 33: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 34"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 34: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 35"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 35: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 36"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 36: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 37"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 37: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 38"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 38: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 39"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 39: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 40"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 40: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 41"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 41: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 42"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 42: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 43"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 43: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 44"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 44: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 45"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 45: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 46"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 46: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 47"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 47: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 48"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 48: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 49"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 49: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 50"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 50: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 51"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 51: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 52"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 52: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 53"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 53: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 54"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 54: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 55"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 55: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 56"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 56: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 57"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 57: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 58"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 58: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 59"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 59: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 60"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 60: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 61"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 61: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 62"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 62: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 63"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 63: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 64"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 64: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 65"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 65: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 66"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 66: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 67"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 67: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 68"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 68: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 69"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 69: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 70"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 70: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 71"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 71: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 72"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 72: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 73"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 73: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 74"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 74: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 75"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 75: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 76"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 76: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 77"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 77: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 78"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 78: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 79"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 79: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  },
+  {
+   "type": "heading",
+   "attrs": {
+    "level": 2
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Section 80"
+    }
+   ]
+  },
+  {
+   "type": "paragraph",
+   "content": [
+    {
+     "type": "text",
+     "text": "Prose for section 80: the quick brown fox jumps over the lazy dog while the collapsed rows above keep their measured heights truthful across every rotation."
+    }
+   ]
+  },
+  {
+   "type": "embedCard",
+   "attrs": {
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+    "layout": "center",
+    "width": 100,
+    "originalWidth": 640,
+    "originalHeight": 360
+   }
+  }
+ ]
+}

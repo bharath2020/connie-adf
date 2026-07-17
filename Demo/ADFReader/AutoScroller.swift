@@ -151,7 +151,7 @@ enum BlockHeightEstimator {
             switch custom.sizing {
             case .aspectRatio(let width, let height, let maxWidth):
                 let boxWidth = min(maxWidth ?? columnPoints, columnPoints)
-                return height / width * boxWidth
+                return height / width * boxWidth + 16 // + fixed row padding
             case .scaledChrome:
                 return 76
             case .reflowingText:
