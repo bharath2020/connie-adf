@@ -8,9 +8,15 @@ import ADFModel
 /// IDs align exactly (Task 3).
 public struct SearchIndexer: Sendable {
     public let theme: ADFTheme
+    /// Must match the preparer configuration the document was prepared with:
+    /// expand bodies are re-prepared here for indexing, and a plugin claim
+    /// that fires at render time but not at index time (or vice versa)
+    /// desynchronizes block IDs from the corpus.
+    public let customPreparers: [any ADFCustomBlockPreparer]
 
-    public init(theme: ADFTheme) {
+    public init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = []) {
         self.theme = theme
+        self.customPreparers = customPreparers
     }
 
     /// Units for a batch of TOP-LEVEL blocks, in document order.
@@ -92,15 +98,43 @@ public struct SearchIndexer: Sendable {
             // IDs and segment shapes match what the expanded view renders.
             let root = ADFNode(id: "expand", type: "doc", kind: .doc(bodyNodes))
             let document = ADFDocument(version: 1, root: root, issues: [])
-            let bodyBlocks = DocumentPreparer(theme: theme).prepare(document)
+            let bodyBlocks = DocumentPreparer(theme: theme, customPreparers: customPreparers)
+                .prepare(document)
             let chain = expandAncestorIDs + [block.id]
             for child in bodyBlocks {
                 collect(child, topLevelBlockID: topLevelBlockID,
                         expandAncestorIDs: chain, into: &result)
             }
+        case .custom(let custom):
+            appendCustomUnit(custom, ownerID: block.id,
+                             topLevelBlockID: topLevelBlockID,
+                             expandAncestorIDs: expandAncestorIDs, into: &result)
         case .divider, .card, .unknown:
             break // No range-highlightable text (see Global Constraints).
         }
+    }
+
+    /// A custom block's searchable text as one whole-block unit. The single
+    /// part is an ATOM covering the entire text, so matches surface through
+    /// the whole-view tint path (like mention pills) rather than range
+    /// painting — a plugin view may render its text truncated or not at all,
+    /// so character ranges could not be trusted to land anywhere visible.
+    private func appendCustomUnit(
+        _ custom: ADFCustomBlock,
+        ownerID: String,
+        topLevelBlockID: String,
+        expandAncestorIDs: [String],
+        into result: inout [SearchTextUnit]
+    ) {
+        guard let text = custom.searchableText,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        result.append(SearchTextUnit(
+            ownerID: ownerID,
+            topLevelBlockID: topLevelBlockID,
+            expandAncestorIDs: expandAncestorIDs,
+            plainText: text,
+            parts: [.init(source: .atom(id: ownerID), range: 0..<text.count)]
+        ))
     }
 
     private func appendCaption(

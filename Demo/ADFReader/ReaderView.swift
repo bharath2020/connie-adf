@@ -2,6 +2,7 @@ import SwiftUI
 import ADFModel
 import ADFPreparation
 import ADFRendering
+import ADFYouTube
 
 /// Reads one fixture: owns the `ADFDocumentModel`, renders it with
 /// `ADFDocumentView`, and offers a table-of-contents toolbar menu that jumps
@@ -11,7 +12,7 @@ struct ReaderView: View {
     let source: DocumentSource
     let options: LaunchOptions
 
-    @State private var model = ADFDocumentModel()
+    @State private var model = ADFDocumentModel(customRenderers: [YouTubeBlockRenderer()])
     @State private var metrics = FrameMetrics()
     @State private var hudVisible: Bool
     @State private var loadStart: ContinuousClock.Instant?

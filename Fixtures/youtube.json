@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "type": "doc",
+  "content": [
+    { "type": "heading", "attrs": { "level": 1 }, "content": [{ "type": "text", "text": "YouTube embeds" }] },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "Every shape a YouTube link can take in a Confluence page, plus non-YouTube controls that must keep their card rendering." }] },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Embed card" }] },
+    { "type": "embedCard", "attrs": { "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "layout": "center", "width": 100, "originalWidth": 640, "originalHeight": 360 } },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Block card" }] },
+    { "type": "blockCard", "attrs": { "url": "https://youtu.be/9bZkp7q19f0" } },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Paragraph-wrapped smart link" }] },
+    { "type": "paragraph", "content": [{ "type": "inlineCard", "attrs": { "url": "https://www.youtube.com/shorts/aqz-KE-bpKQ" } }] },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Bare link paragraph" }] },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "https://www.youtube.com/watch?v=jNQXAC9IVRw", "marks": [{ "type": "link", "attrs": { "href": "https://www.youtube.com/watch?v=jNQXAC9IVRw" } }] }] },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Inside an expand" }] },
+    { "type": "expand", "attrs": { "title": "Watch later" }, "content": [
+      { "type": "paragraph", "content": [{ "type": "text", "text": "A talk hidden behind a disclosure:" }] },
+      { "type": "embedCard", "attrs": { "url": "https://www.youtube.com/watch?v=8jLOx1hD3_o", "layout": "center", "width": 100, "originalWidth": 640, "originalHeight": 360 } }
+    ] },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Inside a panel" }] },
+    { "type": "panel", "attrs": { "panelType": "info" }, "content": [
+      { "type": "paragraph", "content": [{ "type": "text", "text": "Recommended viewing:" }] },
+      { "type": "paragraph", "content": [{ "type": "inlineCard", "attrs": { "url": "https://music.youtube.com/watch?v=5qap5aO4i9A" } }] }
+    ] },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Inside a table" }] },
+    { "type": "table", "content": [
+      { "type": "tableRow", "content": [
+        { "type": "tableHeader", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Topic" }] }] },
+        { "type": "tableHeader", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Video" }] }] }
+      ] },
+      { "type": "tableRow", "content": [
+        { "type": "tableCell", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Keynote" }] }] },
+        { "type": "tableCell", "content": [{ "type": "embedCard", "attrs": { "url": "https://www.youtube.com/embed/M7lc1UVf-VE", "layout": "center", "width": 100 } }] }
+      ] }
+    ] },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Controls: must stay cards" }] },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "None of the following are YouTube videos, so each keeps its existing rendering." }] },
+    { "type": "blockCard", "attrs": { "url": "https://vimeo.com/76979871" } },
+    { "type": "embedCard", "attrs": { "url": "https://example.atlassian.net/wiki/spaces/DOC/pages/42", "layout": "center", "width": 100 } },
+    { "type": "paragraph", "content": [{ "type": "inlineCard", "attrs": { "url": "https://www.youtube.com/@aChannelPage" } }] },
+    { "type": "paragraph", "content": [
+      { "type": "text", "text": "A YouTube link mid-sentence like " },
+      { "type": "inlineCard", "attrs": { "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } },
+      { "type": "text", "text": " stays an inline chip in v1." }
+    ] },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "The playlist page link below has no video id:" }] },
+    { "type": "blockCard", "attrs": { "url": "https://www.youtube.com/playlist?list=PLBCF2DAC6FFB574DE" } },
+
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Text after the embeds" }] },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "Trailing prose so scroll retention past the players is observable. The quick brown fox jumps over the lazy dog, again and again, filling a few lines of wrapped text to give this row a text-shaped height profile." }] }
+  ]
+}

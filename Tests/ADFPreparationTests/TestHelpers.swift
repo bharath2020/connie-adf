@@ -24,7 +24,8 @@ func collectKinds(_ blocks: [RenderBlock]) -> [RenderBlock.Kind] {
             stack.append(contentsOf: rows.flatMap(\.trailingBlocks))
         case .layoutColumns(let columns):
             stack.append(contentsOf: columns.flatMap(\.blocks))
-        case .richText, .codeBlock, .divider, .media, .mediaStrip, .expand, .card, .unknown:
+        case .richText, .codeBlock, .divider, .media, .mediaStrip, .expand, .card, .custom,
+             .unknown:
             break
         }
     }

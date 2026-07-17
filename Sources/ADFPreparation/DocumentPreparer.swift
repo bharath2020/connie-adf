@@ -11,9 +11,18 @@ public struct DocumentPreparer: Sendable {
     public let theme: ADFTheme
     private let engine: BlockPreparer
 
-    public init(theme: ADFTheme) {
+    /// `customPreparers` are consulted for every block-level node before the
+    /// built-in mapping, in registration order (first claim wins). The SAME
+    /// list must configure every preparer built for one document — initial
+    /// load, expand bodies, and search indexing — or a claimed node inside an
+    /// expand renders differently from how it was indexed.
+    public init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = []) {
         self.theme = theme
-        self.engine = BlockPreparer(theme: theme, composer: InlineComposer(theme: theme))
+        self.engine = BlockPreparer(
+            theme: theme,
+            composer: InlineComposer(theme: theme),
+            customPreparers: customPreparers
+        )
     }
 
     public func prepare(_ doc: ADFDocument) -> [RenderBlock] {
@@ -50,10 +59,29 @@ public struct DocumentPreparer: Sendable {
 struct BlockPreparer: Sendable {
     let theme: ADFTheme
     let composer: InlineComposer
+    var customPreparers: [any ADFCustomBlockPreparer] = []
 
     /// Maps one node to zero or more prepared blocks (tables emit several
     /// slices; transparent containers emit their children's blocks).
+    ///
+    /// Custom-block plugins are consulted first (except for the `doc` root),
+    /// so a claim intercepts the node everywhere this walk reaches: top
+    /// level, panels, quotes, table cells, list trailing blocks, layout
+    /// columns, bodied extensions, and lazily prepared expand bodies.
     func blocks(for node: ADFNode) -> [RenderBlock] {
+        if case .doc = node.kind {} else {
+            for preparer in customPreparers {
+                if let claim = preparer.claim(for: node) {
+                    // The library stamps the claiming preparer's rendererID,
+                    // so a claim can never reference the wrong renderer.
+                    return [RenderBlock(
+                        id: node.id,
+                        kind: .custom(ADFCustomBlock(rendererID: preparer.rendererID, claim: claim)),
+                        breakout: blockBreakout(of: node.marks)
+                    )]
+                }
+            }
+        }
         switch node.kind {
         case .doc(let children):
             return children.flatMap(blocks(for:))

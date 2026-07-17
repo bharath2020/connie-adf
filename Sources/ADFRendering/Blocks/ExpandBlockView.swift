@@ -16,6 +16,9 @@ struct ExpandBlockView: View {
 
     @Environment(\.adfTheme) private var theme
     @Environment(\.adfDocumentSearch) private var search
+    /// Same plugins as the document's initial prepare — a claimed node inside
+    /// this body must produce the identical block the search index expects.
+    @Environment(\.adfCustomRenderers) private var customRenderers
     /// Fallback when rendered outside ADFDocumentView (previews): behaves
     /// like the old private state.
     @State private var localExpanded = false
@@ -100,7 +103,15 @@ struct ExpandBlockView: View {
         guard preparedBody == nil else { return }
         let root = ADFNode(id: "expand", type: "doc", kind: .doc(bodyNodes))
         let document = ADFDocument(version: 1, root: root, issues: [])
-        let preparer = DocumentPreparer(theme: theme)
+        // Model-first: the model's registry is what the initial prepare and
+        // the search index used, so this body must use it too. The
+        // environment registry is only a fallback for model-less previews.
+        let preparer = DocumentPreparer(
+            theme: theme,
+            customPreparers: model?.customRenderers.preparers
+                ?? customRenderers?.preparers
+                ?? []
+        )
         var blocks: [RenderBlock] = []
         for await chunk in preparer.prepareStream(document, chunkSize: 50) {
             blocks.append(contentsOf: chunk)

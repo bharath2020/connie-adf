@@ -127,6 +127,7 @@ public struct ADFDocumentView: View {
             }
         }
         .environment(\.adfTheme, model.theme)
+        .environment(\.adfCustomRenderers, model.customRenderers)
         .environment(\.adfMediaProvider, mediaProvider)
         .environment(\.adfTableScrollSync, tableScrollSync)
         .environment(\.adfInteractionHandler, interactionHandler)

@@ -147,6 +147,17 @@ enum BlockHeightEstimator {
         case .card:
             return 76
 
+        case .custom(let custom):
+            switch custom.sizing {
+            case .aspectRatio(let width, let height, let maxWidth):
+                let boxWidth = min(maxWidth ?? columnPoints, columnPoints)
+                return height / width * boxWidth + 16 // + fixed row padding
+            case .scaledChrome:
+                return 76
+            case .reflowingText:
+                return bodyLinePoints * 3
+            }
+
         case .extensionPlaceholder(_, let body):
             return body.reduce(56) { $0 + height(of: $1.kind) }
 

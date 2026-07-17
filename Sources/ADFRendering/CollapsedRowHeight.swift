@@ -32,8 +32,13 @@ struct CollapsedRowHeight {
         /// `cap`, the width past which the box stops growing (media never
         /// upscales beyond its explicit or intrinsic pixel width). `nil`
         /// means the box tracks the column at any width (fraction-width
-        /// media).
-        case proportional(cap: CGFloat?)
+        /// media). `fixedOverhead` is the part of the measured row height
+        /// that does NOT scale with width (the row's vertical padding): the
+        /// measured height is affine (`box(width) + overhead`), so carrying
+        /// the whole measurement proportionally would inflate the overhead
+        /// by the width ratio — ~12 pt per row portrait→landscape, an error
+        /// that multiplies across every collapsed row.
+        case proportional(cap: CGFloat?, fixedOverhead: CGFloat)
         /// Fixed height, or horizontally scrollable (code, table slices,
         /// dividers, link cards, media strips): width does not move the
         /// height.
@@ -102,14 +107,18 @@ struct CollapsedRowHeight {
         switch scaling {
         case .invariant:
             return newest.height
-        case .proportional(let cap):
+        case .proportional(let cap, let fixedOverhead):
             // Clamp both widths at the cap: past it the box no longer grows,
             // so the height only responds to the capped portion of a width
             // change (measured and target both above the cap ⇒ unchanged).
+            // Only the content portion scales; the fixed overhead (vertical
+            // row padding) carries across unchanged — for an uncapped
+            // aspect box the affine carry is exact, not an estimate.
             let target = min(width, cap ?? .infinity)
             let source = min(newest.width, cap ?? .infinity)
             guard source > 0 else { return newest.height }
-            return newest.height * target / source
+            let content = max(newest.height - fixedOverhead, 0)
+            return content * target / source + fixedOverhead
         case .reflowing:
             return newest.height * newest.width / width
         }
@@ -120,7 +129,13 @@ extension RenderBlock.Kind {
     var heightScaling: CollapsedRowHeight.Scaling {
         switch self {
         case .media(let media):
-            .proportional(cap: media.maxWidthCap)
+            // Media keeps the historical whole-row carry (overhead 0): its
+            // rows mix box, caption, and layout-dependent padding, so a
+            // single fixed overhead would be a guess — the small padding
+            // inflation stays in the documented self-correcting-estimate
+            // class. Custom aspect blocks below carry their known fixed
+            // padding exactly instead.
+            .proportional(cap: media.maxWidthCap, fixedOverhead: 0)
         case .codeBlock, .tableSlice, .divider, .card, .mediaStrip:
             // `mediaStrip` is a horizontally scrolling strip of fixed-height
             // thumbnails (`MediaStripView`), so like code and table slices
@@ -129,6 +144,23 @@ extension RenderBlock.Kind {
         case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
              .extensionPlaceholder, .unknown:
             .reflowing
+        case .custom(let custom):
+            // The plugin declared its profile at preparation time; map it
+            // onto the same three behaviors the built-in kinds use. The
+            // aspect box's measured row height includes the row's fixed
+            // vertical padding (`defaultVerticalPadding` top + bottom),
+            // which must not scale with the width ratio.
+            switch custom.sizing {
+            case .aspectRatio(_, _, let maxWidth):
+                .proportional(
+                    cap: maxWidth.map { CGFloat($0) },
+                    fixedOverhead: defaultVerticalPadding * 2
+                )
+            case .scaledChrome:
+                .invariant
+            case .reflowingText:
+                .reflowing
+            }
         }
     }
 
@@ -165,6 +197,12 @@ extension RenderBlock.Kind {
         case .richText, .listRows, .panel, .quote, .expand, .layoutColumns,
              .extensionPlaceholder, .unknown:
             ratio * ratio
+        case .custom(let custom):
+            switch custom.sizing {
+            case .aspectRatio: 1
+            case .scaledChrome: ratio
+            case .reflowingText: ratio * ratio
+            }
         }
     }
 }
