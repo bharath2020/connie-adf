@@ -42,6 +42,25 @@ public enum YouTubeURL {
         URL(string: "https://www.youtube-nocookie.com/embed/\(videoID)?autoplay=1&playsinline=1")
     }
 
+    /// Origin the embed page must be loaded under. YouTube refuses playerless
+    /// requests (Error 153: no referer), so the player is loaded as an iframe
+    /// HTML string with this as `baseURL` rather than as a bare URL request.
+    public static let embedPageBaseURL = URL(string: "https://www.youtube-nocookie.com")
+
+    /// Minimal page hosting the embed iframe edge-to-edge.
+    public static func embedHTML(videoID: String) -> String {
+        """
+        <!doctype html><html><head>
+        <meta name="viewport" content="initial-scale=1, maximum-scale=1">
+        <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}
+        iframe{position:absolute;inset:0;width:100%;height:100%;border:0}</style>
+        </head><body>
+        <iframe src="\(embedURL(videoID: videoID)?.absoluteString ?? "")"
+          allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+        </body></html>
+        """
+    }
+
     private static func isYouTubeHost(_ host: String) -> Bool {
         host == "youtube.com"
             || host.hasSuffix(".youtube.com")

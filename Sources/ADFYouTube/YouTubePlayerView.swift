@@ -139,9 +139,12 @@ private struct EmbedWebView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.scrollView.isScrollEnabled = false
-        if let url = YouTubeURL.embedURL(videoID: videoID) {
-            webView.load(URLRequest(url: url))
-        }
+        // An iframe page with a baseURL, not a bare URL request: YouTube
+        // requires a referer for embedded playback (Error 153 without one).
+        webView.loadHTMLString(
+            YouTubeURL.embedHTML(videoID: videoID),
+            baseURL: YouTubeURL.embedPageBaseURL
+        )
         return webView
     }
 
@@ -165,9 +168,10 @@ private struct EmbedWebView: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.mediaTypesRequiringUserActionForPlayback = []
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        if let url = YouTubeURL.embedURL(videoID: videoID) {
-            webView.load(URLRequest(url: url))
-        }
+        webView.loadHTMLString(
+            YouTubeURL.embedHTML(videoID: videoID),
+            baseURL: YouTubeURL.embedPageBaseURL
+        )
         return webView
     }
 
