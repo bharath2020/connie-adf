@@ -206,6 +206,21 @@ The extension is MV3 with no build step (`pako`/`qrcode-generator` vendored; CSP
 
 ---
 
+## 20. Custom block plugins: preparation-time claims, environment-resolved renderers
+
+**Chosen (2026-07-16):** Consumer-extensible node rendering (first use: YouTube URLs → inline video players, `ADFYouTube` target) is a two-phase plugin: a `Sendable` matcher (`ADFCustomBlockPreparer.claim(for:)`) runs inside the detached prepare walk and emits a value-only descriptor (`RenderBlock.Kind.custom(ADFCustomBlock)`); the consumer view (`ADFCustomBlockRenderer`, typed `Value` payload) resolves at render time from a model-owned registry injected via the environment. Design spec: `docs/superpowers/specs/2026-07-16-custom-block-plugins-design.md` (adversarially panel-reviewed before implementation).
+
+- **The split is forced by the §-Kind rules:** Kind payloads are closure-free Hashable values (rows diff cheaply, preparation is off-main), so registration can't ride in the block — it follows the `ADFMediaProvider` environment pattern. The claim loop stamps `rendererID` from the claiming preparer (internal `ADFCustomBlock` init), so a claim can never reference the wrong renderer.
+- **Sizing is declared, and the library draws it:** `ADFCustomBlockSizing` maps onto the three existing spacer profiles (`aspectRatio`→proportional+factor-1, `scaledChrome`→invariant+ratio, `reflowingText`→reflowing+ratio²); for `aspectRatio` the `CustomBlockView` leaf applies the box itself, so declared profile and rendered geometry agree by construction (the mediaStrip-misclassification lesson).
+- **Configuration is model-owned by construction:** `ADFDocumentModel` holds the renderer list; `load()`, both search-index entry points (which now receive a prebuilt `SearchIndexer` instead of constructing one from `theme`), the indexer's internal expand-body re-prepare, and `ExpandBlockView` (model-first, environment fallback for previews) all draw from it — index and render can't drift.
+- **Search is atom-model + WYSIWYG:** `searchableText` becomes one whole-block atom unit (tint + arrival flash behind the standard `isActive`-first gate; `currentAtomIDs`/`atomIDs`, never spans, never the aggregate `highlights`). Contract: contribute only text the view renders. The YouTube plugin contributes `nil` (a thumbnail renders no URL text).
+- **AnyView stays inside one leaf:** the lazy item's outer type remains `DocumentRow`'s (memcmp-diffable, skipped during scroll); the erased type is the renderer's fixed `Content` resolved from an immutable registry. `CustomBlockView` must remain a case of `BlockView`'s switch — never a row wrapper (§8 `buildLimitedAvailability` lesson).
+- **Facade discipline for heavy embeds:** no WKWebView/network in a scrolling row — visibility-gated thumbnail, player only on tap, identical box both sides of the swap, `scrollView.isScrollEnabled = false` so document flings pass through. YouTube embeds must load as iframe HTML with a `baseURL` (bare embed-URL requests fail with Error 153: no referer).
+- **Un-claimable in v1 (inline positions):** atoms mid-paragraph and list-item LEADING paragraphs (`ListPreparer` composes those inline before `blocks(for:)` runs) — a bullet list of video links renders chips. Future async upgrades (oEmbed titles) must ride `model.apply(_:revision:)` AND a document generation key (structural IDs recur across documents).
+- **Measured (2026-07-16, iPhone 16 sim, iOS 18.2, Release):** stress-5k autoscroll 5.71 ms/s vs same-day main baseline 5.62 ms/s (noise-equivalent; the claim loop costs ~8 ns/consult measured); first chunk 62 ms both; fling-burst CPU settles 0.0 on stress-5k and on the youtube fixture (video facades in the swipe path); rotation round-trip over video blocks pixel-identical; +3 type-size keeps video boxes column-tracking while text scales; expand-open lazily prepares its video via the shared plugin config; inline playback verified end-to-end (facade → tap → playing embed in the identical box). 200 package tests (28 new) pass.
+
+---
+
 ## Summary of measurement-driven reversals
 
 | Initial choice | Measured problem | Final choice |
