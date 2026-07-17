@@ -8,17 +8,32 @@ import WebKit
 /// when the reader taps play.
 ///
 /// The facade discipline is what keeps the scroll gates green: rows must be
-/// cheap to materialize, so no web view (and no network fetch) exists until
-/// the block is visible (thumbnail) or tapped (player). The 16:9 box itself
-/// is drawn by the library from the claim's declared sizing — this view
-/// fills whatever box it is proposed, and the facade→player swap changes
-/// nothing about the row's geometry.
+/// cheap to materialize, so no web view exists until the reader taps play.
+/// The 16:9 box itself is drawn by the library from the claim's declared
+/// sizing — this view fills whatever box it is proposed, and the
+/// facade→player swap changes nothing about the row's geometry.
+///
+/// **Scroll visibility writes NO view state — by hard-won design.** Two
+/// livelocks came from binding `@State` to `onScrollVisibilityChange` here:
+/// an inline write queued transactions into a scene-snapshot commit that
+/// then never converged, and a deferred write turned boundary oscillation
+/// into an endless every-runloop-turn relayout (each commit shifts lazy
+/// placement, the binder fires with the opposite value, the deferred write
+/// schedules the next turn — 100 % CPU across commits). So:
+/// - The thumbnail's lifetime is the ROW's lifetime (`.task` starts on
+///   materialization, dies on render-region exit like every block's state);
+///   thumbnails are ~20 KB and the decoded cache makes re-entry free, so
+///   viewport-level gating buys nothing.
+/// - Visibility feeds ONLY player teardown, via a callback that calls
+///   `deactivate` — idempotent after the first call (the coordinator writes
+///   observable state only while this block is the active player), so it
+///   can never sustain a feedback loop, and it is deferred off the layout
+///   transaction so it can never extend a snapshot commit.
 ///
 /// Player lifetime is coordinator-owned, not row-owned: at most one player
 /// exists per document (activating another block returns this one to its
-/// facade), and leaving the visible viewport deactivates — the web view is
-/// dismantled at viewport exit, not at the much later render-region exit
-/// the lazy stack uses for row teardown.
+/// facade), leaving the visible viewport deactivates, and render-region
+/// exit deactivates on teardown.
 struct YouTubePlayerView: View {
     let videoID: String
     /// The claimed block's stable ID — the playback coordinator's key.
@@ -27,8 +42,6 @@ struct YouTubePlayerView: View {
     let cornerRadius: CGFloat
 
     @State private var thumbnail: Image?
-    @State private var isVisible = false
-    @State private var visibilityCoalescer = VisibilityCoalescer()
 
     private var isPlaying: Bool {
         playback.activeBlockID == blockID
@@ -45,19 +58,12 @@ struct YouTubePlayerView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        .modifier(VisibilityGate(isVisible: $isVisible, coalescer: visibilityCoalescer))
-        .task(id: fetchKey) { await loadThumbnailIfNeeded() }
-        .onChange(of: isVisible) { _, visible in
-            // Fully off the visible viewport ⇒ stop playback and dismantle
-            // the web view now (§6: scroll-away stops playback) — the row
-            // itself stays materialized until the render-region exit.
-            if !visible {
-                playback.deactivate(blockID)
-            }
-        }
+        .modifier(PlayerViewportGuard(blockID: blockID, playback: playback))
+        .task { await loadThumbnailIfNeeded() }
         .onDisappear {
             // Render-region exit destroys the row; release the coordinator
-            // slot so a stale ID can't block the next activation.
+            // slot so a stale ID can't block the next activation. (Also the
+            // pre-iOS 18 teardown path, where no visibility feed exists.)
             playback.deactivate(blockID)
         }
     }
@@ -93,22 +99,9 @@ struct YouTubePlayerView: View {
 
     // MARK: Thumbnail
 
-    private struct FetchKey: Equatable {
-        var isVisible: Bool
-        var videoID: String
-    }
-
-    private var fetchKey: FetchKey {
-        FetchKey(isVisible: isVisible, videoID: videoID)
-    }
-
+    /// Runs once per row materialization; state (and the decoded image ref)
+    /// dies with the row at render-region exit, like every block's state.
     private func loadThumbnailIfNeeded() async {
-        guard isVisible else {
-            // Off-screen rows drop decoded image state (§6.5); re-entry
-            // repaints from the decoded cache below, without a re-decode.
-            thumbnail = nil
-            return
-        }
         guard thumbnail == nil, !isPlaying else { return }
         if let cached = YouTubeThumbnailCache.image(for: videoID) {
             thumbnail = Self.image(from: cached)
@@ -117,6 +110,7 @@ struct YouTubePlayerView: View {
         guard let url = YouTubeURL.thumbnailURL(videoID: videoID) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
             if let decoded = await Self.decodedImage(from: data) {
                 YouTubeThumbnailCache.store(decoded, for: videoID)
                 thumbnail = Self.image(from: decoded)
@@ -146,32 +140,31 @@ struct YouTubePlayerView: View {
     }
 }
 
-/// Flips `isVisible` as the block enters/leaves the visible scroll region —
-/// `.onScrollVisibilityChange` where available, appear/disappear on the lazy
-/// row below iOS 18 / macOS 15. All writes route through the deferred,
-/// latest-wins `VisibilityCoalescer` — see its doc for why both properties
-/// are load-bearing (snapshot-commit livelock; stale-commit race).
-private struct VisibilityGate: ViewModifier {
-    @Binding var isVisible: Bool
-    let coalescer: VisibilityCoalescer
+/// Tears the active player down when its block leaves the visible viewport
+/// (§6: scroll-away stops playback) — without binding any view state to the
+/// visibility feed. The callback only ever calls `deactivate`, deferred off
+/// the current transaction: a no-op unless this block IS the active player,
+/// so at most ONE observable write follows an activation and the feed can
+/// never drive a relayout loop. Below iOS 18 / macOS 15 there is no
+/// visibility feed; teardown happens at render-region exit (`onDisappear`
+/// in the host view).
+private struct PlayerViewportGuard: ViewModifier {
+    let blockID: String
+    let playback: YouTubePlaybackCoordinator
 
     func body(content: Content) -> some View {
         if #available(iOS 18.0, macOS 15.0, *) {
             content.onScrollVisibilityChange(threshold: 0.01) { visible in
-                deferredSet(visible)
+                if !visible {
+                    let playback = playback
+                    let blockID = blockID
+                    Task { @MainActor in
+                        playback.deactivate(blockID)
+                    }
+                }
             }
         } else {
             content
-                .onAppear { deferredSet(true) }
-                .onDisappear { deferredSet(false) }
-        }
-    }
-
-    private func deferredSet(_ visible: Bool) {
-        coalescer.set(visible) { desired in
-            if isVisible != desired {
-                isVisible = desired
-            }
         }
     }
 }

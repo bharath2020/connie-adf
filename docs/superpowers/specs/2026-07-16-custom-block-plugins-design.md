@@ -205,8 +205,9 @@ Ships as an optional product; the demo app registers it as an ordinary consumer.
 - **Payload:** `YouTubeVideo { videoID }`; sizing `.aspectRatio(width: 16, height: 9)`;
   `searchableText: nil` *(panel: the facade renders a thumbnail, not the URL —
   WYSIWYG; also avoids per-substring duplicate matches inflating counts)*.
-- **View:** lite-embed facade — thumbnail (`i.ytimg.com`, visibility-gated
-  `.task(id:)` fetch, dropped off-screen like §6.5 media) + play button; tap swaps
+- **View:** lite-embed facade — thumbnail (`i.ytimg.com`, fetched once per row
+  materialization into a bounded decoded cache; state dies at render-region
+  exit like all block state) + play button; tap swaps
   in a WKWebView loading
   `youtube-nocookie.com/embed/<id>?autoplay=1&playsinline=1` (inline playback,
   document scroll gestures preserved). Scroll-away tears the player down —
@@ -379,12 +380,18 @@ should retain the latest desired value and coalesce it into one deferred commit,
 or the pending commit should be replaced using a generation/token. The final
 callback must not be discarded by comparing it only with committed state.
 
-> **FIXED.** `VisibilityCoalescer` (non-observable, `@MainActor`) retains the
-> latest desired value and schedules at most one deferred commit; callbacks
-> replace the pending value and are never filtered against committed state.
-> Deterministic tests cover `true→false` and `false→true` bursts landing
-> before the commit, a 9-flip oscillation (one commit, last value), and
-> separated callbacks (both commit).
+> **FIXED — twice, the durable way.** A latest-wins coalescer first replaced
+> the committed-state guard, but a live recurrence proved ANY state bound to
+> the visibility feed is a livelock: with genuine boundary oscillation, each
+> deferred commit shifts lazy placement, the binder fires with the opposite
+> value, and the next commit is scheduled — 100 % CPU across commits (captured
+> with sample(1): `beginTransaction` runloop observer → `flushTransactions` →
+> full lazy placement, every turn). Final fix: visibility writes NO view
+> state. Thumbnails load per row materialization (`.task`, bounded by
+> render-region lifetime like all block state; the decoded cache makes
+> re-entry free), and the visibility feed drives only `deactivate` — a
+> deferred, idempotent coordinator call that writes observable state at most
+> once per activation, so it cannot sustain a loop. The coalescer is deleted.
 
 ### 4. Low — repeated full thumbnail decode
 
@@ -445,7 +452,10 @@ or provoke WebContent eviction/application termination.
    `portraitLandscapeAffineCarry` (the review's 361→640 case, exact).
 3. Add a deterministic visibility-coalescing test for `true → false` and
    `false → true` callbacks delivered before the deferred commit runs.
-   → **Done**: `VisibilityCoalescerTests`, four scenarios.
+   → **Superseded**: visibility no longer commits view state at all (see the
+   issue-3 resolution), so there is nothing to coalesce; the loop-immunity property
+   is structural (deactivate is idempotent per activation), pinned by the
+   coordinator unit tests.
 4. Add a long, embed-dense rotation fixture with collapsed video rows above the
    anchor; assert content height, scrollbar end position, and repeated-cycle
    anchor stability.
