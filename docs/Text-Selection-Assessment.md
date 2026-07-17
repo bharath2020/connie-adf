@@ -15,6 +15,9 @@ re-run), dominated by geometry fidelity, not by selection UI.
 This document is the ADR §2 "revisit only if cross-block selection becomes a
 requirement" revisit.
 
+Tracking: issue [#5](https://github.com/bharath2020/connie-adf/issues/5);
+prototype + this doc live on the `selection-prototype` branch.
+
 ## Why there is no cheap path
 
 - **SwiftUI has no cross-view selection API through the iOS 26 SDK.**

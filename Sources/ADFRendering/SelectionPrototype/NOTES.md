@@ -10,7 +10,8 @@ All, and document-ordered Copy all work over real prepared blocks; scroll
 coexists. Main gap: shadow-TextKit geometry drifts on mark-heavy paragraphs
 (fix: dual-scope attributes at preparation time).
 
-Full assessment: `docs/Text-Selection-Assessment.md`.
+Full assessment: `docs/Text-Selection-Assessment.md`. Tracking: issue #5;
+this prototype is preserved on the `selection-prototype` branch.
 
 Run: `xcrun simctl launch <udid> com.connie.adfreader -selectionPrototype kitchen-sink`
 (demo hook in `Demo/ADFReader/ADFReaderApp.swift`).
