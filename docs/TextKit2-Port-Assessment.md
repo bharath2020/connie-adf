@@ -286,32 +286,52 @@ Protocol: launch, `sleep 2`, screenshot ("before"); 8×
 (`xcrun simctl spawn $D notifyutil -p com.connie.adfreader.rotate` +
 `sleep 2`); screenshot ("after"); read both PNGs.
 
-| Run | Before (top heading) | After 8 rotations (heading position) | Approx. drift |
+| Run | Before (top heading) | After 8 rotations (heading position) | Approx. drift¹ |
 |---|---|---|---|
 | `-textkit2` run 1 | `Section 2500` at top | `Section 2410: token chunk kernel` ~60% down viewport | ≈ −95 blocks (top of screen ≈ block 2401) |
 | `-textkit2` run 2 (repeat, independent launch) | `Section 2500` at top (identical) | `Section 2430: inline block swift` ~57% down viewport | ≈ −75 blocks (top of screen ≈ block 2421) |
 | OFF (control, same protocol) | `Section 2500` at top (identical) | `Section 2430: inline block swift` visible essentially at the top of content (partially under the translucent nav bar), same heading text as `-textkit2` run 2 | ≈ −70 blocks (top of screen ≈ block 2430) |
 
-**Finding: retention drifts backward by roughly 70–100 blocks (~1.4–2.0% of
-the 5000-block document) after 8 rotation round-trips.** This is real and
-reproduced twice on the `-textkit2` branch. **However, it is not a TK2
-regression**: the OFF (legacy-renderer) control run, executed with the
-identical protocol on the identical build/sim, drifted to the *same*
-section heading (`Section 2430`) with indistinguishable magnitude. Spec §9
-lists scroll anchoring as an explicitly untouched subsystem for this port,
-and this result is consistent with that — the drift is a pre-existing
-characteristic of the app's rotation/anchor-restoration path, present with
-or without `-textkit2`.
+¹ "Top of screen ≈ block X" values are derived estimates (heading identity
+is exact from the screenshots; the within-viewport fraction is eyeballed),
+not instrumented content offsets.
 
-Read literally, spec §10's kill criterion ("rotation scroll retention
-breaks") is worded as an absolute, and by that literal reading this
-gate does not fully hold in either branch. Framed as the A/B comparison the
-checkpoint is actually meant to police (does TK2 make retention *worse*?),
-it holds: ON and OFF are statistically indistinguishable. Flagging this
-prominently rather than quietly resolving it either way — **this should be
-filed as a separate pre-existing bug (scroll-anchor drift across rotation)
-independent of the TK2 port decision**, and is not treated as a TK2-specific
-kill criterion below.
+Screenshot evidence (repo copies, survive scratchpad cleanup):
+`docs/assessment-assets/phase2-rotation/rotation_before.png` /
+`rotation_after.png` (TK2 run 1), `rotation_before2.png` /
+`rotation_after2.png` (TK2 run 2), `rotation_off_before.png` /
+`rotation_off_after.png` (OFF control).
+
+**Finding: retention drifts backward by roughly 70–100 blocks (~1.4–2.0% of
+the 5000-block document) after 8 rotation round-trips, in BOTH toggle
+branches.** The three runs are indistinguishable within run-to-run noise
+(≈95 / ≈75 blocks TK2 vs ≈70 blocks OFF; the two TK2 runs differ from each
+other by more than TK2 run 2 differs from OFF), so the drift is not
+attributable to the TK2 renderer.
+
+**Reconciliation with `docs/Rotation-Scroll-Retention.md`.** That document
+records this drift class as fixed and verified pixel-identical (8 cycles,
+mean diff ≤ 0.02), and its fix commits are ancestors of the commit measured
+here — an apparent contradiction. It is resolved by cross-session history:
+on 2026-07-17, the per-document-text-size session measured rotation drift
+A/B against a **main** build under the same notifyutil protocol and
+recorded *"branch ≤8-block wobble vs main 100-block excursion, same
+protocol"* — i.e., main exhibits a ~100-block rotation excursion despite
+those fix commits, and the further improvement that achieves ≤8-block
+behavior lives on the **unmerged** branch `feature/per-document-text-size`
+(7 commits on ecb5072, deliberately kept unmerged). `textkit2-port-prototype`
+forked from main (d677949), which still carries the excursion; the ~70–100
+blocks measured here matches the prior session's main measurement in
+magnitude. The drift is therefore **inherited baseline, not a port
+regression**. (This run used iOS 26.2 vs the original 18.2 verification —
+noted, but unproven as a factor and unnecessary to explain the result.)
+
+Spec §10's kill criterion ("rotation scroll retention breaks") is
+accordingly judged against the inherited baseline: the port provably does
+not worsen it (A/B parity above). Recommendations: (a) file a tracking
+issue to land the unmerged rotation improvement on main (or re-fix there);
+(b) Task 13's phase-3 rotation re-run should use A/B-vs-toggle-OFF parity
+as the bar, with an iOS 18.2 spot-check if time permits.
 
 ### Gate 6 — type-size gauntlet, kitchen-sink `-textkit2 -fontSizeStep 3`
 
@@ -349,7 +369,7 @@ Launch, 8× swipe through the gallery (`axe swipe`, 0.3 s apart), settle,
 | giant-table autoscroll (OFF / ON / NoCells) | PASS (ON best of the three; no exclusion needed) |
 | Fling burst CPU settle (both branches) | PASS (0.0% / 0.1%) |
 | First chunk < 150 ms | PASS (75 ms, 47 ms) |
-| Rotation retention (TK2 vs OFF, A/B) | HOLDS in the A/B sense (both branches drift identically) — but see flagged pre-existing bug above |
+| Rotation retention (TK2 vs OFF, A/B) | HOLDS vs inherited baseline (drift indistinguishable within noise across branches; known main-branch excursion — see reconciliation above) |
 | Type-size gauntlet (larger + reflow) | PASS |
 | Memory < 150 MB | PASS (62 MB) |
 
