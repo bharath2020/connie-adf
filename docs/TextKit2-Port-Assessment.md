@@ -443,22 +443,41 @@ at @3x (÷3 for pt):
 | `NEUTRAL` status capsule | 267px | 267px | **0pt** | |
 | `PURPLE` status capsule | 229px | 229px | **0pt** | |
 | `GREEN` status capsule | 206px | 207px | ~0.3pt | |
-| `attachment` chip | 253px | 245px | ~2.7pt narrower | SF Symbol omitted |
-| `Inline macro` chip | 334px | 310px | ~8pt narrower | SF Symbol omitted |
+| `attachment` chip | 353px | 297px | ~18.7pt narrower | SF Symbol omitted |
+| `Inline macro` chip | 378px | 312px | ~22pt narrower | SF Symbol omitted |
+
+*Chip widths corrected in fix-round 1 (2026-07-18): the original 253/245px
+and 334/310px entries were mis-measured. Re-measured directly from the
+committed PNGs with a Python/PIL column scan — for each row inside the
+chip's vertical band, find the leftmost/rightmost non-white pixel (RGB
+channel < 250; chip fill is a flat `(239,239,240)` vs. page background
+`(255,255,255)`), then take the width that recurs across the flat
+(non-corner) rows (42–44 of ~85 sampled rows land on the same bound, so
+corner rounding is not the source of the number). `attachment`: OFF
+`x=[48,400]`=353px vs. TK2 `x=[48,344]`=297px. `Inline macro`: OFF
+`x=[415,792]`=378px vs. TK2 `x=[358,669]`=312px. Capsule rows were
+re-verified as already correct and are unchanged.*
 
 **Capsules (mention/status/date) land within 0–1pt** at default size — well
 inside the ≤1pt target — with matching baseline, tint, tint-opacity, and
 uppercased status text. Verified again at `-fontSizeStep 3`
 (`t10_*_atoms_step3.png`): pills scale correctly and capsule parity holds.
+**Chips, by contrast, are substantially narrower than the SwiftUI arm until
+SF Symbols are added** — ~18.7pt and ~22pt narrower, not the ~3–8pt
+originally reported. Capsules are pixel-accurate; chips are not until T13/
+phase-4 adds the missing icon glyphs.
 
 ### Known, intentional gaps (recorded per brief Step 5)
 
 - **Chip SF Symbols omitted in v1.** `AtomChip`'s paperclip/link/puzzlepiece
   icons are not drawn by the CG path — chips are rounded-rect + text only.
-  This makes chips **~3–8pt narrower** than the SwiftUI arm (drift scales
-  with the omitted symbol's width: paperclip ≈ 3pt, puzzlepiece ≈ 8pt). Chip
-  left edge and vertical position match. Adding the symbols is a later polish
-  item.
+  This makes chips **substantially narrower** than the SwiftUI arm — ~18.7pt
+  (`attachment`/paperclip) and ~22pt (`Inline macro`/puzzlepiece), not the
+  ~3–8pt originally estimated (see corrected measurement above); the missing
+  icon plus its leading gap accounts for most of a chip's width at this text
+  size. Chip left edge and vertical position match. Adding the symbols is a
+  **higher-priority phase-4 polish item than previously stated** — this is a
+  visible, substantial size discrepancy, not a rounding-error-scale gap.
 - **Atom taps are not hit-tested on the TK2 arm** (mention popovers, inline-
   card links). Those still work on the SwiftUI arm; TK2-arm atom hit-testing
   is phase-4 (selection/geometry) work.
@@ -488,10 +507,26 @@ reports `matches=1` on both arms.
 
 stress-5k has no atoms, so it exercises the `SegmentedTextView` refactor on
 the text path only (which is behaviorally identical for text-only rows —
-they compose to a single `.text` segment either way). TK2 autoscroll:
-`frames=29610 dropped=129 hitchRatioMsPerS=4.37` (0.44% dropped). 12-swipe
-fling burst → app CPU settled to **0.0%** (`top -l 2`). The atom draw path
-itself was fling-stressed on kitchen-sink (alternating flings so the atom
-paragraph repeatedly enters/leaves the viewport, forcing pill redraws): CPU
-settled to **0.0%**, thread count 16→3 — no livelock. There is no atom-heavy
-stress fixture; re-check at T13 if one is added.
+they compose to a single `.text` segment either way).
+
+**Paired autoscroll A/B (fix-round 1, 2026-07-18):** the original report
+cited a lone TK2 number (`hitchRatioMsPerS=4.37`) against a different
+session's OFF baseline — not a valid comparison. Re-measured OFF and TK2
+back-to-back on one dedicated sim (`ADF-Task10-FixR1`, iPhone 16, iOS 18.2),
+same build, same install, same `stress-5k` fixture:
+
+```
+$ xcrun simctl launch --console-pty $D com.connie.adfreader -fixture stress-5k -autoscroll | grep SCROLL_METRICS
+SCROLL_METRICS fixture=stress-5k frames=29814 dropped=19 hitchRatioMsPerS=0.66   (OFF)
+
+$ xcrun simctl launch --console-pty $D com.connie.adfreader -fixture stress-5k -autoscroll -textkit2 | grep SCROLL_METRICS
+SCROLL_METRICS fixture=stress-5k frames=29806 dropped=26 hitchRatioMsPerS=0.87   (TK2)
+```
+
+TK2/OFF hitch ratio = 0.87 / 0.66 ≈ **1.32×** — comfortably inside the ≤2×
+bar. Sim deleted after the run. 12-swipe fling burst → app CPU settled to
+**0.0%** (`top -l 2`). The atom draw path itself was fling-stressed on
+kitchen-sink (alternating flings so the atom paragraph repeatedly
+enters/leaves the viewport, forcing pill redraws): CPU settled to **0.0%**,
+thread count 16→3 — no livelock. There is no atom-heavy stress fixture;
+re-check at T13 if one is added.
