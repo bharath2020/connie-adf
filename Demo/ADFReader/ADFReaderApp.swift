@@ -18,7 +18,11 @@ import UIKit
 ///   the TextKit 2 port assessment (spec §11) — not production UI.
 /// - `-textkit2` renders text leaves (paragraphs, headings, code blocks) with
 ///   the TextKit 2 pipeline instead of SwiftUI `Text` (A/B assessment). Read
-///   once at launch by `TextKit2Flags`, not parsed into `LaunchOptions`.
+///   once at launch by `TextKit2Flags`, not parsed into `LaunchOptions`. The
+///   reader toolbar's "TextKit 2 Renderer" toggle persists the same choice
+///   to `UserDefaults` under `TextKit2Flags.defaultsKey`
+///   (`"adf.textkit2.enabled"`) for device builds without launch args; the
+///   launch arg still wins, and either way the change applies on relaunch.
 /// - `-textkit2NoCells` (with `-textkit2`) keeps table-cell text on the
 ///   SwiftUI path — the giant-table gate fallback.
 ///

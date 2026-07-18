@@ -23,6 +23,11 @@ struct ReaderView: View {
     @State private var automationStarted = false
     @State private var fontSizeStep = 0
     @State private var textSizePresented = false
+    /// Persisted default for `TextKit2Flags.enabled` — read once at next
+    /// launch by the library (§ restart-to-apply), so flipping this toggle
+    /// never changes the LIVE renderer mid-session. `@AppStorage` is fine
+    /// here: this is Demo-only settings UI, not the library's static flag.
+    @AppStorage(TextKit2Flags.defaultsKey) private var textKit2Persisted = false
     /// The un-overridden size — the override is applied deeper, on
     /// `ADFDocumentView` only, so this reads the system/app baseline.
     @Environment(\.dynamicTypeSize) private var systemTypeSize
@@ -126,10 +131,19 @@ struct ReaderView: View {
                             + heading.title)
                     }
                 }
+                // Not gated behind `model.headings.isEmpty` (the Menu below
+                // no longer is either) — the beta toggle must stay reachable
+                // on documents without headings too.
+                Section("TextKit 2 Renderer (Beta)") {
+                    Toggle("Use TextKit 2", isOn: $textKit2Persisted)
+                    Text(TextKit2Flags.enabled ? "Active now: TextKit 2" : "Active now: SwiftUI")
+                    if textKit2Persisted != TextKit2Flags.enabled {
+                        Text("Relaunch the app to apply")
+                    }
+                }
             } label: {
                 Label("Table of Contents", systemImage: "list.bullet")
             }
-            .disabled(model.headings.isEmpty)
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
