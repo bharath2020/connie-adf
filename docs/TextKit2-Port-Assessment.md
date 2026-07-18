@@ -905,10 +905,14 @@ by the final screenshot's file dimensions reading back as portrait,
 | OFF | `Section 2500: spline expand fixture` | `Section 2500: spline expand fixture` | **0 rows** |
 | `-textkit2` | `Section 2500: spline expand fixture` | `Section 2500: spline expand fixture` | **0 rows** |
 
-Both before/after screenshot pairs were read directly and are pixel-
-identical, not just heading-identical — the whole visible paragraph
-(including the highlighted link run and the strikethrough run below it)
-lines up exactly, in both branches. Screenshots:
+Both before/after screenshot pairs were read directly. OFF is byte-level
+pixel-identical below the status bar. ON holds the identical content
+position (0-row drift; the whole visible paragraph, including the
+highlighted link run and the strikethrough run, at the same rows) but is
+not byte-identical: an independent review cross-correlation found a genuine
+~1px vertical text-hinting jitter (best-fit dy=−1, ~20k differing pixels)
+plus incidental clock/home-indicator chrome — sub-line rendering jitter,
+not retention drift. Screenshots:
 `docs/assessment-assets/phase3-final/t13_rot_{off,on}_{before,after}.png`.
 
 **This is a large improvement over Phase 2's Gate 5** (~70–100 block drift,
@@ -1096,6 +1100,15 @@ of intentional or discovered TK2-arm gaps still open at the end of Phase 3:
    evidence only, since `-AppleTextDirection YES` forces a global direction
    override that masked the bug pre-fix too (Task 12). A future narrower
    (per-view) direction override would need this test.
+8. **Accessibility: a `UITextInput`-conforming ancestor collapses its
+   descendants into one opaque `AXTextArea`** for accessibility tooling —
+   recorded as a spike constraint (see the Spike section); the selection
+   controller design in phase 4 must budget dedicated accessibility work,
+   and TK2 rows themselves have no accessibility wiring yet (Task 10 note).
+9. **Copy/edit-menu responder wiring is not free**: `UITextInteraction` on
+   a custom container omits Copy unless `copy(_:)`/`canPerformAction` are
+   explicitly implemented (spike row 8's FAIL) — a required phase-4
+   selection-controller work item, not an optional polish.
 
 **Resolved, not carried forward:** the rotation-retention drift that
 dominated Phase 2's Gate 5 discussion (~70–100 block drift, both branches,
@@ -1117,7 +1130,7 @@ and capsule pills all correctly dynamic-color-adapted, with one small,
 newly-precise (not newly-introduced) color gap in `inlineCard` chip tinting.
 
 **Recommendation: the TK2 port has cleared all phase 1–3 kill/proceed gates.**
-The seven open items in the known-gaps register above are phase-4 polish
+The nine open items in the known-gaps register above are phase-4 work
 work (chip icon+tint, atom hit-testing, pill search-tint, pure-atom-row
 baseline, vertical rhythm, an atom-stress fixture, and a narrower RTL
 regression test) — none of them perf or correctness regressions, none of
