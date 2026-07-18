@@ -26,10 +26,13 @@ import UIKit
 /// - `-textkit2NoCells` (with `-textkit2`) keeps table-cell text on the
 ///   SwiftUI path — the giant-table gate fallback.
 /// - `-selection` (requires `-textkit2`) installs the phase-4 read-only
-///   selection engine: a `UITextInput` + `UITextInteraction(.nonEditable)`
-///   attached to the introspected document scroll view's content container,
-///   over the real TK2 rows. Read once at launch by `SelectionFlags`, not
-///   parsed into `LaunchOptions` (same pattern as `-textkit2`).
+///   selection engine (v3, Task 16b): a transparent, session-scoped overlay
+///   added to the introspected document scroll view's content container. The
+///   overlay is itself the `UITextInput` and hosts
+///   `UITextInteraction(.nonEditable)` + `UITextSelectionDisplayInteraction` +
+///   `UIEditMenuInteraction`; a container long-press starts a selection
+///   session over the real TK2 rows. Read once at launch by `SelectionFlags`,
+///   not parsed into `LaunchOptions` (same pattern as `-textkit2`).
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles

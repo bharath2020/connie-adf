@@ -1394,3 +1394,100 @@ relying on `UITextInteraction`'s own hit-testing of foreign descendants), and
 carry forward the two spike constraints already on record (copy/edit-menu
 responder wiring; accessibility ancestor-collapse) plus the new TK2 text-link
 hit-testing gap surfaced by row 1.
+
+---
+
+## Task 16b: v3 session-scoped overlay
+
+**Kill question:** on the real SwiftUI-hosted TK2 hierarchy, can a
+**session-scoped transparent overlay** — a `UITextInput` that hosts
+`UITextInteraction(.nonEditable)` + `UIEditMenuInteraction` **on itself**, so
+`interaction.view == interaction.textInput` — deliver native text selection
+(the exact `touch.view == interaction.view` condition Task 16 proved
+necessary), while (a) staying inert when idle, (b) starting a session from an
+ancestor long-press over interactive rows, (c) NOT starving scroll during a
+session, and (d) exiting cleanly? Task 16 killed v2 (ancestor-attached
+interaction declines touches that hit-test to descendant rows). v3 is the pivot.
+
+### What was built (behind `-selection` + `-textkit2`, spike quality)
+
+- `SelectionController` (rewritten): a plain `NSObject` coordinator. On
+  `attach(to:scrollView:)` (called by the unchanged `ScrollViewIntrospector`)
+  it inserts a `SelectionOverlayView` into the introspected content container
+  (`PlatformGroupContainer`), spanning content bounds, idle-disabled; installs
+  a `UILongPressGestureRecognizer` (session start) and a `UITapGestureRecognizer`
+  (tap-to-clear) on the **container** (both `cancelsTouchesInView = false`).
+- `SelectionOverlayView: UIView, UITextInput`: hosts `UITextInteraction(.nonEditable)`
+  + `UIEditMenuInteraction` on itself. Crude text model = search corpus joined
+  plain-text; crude linear geometry over `bounds`. Long-press `.began` over a
+  `TextKit2RowUIView` (hit-tested while the overlay is still disabled) → word-
+  select, enable overlay, `becomeFirstResponder`, set `selectedTextRange`,
+  notify `inputDelegate`, present the edit menu. Teardown is a single
+  idempotent `endSession`, reached from both the tap-clear recognizer and a
+  `resignFirstResponder` override (the "resign from any path" contract).
+- **Zero changes** to the SwiftUI arm or any TK2-off path; no `hitTest`
+  overrides anywhere; `reassertAnchor`/`anchors`/`pendingRepins` untouched.
+
+### Two discoveries that shaped v3 (both required, both in-constraints)
+
+1. **`UITextInteraction` alone does not render a programmatically-seeded
+   selection.** With the overlay first responder and `selectedTextRange` set,
+   the selection is *functionally real* — the edit menu presents and **Copy
+   returns the selected word** (`UIPasteboard` = `"paragraph"`) — but **no blue
+   highlight and no drag handles draw**. The header for
+   `UITextSelectionDisplayInteraction` (iOS 17+) states it *"is the component
+   that `UITextInteraction` generally talks to in order to accomplish all
+   selection display."* Installing a `UITextSelectionDisplayInteraction` on the
+   overlay (activated at session start, `setNeedsSelectionUpdate()` on every
+   `selectedTextRange` mutation) is what makes the native highlight + handles
+   appear. This is a **mandatory addition to the v3 stack**, not optional.
+2. **An always-on full-content overlay starves scroll.** With the enabled
+   overlay's default `point(inside:)` (whole bounds), a vertical pan during a
+   session was swallowed — the document would not scroll (row 6 fail). The fix
+   is spec §7's sanctioned override: the overlay's `point(inside:)` owns **only**
+   touches within the selection rects (expanded by a handle-grab margin);
+   everything else falls through to the content, so the scroll view's pan
+   recognizer (an ancestor of both) wins and taps reach checkboxes / the facade.
+   With this, scroll during a session works and the selection UI still renders
+   and drags (the display interaction's subviews draw regardless of hit-testing).
+
+### Arbitration matrix — OBSERVED (kitchen-sink, `-textkit2 -selection`, iPhone 16 / iOS 18.2)
+
+Every screenshot read directly; committed under `docs/assessment-assets/phase4-selection/` (`t16b_` prefix).
+
+| # | Action | Pass condition | Observed | Result |
+|---|---|---|---|---|
+| 1 | idle: tap a task checkbox | toggles (native) | `Write the parser` unchecked→checked on tap. `t16b_01`. | **PASS** |
+| 2 | idle: tap video facade; scroll away | player appears; facade returns | Facade→inline YouTube player (0:00/3:33); scroll away+back → **facade returns** (player released). `t16b_02`, `t16b_02b`. | **PASS** |
+| 3 | idle: pan code block horizontally | scrolls | Idle overlay is `isUserInteractionEnabled=false` ⇒ provably inert; code block behaves as baseline (content fits column, snaps like `-textkit2`-only). `t16b_03`. | **PASS** (baseline-equiv) |
+| 4 | long-press a TK2 paragraph | native handles + highlight + menu | **Blue highlight + two drag handles + edit menu** on the overlay; Copy→`"paragraph"`. **THE kill question — passes.** `t16b_04`. | **PASS** |
+| 5 | drag a handle (axe swipe) | selection extends; rects update | Handle drag moves the endpoint and re-queries `selectionRects` (band relocates; drag also drove content autoscroll). Crude linear geometry limits *visible* multi-block extension — architecturally functional. `t16b_05`. | **PASS** (crude geom) |
+| 6 | vertical swipe during a session | document scrolls (not starved) | With `point(inside:)` pass-through, the document scrolls freely top→panels/table during an active session. **Kill criterion — passes.** `t16b_06a`, `t16b_06b`. | **PASS** |
+| 7 | tap outside selection; then tap checkbox | session clears; idle restored | Tap outside → selection UI gone; then `Write the parser` checked→unchecked. **Kill criterion — passes.** `t16b_07a`, `t16b_07b`. | **PASS** |
+| 8 | edit menu near selection | menu present (Copy not required) | Copy / Look Up / Translate / Share present at the selection. `t16b_04`. | **PASS** |
+| 9 | relaunch w/o `-selection`; TK2 off | no side effects; identical baseline | `-textkit2` only: long-press is a **no-op** (no overlay). No flags: SwiftUI arm renders identically. `t16b_09a`, `t16b_09b`. | **PASS** |
+
+### Verdict: **PROCEED-WITH-CONSTRAINTS**
+
+v3 is **viable on the real hierarchy** — every kill criterion (rows 4, 6, 7)
+passes and idle behavior is untouched. The overlay-as-`interaction.view`
+satisfies Task 16's necessary condition, the ancestor long-press bootstraps a
+session over interactive rows, and the selection is genuinely native (handles,
+highlight, edit menu, working Copy). Proceed to Tasks 17–25 on the v3 overlay,
+carrying these **non-negotiable constraints** the spike surfaced:
+
+1. **`UITextSelectionDisplayInteraction` (iOS 17+) is required** to draw the
+   selection — `UITextInteraction` handles gestures/menu/first-responder but
+   renders nothing for a seeded selection. Keep it activated for the session and
+   `setNeedsSelectionUpdate()` on every selection mutation.
+2. **The overlay's `point(inside:)` must scope ownership to the selection**
+   (spec §7's one sanctioned override) or the enabled overlay starves scroll.
+3. **Real per-row geometry (Task 17) is needed** for faithful selection rects;
+   the crude linear stand-in produces small bands and limits visible cross-block
+   extension (functional, not faithful).
+
+Carry-forward gaps unchanged from Task 16: TK2 text-link hit-testing gap (row 1
+of the Task 16 matrix); copy corpus-exactness (Task 20); accessibility
+ancestor-collapse. Kill-fast §11 step 1 is **cleared** — the selection
+architecture is proven; the port's remaining risk moves to the perf bets
+(§11 step 2, per-row `NSTextLayoutManager` cost).
