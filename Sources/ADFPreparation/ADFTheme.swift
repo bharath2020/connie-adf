@@ -71,6 +71,18 @@ public struct ADFTheme: Sendable, Hashable {
         }
     }
 
+    /// Dual-scope twin of `headingFont(_:)` — must stay in lockstep with it.
+    public func headingSpec(_ level: Int) -> FontSpec {
+        switch min(max(level, 1), 6) {
+        case 1: return FontSpec(style: .title, bold: true)
+        case 2: return FontSpec(style: .title2, bold: true)
+        case 3: return FontSpec(style: .title3, bold: true)
+        case 4: return FontSpec(style: .headline)
+        case 5: return FontSpec(style: .subheadline, bold: true)
+        default: return FontSpec(style: .footnote, bold: true)
+        }
+    }
+
     /// Font for `fontSize: "small"` runs. A semantic text style (not a fixed
     /// point size) so the run scales with Dynamic Type alongside body text —
     /// `.subheadline` is ~0.88× body, matching the intended "slightly smaller".

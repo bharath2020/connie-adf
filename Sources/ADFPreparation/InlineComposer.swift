@@ -40,12 +40,14 @@ public struct InlineComposer: Sendable {
     /// chunks here — at preparation time — so the view layer's wrapping
     /// layout never scans or slices attributed strings inside `body` (§5.3).
     public func compose(_ inline: [ADFNode]) -> [InlineSegment] {
-        compose(inline, baseFont: theme.body)
+        compose(inline, baseFont: theme.body, baseSpec: .body)
     }
 
     /// Composes inline nodes on top of an explicit base font (headings pass
-    /// their level font so unmarked runs inherit it).
-    public func compose(_ inline: [ADFNode], baseFont: Font) -> [InlineSegment] {
+    /// their level font so unmarked runs inherit it). `baseSpec` is the
+    /// dual-scope twin of `baseFont` — headings pass `theme.headingSpec(_:)`
+    /// so unmarked runs bake the matching semantic style.
+    public func compose(_ inline: [ADFNode], baseFont: Font, baseSpec: FontSpec = .body) -> [InlineSegment] {
         var segments: [InlineSegment] = []
         var pending = AttributedString()
 
@@ -63,15 +65,15 @@ public struct InlineComposer: Sendable {
         for node in inline {
             switch node.kind {
             case .text(let string, let marks):
-                pending.append(attributedRun(string, marks: marks, baseFont: baseFont))
+                pending.append(attributedRun(string, marks: marks, baseFont: baseFont, baseSpec: baseSpec))
             case .hardBreak:
-                pending.append(attributedRun("\n", marks: [], baseFont: baseFont))
+                pending.append(attributedRun("\n", marks: [], baseFont: baseFont, baseSpec: baseSpec))
             case .mention(_, let text, _):
                 appendAtom(.mention(text: text), id: node.id)
             case .emoji(let shortName, let text):
                 if let text, !text.isEmpty {
                     // Unicode representation exists — keep it in the text run.
-                    pending.append(attributedRun(text, marks: [], baseFont: baseFont))
+                    pending.append(attributedRun(text, marks: [], baseFont: baseFont, baseSpec: baseSpec))
                 } else {
                     appendAtom(.emoji(shortName: shortName), id: node.id)
                 }
@@ -86,11 +88,11 @@ public struct InlineComposer: Sendable {
             case .inlineExtension(let attrs, _):
                 appendAtom(.inlineExtension(name: Self.extensionName(attrs)), id: node.id)
             case .placeholder(let text):
-                pending.append(placeholderRun(text, baseFont: baseFont))
+                pending.append(placeholderRun(text, baseFont: baseFont, baseSpec: baseSpec))
             default:
                 // A non-inline node in inline position: surface its type
                 // subtly rather than dropping content silently.
-                pending.append(placeholderRun("[\(node.type)]", baseFont: baseFont))
+                pending.append(placeholderRun("[\(node.type)]", baseFont: baseFont, baseSpec: baseSpec))
             }
         }
         flush()
@@ -161,7 +163,7 @@ public struct InlineComposer: Sendable {
             case .text(let text):
                 result.append(text)
             case .atom(let atom, _):
-                result.append(attributedRun(Self.fallbackText(atom), marks: [], baseFont: theme.body))
+                result.append(attributedRun(Self.fallbackText(atom), marks: [], baseFont: theme.body, baseSpec: .body))
             }
         }
         return result
@@ -171,7 +173,7 @@ public struct InlineComposer: Sendable {
 
     private typealias SwiftUIAttrs = AttributeScopes.SwiftUIAttributes
 
-    private func attributedRun(_ string: String, marks: [ADFMark], baseFont: Font) -> AttributedString {
+    private func attributedRun(_ string: String, marks: [ADFMark], baseFont: Font, baseSpec: FontSpec) -> AttributedString {
         var run = AttributedString(string)
 
         var bold = false
@@ -231,6 +233,24 @@ public struct InlineComposer: Sendable {
         }
         if bold { font = font.bold() }
         if italic { font = font.italic() }
+
+        // Dual-scope twin of the font selection above (ADR §19): must stay
+        // in lockstep so the later TextKit renderer resolves identical
+        // semantics from the baked `FontSpec` alone.
+        var spec: FontSpec
+        if isSup != nil {
+            spec = FontSpec(style: .footnote, monospaced: code)
+        } else if code {
+            spec = FontSpec(style: .body, monospaced: true)
+        } else if small {
+            spec = FontSpec(style: .subheadline)
+        } else {
+            spec = baseSpec
+        }
+        if bold { spec.bold = true }
+        if italic { spec.italic = true }
+        run[FontSpecAttribute.self] = spec
+
         if code, background == nil { background = theme.codeBackground }
         // Author highlight fills are fixed colors (typically light pastels);
         // without a textColor mark the scheme default (white in dark mode)
@@ -260,10 +280,11 @@ public struct InlineComposer: Sendable {
     }
 
     /// Grey italic run for `placeholder` nodes and non-inline strays.
-    private func placeholderRun(_ text: String, baseFont: Font) -> AttributedString {
+    private func placeholderRun(_ text: String, baseFont: Font, baseSpec: FontSpec) -> AttributedString {
         var run = AttributedString(text)
         run[SwiftUIAttrs.FontAttribute.self] = baseFont.italic()
         run[SwiftUIAttrs.ForegroundColorAttribute.self] = Color.secondary
+        run[FontSpecAttribute.self] = { var s = baseSpec; s.italic = true; return s }()
         return run
     }
 

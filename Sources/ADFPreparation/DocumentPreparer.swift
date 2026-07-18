@@ -101,7 +101,7 @@ struct BlockPreparer: Sendable {
             return [RenderBlock(
                 id: node.id,
                 kind: .richText(
-                    segments: composer.compose(content, baseFont: font),
+                    segments: composer.compose(content, baseFont: font, baseSpec: theme.headingSpec(level)),
                     style: textStyle(font: font, isHeading: true, level: level, marks: marks)
                 ),
                 breakout: blockBreakout(of: marks)
@@ -116,6 +116,7 @@ struct BlockPreparer: Sendable {
         case .codeBlock(let language, let text, let marks):
             var code = AttributedString(text)
             code[AttributeScopes.SwiftUIAttributes.FontAttribute.self] = theme.code
+            code[FontSpecAttribute.self] = FontSpec(monospaced: true)
             return [RenderBlock(
                 id: node.id,
                 kind: .codeBlock(language: language, code: code),

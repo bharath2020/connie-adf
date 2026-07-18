@@ -1,10 +1,25 @@
 import Foundation
+import Testing
 import ADFModel
 import ADFPreparation
 
 /// Parses an ADF JSON string into a document.
 func parseDoc(_ json: String) async throws -> ADFDocument {
     try await ADFParser().parse(Data(json.utf8))
+}
+
+/// Parses a bracketed inline-node JSON array (e.g. `[{"type":"text",...}]`)
+/// by wrapping it in a minimal doc/paragraph shell and returning the
+/// paragraph's children. Mirrors `InlineComposerTests.inlineContent(of:)`.
+func inlineNodes(json: String) async throws -> [ADFNode] {
+    let doc = try await parseDoc("""
+    {"type":"doc","version":1,"content":[{"type":"paragraph","content":\(json)}]}
+    """)
+    let first = try #require(doc.root.children.first)
+    guard case .paragraph(let content, _) = first.kind else {
+        throw TestFailure("first block is not a paragraph")
+    }
+    return content
 }
 
 /// Recursively collects every `RenderBlock.Kind` in a prepared block tree,
