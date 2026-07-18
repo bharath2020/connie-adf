@@ -1202,3 +1202,195 @@ none of them perf or correctness regressions, none of them block shipping
 the toggle for further internal dogfooding. Backporting the
 rotation-retention fix (`165db39`+`f069ab1`) to `main` independent of this
 port remains recommended, as noted in Phase 2.
+
+## Phase 4 — Task 16: introspected ancestor attachment over the real document (KILL-FAST #1)
+
+**Kill question (spec §7/§10):** the phase-1 spike proved
+`UITextInteraction(.nonEditable)` on an ancestor coexists with descendant
+gestures — but on a *synthetic* `SpikeViewController` (its own `UIScrollView`
++ `UILabel`s, labels non-interactive). Does the same ancestor-attachment model
+deliver text selection when the ancestor is SwiftUI's real `ADFDocumentView`
+scroll-view content container and the descendants are the production
+SwiftUI-hosted, interactive TK2 rows (links, `TaskMarkerView` checkboxes, the
+YouTube facade, `TableScrollSync` code/table h-pans)?
+
+**Verdict: KILLED — fall back to the geometry-oracle overlay (spec §10).**
+The introspection itself works (once placed correctly), but
+`UITextInteraction` attached to the introspected ancestor **does not begin a
+selection over the SwiftUI-hosted TK2 rows**. It also does no harm — the
+descendant gesture ecosystem is fully intact — but a selection engine that
+never selects is non-viable, so the architecture dies here, cheapest, exactly
+as this task was positioned to determine.
+
+### What was built (as committed, brief-faithful)
+
+- `Sources/ADFRendering/TextKit2/Selection/SelectionFlags.swift` — `-selection`
+  (requires `-textkit2`), read once as a launch constant.
+- `.../Selection/ScrollViewIntrospector.swift` — a zero-size, hidden,
+  non-interactive `UIView` (`ProbeView`) that walks `superview` upward to the
+  first `UIScrollView` and takes `scrollView.subviews.first` as the attachment
+  container. No `hitTest` override (spec §7).
+- `.../Selection/SelectionController.swift` — a detached responder conforming
+  to `UITextInput`, crude whole-container geometry, placeholder corpus. Copy/
+  `canPerformAction` intentionally unwired (Task 20).
+- `ADFDocumentView.swift` — installs the probe behind `-selection` at the
+  document-**content** level (see finding #1), and a read-only corpus accessor
+  was added to `ADFDocumentSearch` (`selectionCorpusPlainText`, internal,
+  read-only, no scroll-path/observable write) to back the placeholder model.
+
+### Compiler-forced deviations from the brief's literal code (like the spike's two)
+
+1. **`SelectionController: UIResponder`, not `NSObject`.** The SDK types
+   `UITextInteraction.textInput` as `UIResponder <UITextInput> *`
+   (`UITextInteraction.h`, Xcode 26.3 / iOS 26.2 SDK), so `interaction.textInput
+   = self` does not compile for a plain `NSObject`. `UIResponder` is an
+   `NSObject` subclass and still "not a `UIView`", so the brief's intent (a
+   plain object attached to the container, not an interactive view) holds.
+2. **Probe hosted inside the scroll *content*, not on the `ScrollView`** — see
+   finding #1. The brief's Step-4 snippet placed `.background` on the
+   `ScrollView`; that placement cannot introspect (finding #1), so the probe
+   moved one level in, to a `.background` on the row stack. Still
+   document-container level, never per row (§18 intact — a stable
+   `_ConditionalContent` on a launch constant).
+3. **Edit-menu interaction not added.** Step 2's prose mentions installing a
+   `UIEditMenuInteraction`; the concrete interface + Step 3 list only the
+   `UITextInteraction`, and the spike proved the menu arrives via
+   `UITextInteraction` alone. A second, delegate-less edit-menu interaction
+   would be inert and risk muddying arbitration, so it was omitted (Copy/edit
+   menu is Task 20 regardless).
+
+### Environment
+
+Dedicated sim `ADF-Task16` (**iPhone 16, iOS 18.2**, UDID
+`D427F885-CE35-48A2-B440-37AF95ACD25B`), created for this task, deleted at the
+end. Branch `textkit2-port-prototype`. Demo built via `xcodebuild … build`
+(BUILD SUCCEEDED), launched `-fixture kitchen-sink -textkit2 -selection`.
+`swift test`: **226/226**, 37 suites. Warning baseline unchanged (the two
+`SegmentedTextView.swift` iOS-build concurrency warnings are pre-existing on a
+file this task did not touch; `swift build` is warning-clean). Introspection
+outcomes captured via `os.Logger` (`subsystem com.connie.adfreader`, category
+`selection`/`selectionctl`) read back with `simctl … log show`.
+
+### Finding #1 — `.background` on a SwiftUI `ScrollView` is NOT a descendant of the `UIScrollView`
+
+The brief's literal placement (`.background { … }` on the `ScrollView`) never
+introspects: `ProbeView`'s `superview` chain runs
+
+```
+ProbeView → PlatformViewHost<…ScrollViewIntrospector> → HostingView →
+UIViewControllerWrapperView → UINavigationTransitionView → UILayoutContainerView
+→ PlatformViewHost<…NavigationStackRepresentable> → _UIHostingView<…> →
+UIDropShadowView → UITransitionView → UIWindow
+```
+
+— **no `UIScrollView` anywhere.** SwiftUI hosts a `ScrollView`'s `.background`
+in a separate `PlatformViewHost` that is a sibling *behind* the scroll view,
+not inside it. The upward walk gave up after 12 attempts. Hosting the probe
+inside the scroll **content** (a `.background` on the row stack) makes it a
+genuine descendant, and the walk then succeeds on the first laid-out frame.
+
+### Finding #2 — the correct content container
+
+With the content-level probe, introspection succeeds on attempt 1:
+
+```
+scrollView = HostingScrollView          (SwiftUI's private UIScrollView subclass)
+container  = PlatformGroupContainer      (= scrollView.subviews.first; the content
+                                          host and ancestor of every rendered TK2 row)
+scrollView.subviews = [PlatformGroupContainer, _UIScrollViewScrollIndicator]
+```
+
+So `scrollView.subviews.first` **is** the right container (the brief's
+expectation held); it just is not reachable from a `ScrollView`-level
+`.background`.
+
+### Finding #3 — `UITextInteraction` stays dormant; a detached responder cannot become first responder
+
+Attached to `PlatformGroupContainer` with `interaction.textInput = self`
+(`container.isUserInteractionEnabled = true`, `container.interactions = 1`),
+the interaction installs **0 gesture recognizers**. `UITextInteraction` only
+activates its selection gestures when its `textInput` is the first responder,
+and the detached controller **cannot become one**:
+`becomeFirstResponder() → false`, `isFirstResponder = false` (even with
+`canBecomeFirstResponder = true`) — a `UIResponder` with no responder-chain
+`next` is not reachable in any window's chain. So long-press does nothing; the
+controller's `closestPosition`/`caretRect`/`characterRange` are never called.
+(The placeholder corpus is healthy — `corpus.length = 859`, `hasText = true`,
+`container.bounds = 393×3380` by 3 s post-attach — so an empty document is not
+the cause.)
+
+### Finding #4 — even force-activated, it declines to select over the SwiftUI-hosted rows
+
+Wiring the controller into the chain (`override var next { container }`) +
+proactively calling `becomeFirstResponder()` makes it succeed (`→ true`,
+`isFirstResponder = true`) and `UITextInteraction` then installs its full
+gesture set (**14 recognizers**: `UIVariableDelayLoupeGesture`,
+`UITextTapRecognizer`, `UITextRangeAdjustmentGestureRecognizer`, …). **Yet a
+long-press over a TK2 paragraph still begins no selection** — no
+`closestPosition`/geometry query ever fires, no handles, no edit menu (both an
+`axe touch --down --up --delay` press and a same-point `axe swipe --duration`
+were tried; corpus valid; controller confirmed still first responder with 14
+recognizers at the moment of the press).
+
+A decisive discriminator: a plain `UILongPressGestureRecognizer` added to the
+**same** `PlatformGroupContainer` **does fire** (began→ended) on that exact
+long-press. So touches *do* reach the container — `UITextInteraction`
+specifically declines. The touch hit-tests to the interactive descendant row
+(a `PlatformViewHost` hosting `TextKit2RowUIView`, `isUserInteractionEnabled =
+true`), **not** to `interaction.view`; `UITextInteraction` will not begin a
+selection for a touch that lands on a foreign descendant rather than its own
+text-bearing view. In the spike this never surfaced because the "descendants"
+were `UILabel`s (`isUserInteractionEnabled = false`) whose touches hit-tested
+straight through to the interaction's own view. The production TK2 rows *must*
+be interactive (links, checkboxes, facade), so their host views own the
+hit-test and starve the ancestor interaction. This is precisely spec §10's
+kill condition: *"`UITextInteraction` cannot operate with SwiftUI-hosted
+hit-tested descendants."* (All finding #3/#4 experimental scaffolding —
+`next` override, proactive `becomeFirstResponder`, the probe recognizer,
+verbose tracing — was removed from the committed code; the committed
+controller is the clean brief-faithful baseline that stays dormant.)
+
+### Arbitration matrix — OBSERVED (kitchen-sink, `-textkit2 -selection`, iPhone 16 / iOS 18.2)
+
+Every screenshot below was read directly (`docs/assessment-assets/phase4-selection/`,
+`t16_` prefix). Because the committed interaction is **dormant** (finding #3:
+0 recognizers, never first responder), it is *provably inert* and cannot alter
+any descendant gesture — the descendant rows behave exactly as the
+`-textkit2`-only baseline, verified directly where noted.
+
+| # | Action | Pass condition | Observed | Result |
+|---|---|---|---|---|
+| 1 | tap a link run in a TK2 paragraph | link opens (openURL) | Nothing; no Safari. **Pre-existing, not a selection effect:** `TextKit2RowUIView` is a bare drawing `UIView` — `TextRowContent` sets `.link` only for *tinting* (`TextRowContent.swift:144`), there is no link-tap handler on the TK2 arm at all (extends known-gap #2 to text links). Fails identically without `-selection`. | N/A (pre-existing TK2 gap) |
+| 2 | tap a task checkbox (`TaskMarkerView`) | checkbox toggles | `axe describe-ui` before: `Button "Task"` (unchecked); tap `(34,129)`; after: `Button "Completed task"` — state flipped. `t16_02_checkbox_toggled.png`. | **PASS** |
+| 3 | swipe horizontally over code/table | it pans | Descendant h-scroll responds (code block h-scroll observed transiently; snaps back as it is barely wider than the column). Table h-pan via `axe swipe` is a no-op in **both** arms (a tooling limitation, not selection). Interaction inert ⇒ behaves as baseline. `t16_03_table_inview.png`. | **PASS** (baseline-equivalent) |
+| 4 | long-press over a TK2 paragraph | native selection + handles + edit menu | No highlight, no handles, no menu, no keyboard; `closestPosition` never called (findings #3/#4). `t16_04_longpress_no_selection.png`. | **FAIL** |
+| 5 | drag a handle across two blocks | selection extends across blocks | No selection exists to extend (blocked by #4). | **FAIL** (blocked by #4) |
+| 6 | with selection active, tap the YouTube facade | player opens; selection persists | Facade (`Button "Play YouTube video"`, Rick Astley) → in-place player on tap (`t16_02a_…` → `t16_06_youtube_player.png`). Descendant tap alive. "Selection persists" is untestable — no selection can be active. | PARTIAL (facade PASS; persistence N/A) |
+| 7 | with selection active, pan the table | it pans; selection persists | No selection possible; table pan behaves as baseline (interaction inert). | N/A (no selection) |
+| 8 | vertical swipe on paragraph text | outer scroll scrolls | Document scrolls normally through panels/table/task-list (`t16_08_vertical_scroll.png`); interaction does not steal the fling. | **PASS** |
+
+**Reading of the matrix:** the ancestor attachment is *harmless* (descendant
+taps/scroll — rows 2, 6, 8 — all alive, exactly the coexistence the spike
+promised) but *ineffective* (rows 4, 5 — the selection it exists to provide
+never engages on the real rows). Rows 1/3/6-persist/7 are pre-existing gaps or
+untestable consequences of the row-4 failure, not independent findings.
+
+### Verdict: **KILLED — fall back to the geometry-oracle overlay**
+
+Introspection is solved (`HostingScrollView` → `PlatformGroupContainer`, once
+the probe is content-hosted), and ancestor attachment does not break SwiftUI's
+gesture ecosystem. But `UITextInteraction` **will not drive selection from an
+ancestor** when the touched descendants are independent, interactive
+SwiftUI-hosted `UIView`s — it requires the touch to land on `interaction.view`
+itself, which the (necessarily interactive) TK2 rows own. No in-constraints
+fix exists: forcing first-responder + responder-chain wiring installs the
+recognizers but still does not begin selection (finding #4), and an overlay
+that owned the hit-test would swallow the descendant taps (the sibling-overlay
+failure the spike was built to avoid) or require the `hitTest` override spec §7
+forbids. Per spec §10 this is a valid, cheap kill: **do not build Tasks 17–25
+on ancestor attachment; pursue the geometry-oracle overlay** (a self-owned,
+selection-only surface that draws selection from a geometry oracle rather than
+relying on `UITextInteraction`'s own hit-testing of foreign descendants), and
+carry forward the two spike constraints already on record (copy/edit-menu
+responder wiring; accessibility ancestor-collapse) plus the new TK2 text-link
+hit-testing gap surfaced by row 1.

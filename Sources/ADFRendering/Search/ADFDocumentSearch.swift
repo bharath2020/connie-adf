@@ -58,6 +58,21 @@ public final class ADFDocumentSearch {
     @ObservationIgnored internal weak var model: ADFDocumentModel?
     @ObservationIgnored internal let visibleRows = VisibleRowRegistry()
     @ObservationIgnored private var index = IncrementalSearchIndex()
+
+    /// Read-only plain-text corpus for the phase-4 selection engine's Task-16
+    /// PLACEHOLDER text model: every indexed unit's `plainText`, joined in
+    /// document order (`index.itemOrder → units → plainText`). Reads only —
+    /// no observable write, no scroll-path touch — so it is safe to call from
+    /// the selection controller. Task 18 replaces this consumer with the real
+    /// prefix-sum model, so this accessor is a temporary crutch, not a
+    /// committed find-in-page API (hence `internal`, same module as the
+    /// controller).
+    var selectionCorpusPlainText: String {
+        index.orderedItems
+            .flatMap(\.units)
+            .map(\.plainText)
+            .joined(separator: "\n")
+    }
     @ObservationIgnored private var resultsByItem: [String: SearchIndexedItemResult] = [:]
     @ObservationIgnored private var ownerStores: [String: SearchOwnerHighlights] = [:]
     @ObservationIgnored private var activeOwnerIDs: Set<String> = []

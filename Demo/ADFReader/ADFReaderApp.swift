@@ -25,6 +25,11 @@ import UIKit
 ///   launch arg still wins, and either way the change applies on relaunch.
 /// - `-textkit2NoCells` (with `-textkit2`) keeps table-cell text on the
 ///   SwiftUI path — the giant-table gate fallback.
+/// - `-selection` (requires `-textkit2`) installs the phase-4 read-only
+///   selection engine: a `UITextInput` + `UITextInteraction(.nonEditable)`
+///   attached to the introspected document scroll view's content container,
+///   over the real TK2 rows. Read once at launch by `SelectionFlags`, not
+///   parsed into `LaunchOptions` (same pattern as `-textkit2`).
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles

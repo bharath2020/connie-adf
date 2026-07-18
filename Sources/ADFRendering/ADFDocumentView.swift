@@ -44,6 +44,17 @@ public struct ADFDocumentView: View {
     /// re-pin below never fires for it.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    #if os(iOS)
+    /// The read-only selection controller for this document (phase 4),
+    /// constructed once per view identity ONLY when `-selection` (+`-textkit2`)
+    /// is set — a plain launch constant, so a build without the flag never
+    /// allocates it and the `.background` probe below is a stable
+    /// `_ConditionalContent`, not a per-row `#available`/`AnyView` (§18-safe).
+    /// `@State` for one stable instance per view identity, like the scroll
+    /// registries above; it is never reassigned.
+    @State private var selectionController: SelectionController?
+    #endif
+
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -54,6 +65,14 @@ public struct ADFDocumentView: View {
         self.interactionHandler = interactionHandler
         self.taskStates = taskStates
         self.mentionContent = mentionContent
+        #if os(iOS)
+        // Constructed only with the flag on, so an ordinary build allocates
+        // nothing and the probe below is never installed. Same MainActor
+        // @State-default context the scroll registries above use.
+        _selectionController = State(
+            wrappedValue: SelectionFlags.enabled ? SelectionController(model: model) : nil
+        )
+        #endif
     }
 
     /// TOC jumps use `ScrollViewReader.scrollTo` rather than writing the
@@ -79,6 +98,26 @@ public struct ADFDocumentView: View {
                     .padding(.horizontal, model.theme.spacing * 2)
                     .frame(maxWidth: readableWidth)
                     .frame(maxWidth: .infinity)
+                    // Installs the selection controller behind `-selection` at
+                    // the document-CONTENT level (one probe over the whole
+                    // LazyVStack, never per row). It MUST live inside the scroll
+                    // content, not on the `ScrollView` itself: a `.background`
+                    // on the `ScrollView` is hosted in a separate
+                    // `PlatformViewHost` sibling whose superview chain never
+                    // passes through the underlying `UIScrollView` (Task-16
+                    // finding), so the probe could not introspect it. Hosted
+                    // here, the probe is a genuine descendant of the
+                    // `UIScrollView` and walks up to it. `if let` on a
+                    // launch-constant-gated `@State` is a stable
+                    // `_ConditionalContent`, so nothing is added when the flag
+                    // is off and no per-row availability erasure occurs (§18).
+                    #if os(iOS)
+                    .background {
+                        if let selectionController {
+                            ScrollViewIntrospector(controller: selectionController)
+                        }
+                    }
+                    #endif
             }
             .scrollPosition(id: anchorBinding, anchor: .top)
             // The *sole* re-anchor authority: re-assert the reader's row by
