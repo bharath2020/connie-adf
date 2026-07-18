@@ -17,6 +17,16 @@ public struct ADFDocumentView: View {
     /// when this view is torn down.
     @State private var tableScrollSync = TableScrollSync()
 
+    /// The settle-window re-pins `reassertAnchor` schedules after a resize,
+    /// held so a user scroll gesture or this view's teardown can cancel them
+    /// — see `PendingRepins` and `ScrollInteractionGuard` below.
+    ///
+    /// `@State` only to get one stable instance per view identity (created
+    /// once, released when this view is torn down), same reason as
+    /// `tableScrollSync` above: it is never reassigned, only mutated through
+    /// methods, so it invalidates nothing on the scroll path.
+    @State private var pendingRepins = PendingRepins()
+
     /// Readable measure: the column of text is capped near UIKit's readable
     /// content width and centered, so full-screen iPad and landscape layouts
     /// don't run body text to unreadable line lengths. Scaled with Dynamic
@@ -125,6 +135,19 @@ public struct ADFDocumentView: View {
                 // 5k-block hitch gate measures as progressive frame drops.
                 ScrollTargetConsumer(model: model, proxy: proxy)
             }
+            // Cancels `reassertAnchor`'s outstanding settle-window re-pins
+            // the instant the user starts a scroll gesture — see
+            // `ScrollInteractionGuard`. Applied once to the whole document
+            // `ScrollView`, never per row.
+            .modifier(ScrollInteractionGuard(pendingRepins: pendingRepins))
+            // Teardown: cancel whatever is still pending so a re-pin never
+            // fires after this view is gone. `.id(document)` hosts recreate
+            // the whole view per document, so this is also what keeps a
+            // stale re-pin from ever reaching a different document's scroll
+            // view (the minor cross-document hazard the delayed pins had).
+            .onDisappear {
+                pendingRepins.cancelAll()
+            }
         }
         .environment(\.adfTheme, model.theme)
         .environment(\.adfCustomRenderers, model.customRenderers)
@@ -189,10 +212,25 @@ public struct ADFDocumentView: View {
         // idempotent no-ops.) This fires only on a width/type-size change — never on
         // the scroll-gesture path — reads no per-row geometry, and writes no
         // observable state, so it stays clear of the §8 hitch/livelock class.
+        //
+        // Each delayed pin is a cancellable `DispatchWorkItem`, not a bare
+        // closure: a user who starts scrolling inside the settle window must
+        // win, not be yanked back to the anchor captured above (undoing their
+        // gesture is exactly the "scroll view fights the user" class §8b
+        // exists to prevent) — and being yanked back would also leave
+        // `model.anchors.topRow` (just updated by their gesture through the
+        // tracking binding) diverged from the viewport the re-pin forced it
+        // to, so the NEXT rotation would re-pin to a position the user
+        // already scrolled away from. `ScrollInteractionGuard` cancels these
+        // on the first sign of a scroll gesture; `onDisappear` cancels them
+        // on teardown so none outlives this view.
         pin()
-        for delay in Self.rotationSettleRepinDelays {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { pin() }
+        let items = Self.rotationSettleRepinDelays.map { delay -> DispatchWorkItem in
+            let item = DispatchWorkItem { pin() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+            return item
         }
+        pendingRepins.replace(items)
     }
 
     /// Wall-clock offsets (seconds) at which `reassertAnchor` re-snaps the anchor
@@ -270,6 +308,67 @@ public struct ADFDocumentView: View {
             )
         case .idle, .ready:
             EmptyView()
+        }
+    }
+}
+
+/// Holds the settle-window re-pins `ADFDocumentView.reassertAnchor` schedules
+/// after a resize, so a user scroll gesture or the document view's teardown
+/// can cancel them before they fire.
+///
+/// A plain class, like `ScrollAnchorRegistry`: cancelling a work item is a
+/// mutation on this reference, not a state write, so it invalidates no view
+/// and is safe to call from the scroll-phase path.
+@MainActor
+final class PendingRepins {
+    private var items: [DispatchWorkItem] = []
+
+    /// Replaces the pending items, first cancelling whatever was still
+    /// outstanding from the previous resize.
+    func replace(_ items: [DispatchWorkItem]) {
+        cancelAll()
+        self.items = items
+    }
+
+    /// Cancels every outstanding item. Idempotent — safe to call from both
+    /// the scroll-phase guard and teardown, and safe to call on an item that
+    /// already fired (`DispatchWorkItem.cancel()` is a no-op there).
+    func cancelAll() {
+        for item in items { item.cancel() }
+        items.removeAll()
+    }
+}
+
+/// Cancels `reassertAnchor`'s outstanding settle-window re-pins the instant
+/// the user starts a scroll gesture, so a delayed re-pin never fights a
+/// gesture already in flight (see the review note on
+/// `rotationSettleRepinDelays`).
+///
+/// Applied once to the whole document `ScrollView` — never per row. The
+/// `#available` branch below is therefore exempt from the §8 "no
+/// `buildLimitedAvailability` at a lazy container's per-item position" rule
+/// (see `rows`): this erases exactly one view, not one per lazy row.
+///
+/// iOS 17 has no `onScrollPhaseChange`; there the pins simply stay
+/// uncancellable by a scroll gesture, matching this fix's pre-existing
+/// (pre-guard) behavior.
+private struct ScrollInteractionGuard: ViewModifier {
+    let pendingRepins: PendingRepins
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content.onScrollPhaseChange { _, newPhase, _ in
+                // Same discrimination `TableSliceView.SynchronizedTableSlice`
+                // uses for user-driven vs. programmatic motion: dragging or
+                // the momentum that follows it is user-driven; `.animating`
+                // (which our own `disablesAnimations` pins never even enter)
+                // and `.idle` must not cancel anything.
+                if newPhase == .interacting || newPhase == .decelerating {
+                    pendingRepins.cancelAll()
+                }
+            }
+        } else {
+            content
         }
     }
 }
