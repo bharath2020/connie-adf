@@ -55,6 +55,29 @@ struct TextRowContentTests {
         #expect(r == NSRange(location: 2, length: 3))
     }
 
+    /// The TK2 draw pass (Task 9) converts a `SearchHighlightSpan`
+    /// (segmentIndex + local Character range) to an absolute UTF-16 `NSRange`
+    /// via this exact call, then feeds that range to
+    /// `NSTextContentStorage.location(_:offsetBy:)` → `NSTextRange` →
+    /// `layoutManager.enumerateTextSegments(in:type:.highlight)` for rects.
+    /// This proves the conversion lands on the exact substring across a
+    /// multi-segment, multi-emoji row — not just numerically-matching
+    /// offsets — since a rect lookup over the wrong bytes would clip glyphs
+    /// or highlight the wrong text.
+    @Test func searchHighlightSpanConvertsToTheExactSubstringAcrossEmojiSegments() {
+        let content = TextRowContent.make(
+            segments: [textSegment("héllo "), textSegment("wo😄rld"), textSegment(" tail")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .natural, baselineScale: 1, rightToLeft: false)
+        // Segment 1 is "wo😄rld"; Characters [2..<5) = "😄rl" (index 2 is the
+        // emoji, 3 is 'r', 4 is 'l') — a span landing squarely on an emoji
+        // plus the ASCII it's glued to.
+        let span = SearchHighlightSpan(segmentIndex: 1, range: 2..<5)
+        let nsRange = TextRowContent.utf16Range(charRange: span.range, inSegment: span.segmentIndex, of: content)
+        let full = content.attributed.string as NSString
+        #expect(full.substring(with: nsRange) == "😄rl")
+    }
+
     @Test func underlineStrikeBaselineAndLinkConvert() throws {
         var t = AttributedString("styled")
         t[FontSpecAttribute.self] = .body

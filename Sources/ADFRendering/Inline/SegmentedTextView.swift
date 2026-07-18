@@ -1,5 +1,8 @@
 import SwiftUI
 import ADFPreparation
+#if os(iOS)
+import UIKit
+#endif
 
 /// Renders a composed inline sequence.
 ///
@@ -40,36 +43,56 @@ struct SegmentedTextView: View {
     @State private var flashDimmed = false
 
     var body: some View {
-        let displayed = displayedSegments
         Group {
-            if let merged = Self.mergedText(displayed) {
-                #if os(iOS)
-                if TextKit2Flags.enabled && (!inTableCell || TextKit2Flags.cellsEnabled) {
-                    TextKit2RowView(segments: [.text(merged)], blockAlignment: blockAlignment)
-                        .alignmentGuide(.firstTextBaseline) { _ in
-                            TextKit2RowView.firstBaseline(
-                                of: displayed,
-                                categoryRawValue: UIContentSizeCategory(dynamicTypeSize).rawValue)
-                        }
-                } else {
-                    Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+            #if os(iOS)
+            if let rawMerged = tk2EligibleMergedText {
+                let paint = highlightPaint
+                TextKit2RowView(
+                    segments: [.text(rawMerged)],
+                    blockAlignment: blockAlignment,
+                    spans: paint.spans,
+                    currentSpans: paint.currentSpans,
+                    dimCurrent: flashDimmed,
+                    subtleColor: UIColor(theme.searchHighlight),
+                    currentColor: UIColor(theme.searchCurrentHighlight),
+                    currentForeground: theme.searchCurrentForeground.map { UIColor($0) }
+                )
+                .alignmentGuide(.firstTextBaseline) { _ in
+                    TextKit2RowView.firstBaseline(
+                        of: segments,
+                        categoryRawValue: UIContentSizeCategory(dynamicTypeSize).rawValue)
                 }
-                #else
-                Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
-                #endif
             } else {
-                WrappingInlineLayout(lineSpacing: lineSpacing) {
-                    ForEach(Self.tokens(for: displayed)) { token in
-                        InlineTokenView(
-                            token: token,
-                            typeScale: typeScale,
-                            atomHighlight: atomHighlight(for: token)
-                        )
-                    }
+                legacyBody
+            }
+            #else
+            legacyBody
+            #endif
+        }
+        .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
+    }
+
+    /// The SwiftUI-painted arm: `Text` for merged text-only rows, or the
+    /// wrapping atom layout otherwise. Unchanged by this task — still reads
+    /// `displayedSegments` (the `SearchHighlightPainter`-baked array) exactly
+    /// as before. Used on macOS always, and on iOS whenever the TK2 leaf
+    /// doesn't apply (flag off, or a gated table cell).
+    @ViewBuilder
+    private var legacyBody: some View {
+        let displayed = displayedSegments
+        if let merged = Self.mergedText(displayed) {
+            Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+        } else {
+            WrappingInlineLayout(lineSpacing: lineSpacing) {
+                ForEach(Self.tokens(for: displayed)) { token in
+                    InlineTokenView(
+                        token: token,
+                        typeScale: typeScale,
+                        atomHighlight: atomHighlight(for: token)
+                    )
                 }
             }
         }
-        .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
     }
 
     // MARK: Search highlighting
@@ -97,6 +120,29 @@ struct SegmentedTextView: View {
             dimCurrent: flashDimmed
         )
     }
+
+    #if os(iOS)
+    /// This row's raw merged text when it qualifies for the TK2 draw-pass
+    /// arm: text-only (no atoms) AND the leaf applies (flag on, not a gated
+    /// table cell). `nil` routes to `legacyBody` unchanged. Computed from RAW
+    /// `segments` — NEVER `displayedSegments` — because the TK2 arm must
+    /// never run `SearchHighlightPainter`; it draws highlights itself from
+    /// `highlightPaint`, over unpainted base text.
+    private var tk2EligibleMergedText: AttributedString? {
+        guard TextKit2Flags.enabled, !inTableCell || TextKit2Flags.cellsEnabled else { return nil }
+        return Self.mergedText(segments)
+    }
+
+    /// Search-highlight spans for the TK2 draw pass, read directly off the
+    /// owner's highlight store — mirrors `displayedSegments`'s zero-work
+    /// gate exactly (same guard, same one-Bool idle read) but returns spans
+    /// for the view to draw instead of a painted copy of `segments`.
+    private var highlightPaint: (spans: [SearchHighlightSpan], currentSpans: [SearchHighlightSpan]) {
+        guard let ownerID, let search, search.isActive else { return ([], []) }
+        let highlights = search.ownerHighlights(for: ownerID)
+        return (highlights.spans, highlights.currentSpans)
+    }
+    #endif
 
     private func atomHighlight(for token: InlineToken) -> AtomHighlightState? {
         guard case .atom(_, let id) = token.kind,

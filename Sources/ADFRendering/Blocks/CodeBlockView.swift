@@ -1,4 +1,5 @@
 import SwiftUI
+import ADFPreparation
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -42,8 +43,17 @@ struct CodeBlockView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 #if os(iOS)
                 if TextKit2Flags.enabled {
-                    TextKit2RowView(segments: [.text(displayedCode)])
-                        .padding(theme.spacing * 1.5)
+                    let paint = highlightPaint
+                    TextKit2RowView(
+                        segments: [.text(code)],
+                        spans: paint.spans,
+                        currentSpans: paint.currentSpans,
+                        dimCurrent: flashDimmed,
+                        subtleColor: UIColor(theme.searchHighlight),
+                        currentColor: UIColor(theme.searchCurrentHighlight),
+                        currentForeground: theme.searchCurrentForeground.map { UIColor($0) }
+                    )
+                    .padding(theme.spacing * 1.5)
                 } else {
                     Text(displayedCode)
                         .textSelection(.enabled)
@@ -87,4 +97,23 @@ struct CodeBlockView: View {
             theme: theme, dimCurrent: flashDimmed
         )
     }
+
+    #if os(iOS)
+    /// Search-highlight spans for the TK2 draw pass — mirrors
+    /// `displayedCode`'s zero-work gate (same one-Bool idle read) but
+    /// returns spans instead of a painted copy of `code`; the TK2 arm draws
+    /// highlights itself, over unpainted base text. All spans are
+    /// `segmentIndex == 0`: a code block is indexed as a single segment
+    /// (`SearchIndexer.units(for:)`), matching `TextRowContent`'s lone
+    /// `.text(code)` segment — any other index would be a stale-span bug,
+    /// filtered out defensively rather than risking an out-of-bounds lookup.
+    private var highlightPaint: (spans: [SearchHighlightSpan], currentSpans: [SearchHighlightSpan]) {
+        guard let ownerID, let search, search.isActive else { return ([], []) }
+        let highlights = search.ownerHighlights(for: ownerID)
+        return (
+            highlights.spans.filter { $0.segmentIndex == 0 },
+            highlights.currentSpans.filter { $0.segmentIndex == 0 }
+        )
+    }
+    #endif
 }
