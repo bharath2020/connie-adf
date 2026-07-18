@@ -45,10 +45,19 @@ struct SegmentedTextView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if let rawMerged = tk2EligibleMergedText {
+            if tk2Eligible {
                 let paint = highlightPaint
+                // Task 10: the TK2 arm now takes the FULL raw segment array
+                // (text chunks + atoms), not a single merged text run. With
+                // atoms present the preparer word-chunks the text
+                // (`InlineComposer.splitForWrappingLayout`), so
+                // `SearchHighlightSpan.segmentIndex > 0` reaches the TK2 draw
+                // pass for the first time. `TextRowContent.utf16Range`'s
+                // ABSOLUTE semantics (per-segment start + local offset,
+                // mutation-tested) map those correctly, and base text is never
+                // repainted — highlights are drawn from `paint`.
                 TextKit2RowView(
-                    segments: [.text(rawMerged)],
+                    segments: segments,
                     blockAlignment: blockAlignment,
                     spans: paint.spans,
                     currentSpans: paint.currentSpans,
@@ -122,15 +131,15 @@ struct SegmentedTextView: View {
     }
 
     #if os(iOS)
-    /// This row's raw merged text when it qualifies for the TK2 draw-pass
-    /// arm: text-only (no atoms) AND the leaf applies (flag on, not a gated
-    /// table cell). `nil` routes to `legacyBody` unchanged. Computed from RAW
-    /// `segments` — NEVER `displayedSegments` — because the TK2 arm must
-    /// never run `SearchHighlightPainter`; it draws highlights itself from
-    /// `highlightPaint`, over unpainted base text.
-    private var tk2EligibleMergedText: AttributedString? {
-        guard TextKit2Flags.enabled, !inTableCell || TextKit2Flags.cellsEnabled else { return nil }
-        return Self.mergedText(segments)
+    /// True when this row takes the TK2 draw-pass arm: the flag is on and the
+    /// row isn't a gated table cell. Task 10 dropped the earlier text-only
+    /// restriction — atom-bearing rows (mentions/status/date/emoji/cards) now
+    /// render their pills as vector `AtomAttachment`s on this arm too. The arm
+    /// consumes RAW `segments` (see `body`) — NEVER `displayedSegments` —
+    /// because it must not run `SearchHighlightPainter`; it draws highlights
+    /// itself from `highlightPaint`, over unpainted base text.
+    private var tk2Eligible: Bool {
+        TextKit2Flags.enabled && (!inTableCell || TextKit2Flags.cellsEnabled)
     }
 
     /// Search-highlight spans for the TK2 draw pass, read directly off the

@@ -417,3 +417,81 @@ baselines/RTL, screenshot parity) carrying forward: (a) the rotation-anchor
 drift as a separate, renderer-independent bug to file; (b) re-run this same
 matrix at Task 13 per the plan, since pills/search drawing land in Phase 3
 and could change these numbers.
+
+## Phase 3 — Task 10: atom pills as vector-drawn attachments
+
+Atom-bearing paragraphs (mentions, statuses, dates, emoji, inline cards,
+attachments, extensions) now render on the TK2 arm. Each `.atom` segment
+contributes one U+FFFC attachment character carrying an `AtomAttachment`
+(`NSTextAttachment` subclass) sized in `attachmentBounds` and drawn vector-
+style in `image(forBounds:…)` via a draw-time `UIGraphicsImageRenderer` that
+reads the current traits (dark-mode correct without content invalidation).
+Sizing is a pure function of `(atom, contentSizeCategory)`: `.callout`
+weight-medium text (body for emoji) + `UIFontMetrics(.callout)`-scaled 8/2
+paddings mirroring `AtomCapsule`/`AtomChip`'s `@ScaledMetric` chrome. No view
+hosting, no `NSTextAttachmentViewProvider`, no ImageRenderer-from-SwiftUI.
+
+### Pill size/position drift vs the SwiftUI arm (kitchen-sink, iPhone 16, iOS 18.2)
+
+Measured from A/B screenshots (`t10_kitchensink_{off,tk2}_atoms.png`), pixels
+at @3x (÷3 for pt):
+
+| Pill | OFF width | TK2 width | Δ width | Notes |
+|---|---|---|---|---|
+| `@Bharath` mention capsule | 267px | 267px | **0pt** | position, height also identical (63/64px) |
+| `Jul 9, 2024` date capsule | 274px | 277px | ~1pt | |
+| `NEUTRAL` status capsule | 267px | 267px | **0pt** | |
+| `PURPLE` status capsule | 229px | 229px | **0pt** | |
+| `GREEN` status capsule | 206px | 207px | ~0.3pt | |
+| `attachment` chip | 253px | 245px | ~2.7pt narrower | SF Symbol omitted |
+| `Inline macro` chip | 334px | 310px | ~8pt narrower | SF Symbol omitted |
+
+**Capsules (mention/status/date) land within 0–1pt** at default size — well
+inside the ≤1pt target — with matching baseline, tint, tint-opacity, and
+uppercased status text. Verified again at `-fontSizeStep 3`
+(`t10_*_atoms_step3.png`): pills scale correctly and capsule parity holds.
+
+### Known, intentional gaps (recorded per brief Step 5)
+
+- **Chip SF Symbols omitted in v1.** `AtomChip`'s paperclip/link/puzzlepiece
+  icons are not drawn by the CG path — chips are rounded-rect + text only.
+  This makes chips **~3–8pt narrower** than the SwiftUI arm (drift scales
+  with the omitted symbol's width: paperclip ≈ 3pt, puzzlepiece ≈ 8pt). Chip
+  left edge and vertical position match. Adding the symbols is a later polish
+  item.
+- **Atom taps are not hit-tested on the TK2 arm** (mention popovers, inline-
+  card links). Those still work on the SwiftUI arm; TK2-arm atom hit-testing
+  is phase-4 (selection/geometry) work.
+- **Whole-pill search highlight tinting is not applied on the TK2 arm.** A
+  matched atom pill tints entirely on the SwiftUI arm; the TK2 arm draws
+  range highlights over text but not pill-background tints for atoms. Deferred
+  to T13/phase-4 alongside atom hit-testing. (Range highlights inside atom-
+  bearing paragraphs DO work — see search verification below.)
+- **`firstBaseline` for a pure-atom row** (a paragraph with no text run at
+  all) returns the `0` fallback; recovering a pill's own ascent without
+  measuring layout is a T13 baseline-fidelity item. Atom-leading rows with any
+  following text are correct (they use the first text chunk's ascender).
+
+### Search inside atom-bearing paragraphs (past chunk 0)
+
+With atoms present, the preparer word-chunks the paragraph, so search spans
+carry `segmentIndex > 0` on the TK2 path for the first time. Query `see`
+(kitchen-sink) sits after the mention and date atoms in block 26; the TK2
+draw-pass highlight lands exactly on `see`
+(`t10_kitchensink_tk2_search_see.png`), identical to the SwiftUI arm
+(`t10_kitchensink_off_search_see.png`) — proving `TextRowContent.utf16Range`'s
+absolute (per-segment start + local offset) semantics correctly account for
+the attachment characters the atoms insert. Headless `-searchQuery see`
+reports `matches=1` on both arms.
+
+### Perf (non-regression)
+
+stress-5k has no atoms, so it exercises the `SegmentedTextView` refactor on
+the text path only (which is behaviorally identical for text-only rows —
+they compose to a single `.text` segment either way). TK2 autoscroll:
+`frames=29610 dropped=129 hitchRatioMsPerS=4.37` (0.44% dropped). 12-swipe
+fling burst → app CPU settled to **0.0%** (`top -l 2`). The atom draw path
+itself was fling-stressed on kitchen-sink (alternating flings so the atom
+paragraph repeatedly enters/leaves the viewport, forcing pill redraws): CPU
+settled to **0.0%**, thread count 16→3 — no livelock. There is no atom-heavy
+stress fixture; re-check at T13 if one is added.

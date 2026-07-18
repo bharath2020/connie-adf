@@ -64,6 +64,13 @@ struct TextKit2RowView: UIViewRepresentable {
     /// First-line ascent for enclosing `.firstTextBaseline` stacks (list
     /// markers, panel icons). Pure function of the first run's resolved font
     /// — never measured layout, so no geometry feedback (§16).
+    ///
+    /// Scans for the first `.text` run and returns its font ascender. An
+    /// atom-LEADING row (a leading pill before any prose) falls through to the
+    /// first following text chunk's ascender, which is the body ascent the
+    /// pill is baseline-aligned to — correct. A pure-atom row (no text at all)
+    /// returns the `0` fallback; recovering a pill's own ascent here without
+    /// measuring layout is a T13 baseline-fidelity item, not this task's.
     @MainActor
     static func firstBaseline(of segments: [InlineSegment], categoryRawValue: String) -> CGFloat {
         for segment in segments {

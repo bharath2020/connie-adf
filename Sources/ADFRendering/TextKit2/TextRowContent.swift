@@ -23,13 +23,15 @@ public struct TextRowContent {
     public let attributed: NSAttributedString
 
     /// One entry per input segment: the UTF-16 offset (into `attributed`)
-    /// where that segment's text begins. Atom segments append no run at all
-    /// (a no-op), so a following segment can share the same start as one
-    /// that preceded an atom.
+    /// where that segment's content begins. Each atom segment appends exactly
+    /// one attachment character (U+FFFC, one UTF-16 unit — Task 10), so a
+    /// following segment's absolute start advances past it.
     public let segmentUTF16Starts: [Int]
 
-    /// Plain text per segment ("" for atoms in phase 2 — Task 10 gives atoms
-    /// an attachment character instead).
+    /// Plain text per segment. Atom segments store `""` here (the pill has no
+    /// searchable text) even though they contribute one attachment character
+    /// to `attributed`; the absolute offset that character occupies is tracked
+    /// by `segmentUTF16Starts`, so cross-segment `utf16Range` stays exact.
     public let segmentStrings: [String]
 
     #if canImport(UIKit)
@@ -79,9 +81,13 @@ public struct TextRowContent {
                 strings.append(convert(text, categoryRawValue: categoryRawValue,
                                         baselineScale: baselineScale, paragraphStyle: paragraphStyle,
                                         into: result))
-            case .atom:
-                // Phase 2: atoms append nothing to the string (Task 10
-                // replaces this with an `NSTextAttachment` character).
+            case .atom(let atom, _):
+                // Task 10: each atom contributes ONE attachment character
+                // (U+FFFC) carrying a vector-drawn `AtomAttachment` pill. The
+                // char keeps line metrics sane and advances following
+                // segments' absolute UTF-16 starts; the segment's own stored
+                // string stays "" (a pill has no searchable text).
+                appendAtom(atom, categoryRawValue: categoryRawValue, into: result)
                 strings.append("")
             }
         }
@@ -140,6 +146,31 @@ public struct TextRowContent {
             result.append(NSAttributedString(string: runString, attributes: attrs))
         }
         return plain
+    }
+
+    /// Appends one attachment character for an atom. On iOS the character
+    /// carries a vector-drawn `AtomAttachment` pill; on macOS (no render arm —
+    /// `AtomAttachment` is UIKit-only) it is a bare U+FFFC so the UTF-16
+    /// bookkeeping (`segmentUTF16Starts`, `attributed.length`) is identical on
+    /// both platforms, keeping `utf16Range`'s cross-segment semantics testable
+    /// under `swift test`. The character carries the body font so the line's
+    /// metrics stay sane even when the pill is the row's only content.
+    @MainActor
+    private static func appendAtom(
+        _ atom: InlineAtom,
+        categoryRawValue: String,
+        into result: NSMutableAttributedString
+    ) {
+        let font = FontSpecResolver.shared.font(for: .body, categoryRawValue: categoryRawValue)
+        #if canImport(UIKit)
+        let attachment = AtomAttachment(atom: atom, categoryRawValue: categoryRawValue)
+        let attributed = NSMutableAttributedString(attributedString: NSAttributedString(attachment: attachment))
+        attributed.addAttribute(.font, value: font, range: NSRange(location: 0, length: attributed.length))
+        result.append(attributed)
+        #else
+        _ = atom
+        result.append(NSAttributedString(string: "\u{FFFC}", attributes: [.font: font]))
+        #endif
     }
 
     /// Maps a `Character` range within `segmentStrings[index]` to the

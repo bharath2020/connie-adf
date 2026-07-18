@@ -78,6 +78,27 @@ struct TextRowContentTests {
         #expect(full.substring(with: nsRange) == "😄rl")
     }
 
+    @Test func atomEmitsOneAttachmentCharAndAdvancesFollowingStarts() {
+        // Task 10: each `.atom` contributes exactly one attachment character
+        // (U+FFFC, one UTF-16 unit). The following text segment's ABSOLUTE
+        // start must include it, or later search spans land on the wrong
+        // bytes. (Pre-Task-10 the atom appended nothing and "b" started at 1.)
+        let atom = InlineSegment.atom(.status(text: "done", color: .green), id: "s1")
+        let content = TextRowContent.make(
+            segments: [textSegment("a"), atom, textSegment("b")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .natural, baselineScale: 1, rightToLeft: false)
+        // "a"@0 (1 unit), attachment char@1 (1 unit), "b"@2.
+        #expect(content.segmentUTF16Starts == [0, 1, 2])
+        #expect(content.attributed.length == 3)
+        #expect((content.attributed.string as NSString).character(at: 1) == 0xFFFC)
+        #expect(content.segmentStrings[1] == "")   // atom carries no searchable text
+        // The absolute-semantics conversion for the post-atom segment must
+        // pick up the +1 the attachment char inserted.
+        let r = TextRowContent.utf16Range(charRange: 0..<1, inSegment: 2, of: content)
+        #expect(r == NSRange(location: 2, length: 1))
+    }
+
     @Test func underlineStrikeBaselineAndLinkConvert() throws {
         var t = AttributedString("styled")
         t[FontSpecAttribute.self] = .body
