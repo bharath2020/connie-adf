@@ -167,10 +167,39 @@ public struct ADFDocumentView: View {
         guard let anchor = model.anchors.topRow else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            proxy.scrollTo(anchor, anchor: .top)
+        func pin() { withTransaction(transaction) { proxy.scrollTo(anchor, anchor: .top) } }
+
+        // Pin once immediately, then again across the post-resize settle window.
+        //
+        // `scrollTo(_, anchor: .top)` derives the anchor's offset by summing the
+        // heights of every row before it. On a programmatic jump (`-scrollToFraction`,
+        // a TOC tap) the reader never scrolled through the rows above the anchor, so
+        // the lazy stack never materialized or measured them — `CollapsedRowHeight`
+        // holds no sample, and SwiftUI can only *estimate* that (here ~2,500-row)
+        // gap. The first pin therefore lands the anchor coarsely; over the next few
+        // frames SwiftUI materializes the anchor and its neighbours and corrects
+        // their heights, nudging the anchor off the top. A single pin never sees
+        // those corrections and settles tens-to-hundreds of rows off — a backward
+        // drift that is nondeterministic and independent of the row renderer.
+        //
+        // Re-pinning across the settle window follows each height correction with a
+        // fresh snap; once the corrections stop, the anchor is exactly at the top.
+        // (When the rows above were materialized by an organic scroll their heights
+        // are exact, the first pin is already precise, and the extra pins are
+        // idempotent no-ops.) This fires only on a width/type-size change — never on
+        // the scroll-gesture path — reads no per-row geometry, and writes no
+        // observable state, so it stays clear of the §8 hitch/livelock class.
+        pin()
+        for delay in Self.rotationSettleRepinDelays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { pin() }
         }
     }
+
+    /// Wall-clock offsets (seconds) at which `reassertAnchor` re-snaps the anchor
+    /// after a resize, spanning the post-rotation layout-settle window. Wall-clock
+    /// rather than run-loop hops because the height corrections land a frame at a
+    /// time; the series must outlast them.
+    private static let rotationSettleRepinDelays: [TimeInterval] = [0.033, 0.1, 0.2, 0.35, 0.5]
 
     /// Sections are maintained incrementally by the model as chunks stream in,
     /// so this only iterates a stored value — a table's header slice pins
