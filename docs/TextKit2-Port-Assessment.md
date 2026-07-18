@@ -817,3 +817,310 @@ this task). `Fixtures/rtl-mixed.json` is picked up by `Demo/project.yml`'s
 existing glob; no `project.yml` edit needed (the generated `.xcodeproj` is
 gitignored and regenerated via `xcodegen generate`, so it was not
 hand-edited in the final state).
+
+## Phase 3: final gates + parity (Task 13)
+
+Measurement-only task — no production code changed (`swift test`: 226/226,
+37 suites, unchanged from Task 12's baseline). This is the final measurement
+pass of the port plan: the full Phase-2 gate matrix re-run now that Phase-3
+features (TK2 rows, draw-pass search highlights, vector pills, baseline
+guides, the RTL fix, and the settle-window rotation fix, commits `165db39`+
+`f069ab1`) are all in, plus the first exercise of the YouTube video path and
+the first dark-mode pass.
+
+### Environment
+
+Dedicated sim `ADF-Task13` (iPhone 16, iOS 18.2, UDID
+`509FBF6C-3EB4-4B9B-87F6-AAFBDE163400`), created for this task, deleted at
+the end. Branch `textkit2-port-prototype` at `a85ac97`. Demo built once via
+`xcodebuild -project Demo/ADFReader.xcodeproj -scheme ADFReader -destination
+'platform=iOS Simulator,id=<ADF-Task13>' build` (BUILD SUCCEEDED) and
+installed; confirmed current by `strings` on `ADFReader.debug.dylib`
+(`-textkit2NoCells`, `-scrollToFraction`, `-fontSizeStep` all present) and by
+dylib mtime (Jul 18 11:16) postdating the HEAD commit timestamp (Jul 18
+11:08:01). One build served the entire session — every gate below ran
+against the identical binary.
+
+### Gate 1 — stress-5k autoscroll, OFF vs `-textkit2`, ×2 each (kill criterion: ON ≤ 2× OFF)
+
+```
+OFF run 1: SCROLL_METRICS fixture=stress-5k frames=29879 dropped=18 hitchRatioMsPerS=0.61
+OFF run 2: SCROLL_METRICS fixture=stress-5k frames=29887 dropped=20 hitchRatioMsPerS=0.68
+ON  run 1: SCROLL_METRICS fixture=stress-5k frames=29835 dropped=22 hitchRatioMsPerS=0.75
+ON  run 2: SCROLL_METRICS fixture=stress-5k frames=29824 dropped=32 hitchRatioMsPerS=1.06
+```
+
+OFF mean 0.645 ms/s, ON mean 0.905 ms/s → ratio **1.40×** — comfortably
+inside the ≤2× bar. **PASS.**
+
+### Gate 2 — giant-table autoscroll, OFF vs `-textkit2` vs `-textkit2 -textkit2NoCells`
+
+```
+OFF:              SCROLL_METRICS fixture=giant-table frames=2456 dropped=0 hitchRatioMsPerS=0.00
+-textkit2:        SCROLL_METRICS fixture=giant-table frames=2449 dropped=0 hitchRatioMsPerS=0.00
+-textkit2 NoCells: SCROLL_METRICS fixture=giant-table frames=2443 dropped=1 hitchRatioMsPerS=0.41
+```
+
+Cells do not blow the gate (ON ties OFF at 0.00 ms/s; NoCells is still
+comfortably low). No exclusion needed. **PASS.**
+
+### Gate 3 — fling burst + instantaneous CPU settle, stress-5k, both branches
+
+12× `axe swipe --start-x 220 --start-y 800 --end-x 220 --end-y 120
+--duration 0.08`, `sleep 3`, `top -l 2 -pid <pid>` (second sample):
+
+| Branch | PID | Settled %CPU |
+|---|---|---|
+| OFF | 32266 | 0.3 |
+| `-textkit2` | 32388 | 0.2 |
+
+Both settle to near-zero. No livelock either branch. **PASS.**
+
+### Gate 4 — first chunk, kitchen-sink `-textkit2` (target < 150 ms)
+
+```
+READY fixture=kitchen-sink blocks=38 firstChunkMs=37   (run 1)
+READY fixture=kitchen-sink blocks=38 firstChunkMs=38   (run 2)
+```
+
+Both well under the 150 ms gate. **PASS.**
+
+### Gate 5 — rotation retention, stress-5k `-scrollToFraction 0.5`, 8× rotation round-trips, both branches (bar: ABSOLUTE ≤1-row drift + A/B parity, now that the settle-window fix — `165db39`+`f069ab1` — is in)
+
+Same block-index-aligned-heading protocol as Phase 2's Gate 5
+(`scrollTarget = blocks[2500]` = `"Section 2500: spline expand fixture"`,
+exact). Fixed a timing bug from the first attempt this session: the initial
+5 s post-launch sleep before the "before" screenshot occasionally landed
+before `-scrollToFraction` had settled (one discarded run showed `Section 0`
+at the top); switched to polling the launch log for the `READY` line before
+screenshotting, and widened the inter-rotation sleep from 2 s to 2.5 s so
+each `UIWindowScene.requestGeometryUpdate` animation completes before the
+next Darwin notification fires (confirmed by the `ROTATION requested=`
+log lines alternating `landscapeRight`/`portrait` cleanly across all 8, and
+by the final screenshot's file dimensions reading back as portrait,
+`1179×2556`, not a mid-transition size).
+
+| Branch | Before (top heading) | After 8 rotations | Drift |
+|---|---|---|---|
+| OFF | `Section 2500: spline expand fixture` | `Section 2500: spline expand fixture` | **0 rows** |
+| `-textkit2` | `Section 2500: spline expand fixture` | `Section 2500: spline expand fixture` | **0 rows** |
+
+Both before/after screenshot pairs were read directly and are pixel-
+identical, not just heading-identical — the whole visible paragraph
+(including the highlighted link run and the strikethrough run below it)
+lines up exactly, in both branches. Screenshots:
+`docs/assessment-assets/phase3-final/t13_rot_{off,on}_{before,after}.png`.
+
+**This is a large improvement over Phase 2's Gate 5** (~70–100 block drift,
+~1.4–2.0% of the document, in both branches, on iOS 26.2) and validates the
+Phase-2 fix commits' own iOS 18.2 numbers (≤4-block drift, 5/5 runs) at the
+now-achievable **absolute 0-row** bar. **PASS**, both branches, A/B parity
+exact.
+
+### Gate 6 — §19 mid-scroll type-size reflow, kitchen-sink `-textkit2 -fontSizeStep 3`
+
+`t13_step6_default.png` vs `t13_step6_step3.png`: text is visibly larger at
+step 3, and the inline code span `let x = 1` wraps from one line (default)
+to two (`let x` / `= 1`) — confirms TK2 rows reflow, not just up-scale.
+**PASS.** Mid-scroll live popover-driven size change: not attempted this
+session (brief marks it optional, same as Phase 2's Gate 6) —
+**UNTESTED (optional)**.
+
+### Gate 7 — memory, media-gallery `-textkit2` (target < 150 MB)
+
+8× swipe through the gallery, settle, `top -l 1 -pid <pid>`: **59 MB**
+(RSS). Well under budget. **PASS.**
+
+### Gate 8 — VIDEO gate (first exercise of the YouTube path in phases 2–3; nothing since its original implementation touched this code)
+
+Fixture: `youtube` (`Fixtures/youtube.json` — chosen over `youtube-dense.json`
+for a focused, fast-to-navigate matrix; it covers an embed card, a block
+card, a paragraph-wrapped smart link, and a table-cell embed, one of each
+shape the renderer claims). Screenshots under
+`docs/assessment-assets/phase3-final/`, `t13_video_*` prefix.
+
+**Facade → player, same box.** Launch `-fixture youtube -textkit2`: facade
+renders (thumbnail + red play button) for every claimed block
+(`t13_video_facade.png`). `axe describe-ui` located the Rick Astley embed
+card's "Play YouTube video" button at `{x:16, y:281.67, width:361,
+height:203}` (points); `axe tap -x 196.5 -y 383` (its center) opens the real
+player in place (`t13_video_player.png`, `0:01 / 3:34`, actively playing).
+Pixel-measured (Python3/PIL, column/row non-white-pixel scan) box bounds, at
+3× capture (`1179×2556`):
+
+| State | top | bottom | left | right | size (px) |
+|---|---|---|---|---|---|
+| Facade | 845 | 1453 | 48 | 1130 | 1082×609 |
+| Player (after tap) | 845 | 1453 | 48 | 1130 | 1082×609 |
+
+**Identical to the pixel** — 1082×609 px is exactly a 16:9 box (matching
+`YouTubeBlockRenderer`'s declared `sizing: .aspectRatio(width: 16, height:
+9)`), and the facade→player swap changes none of it. **PASS.**
+
+**Scroll away / scroll back.** 5× downward swipes move the viewport past
+the video, a table-cell embed, and into the "Controls: must stay cards"
+section (`t13_video_scrolled_away.png` — confirms non-YouTube links, e.g.
+`vimeo.com`, correctly keep their existing card rendering, not a facade).
+5× upward swipes return to the top: `t13_video_facade_returned.png` is
+pixel-identical to the original `t13_video_facade.png` — the player tore
+down and the facade re-rendered in the same box. **PASS.**
+
+**Fling through an active player.** Fresh launch, tapped play
+(`t13_video_flingthrough_before.png`, playing), then a single vertical swipe
+from `(220, 900)` — inside the player's box — to `(220, 250)`:
+`t13_video_flingthrough_after.png` shows the document scrolled down to the
+same "Controls: must stay cards" region reached by the multi-swipe scroll-
+away above. The gesture passed through the `WKWebView` to the parent scroll
+view rather than being captured by the player. **PASS.**
+
+**2× rotation round-trip over an active player.** Fresh launch, tapped
+play, 2 round-trips (4× `notifyutil -p com.connie.adfreader.rotate`, 2.5 s
+apart). Box bounds measured identically at every checkpoint:
+
+| Checkpoint | top | bottom | left | right |
+|---|---|---|---|---|
+| Before rotation | 845 | 1453 | 48 | 1130 |
+| After round-trip 1 | 845 | 1453 | 48 | 1130 |
+| After round-trip 2 | 845 | 1453 | 48 | 1130 |
+
+Geometry is pixel-stable across both round-trips; playback continued
+throughout (each screenshot shows a different video frame, not a frozen
+one) — `t13_video_rotate_{before,rt1,rt2}.png`. **PASS.**
+
+All five VIDEO sub-checks pass. **Gate 8 verdict: PASS.**
+
+### Gate 9 — screenshot parity suite: {OFF, ON} × {kitchen-sink, rtl-mixed} × {default, `-fontSizeStep 6`} × {light, dark}, plus giant-table ON default light
+
+17 screenshots under `docs/assessment-assets/phase3-final/`, `t13_` prefix
+(`t13_{off,tk2}_{ks,rtl}_{default,step6}_{light,dark}.png` +
+`t13_gianttable_tk2_default_light.png`), dark toggled live via `xcrun simctl
+ui $D appearance dark` (confirmed it applies to a running app without
+relaunch). Every one of the 8 OFF/TK2 pairs was read directly, side by side:
+
+| Pair | Result |
+|---|---|
+| kitchen-sink, default, light | Pixel-matching; known ≤1px baseline / cumulative vertical-rhythm drift only (Task 11) |
+| kitchen-sink, default, dark | Same match; dark colors correct (see below) |
+| kitchen-sink, step 6, light | Pixel-matching, identical wraps |
+| kitchen-sink, step 6, dark | Pixel-matching, identical wraps |
+| rtl-mixed, default, light | Pixel-matching; right-alignment identical both arms |
+| rtl-mixed, default, dark | Pixel-matching |
+| rtl-mixed, step 6, light | Matching wraps, sub-pixel rhythm drift only |
+| rtl-mixed, step 6, dark | Matching wraps, sub-pixel rhythm drift only |
+
+giant-table `-textkit2` default light (`t13_gianttable_tk2_default_light.png`):
+renders cleanly, cell background tints (blue/pink/green highlight cells)
+intact, no artifacts.
+
+**No new layout/structural diffs.** The only diffs are the two already-known,
+already-documented ones (chip icon widths, Task 10; ~5–6px cumulative
+vertical rhythm down long lists, Task 11) — carried forward, not
+regressions.
+
+### Dark-mode result (first dark-mode check of this port)
+
+Toggling `xcrun simctl ui $D appearance dark` and re-reading the kitchen-sink
+and rtl-mixed pairs above: headings, body text, `colored`/`highlighted`
+marks, links, quote bars, and code-block backgrounds all switch to their
+dark-appropriate colors identically between OFF and `-textkit2` — no
+TK2-specific dark-mode defect in body text.
+
+**Atom pills were also captured specifically in dark mode**
+(`-fixture kitchen-sink -scrollToFraction 0.68`, atoms-heavy paragraph;
+`t13_atoms_{off,tk2}_dark.png`, crops at `t13_atoms_{off,tk2}_dark_chipcrop.png`),
+since Task 10 flagged this as verified in light mode only. Result:
+
+- **Capsules (mention, date, status badges) adapt correctly and match
+  exactly** — `@Bharath` navy capsule/blue text, `Jul 9, 2024` dark-gray
+  capsule/light text, and all six status badges (NEUTRAL/PURPLE/BLUE/RED/
+  YELLOW/GREEN) render with the same dynamic-color-adapted tinted
+  backgrounds and text in both arms.
+- **One wrong-color finding, not previously documented:** the `inlineCard`
+  chip (`example.atlassian.net`) renders its text in **blue (the link/tint
+  color)** on the OFF (SwiftUI) arm, in both light and dark mode, but in
+  **plain label color** (black in light, white in dark) on the `-textkit2`
+  arm — confirmed by direct crop comparison
+  (`t13_atoms_{off,tk2}_dark_chipcrop.png`) and traced to source:
+  `Sources/ADFRendering/TextKit2/AtomAttachment.swift:165` sets
+  `textColor = .label` uniformly for every `.chip`-style atom (inlineCard,
+  mediaInline, inlineExtension), while
+  `Sources/ADFRendering/Inline/AtomViews.swift`'s `InlineCardChip` wraps
+  only the inlineCard case in a SwiftUI `Link`, which applies the
+  environment's tint (blue) to its label — a distinction `AtomAttachment`
+  doesn't replicate. This reproduces identically in light mode too (re-
+  checked against the existing Task 10 screenshots,
+  `docs/assessment-assets/phase3-pills/t10_kitchensink_{off,tk2}_atoms.png`)
+  — it is **not** a new dark-mode regression, but a previously-undocumented
+  refinement of the known "chip SF Symbols omitted" gap: the chip is
+  missing its icon **and** its link tint, not just the icon. The
+  `attachment`/`Inline macro` chips (never tinted on either arm) are
+  unaffected and match correctly.
+
+**Dark-mode verdict: PASS**, with one real, now-documented, low-severity
+color gap (inlineCard chip tint) rolled into the existing chip-styling gap
+below — no new structural or layout defect in dark mode.
+
+### Known-gaps register (consolidated for the phase-4 planner)
+
+Pulled together from Tasks 8, 10, 11, 12, and this task — the complete list
+of intentional or discovered TK2-arm gaps still open at the end of Phase 3:
+
+1. **Chip styling is incomplete** (Task 10, refined here): SF Symbol icons
+   are omitted (chips ~18.7pt/~22pt narrower than the SwiftUI arm), and the
+   `inlineCard` chip's text lacks its blue link tint (renders in default
+   label color instead) — both in light and dark mode. Capsules (mention/
+   date/status) are unaffected and pixel-accurate.
+2. **Atom taps are not hit-tested on the TK2 arm** (mention popovers,
+   inline-card link taps) — works on the SwiftUI arm; TK2 hit-testing is
+   phase-4 (selection/geometry) work (Task 10).
+3. **Whole-pill search highlight tinting is not applied on the TK2 arm** —
+   range highlights inside atom-bearing paragraphs work; a matched atom
+   pill itself doesn't tint the way it does on the SwiftUI arm (Task 10).
+4. **`firstBaseline` returns the `0` fallback for a pure-atom row** (a
+   paragraph with no text run at all); atom-leading rows with any following
+   text are correct (Task 10).
+5. **Row-height/line-height vertical rhythm drift**: TK2 rows run slightly
+   taller than the SwiftUI arm's down a long list/panel region (~5–6px
+   growing to ~22px by the 5th row in Task 11's measurement) — a
+   `TextRowLayout` vs. SwiftUI `Text` line-height difference, not a
+   marker-to-text misalignment (markers still track their own row's
+   baseline within 1px). Reconfirmed present, unchanged, in this task's
+   parity suite. Flagged as "Task 13's pixel-perfection job" since Task 7;
+   still open — carried to phase-4.
+6. **No atom-heavy stress fixture exists** to check the pill draw path's
+   behavior at stress-5k-like scale (Task 10); worth adding if phase-4 does
+   further pill work.
+7. **RTL fix has no simulator-visible regression test** — only the unit
+   test (`naturalAlignmentResolvesPerHostDirection`) reliably reproduces the
+   pre-fix bug; the launch-argument-driven simulator matrix is regression
+   evidence only, since `-AppleTextDirection YES` forces a global direction
+   override that masked the bug pre-fix too (Task 12). A future narrower
+   (per-view) direction override would need this test.
+
+**Resolved, not carried forward:** the rotation-retention drift that
+dominated Phase 2's Gate 5 discussion (~70–100 block drift, both branches,
+iOS 26.2) is fixed by `165db39`+`f069ab1` and reconfirmed at the **absolute
+0-row** bar on iOS 18.2 in this task (Gate 5 above) — no longer an open
+item.
+
+### Phase 3 final verdict
+
+All 8 numbered gates in this task's matrix **PASS**, several with
+comfortable-to-large margin (rotation retention improved from ~70–100 block
+drift to 0; giant-table ties or beats OFF; fling settles to ≤0.3% CPU both
+branches; memory at 39% of budget). The video path — untouched by any
+Phase-2/3 change — passes its first-ever exercise cleanly, including
+geometry stability under rotation and gesture pass-through while a real
+player is active. The screenshot parity suite finds **no new structural
+diffs**; the dark-mode pass (also a first) finds body text, headings, links,
+and capsule pills all correctly dynamic-color-adapted, with one small,
+newly-precise (not newly-introduced) color gap in `inlineCard` chip tinting.
+
+**Recommendation: the TK2 port has cleared all phase 1–3 kill/proceed gates.**
+The seven open items in the known-gaps register above are phase-4 polish
+work (chip icon+tint, atom hit-testing, pill search-tint, pure-atom-row
+baseline, vertical rhythm, an atom-stress fixture, and a narrower RTL
+regression test) — none of them perf or correctness regressions, none of
+them block shipping the toggle for further internal dogfooding. Backporting
+the rotation-retention fix (`165db39`+`f069ab1`) to `main` independent of
+this port remains recommended, as noted in Phase 2.
