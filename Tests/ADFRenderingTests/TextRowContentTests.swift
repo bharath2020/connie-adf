@@ -99,6 +99,62 @@ struct TextRowContentTests {
         #expect(r == NSRange(location: 2, length: 1))
     }
 
+    /// Task 12: an Arabic paragraph in an LTR host must render LEFT-aligned
+    /// (matching `RichTextBlockView`'s `nil → .leading` mapping), not
+    /// right-aligned by the paragraph's own first-strong Bidi character.
+    /// `.natural` is the signal `TextKit2RowView.nsAlignment`'s default case
+    /// emits for "no explicit alignment mark" — `make` must resolve it to an
+    /// explicit `.left`/`.right` per `rightToLeft` rather than handing
+    /// `NSParagraphStyle` a `.natural` value it would resolve per-paragraph.
+    @Test func naturalAlignmentResolvesPerHostDirection() {
+        let ltr = TextRowContent.make(
+            segments: [textSegment("هذا نص عربي")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .natural, baselineScale: 1, rightToLeft: false)
+        let rtl = TextRowContent.make(
+            segments: [textSegment("هذا نص عربي")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .natural, baselineScale: 1, rightToLeft: true)
+        let ltrStyle = ltr.attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let rtlStyle = rtl.attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        #expect(ltrStyle?.alignment == .left)
+        #expect(rtlStyle?.alignment == .right)
+        // `baseWritingDirection` stays `.natural` regardless — per-paragraph
+        // Bidi run direction is still TextKit's to resolve; only the
+        // alignment SIDE is pinned to the host's direction.
+        #expect(ltrStyle?.baseWritingDirection == .natural)
+    }
+
+    /// `TextKit2RowView.nsAlignment`'s `.trailing` case already flips
+    /// left/right by host `layoutDirection` before calling `make` — `make`
+    /// must pass an already-resolved `.left`/`.right` straight through, never
+    /// re-flipping it a second time.
+    @Test func resolvedTrailingAlignmentPassesThroughUnchanged() {
+        let trailingInLTR = TextRowContent.make(
+            segments: [textSegment("end-aligned")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .right, baselineScale: 1, rightToLeft: false)
+        let trailingInRTL = TextRowContent.make(
+            segments: [textSegment("end-aligned")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .left, baselineScale: 1, rightToLeft: true)
+        let ltrStyle = trailingInLTR.attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let rtlStyle = trailingInRTL.attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        #expect(ltrStyle?.alignment == .right)
+        #expect(rtlStyle?.alignment == .left)
+    }
+
+    /// Center alignment is direction-agnostic — `rightToLeft` must never
+    /// perturb it.
+    @Test func centerAlignmentUnaffectedByDirection() {
+        let content = TextRowContent.make(
+            segments: [textSegment("centered")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .center, baselineScale: 1, rightToLeft: true)
+        let style = content.attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        #expect(style?.alignment == .center)
+    }
+
     @Test func underlineStrikeBaselineAndLinkConvert() throws {
         var t = AttributedString("styled")
         t[FontSpecAttribute.self] = .body

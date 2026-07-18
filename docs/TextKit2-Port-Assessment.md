@@ -648,3 +648,172 @@ Checkboxes toggle correctly under the TK2 renderer.
 `swift test`: **223/223 pass**, 37 suites (unchanged — no code touched).
 No new build warnings. No commit to `TextKit2RowView.swift`; this section
 and the screenshot assets are the only changes.
+
+## Phase 3 — Task 12: RTL + AX3 fixtures
+
+### The predicted bug
+
+The design red-team flagged `TextRowContent.make` (`Sources/ADFRendering/
+TextKit2/TextRowContent.swift`): it accepted a `rightToLeft` parameter but
+discarded it (`_ = rightToLeft`) and always set `paragraphStyle.alignment =
+alignment` verbatim. `TextKit2RowView.nsAlignment` resolves `.center` and
+(host-direction-flipped) `.trailing` explicitly, but its default case — "no
+alignment mark", the common row — passes `NSTextAlignment.natural` straight
+through (there is no "leading" case on `NSTextAlignment`). Meanwhile
+`RichTextBlockView`'s `nil → .leading` mapping makes the SwiftUI arm's
+"no mark" case explicitly host-direction-relative. The predicted failure:
+`.natural`, resolved by TextKit against the paragraph's own first-strong
+Bidi character, would make an Arabic paragraph render right-aligned under
+TK2 even inside an LTR host, while the SwiftUI arm renders it left-aligned
+— a visible mismatch.
+
+### Fixture
+
+`Fixtures/rtl-mixed.json`: 4 paragraphs (pure Arabic; Arabic with an
+embedded bold Latin word, "SwiftUI"; a `center`-marked Arabic paragraph; an
+`end`-marked Arabic paragraph) plus a 2-item Arabic `bulletList`. Follows
+`kitchen-sink.json`'s doc-wrapper shape. Verified by launching
+`-fixture rtl-mixed` (bundled automatically — `Demo/project.yml`'s
+`../Fixtures` source glob picks up any file under `Fixtures/`, no
+`project.yml`/`xcodegen` change needed).
+
+### TDD: proving and fixing the gap
+
+Added a red test to `Tests/ADFRenderingTests/TextRowContentTests.swift`
+(`naturalAlignmentResolvesPerHostDirection`) asserting the paragraph
+style's resolved `.alignment` for `(alignment: .natural, rightToLeft:
+false/true)` — it failed before any fix (`NSTextAlignment(rawValue: 4)`
+i.e. `.natural`, not the expected `.left`/`.right`), proving the gap
+deterministically at the unit level regardless of any simulator/OS
+resolution quirk.
+
+Fix, in `TextRowContent.make`:
+
+```swift
+paragraphStyle.alignment = alignment == .natural ? (rightToLeft ? .right : .left) : alignment
+paragraphStyle.baseWritingDirection = .natural
+```
+
+`.natural` — the signal `nsAlignment`'s default case emits for "no
+alignment mark" — now resolves to an explicit `.left`/`.right` per the
+already-threaded `rightToLeft` bool, mirroring `RichTextBlockView`'s
+`nil → .leading` mapping exactly. Any other value (`.center`, or the
+already-flipped `.left`/`.right` `nsAlignment`'s `.trailing` case
+produces) passes through unchanged — `nsAlignment`'s existing logic is
+untouched. `baseWritingDirection` stays `.natural`: per-paragraph Bidi run
+direction (glyph ordering within a line) is still TextKit's to resolve;
+only the alignment *side* is pinned to the host. Three more tests
+(`resolvedTrailingAlignmentPassesThroughUnchanged`,
+`centerAlignmentUnaffectedByDirection`) cover the two "already resolved"
+inputs). All are `@MainActor`, macOS-runnable (no `#if os(iOS)` gate) —
+they run under plain `swift test`, not just the iOS-only UIView suite.
+
+### RTL screenshot matrix — OBSERVED results
+
+Sim `ADF-Task12` (iPhone 16, iOS 18.2), created for this task. Built via
+`cd Demo && xcodegen generate && xcodebuild … build`, installed, then
+`-fixture rtl-mixed` launched in all four combinations (screenshots under
+`docs/assessment-assets/phase3-rtl/`, `t12_` prefix):
+
+**Methodology note (deviation from the brief's literal flag):**
+`-AppleLanguages '(ar)'` alone does **not** flip `layoutDirection` for this
+demo app — confirmed by pixel-diffing `t12_off_ltr.png` against an
+`-AppleLanguages (ar)`-only capture: identical `x` bounds for every row,
+only a few px of vertical drift (Arabic-font metric substitution, not a
+direction change). Root cause: the app bundle has no `.lproj` at all
+(`CFBundleDevelopmentRegion = en`, confirmed via `PlistBuddy`/`ls
+ADFReader.app | grep lproj`), so `Bundle.main.preferredLocalizations`
+always resolves to `en` regardless of `-AppleLanguages` — there is no `ar`
+localization to select. The flag that actually forces RTL for an
+unlocalized app is `-AppleTextDirection YES
+-NSForceRightToLeftWritingDirection YES`; the RTL captures below use that
+(plus `-AppleLanguages '(ar)'` for Arabic font shaping) and it visibly
+flips chrome (nav-bar icon order reverses) as well as content.
+
+Ink bounding boxes (Python3 + PIL, column-scanning each row's non-white
+pixels — same method as Task 11) confirm, for every row, in both locales:
+
+| Paragraph | OFF (LTR) | TK2 (LTR) | OFF (RTL-forced) | TK2 (RTL-forced) |
+|---|---|---|---|---|
+| ¶1 pure Arabic (no mark) | left, `x∈[46,470]` | left, `x∈[48,470]` | right, `x∈[703,1127]` | right, `x∈[703,1127]` |
+| ¶2 Arabic+Latin (no mark) | left, `x∈[51,1079]` | left, `x∈[51,1079]` | right, `x∈[99,1127]` | right, `x∈[99,1127]` |
+| ¶3 `center` mark | center, `x∈[371,808]` | center, `x∈[370,808]` | center, `x∈[371,808]` | center, `x∈[370,808]` |
+| ¶4 `end` mark | right, `x∈[634,1127]` | right, `x∈[634,1127]` | left, `x∈[51,544]` | left, `x∈[51,544]` |
+| bulletList (2 items) | left, indented | left, indented | right, indented | right, indented |
+
+**Acceptance: PASS in both locales** — every paragraph's alignment side
+matches between OFF and TK2 (sub-1-2px differences are the same
+TextKit-vs-`Text` sub-pixel rounding Task 11 already characterized, not a
+direction bug).
+
+**Did the predicted bug actually reproduce?** Screenshots alone, taken
+*after* the fix above, can't answer that — so the fix was reverted
+(`git stash`), the demo rebuilt, and `-fixture rtl-mixed -textkit2`
+recaptured in both locales (`t12_beforefix_tk2_{ltr,rtl}.png`). Pixel
+measurement showed the **pre-fix** build *also* matched OFF in both
+locales (identical `x` bounds to the post-fix captures above) — the
+predicted visual mismatch did not reproduce via this launch-argument-driven
+test. Reasoning: `-AppleTextDirection YES` forces
+`effectiveUserInterfaceLayoutDirection` app-wide, for *every* view
+including the raw `UIView` `TextKit2RowUIView` wraps — so pre-fix
+`NSTextAlignment.natural` (documented as "align according to the user's
+default language") tracked the same forced direction as SwiftUI's
+`layoutDirection` environment, coincidentally agreeing with it. This is
+exactly why the fix is still correct to make: that agreement is incidental
+to a *global* UIKit-wide override, not to the codebase's own explicit
+`rightToLeft` signal — a narrower override (e.g. a future per-document
+`.environment(\.layoutDirection, …)` that doesn't reach a
+`UIViewRepresentable`'s own `UIView.semanticContentAttribute`, since
+SwiftUI environment values don't auto-propagate there) would still diverge
+pre-fix. The **unit test is the reliable, deterministic reproduction** of
+the bug (§ above); the simulator matrix is corroborating evidence that the
+fix introduces no regression, not proof the bug was simulator-visible.
+Fix kept.
+
+### AX3 wrap parity
+
+Ladder: `Sources/ADFRendering/DynamicTypeStep.swift`'s `DynamicTypeSize.
+allCases` is `[xSmall, small, medium, large, xLarge, xxLarge, xxxLarge,
+accessibility1…5]` (12 rungs, index 0–11). `ReaderView`'s `systemTypeSize`
+reads the ambient `@Environment(\.dynamicTypeSize)`, which is `.large`
+(index 3) on a freshly-created, un-configured simulator. `accessibility3`
+is index 9, so **`-fontSizeStep 6`** (`3 → 9`) reaches it exactly — no
+"max step" fallback needed.
+
+`kitchen-sink -fontSizeStep 6`, OFF vs `-textkit2`, three long/complex
+paragraphs (screenshots `t12_ax3_{off,tk2}_p{1,2,3}.png`):
+
+1. **¶1** (bold/italic/underline/strike/code/sub/sup/color/highlight/
+   small/link/annotation marks + a `hardBreak`): **6 lines**, identical
+   wrap points, in both arms.
+2. **¶26** (`Ping [@mention] [emoji] due [date] see [inlineCard] [placeholder]
+   [mediaInline] [inlineExtension]`, atom-heavy): **7 rows**, identical
+   structure/order, in both arms.
+3. **¶27** (6 status-badge atoms, `NEUTRAL`/`PURPLE`/`BLUE`/`RED`/
+   `YELLOW`/`GREEN`) plus the following `taskList` and `decisionList`:
+   **4 lines** (status paragraph) + **2 lines** (checked task, wraps
+   "Design the schema" to its own line) + **3 lines** (decision item) —
+   identical in both arms.
+
+**Verdict: exact line-count parity** at the AX3-equivalent step for all
+three paragraphs (and the two list rows checked alongside them) — no
+resolver bug, no divergence to investigate.
+
+**Known, non-blocking observation (already documented at Task 10, not a
+new Task-12 finding):** at this accessibility size, ¶26's `attachment` and
+`Inline macro` atom chips still render without their SF Symbol icon under
+TK2 (narrower, no glyph, no tint) — the exact "Chip SF Symbols omitted in
+v1" gap Task 10 recorded as deferred to phase-4/T13. It affects chip
+*width/styling* only; the line-wrap *count*, which is what this task
+measures, is unaffected and matches exactly.
+
+### Verification
+
+`swift test`: **226/226 pass** (223 baseline + 3 new `TextRowContentTests`
+cases), 37 suites. Warning count unchanged (2: the pre-existing
+`ADFBeamTests` unhandled-resource notice and the pre-existing
+`IncrementalSearchIndexTests` redundant-`#require` notice — both predate
+this task). `Fixtures/rtl-mixed.json` is picked up by `Demo/project.yml`'s
+existing glob; no `project.yml` edit needed (the generated `.xcodeproj` is
+gitignored and regenerated via `xcodegen generate`, so it was not
+hand-edited in the final state).

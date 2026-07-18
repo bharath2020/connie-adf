@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "type": "doc",
+  "content": [
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "هذا نص عربي للاختبار" }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "هذا النص يحتوي على كلمة " },
+        { "type": "text", "text": "SwiftUI", "marks": [{ "type": "strong" }] },
+        { "type": "text", "text": " باللغة الإنجليزية" }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "marks": [{ "type": "alignment", "attrs": { "align": "center" } }],
+      "content": [
+        { "type": "text", "text": "هذه فقرة في المنتصف" }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "marks": [{ "type": "alignment", "attrs": { "align": "end" } }],
+      "content": [
+        { "type": "text", "text": "هذه فقرة محاذاتها للنهاية" }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "العنصر الأول في القائمة" }] }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "العنصر الثاني في القائمة" }] }
+          ]
+        }
+      ]
+    }
+  ]
+}

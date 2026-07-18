@@ -49,11 +49,20 @@ public struct TextRowContent {
     /// them — so unstyled text still tracks `.label`/`.labelColor` dynamically
     /// while marked-up runs keep their explicit styling.
     ///
-    /// `rightToLeft` is accepted for signature parity with later tasks
-    /// (measurement/attachment callers use the same `Inputs` shape); the
-    /// paragraph style's writing direction is always `.natural` here, per
-    /// the phase-2 spec — the caller has already resolved `alignment` using
-    /// its own layout-direction knowledge before calling `make`.
+    /// `TextKit2RowView.nsAlignment` already resolves `.center` and (its
+    /// direction-flipped) `.trailing` case to concrete values before calling
+    /// `make`; its default case (no alignment mark — the common "leading"
+    /// row) passes `.natural` through instead, since `NSTextAlignment` has no
+    /// "leading" case of its own. `make` resolves THAT `.natural` signal to
+    /// an explicit `.left`/`.right` per `rightToLeft` (Task 12) — mirroring
+    /// `RichTextBlockView`'s `nil → .leading` mapping. This matters because
+    /// leaving `paragraphStyle.alignment` as `.natural` would instead let
+    /// `NSParagraphStyle` resolve it per-PARAGRAPH, from that text's own
+    /// first-strong Bidi character — so an Arabic paragraph would render
+    /// right-aligned even inside an LTR host, diverging from the SwiftUI arm.
+    /// `baseWritingDirection` stays `.natural` regardless: per-paragraph Bidi
+    /// run direction (which glyphs go which way within the line) is still
+    /// TextKit's to resolve — only the alignment SIDE is pinned to the host.
     @MainActor
     public static func make(
         segments: [InlineSegment],
@@ -62,10 +71,8 @@ public struct TextRowContent {
         baselineScale: CGFloat,
         rightToLeft: Bool
     ) -> TextRowContent {
-        _ = rightToLeft
-
         let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.alignment = alignment
+        paragraphStyle.alignment = alignment == .natural ? (rightToLeft ? .right : .left) : alignment
         paragraphStyle.baseWritingDirection = .natural
 
         let result = NSMutableAttributedString()
