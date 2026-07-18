@@ -55,6 +55,19 @@ public struct ADFDocumentView: View {
     @State private var selectionController: SelectionController?
     #endif
 
+    /// The active document's row-geometry registry (Task 17), or `nil` when
+    /// selection isn't wired (flag off, or macOS — `SelectionController`
+    /// itself is iOS-only). Cross-platform typed so it can feed the
+    /// `.environment` write below unconditionally, mirroring
+    /// `adfTableScrollSync`'s always-injected-may-be-nil discipline.
+    private var rowGeometryRegistry: RowGeometryRegistry? {
+        #if os(iOS)
+        selectionController?.geometryRegistry
+        #else
+        nil
+        #endif
+    }
+
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -196,6 +209,7 @@ public struct ADFDocumentView: View {
         .environment(\.adfTaskStates, taskStates)
         .environment(\.adfMentionContent, mentionContent)
         .environment(\.adfDocumentSearch, model.search)
+        .environment(\.adfRowGeometryRegistry, rowGeometryRegistry)
         .overlay { statusOverlay }
     }
 

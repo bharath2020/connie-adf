@@ -38,6 +38,16 @@ import UIKit
 final class SelectionController: NSObject {
     weak var model: ADFDocumentModel?
 
+    /// Per-document row-geometry registry (Task 17): live TK2 rows
+    /// self-register here (via `RowGeometryRegistry`'s own `didMoveToWindow`
+    /// hook, threaded down through `ADFDocumentView` → `SegmentedTextView` →
+    /// `TextKit2RowView`) so a session can query real per-row layout on
+    /// demand. `orderOf` is a stub until Task 18 supplies the real text
+    /// model's document order; registration still sorts (by the stub's
+    /// constant `.max` for everything), it just doesn't yet reflect true
+    /// document order.
+    let geometryRegistry = RowGeometryRegistry()
+
     private weak var container: UIView?
     private weak var scrollView: UIScrollView?
     private var attached = false

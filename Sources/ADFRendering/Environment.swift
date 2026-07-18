@@ -31,6 +31,12 @@ private struct ADFInTableCellKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct ADFRowGeometryRegistryKey: EnvironmentKey {
+    // Optional, like `ADFTableScrollSyncKey` above: `nil` outside a
+    // document (previews) or when the TK2 selection engine isn't wired.
+    static let defaultValue: RowGeometryRegistry? = nil
+}
+
 extension EnvironmentValues {
     /// Media provider injected by `ADFDocumentView`; consumed by the media
     /// block views (Task 5).
@@ -62,5 +68,15 @@ extension EnvironmentValues {
     var adfInTableCell: Bool {
         get { self[ADFInTableCellKey.self] }
         set { self[ADFInTableCellKey.self] = newValue }
+    }
+
+    /// Per-document row-geometry registry (Task 17), injected by
+    /// `ADFDocumentView` only on iOS behind `SelectionFlags.enabled` — live
+    /// TK2 rows self-register here for on-demand selection-rect/caret/hit-test
+    /// queries. `nil` outside a document (previews) or when selection isn't
+    /// wired, same discipline as `adfTableScrollSync`.
+    var adfRowGeometryRegistry: RowGeometryRegistry? {
+        get { self[ADFRowGeometryRegistryKey.self] }
+        set { self[ADFRowGeometryRegistryKey.self] = newValue }
     }
 }

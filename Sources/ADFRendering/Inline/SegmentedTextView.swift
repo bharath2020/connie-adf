@@ -32,6 +32,14 @@ struct SegmentedTextView: View {
 
     @Environment(\.adfDocumentSearch) private var search
     @Environment(\.adfTheme) private var theme
+    #if os(iOS)
+    /// Per-document row-geometry registry (Task 17), threaded into the TK2
+    /// row so it can self-register for on-demand selection queries. `nil`
+    /// outside a document or with selection unwired — registration then never
+    /// runs (`TextKit2RowUIView.registerIfNeeded`/`didMoveToWindow` both
+    /// guard on `ownerID`, which is `nil` too in that case).
+    @Environment(\.adfRowGeometryRegistry) private var rowGeometryRegistry
+    #endif
     /// Live Dynamic Type size, used to resolve the TK2 row's first-line
     /// baseline (font ascent) for enclosing `.firstTextBaseline` stacks.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -59,6 +67,8 @@ struct SegmentedTextView: View {
                 TextKit2RowView(
                     segments: segments,
                     blockAlignment: blockAlignment,
+                    ownerID: ownerID,
+                    registry: rowGeometryRegistry,
                     spans: paint.spans,
                     currentSpans: paint.currentSpans,
                     dimCurrent: flashDimmed,

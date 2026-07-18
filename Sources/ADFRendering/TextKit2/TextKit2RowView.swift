@@ -10,6 +10,17 @@ struct TextKit2RowView: UIViewRepresentable {
     let segments: [InlineSegment]
     var blockAlignment: TextAlignment? = nil
 
+    /// Row identity for `RowGeometryRegistry` self-registration (Task 17) —
+    /// the same key `SegmentedTextView.ownerID` already uses for search
+    /// highlighting. `nil` opts the row out of registration entirely
+    /// (previews, chrome), same as search.
+    var ownerID: String? = nil
+    /// The document's row-geometry registry, threaded down from
+    /// `ADFDocumentView` via `SegmentedTextView`. `nil` outside a document
+    /// (previews) or when selection isn't wired — registration is then a
+    /// no-op.
+    var registry: RowGeometryRegistry? = nil
+
     /// Search-highlight paint values, read by the caller behind the same
     /// zero-work gate the SwiftUI arm uses (`search.isActive`) — empty when
     /// no session is active. `segments` above is the BASE text and is never
@@ -33,6 +44,9 @@ struct TextKit2RowView: UIViewRepresentable {
     func makeUIView(context: Context) -> TextKit2RowUIView { TextKit2RowUIView() }
 
     func updateUIView(_ view: TextKit2RowUIView, context: Context) {
+        view.ownerID = ownerID
+        view.registry = registry
+        view.registerIfNeeded()
         view.apply(TextKit2RowUIView.Inputs(
             content: TextKit2RowUIView.Inputs.Content(
                 segments: segments,
@@ -118,6 +132,13 @@ final class TextKit2RowUIView: UIView {
     private(set) var content: TextRowContent?
     private var drawnWidth: CGFloat = -1
 
+    /// Row-geometry self-registration (Task 17). `ownerID`/`registry` are set
+    /// by `TextKit2RowView.updateUIView`, independent of `Inputs`/`apply` —
+    /// registration is a pure identity/window concern, never a content
+    /// rebuild trigger.
+    var ownerID: String?
+    weak var registry: RowGeometryRegistry?
+
     /// Counts calls that actually rebuilt `TextRowContent` (i.e. ran
     /// `TextRowContent.make` + `TextRowLayout.setAttributedString`) —
     /// exposed so a paint-only `apply` (arrival flash, navigation to a new
@@ -132,6 +153,30 @@ final class TextKit2RowUIView: UIView {
         contentMode = .redraw
     }
     required init?(coder: NSCoder) { fatalError("unused") }
+
+    /// Registers with `registry` when this row enters a window, evicts when
+    /// it leaves (the collapse path — a row's `TextKit2RowUIView` is torn
+    /// down when its `DocumentRow` collapses to a spacer). No beacon views at
+    /// rest: this is the only registration cost, and it never runs on the
+    /// scroll path itself (only on the one-time window-attach transition).
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard let ownerID else { return }
+        if window != nil { registry?.register(ownerID: ownerID, view: self) }
+        else { registry?.unregister(ownerID: ownerID) }
+    }
+
+    /// Registers immediately if this view is ALREADY inside a window when
+    /// `ownerID`/`registry` are (re)assigned by `updateUIView` — `didMoveToWindow`
+    /// only fires on a window TRANSITION, so a lazily-materialized row whose
+    /// `updateUIView` sets these after SwiftUI already inserted it into the
+    /// live hierarchy would otherwise never register. Idempotent (`register`
+    /// itself de-dupes by `ownerID`), so calling this every `updateUIView`
+    /// pass is harmless.
+    func registerIfNeeded() {
+        guard window != nil, let ownerID else { return }
+        registry?.register(ownerID: ownerID, view: self)
+    }
 
     func apply(_ new: Inputs) {
         guard new != inputs else { return }
@@ -258,14 +303,64 @@ final class TextKit2RowUIView: UIView {
     /// Absolute UTF-16 `NSRange` → `NSTextRange`, via offsetting from the
     /// content storage's document start. TextKit 2 locations are opaque —
     /// this `location(_:offsetBy:)` walk is the only legal way to turn a
-    /// UTF-16 offset into one.
-    private func textRange(for nsRange: NSRange) -> NSTextRange? {
+    /// UTF-16 offset into one. Promoted to `internal` (from Task 9's
+    /// `private`) so the geometry-query methods below — reachable from
+    /// `@testable import` — can share it.
+    func textRange(for nsRange: NSRange) -> NSTextRange? {
         let contentStorage = layout.contentStorage
         guard let start = contentStorage.location(contentStorage.documentRange.location, offsetBy: nsRange.location),
               let end = contentStorage.location(start, offsetBy: nsRange.length) else {
             return nil
         }
         return NSTextRange(location: start, end: end)
+    }
+
+    // MARK: Row geometry (Task 17)
+
+    /// Real-layout selection rects for a UTF-16 range in THIS row's attributed
+    /// string, in the row's own coordinate space. Reads the already-committed
+    /// `layoutManager` — never triggers a re-measure (§16). The caller
+    /// converts to container space via `convert(_:to:)`.
+    func selectionRects(forUTF16 range: NSRange) -> [CGRect] {
+        guard range.length > 0, let textRange = textRange(for: range) else { return [] }
+        var rects: [CGRect] = []
+        layout.layoutManager.enumerateTextSegments(in: textRange, type: .selection) { _, frame, _, _ in
+            if frame.width > 0, frame.height > 0 { rects.append(frame) }
+            return true
+        }
+        return rects
+    }
+
+    func caretRect(atUTF16 offset: Int) -> CGRect? {
+        guard let textRange = textRange(for: NSRange(location: offset, length: 0)) else { return nil }
+        var caret: CGRect?
+        layout.layoutManager.enumerateTextSegments(in: textRange, type: .standard) { _, frame, _, _ in
+            caret = CGRect(x: frame.minX, y: frame.minY, width: 2, height: frame.height); return false
+        }
+        return caret
+    }
+
+    /// UTF-16 offset in THIS row nearest a point in the row's own space, via
+    /// the TK2 line fragment under the point (`NSTextLineFragment` is UTF-16).
+    func closestUTF16Offset(to point: CGPoint) -> Int? {
+        var result: Int?
+        layout.layoutManager.enumerateTextLayoutFragments(from: nil, options: []) { fragment in
+            let frame = fragment.layoutFragmentFrame
+            guard frame.minY <= point.y, point.y < frame.maxY else { return true }
+            let local = CGPoint(x: point.x - frame.minX, y: point.y - frame.minY)
+            for line in fragment.textLineFragments {
+                let lineRect = line.typographicBounds
+                guard local.y >= lineRect.minY, local.y < lineRect.maxY || line === fragment.textLineFragments.last else { continue }
+                let charInLine = line.characterIndex(for: CGPoint(x: local.x, y: lineRect.midY))
+                let fragmentStart = layout.contentStorage.offset(
+                    from: layout.contentStorage.documentRange.location,
+                    to: fragment.rangeInElement.location)
+                result = fragmentStart + charInLine
+                return false
+            }
+            return true
+        }
+        return result
     }
 }
 #endif
