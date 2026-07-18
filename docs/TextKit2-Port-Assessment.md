@@ -530,3 +530,121 @@ kitchen-sink (alternating flings so the atom paragraph repeatedly
 enters/leaves the viewport, forcing pill redraws): CPU settled to **0.0%**,
 thread count 16→3 — no livelock. There is no atom-heavy stress fixture;
 re-check at T13 if one is added.
+
+## Phase 3 — Task 11: list/panel baseline parity (measurement only)
+
+Task 7 gave `TextKit2RowView` a `.alignmentGuide(.firstTextBaseline)` that
+returns `firstBaseline(of:categoryRawValue:)` — the first `.text` run's
+resolved-font `.ascender`, a pure function of the resolved `FontSpec` (never
+measured layout, per §16). This is what `ListRowView`
+(`Sources/ADFRendering/Blocks/ListBlockView.swift:32`,
+`HStack(alignment: .firstTextBaseline)`) and `PanelBlockView`
+(`PanelBlockView.swift:16`) align bullet/number/checkbox/decision markers
+and panel icons against. This task measures whether that computed baseline
+actually lines markers/icons up with the real first line of text as well as
+the SwiftUI (`Text`) arm does — the acceptance bar from the brief is ≤1pt
+drift at default size, ≤2pt at `-fontSizeStep 3`.
+
+### Method
+
+Sim `ADF-Task11` (iPhone 16, iOS 18.2), created for this task, deleted at
+the end. Demo built once (`xcodebuild … build`, `xcrun simctl install`) and
+exercised via `-fixture kitchen-sink -scrollToFraction <f> [-textkit2]
+[-fontSizeStep 3]`, screenshotted with `axe screenshot`. `kitchen-sink` has a
+bulletList (depth 0 + a nested depth-1 item), an `orderedList`, 7 `panel`s
+(info/note/tip/success/warning/error/custom), a 2-item `taskList`, and a
+1-item `decisionList` — `f=0.27` (block 10/37) frames the lists+panels in
+one screenshot; `f=0.755` (block 28/37) frames the task/decision rows.
+
+Pixel measurement is Python3 + PIL, reading the PNGs directly (@3x, so
+1px = ⅓pt). For each row:
+
+1. **Column-group the row band** (`col_groups`): scan for contiguous
+   non-background columns (background sampled locally — plain white for
+   list rows, the panel's own pastel fill for panel rows, the decision
+   row's tinted container fill for the decision row) with a gap tolerance
+   (14px) wide enough to bridge intra-word glyph gaps (e.g. the two strokes
+   of a double "l") but not wide enough to bridge the HStack's
+   marker-to-content spacing. The first group is the marker/icon; the next
+   is the first text word.
+2. **Ink bounding box** of the marker group and of the text-word group
+   (`ink_bbox`), each within a y-window padded a few px above/below the
+   row band.
+3. **offset = text_word.bottom − marker.bottom**, computed independently in
+   the OFF screenshot and the `-textkit2` screenshot of the *same* row.
+4. **drift = offset(TK2) − offset(OFF)**, in px, ÷3 for pt.
+
+Step 4 is the load-bearing move: it never treats either screenshot's
+absolute offset as "the" baseline distance (a bullet dot or panel icon
+has no universally meaningful "baseline" of its own, and several row
+labels — "Tip panel", "Warning panel" — contain descenders that shift a
+naive bbox-bottom down). Instead it asks "does TK2 place the marker
+relative to the text the same way OFF does for this exact row", which is
+translation-invariant (immune to the two screenshots' scroll positions
+not lining up to the pixel) and cancels any systematic bias from a
+descender or a marker's own glyph shape (same glyph, same word, in both
+arms — only the text-rendering engine behind it differs).
+
+### Measurements (worst-case drift per row)
+
+| Row | Default drift | `-fontSizeStep 3` drift |
+|---|---|---|
+| Bullet, depth 0, item 1 ("First bullet") | 0px | 0px |
+| Bullet, depth 0, item 2 ("Second bullet") | 1px (0.33pt) | 1px (0.33pt) |
+| Bullet, depth 1 ("Nested bullet") | 0px | 0px |
+| Ordered, item 4 | 1px (0.33pt) | 0px |
+| Ordered, item 5 | 0px | 1px (0.33pt) |
+| Panel: Info | 0px | 1px (0.33pt) |
+| Panel: Note | 0px | 1px (0.33pt) |
+| Panel: Tip | 1px (0.33pt) | 0px |
+| Panel: Success | 1px (0.33pt) | 0px |
+| Panel: Warning | 1px (0.33pt) | 0px |
+| Panel: Error | 1px (0.33pt) | 0px |
+| Panel: Custom | 0px | *(clipped off-screen at step3, not measured)* |
+| Task checkbox, unchecked ("Write the parser") | 0px | 0px |
+| Task checkbox, checked ("Design the schema") | 1px (0.33pt) | 0px |
+| Decision ("Use Swift 6 strict concurrency") | 0px | 1px (0.33pt) |
+
+**Worst-case drift: 1px ≈ 0.33pt, at both default and `-fontSizeStep 3`.**
+Comfortably inside the brief's ≤1pt / ≤2pt bars — the 1px figure is at the
+resolution floor of the measurement itself (a single subpixel rounding
+difference between `TextRowLayout`'s TextKit 2 line metrics and `Text`'s,
+not a systematic misalignment). **Verdict: within tolerance — no change to
+`firstBaseline` needed** (brief Step 3 is a no-op; Step 4's fix path was not
+taken).
+
+Screenshots (`docs/assessment-assets/phase3-baselines/`, `t11_` prefix):
+`t11_{off,tk2}_lists.png` (default, lists+panels), `t11_{off,tk2}_lists_step3.png`
+(`-fontSizeStep 3`), `t11_{off,tk2}_tasks.png` / `t11_{off,tk2}_tasks_step3.png`
+(task/decision rows, both sizes).
+
+### Observation (not a marker/baseline defect — recorded for T13)
+
+The row *bands themselves* drift downward across the TK2 screenshot
+relative to OFF as you move down the bulletList/panels region — e.g. the
+bullet rows' y-position grows apart by ~5-6px per row, reaching ~22px by
+the 5th row; the panel bands are ~5px taller in TK2 than OFF. This is a
+**row-height/line-height difference between `TextRowLayout` (TextKit 2)
+and SwiftUI `Text`**, not a marker-to-text misalignment — the marker inside
+each row still tracks that row's own (taller-or-not) text baseline within
+1px, per the measurements above. It matches Task 7's report ("the only
+differences are sub-pixel vertical rhythm … Task 13's pixel-perfection
+job, not gross breakage"); it isn't cumulative in the task/decision
+screenshot because `-scrollToFraction` anchors to a nearby block rather
+than carrying a continuous pixel offset from the top. Left to T13.
+
+### Checkbox toggle under `-textkit2`
+
+Launched `-textkit2 -fixture kitchen-sink -scrollToFraction 0.755`,
+`axe describe-ui` found the unchecked task ("Write the parser") as
+`Button "Task"`; `axe tap --label "Task" --element-type Button` toggled it.
+`describe-ui` afterward shows both task rows labeled `"Completed task"`,
+and the screenshots (`t11_checkbox_before.png` / `t11_checkbox_after.png`)
+confirm the glyph flips from an empty square to a filled blue checkmark.
+Checkboxes toggle correctly under the TK2 renderer.
+
+### Verification
+
+`swift test`: **223/223 pass**, 37 suites (unchanged — no code touched).
+No new build warnings. No commit to `TextKit2RowView.swift`; this section
+and the screenshot assets are the only changes.
