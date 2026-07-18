@@ -16,6 +16,11 @@ import UIKit
 ///   persisted per-document value — so perf gates can run at large sizes.
 /// - `-selectionSpike` shows `SpikeScreen`, a throwaway feasibility spike for
 ///   the TextKit 2 port assessment (spec §11) — not production UI.
+/// - `-textkit2` renders text leaves (paragraphs, headings, code blocks) with
+///   the TextKit 2 pipeline instead of SwiftUI `Text` (A/B assessment). Read
+///   once at launch by `TextKit2Flags`, not parsed into `LaunchOptions`.
+/// - `-textkit2NoCells` (with `-textkit2`) keeps table-cell text on the
+///   SwiftUI path — the giant-table gate fallback.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles

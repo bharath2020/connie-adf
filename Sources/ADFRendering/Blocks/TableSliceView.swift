@@ -329,6 +329,10 @@ struct TableCellView: View {
 
     private var styledContent: some View {
         content
+            // One flag at the cell-content level (covers both the single-block
+            // and multi-block branches): the TK2 text-leaf toggle reads this so
+            // `-textkit2NoCells` can keep table cells on the SwiftUI path.
+            .environment(\.adfInTableCell, true)
             .fontWeight(cell.isHeader ? .semibold : nil)
             .padding(theme.spacing)
             .frame(maxWidth: .infinity, alignment: .topLeading)

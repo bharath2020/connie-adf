@@ -27,6 +27,10 @@ private struct ADFTableScrollSyncKey: EnvironmentKey {
     static let defaultValue: TableScrollSync? = nil
 }
 
+private struct ADFInTableCellKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// Media provider injected by `ADFDocumentView`; consumed by the media
     /// block views (Task 5).
@@ -49,5 +53,14 @@ extension EnvironmentValues {
     var adfTableScrollSync: TableScrollSync? {
         get { self[ADFTableScrollSyncKey.self] }
         set { self[ADFTableScrollSyncKey.self] = newValue }
+    }
+
+    /// True while rendering inside a table cell's content. The TextKit 2
+    /// text-leaf toggle reads this so `-textkit2NoCells` can keep giant-table
+    /// cells on the SwiftUI path (giant-table gate fallback). Set by
+    /// `TableCellView` at the cell-content level.
+    var adfInTableCell: Bool {
+        get { self[ADFInTableCellKey.self] }
+        set { self[ADFInTableCellKey.self] = newValue }
     }
 }

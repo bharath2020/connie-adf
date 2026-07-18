@@ -12,6 +12,10 @@ struct SegmentedTextView: View {
     /// ID search highlights are keyed by (`RenderBlock.id`, list-row id, or
     /// media id). `nil` opts out of search entirely (previews, chrome).
     var ownerID: String? = nil
+    /// Block-level text alignment, forwarded to the TextKit 2 row so its
+    /// paragraph style matches the SwiftUI `.multilineTextAlignment` the
+    /// enclosing block applies. `nil` (the default) reads as natural/leading.
+    var blockAlignment: TextAlignment? = nil
 
     /// Gap between wrapped lines, scaled with Dynamic Type so line rhythm
     /// tracks the text size it separates.
@@ -25,6 +29,12 @@ struct SegmentedTextView: View {
 
     @Environment(\.adfDocumentSearch) private var search
     @Environment(\.adfTheme) private var theme
+    /// Live Dynamic Type size, used to resolve the TK2 row's first-line
+    /// baseline (font ascent) for enclosing `.firstTextBaseline` stacks.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// True inside a table cell — with `-textkit2NoCells`, cells stay on the
+    /// SwiftUI path (giant-table gate fallback).
+    @Environment(\.adfInTableCell) private var inTableCell
     /// Flash off-phase: while true the current match paints with the subtle
     /// color, so alternating it blinks the accent (§ arrival flash).
     @State private var flashDimmed = false
@@ -33,7 +43,20 @@ struct SegmentedTextView: View {
         let displayed = displayedSegments
         Group {
             if let merged = Self.mergedText(displayed) {
+                #if os(iOS)
+                if TextKit2Flags.enabled && (!inTableCell || TextKit2Flags.cellsEnabled) {
+                    TextKit2RowView(segments: [.text(merged)], blockAlignment: blockAlignment)
+                        .alignmentGuide(.firstTextBaseline) { _ in
+                            TextKit2RowView.firstBaseline(
+                                of: displayed,
+                                categoryRawValue: UIContentSizeCategory(dynamicTypeSize).rawValue)
+                        }
+                } else {
+                    Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+                }
+                #else
                 Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+                #endif
             } else {
                 WrappingInlineLayout(lineSpacing: lineSpacing) {
                     ForEach(Self.tokens(for: displayed)) { token in

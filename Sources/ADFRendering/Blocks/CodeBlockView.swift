@@ -40,9 +40,20 @@ struct CodeBlockView: View {
             .padding(.top, theme.spacing)
 
             ScrollView(.horizontal, showsIndicators: false) {
+                #if os(iOS)
+                if TextKit2Flags.enabled {
+                    TextKit2RowView(segments: [.text(displayedCode)])
+                        .padding(theme.spacing * 1.5)
+                } else {
+                    Text(displayedCode)
+                        .textSelection(.enabled)
+                        .padding(theme.spacing * 1.5)
+                }
+                #else
                 Text(displayedCode)
                     .textSelection(.enabled)
                     .padding(theme.spacing * 1.5)
+                #endif
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

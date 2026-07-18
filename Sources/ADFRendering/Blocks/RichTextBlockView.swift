@@ -12,7 +12,7 @@ struct RichTextBlockView: View {
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
-        SegmentedTextView(segments: segments, ownerID: ownerID)
+        SegmentedTextView(segments: segments, ownerID: ownerID, blockAlignment: textAlignment)
             .multilineTextAlignment(textAlignment)
             .textSelection(.enabled)
             .padding(.leading, indentationPadding)
