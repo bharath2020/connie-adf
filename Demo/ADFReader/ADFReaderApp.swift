@@ -14,6 +14,8 @@ import UIKit
 /// - `-fontSizeStep <n>` opens the reader with the text-size control at
 ///   step `n` (ladder steps relative to the system size), bypassing the
 ///   persisted per-document value — so perf gates can run at large sizes.
+/// - `-selectionSpike` shows `SpikeScreen`, a throwaway feasibility spike for
+///   the TextKit 2 port assessment (spec §11) — not production UI.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -25,6 +27,7 @@ struct LaunchOptions: Sendable {
     var searchQuery: String?
     var searchUpdates = 0
     var fontSizeStep: Int?
+    var selectionSpike = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -49,6 +52,8 @@ struct LaunchOptions: Sendable {
             case "-fontSizeStep" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 fontSizeStep = Int(arguments[index])
+            case "-selectionSpike":
+                selectionSpike = true
             default:
                 break
             }
@@ -68,7 +73,9 @@ struct ADFReaderApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack {
-                if let name = options.fixtureName {
+                if options.selectionSpike {
+                    SpikeScreen().ignoresSafeArea()
+                } else if let name = options.fixtureName {
                     if let fixture = Fixture(named: name) {
                         ReaderView(source: .fixture(fixture), options: options)
                     } else {
