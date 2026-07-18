@@ -309,29 +309,55 @@ branches.** The three runs are indistinguishable within run-to-run noise
 other by more than TK2 run 2 differs from OFF), so the drift is not
 attributable to the TK2 renderer.
 
-**Reconciliation with `docs/Rotation-Scroll-Retention.md`.** That document
-records this drift class as fixed and verified pixel-identical (8 cycles,
-mean diff ≤ 0.02), and its fix commits are ancestors of the commit measured
-here — an apparent contradiction. It is resolved by cross-session history:
-on 2026-07-17, the per-document-text-size session measured rotation drift
-A/B against a **main** build under the same notifyutil protocol and
-recorded *"branch ≤8-block wobble vs main 100-block excursion, same
-protocol"* — i.e., main exhibits a ~100-block rotation excursion despite
-those fix commits, and the further improvement that achieves ≤8-block
-behavior lives on the **unmerged** branch `feature/per-document-text-size`
-(7 commits on ecb5072, deliberately kept unmerged). `textkit2-port-prototype`
-forked from main (d677949), which still carries the excursion; the ~70–100
-blocks measured here matches the prior session's main measurement in
-magnitude. The drift is therefore **inherited baseline, not a port
-regression**. (This run used iOS 26.2 vs the original 18.2 verification —
-noted, but unproven as a factor and unnecessary to explain the result.)
+**Root cause and resolution (final — supersedes two earlier readings).**
+This finding went through three interpretations; the record keeps all three
+for honesty:
 
-Spec §10's kill criterion ("rotation scroll retention breaks") is
-accordingly judged against the inherited baseline: the port provably does
-not worsen it (A/B parity above). Recommendations: (a) file a tracking
-issue to land the unmerged rotation improvement on main (or re-fix there);
-(b) Task 13's phase-3 rotation re-run should use A/B-vs-toggle-OFF parity
-as the bar, with an iOS 18.2 spot-check if time permits.
+1. *First reading (this section's original text):* "pre-existing,
+   renderer-independent" based on iOS 26.2 A/B parity — correct conclusion,
+   insufficient justification (it never reconciled
+   `docs/Rotation-Scroll-Retention.md`, which records this drift class as
+   fixed and pixel-verified, with fix commits ancestral to the measured
+   commit).
+2. *Second reading (an interim amendment):* attributed the drift to an
+   "unmerged improvement branch" — **factually wrong** (that branch was
+   merged to main in `2a6fc94` and deleted; caught by review against git
+   history). A follow-up single-run discriminator on iOS 18.2 then
+   suggested the drift was TK2-specific — **also wrong**, a sampling
+   artifact of a flaky bug.
+3. *Final reading (instrumented, multi-run — see
+   `docs/assessment-assets/phase2-rotation/`, fix commits `165db39` +
+   `f069ab1`):* after a deep programmatic jump (`-scrollToFraction`/TOC),
+   the ~2,500 rows above the anchor were never materialized or measured, so
+   each rotation's single one-shot `scrollTo(anchor, .top)` re-pin bridges
+   that gap on *estimates* and never sees the frame-by-frame height
+   corrections that follow — it settles tens-to-hundreds of blocks off,
+   nondeterministically. Controlled runs: drift in **3/5 TK2 AND 3/4
+   toggle-OFF** launches (−37 to −163 blocks, clustering at discrete
+   magnitudes), i.e. **renderer-agnostic and flaky** — a pre-existing bug
+   of current main, merely *sampled* differently by the earlier
+   single-run measurements (including this gate's iOS 26.2 numbers). The
+   instrumentation also refuted the "TK2 rows report zero height" hypothesis
+   (zero `.zero` returns, zero memo overwrites, anchor id always correct).
+
+**Fix (landed on this branch; candidate for main backport — cleanly
+separable, zero TK2 coupling per review):** keep the immediate re-pin, then
+re-issue it across a post-resize settle window ([0.033, 0.1, 0.2, 0.35,
+0.5] s) as cancellable work items, cancelled on the first user scroll
+interaction (`onScrollPhaseChange`, document-level, availability hoisted;
+pre-iOS-18 falls back to the old behavior) and on view teardown.
+Verified on iOS 18.2: jump+8-rotate drift ≤ 4 blocks in 5/5 runs per
+branch (0/0/0 per branch in the guard round); a user scrolling within the
+settle window wins (counterfactually proven — the unguarded build
+reproduces the yank-back); autoscroll 0.63 / 0.46 ms/s (OFF / ON, better
+than this gate's table); fling CPU settles; 221/221 tests.
+
+Spec §10's kill criterion is therefore judged: **retention does not break
+under TK2** — the observed drift was a pre-existing main bug, now fixed on
+this branch. Recommendations: (a) backport `165db39` + `f069ab1` to main;
+(b) Task 13's phase-3 rotation re-run validates the fixed behavior in both
+toggle branches (A/B parity plus absolute ≤1-row bar, now that the absolute
+bar is achievable again).
 
 ### Gate 6 — type-size gauntlet, kitchen-sink `-textkit2 -fontSizeStep 3`
 
@@ -369,7 +395,7 @@ Launch, 8× swipe through the gallery (`axe swipe`, 0.3 s apart), settle,
 | giant-table autoscroll (OFF / ON / NoCells) | PASS (ON best of the three; no exclusion needed) |
 | Fling burst CPU settle (both branches) | PASS (0.0% / 0.1%) |
 | First chunk < 150 ms | PASS (75 ms, 47 ms) |
-| Rotation retention (TK2 vs OFF, A/B) | HOLDS vs inherited baseline (drift indistinguishable within noise across branches; known main-branch excursion — see reconciliation above) |
+| Rotation retention | PASS after fix — pre-existing renderer-agnostic jump+rotate drift root-caused and fixed on this branch (165db39 + f069ab1); ≤4-block drift 5/5 both branches on iOS 18.2 |
 | Type-size gauntlet (larger + reflow) | PASS |
 | Memory < 150 MB | PASS (62 MB) |
 
