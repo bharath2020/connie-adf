@@ -114,12 +114,15 @@ spans hand span values through `updateUIView`; invalidation is per-owner;
 the arrival flash maps to timed `setNeedsDisplay` of affected fragments only —
 a redraw, never a relayout.
 
-**Baselines.** List markers are CG-drawn inside the row at the first-line
-baseline (they stay OUT of the text content so copy remains byte-identical to
-the search corpus). Panel/quote icon alignment uses computed ascent padding
-from the resolved font — **no SwiftUI `firstTextBaseline` stacks around bare
-UIViews** (probe-measured: SwiftUI places a bare UIView's top edge at the
-baseline; only UILabel/UITextView get true baselines honored).
+**Baselines.** *(Amended after Task 11 verification.)* List markers stay in
+the existing SwiftUI marker column (preserving `TaskMarkerView` checkbox
+interactivity, which CG-drawn markers would have destroyed); the TK2 row
+supplies an explicit `.alignmentGuide(.firstTextBaseline)` computed as the
+first text run's resolved-font ascender — a pure font function, never
+measured layout. Verified: worst marker/icon drift 0.33pt at default and
+step-3 sizes across lists, panels, checkboxes, decisions. Markers remain
+out of the text content so copy stays byte-identical to the search corpus.
+(Bare-UIView top-edge baseline behavior probe-measured as predicted.)
 
 **RTL.** Explicit `NSParagraphStyle` per block: alignment mapped exactly as
 `RichTextBlockView` maps it, flipped by the bridged `layoutDirection`;
