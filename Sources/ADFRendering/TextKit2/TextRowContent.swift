@@ -23,8 +23,8 @@ public struct TextRowContent {
     public let attributed: NSAttributedString
 
     /// One entry per input segment: the UTF-16 offset (into `attributed`)
-    /// where that segment's text begins. Atom segments contribute a zero-
-    /// length run, so a following segment can share the same start as one
+    /// where that segment's text begins. Atom segments append no run at all
+    /// (a no-op), so a following segment can share the same start as one
     /// that preceded an atom.
     public let segmentUTF16Starts: [Int]
 

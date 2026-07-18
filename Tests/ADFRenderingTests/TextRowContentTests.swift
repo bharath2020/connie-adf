@@ -43,6 +43,18 @@ struct TextRowContentTests {
         #expect(r == NSRange(location: 3, length: 2))
     }
 
+    @Test func charRangeToUTF16RangeIsAbsoluteAcrossSegments() {
+        let content = TextRowContent.make(
+            segments: [textSegment("x"), textSegment("y😄z")],
+            categoryRawValue: "UICTContentSizeCategoryL",
+            alignment: .natural, baselineScale: 1, rightToLeft: false)
+        // Segment 1 ("y😄z") characters [1..3) = "😄z" → local UTF-16 [1..4).
+        // Segment 0 ("x") contributes 1 UTF-16 unit ahead of segment 1, so the
+        // absolute location must include segmentUTF16Starts[1] (== 1).
+        let r = TextRowContent.utf16Range(charRange: 1..<3, inSegment: 1, of: content)
+        #expect(r == NSRange(location: 2, length: 3))
+    }
+
     @Test func underlineStrikeBaselineAndLinkConvert() throws {
         var t = AttributedString("styled")
         t[FontSpecAttribute.self] = .body
