@@ -23,6 +23,12 @@ public final class FontSpecResolver {
     private struct Key: Hashable { let spec: FontSpec; let category: String }
     private var cache: [Key: ADFPlatformFont] = [:]
 
+    /// Counts calls to `resolve(_:categoryRawValue:)` — i.e. cache misses.
+    /// Exposed (internal, private(set)) so tests can prove memoization
+    /// actually short-circuits resolution, rather than relying on
+    /// UIFont/NSFont's own interning to coincidentally satisfy `===`.
+    private(set) var resolutionCount = 0
+
     public func font(for spec: FontSpec, categoryRawValue: String) -> ADFPlatformFont {
         let key = Key(spec: spec, category: categoryRawValue)
         if let hit = cache[key] { return hit }
@@ -33,6 +39,7 @@ public final class FontSpecResolver {
 
     #if canImport(UIKit)
     private func resolve(_ spec: FontSpec, categoryRawValue: String) -> UIFont {
+        resolutionCount += 1
         let traits = UITraitCollection(
             preferredContentSizeCategory: UIContentSizeCategory(rawValue: categoryRawValue))
         let base = UIFont.preferredFont(forTextStyle: spec.style.uiTextStyle, compatibleWith: traits)
@@ -50,6 +57,7 @@ public final class FontSpecResolver {
     }
     #elseif canImport(AppKit)
     private func resolve(_ spec: FontSpec, categoryRawValue _: String) -> NSFont {
+        resolutionCount += 1
         // macOS: single-size resolution — `swift test` exercises mapping and
         // memoization; category behavior is iOS-gate territory.
         let base = NSFont.preferredFont(forTextStyle: spec.style.nsTextStyle, options: [:])
