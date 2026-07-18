@@ -160,6 +160,91 @@ public struct SelectionTextModel: Sendable {
         unitUTF16Starts[unit] + localUTF16
     }
 
+    // MARK: - Grapheme snapping (Task 19 — offset ingestion guard)
+
+    /// Snaps a global UTF-16 offset to the nearest GRAPHEME (composed
+    /// character) boundary within its unit. Every gesture-derived offset
+    /// (`closestPosition`, the long-press seed, handle drags) is passed through
+    /// this before it enters the selection model, so a UTF-16 offset that would
+    /// otherwise split a surrogate pair (`"a😄"`) or a combining sequence never
+    /// reaches `NSString.substring` (the corpus has no guard of its own — Task
+    /// 18 review #1). Offsets already on a boundary — including `0`, each unit's
+    /// end, and the `"\n"` joiners between units — pass through unchanged.
+    public func snapToGraphemeBoundary(_ utf16Offset: Int) -> Int {
+        let clamped = max(0, min(utf16Offset, totalUTF16Length))
+        guard let (unit, local) = locate(utf16: clamped) else { return clamped }
+        let plain = units[unit].plainText as NSString
+        // `0` and the unit's end (a `"\n"` joiner or the document end) are
+        // always boundaries; `locate` clamps `local` into `[0, utf16Length]`.
+        guard local > 0, local < plain.length else { return clamped }
+        let sequence = plain.rangeOfComposedCharacterSequence(at: local)
+        if sequence.location == local { return clamped } // already on a boundary
+        let lowerGlobal = unitUTF16Starts[unit] + sequence.location
+        let upperGlobal = unitUTF16Starts[unit] + sequence.location + sequence.length
+        return (clamped - lowerGlobal) <= (upperGlobal - clamped) ? lowerGlobal : upperGlobal
+    }
+
+    // MARK: - Caret anchoring (global offset ↔ live-row part+char)
+
+    /// Which part of which unit a global UTF-16 caret offset falls in, and the
+    /// `Character` offset within that part — the bridge the geometry layer maps
+    /// to a live row's own attributed-string UTF-16 (where an atom is ONE
+    /// U+FFFC attachment char, not its multi-character `fallbackText`). `.atom`
+    /// anchors report `localCharOffset == 0` at the pill's leading edge and its
+    /// whole `Character` count at the trailing edge.
+    public struct CaretAnchor: Sendable, Equatable {
+        public let unit: Int
+        public let source: SearchTextUnit.Part.Source
+        public let localCharOffset: Int
+    }
+
+    public func caretAnchor(forUTF16 offset: Int) -> CaretAnchor? {
+        let clamped = max(0, min(offset, totalUTF16Length))
+        guard let (unit, _) = locate(utf16: clamped) else { return nil }
+        let global = clamped
+        let parts = units[unit].parts
+        let ranges = unitPartGlobalRanges[unit]
+        guard !parts.isEmpty else { return nil }
+        for (index, partRange) in ranges.enumerated() {
+            let isLast = index == parts.count - 1
+            guard global < partRange.upperBound || isLast else { continue }
+            let localUTF16 = max(0, min(global - partRange.lowerBound,
+                                        partRange.upperBound - partRange.lowerBound))
+            let part = parts[index]
+            let charOffset: Int
+            switch part.source {
+            case .atom:
+                charOffset = localUTF16 == 0 ? 0 : (part.range.upperBound - part.range.lowerBound)
+            case .textSegment:
+                let partText = Self.substring(of: units[unit].plainText, charRange: part.range)
+                charOffset = Self.characterOffset(forUTF16Offset: localUTF16, in: partText)
+            }
+            return CaretAnchor(unit: unit, source: part.source, localCharOffset: charOffset)
+        }
+        return CaretAnchor(unit: unit, source: parts[0].source, localCharOffset: 0)
+    }
+
+    /// Inverse of `caretAnchor`: a `(unit, part, Character offset)` back to a
+    /// global UTF-16 offset. `closestPosition` uses it to lift a live row's own
+    /// UTF-16 hit (resolved back through the row's segments into a corpus part +
+    /// char) into the virtual document's global offset space. `.atom` parts
+    /// resolve wholesale — `charOffset <= 0` to the pill's leading edge, any
+    /// larger value to its trailing edge (atomicity).
+    public func globalOffset(unit: Int, partSource: SearchTextUnit.Part.Source, charOffset: Int) -> Int? {
+        guard units.indices.contains(unit) else { return nil }
+        let parts = units[unit].parts
+        guard let index = parts.firstIndex(where: { $0.source == partSource }) else { return nil }
+        let part = parts[index]
+        let partRange = unitPartGlobalRanges[unit][index]
+        if case .atom = part.source {
+            return charOffset <= 0 ? partRange.lowerBound : partRange.upperBound
+        }
+        let corpusChar = max(part.range.lowerBound,
+                             min(part.range.lowerBound + charOffset, part.range.upperBound))
+        let localUTF16 = Self.utf16Range(charRange: 0..<corpusChar, in: units[unit].plainText).upperBound
+        return unitUTF16Starts[unit] + localUTF16
+    }
+
     // MARK: - Copy
 
     /// The visible-unit substring of the requested global UTF-16 range, with

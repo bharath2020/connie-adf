@@ -72,6 +72,41 @@ public final class RowGeometryRegistry {
         return (below.map { ($0.0, $0.1) }, above.map { ($0.0, $0.1) })
     }
 
+    /// The live-row frames bracketing a document-order position — the live row
+    /// with the greatest order strictly below `order` (`above`, physically
+    /// higher on screen) and the least order strictly above it (`below`) — for
+    /// collapsed-row rect interpolation (spec §7). Computed from a fresh
+    /// `orderOf` per entry, so it is correct even if `orderOf` was reassigned
+    /// (Task 18 wiring) after some rows registered under the stub. Never a
+    /// scroll-path query.
+    public func liveFrames(
+        bracketingOrder order: Int, frameInContainer: (ADFPlatformView) -> CGRect
+    ) -> (above: CGRect?, below: CGRect?) {
+        evictDead()
+        var above: (order: Int, frame: CGRect)?
+        var below: (order: Int, frame: CGRect)?
+        for entry in entries {
+            guard let view = entry.view else { continue }
+            let entryOrder = orderOf(entry.ownerID)
+            if entryOrder < order {
+                if above == nil || entryOrder > above!.order { above = (entryOrder, frameInContainer(view)) }
+            } else if entryOrder > order {
+                if below == nil || entryOrder < below!.order { below = (entryOrder, frameInContainer(view)) }
+            }
+        }
+        return (above?.frame, below?.frame)
+    }
+
+    /// All live rows in document order — the candidate set for a nearest-row
+    /// scan during `closestPosition`. Sorts by a fresh `orderOf` (robust to a
+    /// post-registration `orderOf` reassignment). Selection-path only.
+    public func liveEntriesInDocumentOrder() -> [(ownerID: String, view: ADFPlatformView)] {
+        evictDead()
+        return entries.compactMap { entry in
+            entry.view.map { (entry.ownerID, $0) }
+        }.sorted { orderOf($0.ownerID) < orderOf($1.ownerID) }
+    }
+
     private func insertionIndex(forOrder order: Int) -> Int {
         var lo = 0, hi = entries.count
         while lo < hi {

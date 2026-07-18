@@ -362,5 +362,43 @@ final class TextKit2RowUIView: UIView {
         }
         return result
     }
+
+    // MARK: Selection part mapping (Task 19)
+
+    /// Segment index of the atom whose structural node ID is `id`, or nil.
+    /// The selection engine turns a corpus atom part (`.atom(id:)`) into the
+    /// ONE U+FFFC attachment char the row renders for it, located at
+    /// `content.segmentUTF16Starts[index]` (Task 10 — one attachment char per
+    /// atom). Walks the row's own input segments, which carry each atom's ID
+    /// (`InlineSegment.atom(_, id:)`).
+    func segmentIndex(forAtomID id: String) -> Int? {
+        guard let segments = inputs?.content.segments else { return nil }
+        for (index, segment) in segments.enumerated() {
+            if case .atom(_, let atomID) = segment, atomID == id { return index }
+        }
+        return nil
+    }
+
+    /// Resolves a UTF-16 offset in THIS row's attributed string back to the
+    /// corpus part it belongs to and the `Character` offset within that part —
+    /// the inverse of the search/selection part → row-UTF-16 mapping. Used by
+    /// `closestPosition` so a live-row hit lifts to the virtual document's
+    /// global offset space (the row treats an atom as one U+FFFC char; the
+    /// returned `.atom` offset is 0 at the pill's leading edge, 1 past it).
+    func rowAnchor(atRowUTF16 offset: Int) -> (source: SearchTextUnit.Part.Source, localCharOffset: Int)? {
+        guard let content, let segments = inputs?.content.segments, !segments.isEmpty else { return nil }
+        var segment = 0
+        for (index, start) in content.segmentUTF16Starts.enumerated() {
+            if start <= offset { segment = index } else { break }
+        }
+        let within = offset - content.segmentUTF16Starts[segment]
+        switch segments[segment] {
+        case .atom(_, let id):
+            return (.atom(id: id), within >= 1 ? 1 : 0)
+        case .text:
+            let charOffset = TextRowContent.characterOffset(forUTF16Offset: within, inSegment: segment, of: content)
+            return (.textSegment(index: segment), charOffset)
+        }
+    }
 }
 #endif

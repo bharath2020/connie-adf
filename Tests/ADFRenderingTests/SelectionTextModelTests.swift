@@ -66,4 +66,66 @@ struct SelectionTextModelTests {
         #expect(m.snapAcrossAtoms(2, forward: false) == 0)   // inside atom, nearer back edge
         #expect(m.snapAcrossAtoms(9, forward: true) == 9)    // in " done" text — unchanged
     }
+
+    // MARK: partSlices — geometry slicing (Task 18 review #2: had zero coverage)
+
+    /// A multi-part unit (text · atom · text) sliced by a range spanning all
+    /// three: text parts report their intersected `Character` sub-range; the
+    /// atom reports its WHOLE contribution on any overlap (atomicity).
+    @Test func partSlicesMultiPartWithAtomOverlap() {
+        // "Hi@Xdone": "Hi"[0,2) · atom "@X"[2,4) · "done"[4,8); all BMP so
+        // Character offsets == UTF-16 offsets.
+        let unit = SearchTextUnit(
+            ownerID: "b0", topLevelBlockID: "b0", expandAncestorIDs: [],
+            plainText: "Hi@Xdone",
+            parts: [.init(source: .textSegment(index: 0), range: 0..<2),
+                    .init(source: .atom(id: "m1"), range: 2..<4),
+                    .init(source: .textSegment(index: 2), range: 4..<8)])
+        let m = SelectionTextModel.build(orderedItems: [item("b0", [unit])])
+
+        let slices = m.partSlices(forUTF16: 1..<6, isVisible: { _ in true })
+        #expect(slices.count == 3)
+        #expect(slices[0].source == .textSegment(index: 0))
+        #expect(slices[0].localCharRange == 1..<2)          // "i" — the intersected tail of "Hi"
+        #expect(slices[1].source == .atom(id: "m1"))
+        #expect(slices[1].localCharRange == 0..<2)          // whole pill despite partial overlap
+        #expect(slices[2].source == .textSegment(index: 2))
+        #expect(slices[2].localCharRange == 0..<2)          // "do" — the intersected head of "done"
+        #expect(slices.allSatisfy { $0.unit == 0 })
+    }
+
+    /// A range that lands STRICTLY inside the atom still selects the whole pill,
+    /// and touches no neighboring text part.
+    @Test func partSlicesAtomInteriorSelectsWholePill() {
+        let unit = SearchTextUnit(
+            ownerID: "b0", topLevelBlockID: "b0", expandAncestorIDs: [],
+            plainText: "Hi@Xdone",
+            parts: [.init(source: .textSegment(index: 0), range: 0..<2),
+                    .init(source: .atom(id: "m1"), range: 2..<4),
+                    .init(source: .textSegment(index: 2), range: 4..<8)])
+        let m = SelectionTextModel.build(orderedItems: [item("b0", [unit])])
+
+        let slices = m.partSlices(forUTF16: 3..<4, isVisible: { _ in true })  // one unit inside "@X"
+        #expect(slices.count == 1)
+        #expect(slices[0].source == .atom(id: "m1"))
+        #expect(slices[0].localCharRange == 0..<2)
+    }
+
+    /// A multi-unit range: each visible unit contributes its own text slice,
+    /// with `localCharRange` measured within that unit's part (not the joined
+    /// document), and hidden units drop out entirely.
+    @Test func partSlicesSpansUnitsAndSkipsHidden() {
+        let m = SelectionTextModel.build(orderedItems: [
+            item("b0", [textUnit(owner: "b0", top: "b0", "alpha")]),                    // [0,5)
+            item("b1", [textUnit(owner: "b1", top: "e0", "bravo", expands: ["e0"])]),   // [6,11) hidden
+            item("b2", [textUnit(owner: "b2", top: "b2", "charlie")]),                  // [12,19)
+        ])
+        // Range from mid-"alpha" through mid-"charlie", with e0 closed.
+        let slices = m.partSlices(forUTF16: 2..<15, isVisible: { !$0.expandAncestorIDs.contains("e0") })
+        #expect(slices.count == 2)                       // b0 and b2 only; b1 hidden
+        #expect(slices[0].unit == 0)
+        #expect(slices[0].localCharRange == 2..<5)       // "pha"
+        #expect(slices[1].unit == 2)
+        #expect(slices[1].localCharRange == 0..<3)       // "cha"
+    }
 }

@@ -201,4 +201,22 @@ public struct TextRowContent {
         let location = content.segmentUTF16Starts[index] + precedingUTF16
         return NSRange(location: location, length: rangeUTF16)
     }
+
+    /// Inverse of `utf16Range`: the `Character` offset within
+    /// `segmentStrings[index]` at which `utf16Offset` UTF-16 units of that
+    /// segment's own text have been consumed. Used by the selection engine to
+    /// turn a live row's UTF-16 hit (from `closestUTF16Offset`) back into a
+    /// corpus part + `Character` offset. Surrogate-safe: it counts by
+    /// `Character`, never slicing mid-scalar.
+    public static func characterOffset(forUTF16Offset utf16Offset: Int, inSegment index: Int, of content: TextRowContent) -> Int {
+        let string = content.segmentStrings[index]
+        var utf16Count = 0
+        var charCount = 0
+        for character in string {
+            if utf16Count >= utf16Offset { break }
+            utf16Count += character.utf16.count
+            charCount += 1
+        }
+        return charCount
+    }
 }

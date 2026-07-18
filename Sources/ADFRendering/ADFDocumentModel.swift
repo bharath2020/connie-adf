@@ -66,6 +66,18 @@ public final class ADFDocumentModel {
     /// top-visible row without any geometry. See `ScrollAnchorRegistry`.
     @ObservationIgnored let anchors = ScrollAnchorRegistry()
 
+    /// The read-only text-selection range (spec §7, phase 4 / Task 19). A
+    /// plain non-observed box (the `anchors` pattern) so UIKit's per-touch-move
+    /// `selectedTextRange` writes during a handle drag invalidate no SwiftUI
+    /// state. Populated only under the TK2 selection flag; `nil` at rest.
+    @ObservationIgnored public let selection = SelectionState()
+
+    /// The ONE coarse Bool SwiftUI observes for selection — flips at session
+    /// start/end only (like `search.isActive`), so idle rows never re-evaluate
+    /// on a per-touch-move selection write. `false` at rest.
+    public private(set) var selectionSessionActive = false
+    func setSelectionSessionActive(_ active: Bool) { selectionSessionActive = active }
+
     let theme: ADFTheme
     /// Registered block plugins: matching during preparation (in registration
     /// order) and view resolution during rendering both read from here — one
