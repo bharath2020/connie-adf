@@ -183,22 +183,42 @@ giant-table gate kills it without killing the whole port.
 
 ## 7. Selection engine
 
-**Attachment point (feasibility question #1).** The read-only `UITextInput`
-container + `UITextInteraction(.nonEditable)` + `UIEditMenuInteraction` attach
-to an **ancestor** of the row content — the introspected hosting
-`UIScrollView`'s content container — not a sibling overlay. Ancestor gesture
-recognizers receive touches hit-tested to descendants, so:
-- long-press starts selection anywhere over text without winning hitTest;
-- links, task checkboxes, the YouTube facade, expand headers, and table/code
-  horizontal pans keep fully native behavior **even while a selection is
-  active** (the prototype's sibling overlay provably broke all of these);
-- hitTest is never overridden; there is no capture-vs-pass region logic.
+**Attachment point — v3, session-scoped overlay.** *(Amended after Task 16
+killed the v2 ancestor-interaction architecture on the real hierarchy:
+`UITextInteraction`'s recognizers decline touches that hit-test to
+descendant rows — the phase-1 spike passed only because its synthetic labels
+were non-interactive. The same experiment proved a plain long-press
+recognizer on the ancestor DOES fire over interactive descendants; that
+finding is the foundation of v3. User constraint recorded: the SwiftUI
+renderer path must not change — every piece of selection machinery mounts
+only when `TextKit2Flags.enabled`.)*
 
-Tap-to-clear and long-press-inside-selection are ancestor recognizers with
-failure requirements against descendant controls. If `UITextInteraction`
-cannot operate with hit-tested descendants (interaction internals cancel
-descendant touches, etc.), that is a design-killing finding the spike surfaces
-in day one.
+- The read-only `UITextInput` container + `UITextInteraction(.nonEditable)` +
+  `UIEditMenuInteraction` live on a **transparent overlay** spanning the
+  scroll content (mounted only under the TK2 flag).
+- **Idle (no selection session): the overlay is hit-test transparent**
+  (`isUserInteractionEnabled = false` or hitTest → nil). Links, checkboxes,
+  the video facade, expand headers, and table/code pans behave natively;
+  per-frame cost is zero.
+- **Session start:** our own `UILongPressGestureRecognizer` on the
+  introspected content container (the ancestor — proven to fire over
+  interactive descendants) begins a session: word-select at the press point
+  via the text model, make the overlay first responder, enable its
+  hit-testing.
+- **Session active:** the overlay owns touches over the selection UI —
+  `UITextInteraction` drives handles/drags/menu natively on the overlay
+  (touches now hit-test TO the overlay, which is `interaction.view`, the
+  exact condition Task 16 proved necessary). Tap outside the selection
+  clears the session and returns the overlay to transparent; the
+  first-responder resignation path must restore the idle state
+  unconditionally.
+- Scroll must keep working during a session (the overlay passes vertical
+  pans through to the scroll view — verified in the arbitration matrix).
+
+The remaining v2 contracts are unchanged: UTF-16 currency, on-demand-only
+geometry, non-observed state + coarse session Bool, epochs + gesture-cancel,
+expand policy, copy semantics, and the interaction-hardening items (copy
+wiring, drag-past-edge autoscroll writing `anchors.topRow`).
 
 **Text model.** The search corpus (`index.itemOrder` → units → plainText) with
 stored cumulative prefix sums. **UTF-16 code units are the global currency**
