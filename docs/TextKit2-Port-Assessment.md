@@ -418,6 +418,54 @@ drift as a separate, renderer-independent bug to file; (b) re-run this same
 matrix at Task 13 per the plan, since pills/search drawing land in Phase 3
 and could change these numbers.
 
+## Phase 3: draw-pass search highlights (Task 9)
+
+Commit `e5213e9` (parent `f27d72b`). Dedicated sim `ADF-Task9` (iPhone 16,
+iOS 18.2), created for this task, deleted at the end.
+
+**Draw-pass architecture.** `TextKit2RowView` gains `spans`/`currentSpans`
+highlight inputs, diffed independently from the base content inputs
+(`TextKit2RowUIView.Inputs.Paint`, a separate `Equatable` sub-struct) behind
+the same one-Bool idle gate the SwiftUI/legacy arm already uses — base text
+(`segments`/`TextRowContent`) is never repainted for a highlight-only
+change. `draw(_:)` runs a new `drawHighlightBackgrounds(in:)` before the
+fragment-drawing loop: subtle-match fills first, current-match fills after
+(so the accent wins any overlap); the current match's foreground is forced
+via `layoutManager.setRenderingAttributes`, never by touching the content
+storage's attributed string. The arrival flash is therefore redraw-only,
+never a relayout — proven not by inspection but by a real unit test:
+`TextKit2RowUIViewTests.paintOnlyChangeSkipsConversion` applies three
+paint-only changes (spans populate, `dimCurrent` true, `dimCurrent` false)
+and asserts the row's `conversionCount` stays at `1` throughout;
+`contentChangeReconverts` confirms a segments change does bump it.
+
+**Match-count and highlight parity** — kitchen-sink, query `heading`: OFF
+and `-textkit2` both report `matches=5` (one per heading level 2-6), and
+the highlight pattern is pixel-identical between arms — same words, same
+positions, current match in accent, other matches subtle
+(`t9_kitchensink_off_search_heading.png` /
+`t9_kitchensink_tk2_search_heading.png`). **PASS, 5/5.**
+
+**stress-5k fling gate** — query `e` settles at **73,399 matches** in both
+the in-app UI counter and the OFF/`-textkit2` launch-arg `SEARCH_METRICS`
+output — exact parity at scale (`t9_stress5k_tk2_search_e_73399matches.png`).
+A 12× `axe swipe` fling burst with all 73,399 spans highlighted settles CPU
+to **0.2%** (`top -l 2 -pid`), no livelock
+(`t9_stress5k_tk2_after_fling_scroll.png`).
+
+**Arrival flash.** Plain repeated `simctl io screenshot` calls could not
+reliably catch the ~130ms dimmed window (confirmed empirically across ~20
+attempts), so `xcrun simctl io recordVideo` captured the full
+launch→search→flash→exit sequence, decoded to 30fps PNGs via `ffmpeg`.
+Sampling the current match's background pixel across frames shows the
+three-phase sequence: accent → dimmed/subtle (~130ms) → accent again —
+`t9_flash_1_accent.png`, `t9_flash_2_dimmed.png`,
+`t9_flash_3_accent_again.png`.
+
+`swift test`: 222/222, 37 suites. `xcodebuild test` (iOS Simulator):
+83/83, 13 suites, including the new `TextKit2RowUIView` paint/content-split
+suite. Screenshots: `docs/assessment-assets/phase3-search/`.
+
 ## Phase 3 — Task 10: atom pills as vector-drawn attachments
 
 Atom-bearing paragraphs (mentions, statuses, dates, emoji, inline cards,
@@ -1109,6 +1157,20 @@ of intentional or discovered TK2-arm gaps still open at the end of Phase 3:
    a custom container omits Copy unless `copy(_:)`/`canPerformAction` are
    explicitly implemented (spike row 8's FAIL) — a required phase-4
    selection-controller work item, not an optional polish.
+10. **`TextRowLayoutTests.sameInputSameWidthMeasuresIdentically` flaked
+    once in ~30 combined full-suite runs** across phases 1-3 (pre-existing
+    on base, unrelated to any TK2 change; suspected parallel-test cache
+    contention — Task 9's concerns section). Layout determinism underpins
+    the `CollapsedRowHeight` exact-replay contract, so this can't just be
+    waved off: a serial-vs-parallel discriminator run (e.g. N=100 serial)
+    must precede any production-port decision.
+11. **The mid-scroll LIVE type-size change** (in-app popover while
+    scrolled deep, over materialized TK2 rows) was marked optional/
+    UNTESTED in both Gate-6 runs (Phase 2 and Task 13). Spec §10 names it
+    explicitly, and it exercises exactly the §19-re-pin-over-TK2-rows path
+    phase 4 leans on — it must be run in phase 4, not deferred again.
+12. **Spec §10's idle-soak and scene-snapshot-thrash gates** (backgrounding
+    through Home/lock/app-switcher) were never run across phases 1-3.
 
 **Resolved, not carried forward:** the rotation-retention drift that
 dominated Phase 2's Gate 5 discussion (~70–100 block drift, both branches,
@@ -1130,10 +1192,13 @@ and capsule pills all correctly dynamic-color-adapted, with one small,
 newly-precise (not newly-introduced) color gap in `inlineCard` chip tinting.
 
 **Recommendation: the TK2 port has cleared all phase 1–3 kill/proceed gates.**
-The nine open items in the known-gaps register above are phase-4 work
-work (chip icon+tint, atom hit-testing, pill search-tint, pure-atom-row
-baseline, vertical rhythm, an atom-stress fixture, and a narrower RTL
-regression test) — none of them perf or correctness regressions, none of
-them block shipping the toggle for further internal dogfooding. Backporting
-the rotation-retention fix (`165db39`+`f069ab1`) to `main` independent of
-this port remains recommended, as noted in Phase 2.
+The twelve open items in the known-gaps register above are phase-4 work
+(chip icon+tint, atom hit-testing, pill search-tint, pure-atom-row
+baseline, vertical rhythm, an atom-stress fixture, a narrower RTL
+regression test, accessibility ancestor-collapse budgeting, copy/edit-menu
+responder wiring, the layout-determinism flake discriminator, the
+mid-scroll live type-size gate, and the idle-soak/scene-thrash gates) —
+none of them perf or correctness regressions, none of them block shipping
+the toggle for further internal dogfooding. Backporting the
+rotation-retention fix (`165db39`+`f069ab1`) to `main` independent of this
+port remains recommended, as noted in Phase 2.

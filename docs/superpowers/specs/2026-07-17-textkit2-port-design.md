@@ -269,6 +269,13 @@ DocumentRow/spacer collapse/`CollapsedRowHeight` machinery; scroll anchoring
 streaming append; search indexing/matching; video coordinator + facade
 discipline; media pipeline; `.id(document)` identity contract.
 
+**Scroll anchoring.** *(Amended during phase 2–3 execution.)* During the
+assessment, the one-shot re-pin was extended to a cancellable settle-window
+re-pin series (commits `165db39` + `f069ab1`) to fix a pre-existing,
+renderer-agnostic jump-then-rotate drift — flagged for main backport. The
+tracking-only nil-getter binding and anchors-truthfulness contracts remain
+untouched.
+
 ## 10. Gates and verdict criteria
 
 Perf (both toggle branches where marked):
