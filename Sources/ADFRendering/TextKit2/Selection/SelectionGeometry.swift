@@ -155,6 +155,33 @@ struct SelectionGeometryResolver {
         return (grapheme - backward) <= (forward - grapheme) ? backward : forward
     }
 
+    /// Grapheme-snap then atom-aware-snap a RANGE as a whole — the
+    /// endpoint-resolution path `writeSelection` uses (Task 19 review fix
+    /// round 1). If the range falls WHOLLY inside a single atom's span —
+    /// e.g. a tokenizer word-seed ("Jul", "2024") or a drag-derived range
+    /// landing inside the "Jul 9, 2024" date pill's `fallbackText` — expand
+    /// to that atom's WHOLE range (spec §5 atomicity: "the tokenizer treats
+    /// an atom's range as a single word"), rather than calling `snapIngested`
+    /// on each endpoint independently. Independent per-endpoint snapping can
+    /// drive BOTH ends to the SAME nearer edge and collapse to an empty
+    /// range — an empty selection that still presents an edit menu over
+    /// nothing (the finding this fixes). A range not wholly inside one atom
+    /// snaps each endpoint independently via `snapIngested`, unchanged from
+    /// before.
+    func snapIngestedRange(_ range: Range<Int>) -> Range<Int> {
+        let lowerRaw = min(range.lowerBound, range.upperBound)
+        let upperRaw = max(range.lowerBound, range.upperBound)
+        let gLower = model.snapToGraphemeBoundary(lowerRaw)
+        let gUpper = model.snapToGraphemeBoundary(upperRaw)
+        let grapheme = min(gLower, gUpper)..<max(gLower, gUpper)
+        if !grapheme.isEmpty, let atom = model.atomRange(containing: grapheme) {
+            return atom
+        }
+        let snappedLower = snapIngested(lowerRaw)
+        let snappedUpper = snapIngested(upperRaw)
+        return snappedLower..<max(snappedLower, snappedUpper)
+    }
+
     // MARK: Interpolation
 
     /// One whole-owner rect for a collapsed owner, spanning the vertical gap

@@ -136,8 +136,16 @@ final class SelectionController: NSObject {
         container.bringSubviewToFront(overlay)
         overlay.isUserInteractionEnabled = true
 
+        // `sessionActive` / `selectionSessionActive` / the presented menu only
+        // commit once a seed offset actually resolves — a seed miss undoes the
+        // tentative "enable interaction" instead of leaving an
+        // interaction-enabled empty session behind (review fix round 1, minor #3).
+        guard overlay.beginSession(atContainerPoint: point) else {
+            overlay.isUserInteractionEnabled = false
+            return
+        }
+
         sessionActive = true
-        overlay.beginSession(atContainerPoint: point)
         // The ONE observed flip at session start (first non-empty selection).
         model.setSelectionSessionActive(true)
         presentMenu(near: point)
@@ -398,8 +406,14 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     /// Word-select at the press point via the tokenizer over the real corpus,
     /// and push the selection to UIKit. The overlay must already be
     /// first-responder-eligible and enabled (the controller does that first).
-    func beginSession(atContainerPoint point: CGPoint) {
-        guard let seed = resolver.closestGlobalOffset(toContainerPoint: point) else { return }
+    /// Returns `false` on a seed miss (no resolvable geometry under the
+    /// point) WITHOUT touching first-responder/selection-display state, so
+    /// the caller can undo its tentative "enable interaction" and never mark
+    /// the session active (Task 19 review fix round 1, minor #3 — a failed
+    /// seed used to leave an interaction-enabled empty session behind).
+    @discardableResult
+    func beginSession(atContainerPoint point: CGPoint) -> Bool {
+        guard let seed = resolver.closestGlobalOffset(toContainerPoint: point) else { return false }
         _ = becomeFirstResponder()
         inputDelegate?.selectionWillChange(self)
         let seedPosition = SelectionTextPosition(seed)
@@ -409,6 +423,7 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         selectionDisplay?.isActivated = true
         selectionDisplay?.setNeedsSelectionUpdate()
         selectionDisplay?.layoutManagedSubviews()
+        return true
     }
 
     /// The tokenizer's enclosing word at a position, tried in both storage
@@ -465,21 +480,31 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         let total = textModel.totalUTF16Length
         let lower = max(0, min(range.lowerBound, total))
         let upper = max(lower, min(range.upperBound, total))
-        return lower < upper ? lower..<upper : lower..<upper
+        // A degenerate/empty range (e.g. after clamping to a shrunk document)
+        // is NO SELECTION, not a zero-length caret that can still present a
+        // menu (Task 19 review fix round 1, minor #1 — was a dead ternary
+        // returning the same value on both branches).
+        return lower < upper ? lower..<upper : nil
     }
 
-    /// Writes a range into the model box (a non-observed write). Both endpoints
-    /// pass through the single ingestion guard (`snapIngested`): grapheme-snap,
-    /// then snap to the NEARER edge of any atom they land strictly inside, so a
-    /// caret/handle never rests inside a pill (spec §7 "endpoints snap to the
-    /// nearer pill edge"). Rect atomicity — a range that overlaps a pill draws
-    /// the whole pill — is handled separately by `partSlices`.
+    /// Writes a range into the model box (a non-observed write) via the
+    /// resolver's single ingestion guard, `snapIngestedRange`: whole-atom
+    /// expansion when the range lands entirely inside one atom (spec §5
+    /// atomicity), else grapheme-then-nearer-edge snapping of each endpoint
+    /// independently (spec §7 "endpoints snap to the nearer pill edge"). Rect
+    /// atomicity — a range that overlaps a pill draws the whole pill — is
+    /// handled separately by `partSlices`. If snapping collapses the range to
+    /// empty, no selection is written (empty-range hygiene, review fix round
+    /// 1) rather than persisting a degenerate range.
     private func writeSelection(_ range: Range<Int>) {
         guard let model else { return }
-        let currentResolver = resolver
-        let lower = currentResolver.snapIngested(min(range.lowerBound, range.upperBound))
-        let upper = currentResolver.snapIngested(max(range.lowerBound, range.upperBound))
-        model.selection.utf16Range = lower..<max(lower, upper)
+        let snapped = resolver.snapIngestedRange(range)
+        guard !snapped.isEmpty else {
+            model.selection.utf16Range = nil
+            selectionDisplay?.setNeedsSelectionUpdate()
+            return
+        }
+        model.selection.utf16Range = snapped
         model.selection.epoch = model.documentRevision // placeholder → documentEpoch in Task 22
         selectionDisplay?.setNeedsSelectionUpdate()
     }

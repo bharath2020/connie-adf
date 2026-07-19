@@ -53,25 +53,6 @@ public final class RowGeometryRegistry {
         }
     }
 
-    /// The live row nearest (vertically) to a content-space point, plus the
-    /// two live neighbors bracketing a gap — the inputs collapsed-row
-    /// interpolation needs. `frameInContainer` converts each row to the
-    /// container's coordinate space (the ancestor the controller attaches to).
-    public func nearestLive(
-        toY y: CGFloat, frameInContainer: (ADFPlatformView) -> CGRect
-    ) -> (below: (ownerID: String, frame: CGRect)?, above: (ownerID: String, frame: CGRect)?) {
-        evictDead()
-        var above: (String, CGRect)?
-        var below: (String, CGRect)?
-        for e in entries {
-            guard let v = e.view else { continue }
-            let f = frameInContainer(v)
-            if f.maxY <= y { above = (e.ownerID, f) }
-            else if f.minY >= y, below == nil { below = (e.ownerID, f) }
-        }
-        return (below.map { ($0.0, $0.1) }, above.map { ($0.0, $0.1) })
-    }
-
     /// The live-row frames bracketing a document-order position — the live row
     /// with the greatest order strictly below `order` (`above`, physically
     /// higher on screen) and the least order strictly above it (`below`) — for

@@ -301,6 +301,42 @@ public struct SelectionTextModel: Sendable {
         return forward ? range.upperBound : range.lowerBound
     }
 
+    /// The full global UTF-16 range of the atom that WHOLLY contains `range` —
+    /// both endpoints fall within (or exactly on) a single atom's span — or
+    /// `nil` if no one atom encloses the whole range (it's empty, touches no
+    /// atom, or straddles an atom boundary without being contained by it).
+    ///
+    /// The endpoint-resolution path (`SelectionGeometryResolver.snapIngestedRange`,
+    /// Task 19 review fix round 1) uses this so a word-seed or drag-derived
+    /// range landing INSIDE a multi-word atom's `fallbackText` — e.g. the
+    /// word "Jul" or "2024" inside the "Jul 9, 2024" date pill — expands to
+    /// the pill's whole range instead of nearer-edge-snapping each endpoint
+    /// independently. Independent per-endpoint snapping can drive BOTH ends
+    /// to the SAME atom edge and collapse the selection to empty (spec §5
+    /// atomicity: "the tokenizer treats an atom's range as a single word").
+    public func atomRange(containing range: Range<Int>) -> Range<Int>? {
+        guard !range.isEmpty, !atomRangesGlobal.isEmpty else { return nil }
+
+        // Binary search for the last atom range whose lowerBound <=
+        // range.lowerBound — mirrors `snapAcrossAtoms`'s search, so the
+        // candidate is the only atom that could possibly contain `range`.
+        var lo = 0, hi = atomRangesGlobal.count - 1
+        var candidate = -1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if atomRangesGlobal[mid].lowerBound <= range.lowerBound {
+                candidate = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        guard candidate >= 0 else { return nil }
+        let atom = atomRangesGlobal[candidate]
+        guard range.upperBound <= atom.upperBound else { return nil }
+        return atom
+    }
+
     // MARK: - Geometry slicing
 
     /// For each visible unit overlapping `range`, the parts whose global

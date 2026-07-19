@@ -67,6 +67,27 @@ struct SelectionTextModelTests {
         #expect(m.snapAcrossAtoms(9, forward: true) == 9)    // in " done" text — unchanged
     }
 
+    // MARK: atomRange(containing:) — Task 19 review fix round 1 (whole-atom
+    // expansion for atom-interior word/drag seeds)
+
+    @Test func atomRangeContainingReturnsWholeAtomForWhollyInteriorRange() {
+        // "due Jul 9, 2024": text "due " [0,4) + atom "Jul 9, 2024" [4,15)
+        // (fallbackText, 11 chars — all ASCII, so Character == UTF-16 offsets).
+        let unit = SearchTextUnit(
+            ownerID: "b0", topLevelBlockID: "b0", expandAncestorIDs: [],
+            plainText: "due Jul 9, 2024",
+            parts: [.init(source: .textSegment(index: 0), range: 0..<4),
+                    .init(source: .atom(id: "date1"), range: 4..<15)])
+        let m = SelectionTextModel.build(orderedItems: [item("b0", [unit])])
+
+        #expect(m.atomRange(containing: 4..<7) == 4..<15)     // "Jul" — leading word
+        #expect(m.atomRange(containing: 11..<15) == 4..<15)   // "2024" — tail word
+        #expect(m.atomRange(containing: 4..<15) == 4..<15)    // the whole pill itself
+        #expect(m.atomRange(containing: 0..<3) == nil)        // "due" — outside the atom
+        #expect(m.atomRange(containing: 0..<15) == nil)       // spans text + atom — not WHOLLY inside
+        #expect(m.atomRange(containing: 4..<4) == nil)        // empty range never expands
+    }
+
     // MARK: partSlices — geometry slicing (Task 18 review #2: had zero coverage)
 
     /// A multi-part unit (text · atom · text) sliced by a range spanning all

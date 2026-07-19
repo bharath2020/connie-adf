@@ -162,6 +162,49 @@ struct SelectionControllerOffsetTests {
         #expect(resolver(model, source).closestGlobalOffset(toContainerPoint: .zero) == 8)
     }
 
+    // MARK: snapIngestedRange — whole-atom expansion for atom-interior
+    // word/drag seeds (Task 19 review fix round 1, the "Important" finding)
+
+    /// "due Jul 9, 2024": text "due " [0,4) + one multi-word atom "Jul 9,
+    /// 2024" [4,15) (fallbackText, 11 chars — all ASCII, so Character ==
+    /// UTF-16 offsets). Shared fixture for the three tests below.
+    private func dueDateModel() -> SelectionTextModel {
+        let unit = SearchTextUnit(
+            ownerID: "b0", topLevelBlockID: "b0", expandAncestorIDs: [],
+            plainText: "due Jul 9, 2024",
+            parts: [.init(source: .textSegment(index: 0), range: 0..<4),
+                    .init(source: .atom(id: "date1"), range: 4..<15)])
+        return SelectionTextModel.build(orderedItems: [item("b0", [unit])])
+    }
+
+    @Test func wordSeedInsideMultiWordAtomExpandsToWholeAtom() {
+        let model = dueDateModel()
+        let r = resolver(model, FakeGeometrySource())
+        // The tokenizer's word "Jul" is [4,7) — wholly inside the atom
+        // [4,15), touching its LEADING edge. Nearer-edge-snapping each
+        // endpoint independently would snap BOTH to the atom's start (4),
+        // collapsing to an empty range (the finding this fixes).
+        #expect(r.snapIngestedRange(4..<7) == 4..<15)
+    }
+
+    @Test func tailWordSeedInsideMultiWordAtomExpandsToWholeAtom() {
+        let model = dueDateModel()
+        let r = resolver(model, FakeGeometrySource())
+        // The tail word "2024" is [11,15) — wholly inside the atom, touching
+        // its TRAILING edge. Nearer-edge snap would snap both ends forward to
+        // 15, also collapsing to empty.
+        #expect(r.snapIngestedRange(11..<15) == 4..<15)
+    }
+
+    @Test func adjacentWordSeedOutsideAtomResolvesTight() {
+        // Regression pin (Task 19 deviation note): a word seed adjacent to —
+        // but not inside — an atom must NOT be pulled into it. "due" is
+        // [0,3), one char short of the atom's start (4); must resolve tight.
+        let model = dueDateModel()
+        let r = resolver(model, FakeGeometrySource())
+        #expect(r.snapIngestedRange(0..<3) == 0..<3)
+    }
+
     // MARK: Caret never null; hidden units excluded
 
     @Test func caretRectFallsBackWhenNoLiveRow() {

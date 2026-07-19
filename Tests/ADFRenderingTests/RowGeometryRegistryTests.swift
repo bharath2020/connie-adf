@@ -43,16 +43,4 @@ struct RowGeometryRegistryTests {
         r.register(ownerID: "b", view: bView)
         #expect(r.liveEntries(orderRange: 0...1).map(\.ownerID) == ["b"])
     }
-
-    @Test func nearestLiveBracketsAGap() {
-        let r = RowGeometryRegistry()
-        r.orderOf = { ["a": 0, "z": 9][$0] ?? .max }
-        let aView = view(y: 0, h: 20)     // maxY 20
-        let zView = view(y: 500, h: 20)   // minY 500
-        r.register(ownerID: "a", view: aView)
-        r.register(ownerID: "z", view: zView)
-        let (below, above) = r.nearestLive(toY: 250) { $0.frame }
-        #expect(above?.ownerID == "a")
-        #expect(below?.ownerID == "z")
-    }
 }
