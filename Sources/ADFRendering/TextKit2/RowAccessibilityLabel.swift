@@ -52,13 +52,13 @@ enum RowAccessibilityLabel {
     /// Approximate heading detector ("approximate is acceptable, document" —
     /// Task 25's brief): true iff the row's FIRST `.text` segment's FIRST
     /// run carries a level-1–4 heading `FontSpec.style` (`.title`/`.title2`/
-    /// `.title3`/`.headline` — see `ADFTheme.headingFontSpec`, which bakes
+    /// `.title3`/`.headline` — see `ADFTheme.headingSpec`, which bakes
     /// exactly these four styles, bold, for `headingLevel` 1–4). Mirrors
     /// `TextKit2RowView.firstBaseline`'s own "first text run of `segments`"
     /// read, so this stays consistent with the row's other first-run-only
     /// approximations rather than inventing a second convention.
     ///
-    /// Deliberately does NOT attempt levels 5–6: `ADFTheme.headingFontSpec`
+    /// Deliberately does NOT attempt levels 5–6: `ADFTheme.headingSpec`
     /// bakes those as `.subheadline`/`.footnote`, bold — but
     /// `InlineComposer.convert` ALSO uses those same two `FontSpec.style`
     /// values, unbolded, for the small-text and superscript/subscript marks.

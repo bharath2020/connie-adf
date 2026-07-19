@@ -1882,9 +1882,13 @@ mechanism is simpler and, from a VoiceOver user's perspective, *worse* than
 "one opaque blob": bare `TextKit2RowUIView`s are plain `UIView`s with zero
 accessibility wiring (the Task 10 note the register already flagged),
 so they read as if the content doesn't exist at all. **Even during an
-active selection session**, the tree gains only the edit menu's own
-elements (`Copy`/`Select All`/`Look Up`, a `Forward` button) — the
-selected text itself is never announced or exposed as any element,
+active selection session**, the tree gains only 7 elements (idle 8 →
+active 15): the edit menu's own 5 elements (`Copy`/`Select All`/`Look Up`,
+a `Forward` button, and their containing `AXGroup`) plus 2 below-fold
+table-cell row-number labels (`"1"`/`"2"`) that `SelectionController`'s
+geometry materialization pulls in as a side effect, unrelated to the edit
+menu (see Step 2 below for the full accounting against the AFTER trees) —
+the selected text itself is never announced or exposed as any element,
 confirming there is currently no VoiceOver path to "what got selected."
 
 ### Step 2 — minimal exposure prototype
@@ -1964,13 +1968,53 @@ colored highlighted small a link annotated\nafter the break"` — SwiftUI's
 own `Text`-per-paragraph granularity ALSO merges an embedded link's visible
 text into the surrounding static-text label at this tree-dump level; see
 Concerns), list markers, panel labels, and the image alt text. During an
-active session the tree grows from 32 to 45 (the edit menu's own elements,
-same as the BEFORE active-session delta) — confirmed by screenshot
-(`t25_after_tk2_selection_active.png`) that the selection UI itself
-(handles, edit menu, Copy) is pixel-identical to the BEFORE screenshot, and
-by a live Copy-through-the-menu action (`xcrun simctl pbpaste` returned
-`"Heading"`, matching the visibly selected word) that nothing about
-selection was perturbed by making rows accessibility elements.
+active session the tree grows from 32 to 45 — **not** a pure edit-menu
+delta, and **not** the same delta as the BEFORE arm (7). A role+label+frame
+multiset diff of `t25_tk2_selection_idle_after.json` against
+`t25_tk2_selection_active_after.json` (the reviewer's own verification
+method: flatten each tree, diff as multisets, inspect the `AXFrame` of
+every gained element) accounts for all +13 as two disjoint groups:
+
+- **5 edit-menu chrome elements** — the containing `AXGroup`, `AXStaticText`
+  `"Copy"`/`"Select All"`/`"Look Up"`, and the `AXButton` `"Forward"`, all at
+  `AXFrame` y≈354–358 (the on-screen menu's actual position). These are the
+  only elements the doc's original claim accounted for.
+- **8 below-fold table cells** — real document content (`"Name"`, `"Role"`,
+  `"Status"`, `"1"`, `"Spans two columns"`, `"Spans two rows"`, `"2"`,
+  `"Bottom-aligned cell"`) at `AXFrame` y≈1289.7–1409.7, well below the
+  852pt screen height, that get materialized as a side effect of
+  `SelectionController`'s geometry queries during the session. This is
+  **not** new behavior introduced by this task's row-exposure fix: 2 of
+  these 8 (the `"1"`/`"2"` row-number labels) already leak in the
+  before-fix active-session tree (`t25_tk2_selection_active_before.json`,
+  confirmed by the same diff against `t25_tk2_selection_idle_before.json`
+  above) — i.e. the lazy row stack was already materializing below-fold
+  rows on selection before Task 25 touched anything; this task's fix only
+  made those already-materialized rows *exposed* rather than silent.
+
+Confirmed by screenshot (`t25_after_tk2_selection_active.png`) that the
+selection UI itself (handles, edit menu, Copy) is pixel-identical to the
+BEFORE screenshot, and by a live Copy-through-the-menu action (`xcrun
+simctl pbpaste` returned `"Heading"`, matching the visibly selected word)
+that nothing about selection was perturbed by making rows accessibility
+elements.
+
+**Below-fold exposure — accepted, not a bug.** Once
+`SelectionController`'s geometry materialization pulls a row into the live
+stack, `TextKit2RowUIView`'s unconditional `isAccessibilityElement = true`
+(Step 2 above) exposes it, on-screen or not. This matches standard UIKit
+convention rather than violating it: a `UITableViewCell` recycled into the
+visible pool but scrolled just past the fold is exposed the same way —
+accessibility follows *materialization*, not *viewport visibility*, and the
+lazy row stack (not the accessibility wiring) is what bounds how much
+materializes at any moment. So below-fold exposure during a selection
+session is accepted as correct-by-convention behavior, not something this
+task's fix should special-case or suppress. It is, however, recorded as a
+line item in the production scope note below (item 5): a future
+`UIAccessibilityContainer` pass should rationalize VoiceOver's traversal
+*order* against document reading order for sessions that interleave
+on-screen and off-screen-but-materialized rows, since nothing measured here
+guarantees the two stay in sync.
 
 **No `SelectionController`/overlay changes were needed.** The brief
 anticipated gating `SelectionController`'s `accessibilityElements`/the
@@ -2029,19 +2073,40 @@ experience — needs, beyond this task's one-label-per-row bar:
 4. **Selected-text announcements.** A specific instance of item 3: on
    `copy(_:)`, VoiceOver should confirm what was copied (stock text views
    post an announcement here too); currently silent.
+5. **Element ordering vs. reading order for off-screen materialized rows.**
+   Measured this task (Step 1 above): an active selection session
+   materializes rows below the visible viewport as a side effect of
+   `SelectionController`'s geometry queries (8 below-fold table cells in the
+   AFTER active-session tree; 2 of the 8 already materialized pre-fix), and
+   because `isAccessibilityElement = true` is unconditional, every
+   materialized row is exposed as soon as it exists — accepted as
+   correct-by-convention (Step 1), not a bug this task's fix should
+   suppress. What's NOT verified is whether VoiceOver's traversal order for
+   a mix of on-screen and off-screen-but-materialized rows matches document
+   reading order. Production should build the `UIAccessibilityContainer`/
+   `accessibilityElements` array from item 1 with document order as the
+   explicit ordering key, rather than relying on `UIView` subview
+   z-order/traversal order, so a below-fold materialization during a
+   session never reorders what VoiceOver reads next relative to on-screen
+   content.
 
 None of this is built here — this is a scope/estimate note per the brief,
 not an implementation. Rough total: **3–4 tasks**, similar in size to the
 Task 17/19/21 cluster that built the selection engine's own geometry/
-hit-testing layer, since items 1 and 3 above are designed to reuse that
+hit-testing layer, since items 1, 3, and 5 above are designed to reuse that
 layer rather than duplicate it.
 
 ### Verify
 
 - macOS `swift test`: **293/293 pass**, 43 suites (281 baseline + 12 new
-  `RowAccessibilityLabelTests`). 1 pre-existing warning observed on a clean
-  build (`ADFBeamTests` unhandled-resource); no new warnings from either
-  new file.
+  `RowAccessibilityLabelTests`). **2** pre-existing warnings observed on a
+  clean `rm -rf .build && swift build --build-tests` (the `#require` one
+  only surfaces on a genuinely clean rebuild — an earlier report,
+  Task 6, observed only the first of these because the second wasn't
+  reproducible in a clean build at that HEAD): `ADFBeamTests`
+  unhandled-resource (`Tests/ADFBeamTests/Fixtures/kitchen-sink.chunks.txt`)
+  and `IncrementalSearchIndexTests.swift:69` redundant `#require`. Neither
+  is attributable to either of this task's two new files.
 - iOS `ADFRenderingTests` lane (dedicated sim `ADF-Task25`, iPhone 16 /
   iOS 26.2): **179/179 pass**, 23 suites (161 baseline + 6 new
   `TextKit2RowAccessibilityTests` + the pre-existing suites' own count
