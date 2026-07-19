@@ -595,6 +595,60 @@ func makeMediaGallery() -> [String: Any] {
     return doc(blocks)
 }
 
+// MARK: - Fixture 4: atom-stress.json (Task 24)
+
+/// One atom-dense paragraph: mention, emoji, date, status, inlineCard,
+/// mediaInline, inlineExtension — all seven non-text `InlineAtom` kinds
+/// (`Sources/ADFPreparation/InlineComposer.swift`) in one paragraph, joined
+/// by short connective text runs, mirroring kitchen-sink.json's ¶26 shape
+/// (`Ping [mention] [emoji] due [date] see [inlineCard] … [mediaInline]
+/// [inlineExtension]`) but WITHOUT its `placeholder` node (placeholder isn't
+/// an `InlineAtom` / pill — irrelevant to the atom-pill stress this fixture
+/// targets) and WITH a `status` atom added (kitchen-sink keeps status
+/// badges in a separate paragraph; this fixture wants every pill kind
+/// stressed together, per paragraph).
+func atomParagraph(_ rng: inout LCG, index: Int) -> [String: Any] {
+    paragraph([
+        textNode("Ping "),
+        mention(index),
+        textNode(" "),
+        emoji(&rng),
+        textNode(" due "),
+        date(index),
+        textNode(" "),
+        status(&rng, index: index),
+        textNode(" see "),
+        inlineCard(index),
+        textNode(" "),
+        mediaInline(index),
+        textNode(" "),
+        ["type": "inlineExtension", "attrs": extensionAttrs("status-macro", index: index)] as [String: Any],
+        textNode(" \(sentence(&rng, wordCount: rng.int(2 ..< 5)))."),
+    ])
+}
+
+/// 2,000 atom-dense paragraphs (pill-heavy, stress-scale — phase-3 known-gap
+/// #6: "no atom-heavy stress fixture exists" to check the pill draw path's
+/// behavior at stress-5k-like scale). Every paragraph carries all 7 atom
+/// kinds (14,000 pill attachments total across the fixture), following
+/// kitchen-sink.json's doc-wrapper shape (`{"version":1,"type":"doc",
+/// "content":[…]}`) and atom-attrs shapes (same `mention`/`date`/`status`/
+/// `emoji`/`inlineCard`/`mediaInline`/extension builders the other
+/// generated fixtures already use — kitchen-sink itself is hand-authored
+/// pretty JSON; this one is machine-generated minified JSON like
+/// stress-5k/giant-table/media-gallery, picked up by the SAME `../Fixtures`
+/// glob either way).
+func makeAtomStress() -> [String: Any] {
+    var rng = LCG(seed: 0x5EED_A70A)
+    var blocks: [[String: Any]] = []
+    blocks.reserveCapacity(2001)
+    blocks.append(["type": "heading", "attrs": ["level": 1], "content": [textNode("Atom stress: 2,000 pill-dense paragraphs")]])
+    for i in 0 ..< 2000 {
+        blocks.append(atomParagraph(&rng, index: i))
+    }
+    return doc(blocks)
+}
+
 // MARK: - Emit
 
 let repoRoot = URL(fileURLWithPath: #filePath)
@@ -607,6 +661,7 @@ let fixtures: [(name: String, document: [String: Any])] = [
     ("stress-5k.json", makeStress5K()),
     ("giant-table.json", makeGiantTable()),
     ("media-gallery.json", makeMediaGallery()),
+    ("atom-stress.json", makeAtomStress()),
 ]
 
 for (name, document) in fixtures {

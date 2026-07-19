@@ -7,7 +7,23 @@ import UIKit
 import AppKit
 #endif
 
-@Suite("TextRowLayout") @MainActor
+// Task 24 determinism discriminator: `sameInputSameWidthMeasuresIdentically`
+// flaked 1/140 under `swift test --parallel` (full 281-test suite, 42
+// suites) but 0/100 under `swift test --filter TextRowLayoutTests` (isolated,
+// fresh process each run) — i.e. it reproduces ONLY when this suite's tests
+// race the REST of the suite, never in isolation. Each `TextRowLayout`
+// instance owns its own `NSTextContentStorage`/`NSTextLayoutManager`/
+// `NSTextContainer` (no shared/static state at the Swift level, and the type
+// is `@MainActor`-isolated), so the contention is inside TextKit 2's own
+// internals (font/glyph caching is not documented as safe under the interleaved
+// concurrent scheduling `swift test --parallel` produces), not a bug in this
+// package's code — classified TEST-INFRASTRUCTURE, per the brief's
+// discriminator protocol (reproduces only in parallel ⇒ serialize, don't
+// chase a product fix). `.serialized` makes this suite's tests run one at a
+// time; it does not slow down `swift test`'s default (serial) mode at all,
+// and only removes THIS suite from other suites' parallel scheduling window
+// when parallel mode is used.
+@Suite("TextRowLayout", .serialized) @MainActor
 struct TextRowLayoutTests {
     private func layout(_ text: String, size: CGFloat = 17) -> TextRowLayout {
         let l = TextRowLayout()

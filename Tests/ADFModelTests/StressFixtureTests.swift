@@ -8,12 +8,28 @@ import Testing
 @Suite("Stress fixtures")
 struct StressFixtureTests {
     @Test("generated fixtures parse with zero issues and zero unknown nodes",
-          arguments: ["stress-5k.json", "giant-table.json", "media-gallery.json"])
+          arguments: ["stress-5k.json", "giant-table.json", "media-gallery.json", "atom-stress.json"])
     func parsesCleanly(name: String) async throws {
         let doc = try await parseFixture(name)
         #expect(doc.issues.isEmpty, "issues in \(name): \(doc.issues.prefix(5))")
         #expect(unknownNodes(in: doc.root).isEmpty, "unknown nodes in \(name)")
         #expect(doc.version == 1)
+    }
+
+    /// Task 24 — atom-stress.json: 2,000 paragraphs, each carrying all 7
+    /// `InlineAtom` kinds (mention/emoji/date/status/inlineCard/mediaInline/
+    /// inlineExtension), for the pill-draw-path stress phase-3 gap #6 named.
+    @Test("atom-stress has 2,000 atom-dense paragraphs covering every pill kind")
+    func atomStressShape() async throws {
+        let doc = try await parseFixture("atom-stress.json")
+        let paragraphs = doc.root.children.filter { $0.type == "paragraph" }
+        #expect(paragraphs.count == 2000)
+
+        let atomTypes: Set<String> = ["mention", "emoji", "date", "status", "inlineCard", "mediaInline", "inlineExtension"]
+        for (index, para) in paragraphs.enumerated() {
+            let present = Set(para.children.map(\.type)).intersection(atomTypes)
+            #expect(present == atomTypes, "paragraph \(index) missing: \(atomTypes.subtracting(present))")
+        }
     }
 
     @Test("stress-5k has 5,000 mixed top-level blocks")

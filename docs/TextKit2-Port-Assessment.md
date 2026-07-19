@@ -1649,3 +1649,178 @@ OFF is gone. No line-metric code was changed by this task.
 - `AtomAttachment.pillAscent` is a NEW public surface on an otherwise
   internal type; it exists solely for `TextKit2RowView.firstBaseline`'s
   fallback and is not used anywhere else in the draw/sizing path.
+
+## Phase 4 — Task 24: test infrastructure (atom-stress fixture, RTL selection regression, layout-determinism discriminator)
+
+Closes known-gaps-register items **#6** (no atom-heavy stress fixture),
+**#7** (RTL fix has only a unit-test reproduction, no simulator-visible
+selection regression), and **#10** (the `TextRowLayoutTests.
+sameInputSameWidthMeasuresIdentically` flake — the discriminator the phase-3
+verdict said "must precede any production-port decision"). No production
+code changed except the one test-suite trait Step 3's discriminator result
+calls for.
+
+### Step 1 — `Fixtures/atom-stress.json`
+
+Added `makeAtomStress()`/`atomParagraph(_:index:)` to `Tools/make-fixtures.
+swift` (the SAME generator infrastructure — seeded `LCG`, word soup, node
+builders — that already produces `stress-5k.json`/`giant-table.json`/
+`media-gallery.json`) rather than hand-authoring: 2,000 top-level paragraphs
+(plus one heading), each carrying **all seven** `InlineAtom` kinds (mention,
+emoji, date, status, inlineCard, mediaInline, inlineExtension — 14,000 pill
+attachments total), joined by short connective text, following kitchen-
+sink.json's ¶26 shape (`Ping [mention] [emoji] due [date] see [inlineCard] …
+[mediaInline] [inlineExtension]`) plus a `status` atom kitchen-sink keeps in
+a separate paragraph — this fixture wants every pill kind stressed together,
+per paragraph. Re-running the generator reproduced `stress-5k.json`/
+`giant-table.json`/`media-gallery.json` byte-for-byte (confirmed via `git
+status`/`git diff --stat` — zero diff), proving the addition didn't disturb
+the existing fixtures' determinism. Picked up automatically by `Demo/
+project.yml`'s `../Fixtures` glob after `xcodegen generate` (re-run to
+rebuild the `.xcodeproj`'s resource list) — no `project.yml` edit. Added
+`StressFixtureTests.atomStressShape` (2,000 paragraphs, every paragraph
+carries all 7 atom kinds) and extended `parsesCleanly`'s `arguments:` list
+with `"atom-stress.json"` (zero parse issues, zero unknown nodes — same bar
+the other 3 generated fixtures already meet).
+
+**Perf spot-check** (iPhone 16 / iOS 18.2, dedicated sim, atom-stress
+fixture, built+installed with the new fixture bundled):
+
+| | OFF | `-textkit2` |
+|---|---|---|
+| Autoscroll (×1) | frames=8278 dropped=7 `hitchRatioMsPerS=1.16` | frames=8234 dropped=2 `hitchRatioMsPerS=0.24` |
+| 12-swipe fling + `top -l 2` settle | 0.4% CPU | 0.5% CPU |
+
+TK2/OFF hitch ratio ≈ **0.21×** — TK2 is FASTER on this atom-dense fixture
+(consistent with the vector-drawn-pill design: no per-pill SwiftUI view
+hosting, unlike the OFF arm's real `AtomCapsule`/`AtomChip` SwiftUI views).
+Both branches' CPU settles near-zero after the fling burst — no livelock
+newly exposed by 14,000 pill attachments.
+
+### Step 2 — RTL selection-visible regression
+
+The phase-3 RTL fix (`TextRowContent.make`'s `.natural` → explicit `.left`/
+`.right` per host direction) had only `naturalAlignmentResolvesPerHostDirection`
+as a reliable reproduction (Task 12: the simulator's `-AppleTextDirection
+YES` masks the pre-fix bug by forcing a GLOBAL direction override that
+happens to agree with the fix regardless). This step adds a
+**selection-level** regression the pure-render matrix lacked: with a plain
+(unforced-direction) host — `-fixture rtl-mixed -textkit2 -selection` — long-
+press-select an Arabic word and Copy, checking BOTH the copied text AND
+which side of the (short, left-aligned-per-¶1's-no-mark-case) line the
+selection highlight lands on.
+
+`rtl-mixed.json` ¶1 is "هذا نص عربي للاختبار" (4 words, no alignment mark, so
+`.natural` → `.left` under our LTR-host fix — a SHORT line, `x∈[69,451]px`
+at `@3x`, not full container width). Long-pressed twice on a dedicated sim
+(`ADF-Task23`, iPhone 16 / iOS 18.2, reused from Task 23 in the same
+session — see report), via `axe touch -x … -y … --down --up --delay 1.0`
+(point-space coordinates, converted from pixel measurements ÷3 for `@3x`),
+each followed immediately by `axe tap` on the edit menu's Copy button, read
+via `xcrun simctl pbpaste`:
+
+| Touch x (pt / px) | Copied text | Word's offset in "هذا نص عربي للاختبار" |
+|---|---|---|
+| 140pt / 420px (RIGHT side of the line) | `هذا` (exact) | **0** — the FIRST word |
+| 33pt / 99px (LEFT side of the line) | `للاختبار` (exact) | **last** word |
+
+Both copies are **byte-for-byte exact** against the fixture source string
+(`words[0]`/`words[-1]` of `text.split(" ")`, verified in Python). This is
+the correct, unambiguous signature of genuine RTL rendering: a touch near
+the RIGHT edge of the (left-aligned) line selects the LOGICALLY-FIRST word,
+and a touch near the LEFT edge selects the LOGICALLY-LAST word — exactly
+backwards from what an (incorrectly) LTR-ordered rendering of the same
+Arabic text would produce. Pixel-measured selection-highlight bands confirm
+the same story geometrically: the right-side touch's highlight sits at
+`x∈[389,420]px` (within the line's last ~9%), the left-side touch's at
+`x∈[35,66]px` (at the line's own start) — **selection rects sit on the
+correct (right-to-left-ordered) side.** Screenshots (`t24_rtl_*` prefix)
+committed under `docs/assessment-assets/phase4-rendering/`:
+`t24_rtl_selection_initial.png`, `t24_rtl_longpress_{right,left}.png`.
+
+This closes gap #7 as a genuinely simulator/selection-visible regression —
+unlike the Task-12 render-matrix attempt, this one does NOT depend on
+`-AppleTextDirection YES` (the whole point: it runs the app with NO forced
+direction override, the actual host configuration production users have),
+so it will catch a real per-view direction regression the render-only matrix
+structurally cannot.
+
+### Step 3 — layout-determinism discriminator
+
+Per the phase-3 verdict's requirement ("a serial-vs-parallel discriminator
+run … must precede any production-port decision"), ran
+`TextRowLayoutTests.sameInputSameWidthMeasuresIdentically` under two
+regimes, each a fresh `swift test` process invocation (no shared state
+carried between runs):
+
+| Regime | Command | Runs | Failures |
+|---|---|---|---|
+| Serial (isolated) | `swift test --filter TextRowLayoutTests` | 100 | **0/100** |
+| Parallel (full suite) | `swift test --parallel` (281 tests, 42 suites) | 140 | **1/140** |
+
+The ONE parallel failure (run 68 of the second 100-run batch) recorded:
+`sameInputSameWidthMeasuresIdentically(): (a → (320.0, 560.0)) == (b →
+(320.0, 1080.0))` — two FRESH, independent `TextRowLayout` instances (each
+owning its own `NSTextContentStorage`/`NSTextLayoutManager`/`NSTextContainer`
+— no shared Swift-level state, and the type is `@MainActor`-isolated)
+measuring the IDENTICAL text at the IDENTICAL width (320) produced different
+heights. Since each instance's own state can't leak into another Swift-level,
+and this reproduced ONLY when many OTHER suites' tests were scheduled
+concurrently against it (never once in 100 isolated serial runs), the
+contention is inside TextKit 2's own internals (undocumented as
+thread/reentrancy-safe under Swift Testing's interleaved concurrent
+scheduling), not a bug in this package's measurement code.
+
+**Classification: TEST-INFRASTRUCTURE (parallel-cache contention), NOT a
+product bug** — per the brief's discriminator protocol. Applied the
+prescribed fix: `@Suite("TextRowLayout", .serialized)` on
+`TextRowLayoutTests` (`Tests/ADFRenderingTests/TextRowLayoutTests.swift`),
+with a comment recording this evidence and the classification. **Verified
+the fix**: re-ran `swift test --parallel` **100 more times post-fix — 0/100
+failures** (vs. 1/140 pre-fix), and confirmed via log inspection that the
+suite's 4 tests now execute strictly one-at-a-time under `--parallel`
+(each "started" immediately followed by its own "passed", not interleaved
+with the other three, unlike the pre-fix log). `.serialized` only removes
+THIS suite from other suites' concurrent scheduling window when parallel
+mode is used — `swift test`'s default (serial-by-default at the SwiftPM
+level) is unaffected either way.
+
+This closes gap #10: the `CollapsedRowHeight` exact-replay contract and
+selection-geometry stability are NOT threatened by a product-level
+non-determinism — the underlying `TextRowLayout.measure` computation itself
+never produced a wrong answer in 100 dedicated, isolated exercises; the
+flake was purely a test-harness scheduling artifact.
+
+### Step 4 — verify
+
+- macOS `swift test`: **281/281 pass**, 42 suites (280 baseline + 1 new
+  `atomStressShape`; the `parsesCleanly` parameterized test grew from 3 to 4
+  cases).
+- iOS `ADFRenderingTests` lane (dedicated sim, iPhone 16 / iOS 18.2):
+  **161/161 pass**, 21 suites (unchanged from Task 23 — no iOS-lane test
+  changes this task).
+- Determinism discriminator: 100 serial / 140+100 parallel runs, as above.
+- `git status`/`git diff --stat` confirmed `stress-5k.json`/`giant-table.
+  json`/`media-gallery.json` are byte-identical after re-running the
+  generator (only `atom-stress.json` is new).
+
+### Concerns / carried forward
+
+- The RTL selection regression's touch coordinates are hand-measured
+  pixel positions (from a screenshot, ÷3 for point space) for THIS specific
+  fixture/device/font-size combination — not resilient to a future layout
+  change the way a coordinate-free, ID-based UI test would be; a follow-up
+  could resolve the touch point from `RowGeometryRegistry`/`SelectionController`
+  test doubles instead of a screenshot measurement, if this needs to become
+  a permanent CI gate rather than a one-time regression check.
+- The determinism discriminator's root cause (WHAT inside TextKit 2 races)
+  was not identified beyond "not this package's Swift-level state" — only
+  the classification (test-infra vs. product) was required by the brief,
+  and `.serialized` is the prescribed mitigation regardless of the exact
+  mechanism.
+- Reused the Task 23 simulator (`ADF-Task23`) for the RTL regression and
+  perf spot-check rather than creating a fresh `ADF-Task24` sim — both tasks
+  ran in the same session; deleted at the very end of Task 24 instead of
+  after each task. No correctness risk (app state doesn't affect either
+  measurement), but it is a deviation from the "one dedicated sim per task"
+  convention prior reports followed.
