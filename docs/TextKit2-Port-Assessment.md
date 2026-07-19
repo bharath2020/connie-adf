@@ -1491,3 +1491,161 @@ of the Task 16 matrix); copy corpus-exactness (Task 20); accessibility
 ancestor-collapse. Kill-fast §11 step 1 is **cleared** — the selection
 architecture is proven; the port's remaining risk moves to the perf bets
 (§11 step 2, per-row `NSTextLayoutManager` cost).
+
+## Phase 4 — Task 23: rendering fidelity closeout (chip icons, inlineCard tint, pure-atom-row baseline, vertical-rhythm decision)
+
+Closes known-gaps-register items **#1** (chip SF Symbols + inlineCard tint)
+and **#4** (pure-atom-row `firstBaseline` `0` fallback), and reaches a
+recorded decision on **#5** (vertical-rhythm drift). Chip width was scheduled
+here (not deferred further) because a chip's whole-pill selection rect
+(Task 21) depends on the pill's real geometry — an 18–22pt-narrow chip was a
+wrong selection rect, not just a cosmetic gap.
+
+### Step 1 — chip SF Symbol icons + inlineCard tint
+
+`AtomAttachment`'s `Style.chip` case now carries `(icon: String, tint:
+UIColor)`: `.inlineCard` → `"link"`/`.systemBlue` (mirroring
+`InlineCardChip`'s SwiftUI `Link`, which tints its whole label — icon and
+text — with the ambient accent color); `.mediaInline` → `"paperclip"`/
+`.label`; `.inlineExtension` → `"puzzlepiece.extension"`/`.label`. The icon is
+resolved via `UIImage.SymbolConfiguration(font:scale:)` — the documented
+UIKit equivalent of SwiftUI's `.imageScale(.small)` on a `.callout`-font
+`HStack` (`AtomChip`) — sized once in `init` (pure function of `(icon name,
+pillFont)`) and its width + a `UIFontMetrics`-scaled 4pt gap
+(`AtomChip`'s `iconSpacing`) now contribute to `pillSize.width`, closing the
+gap Task 10 flagged. `draw(into:)` pre-tints the resolved symbol via
+`withTintColor(_:renderingMode:.alwaysOriginal)` against the SAME
+draw-time-current traits the pill background/text already resolve against
+(dark-mode correct, no invalidation) and draws it at the pill's leading
+edge, vertically centered — `AtomChip`'s `HStack`'s default alignment.
+`inlineCard`'s text color changed from the uniform `.label` (the
+`AtomAttachment.swift:165` bug Task 13 traced) to the same `tint` the icon
+uses.
+
+New tests in `AtomAttachmentTests.swift`: `chipWidthIncludesIconGlyph`
+(pins `pillSize.width` within ≤3pt of the SwiftUI-arm-measured targets
+below), `chipWidthWiderThanTextAlone` (regression guard independent of the
+exact target numbers), `inlineCardChipUsesTintColor` (renders the pill via
+`image(forBounds:...)` and scans the raw pixel buffer for a blue-dominant
+pixel, present for `.inlineCard` and absent for the `.mediaInline` control).
+
+**Measured residual delta (`t23_kitchensink_{off,tk2}_atoms.png`,
+`docs/assessment-assets/phase4-rendering/`, iPhone 16 / iOS 18.2, kitchen-sink
+¶26, default size), same Python3+PIL column-scan method as Task 10 (leftmost/
+rightmost non-white pixel per row in the chip's vertical band, widest bound
+recurring across the flat, non-corner rows):**
+
+| Chip | OFF width | TK2 width | Residual Δ | Was (Task 10) |
+|---|---|---|---|---|
+| `attachment` (paperclip) | 353px (117.67pt) | 354px (118.00pt) | **1px ≈ 0.33pt** | ~18.7pt narrower |
+| `Inline macro` (puzzlepiece) | 378px (126.00pt) | 378px (126.00pt) | **0px ≈ 0.00pt** | ~22pt narrower |
+
+Both residuals are inside the brief's ≤3pt bar by a wide margin — the icon +
+gap fully accounts for the previously-missing width; the 1px `attachment`
+residual is at the measurement's own resolution floor (sub-pixel hinting),
+not a systematic gap. The `t23_` screenshots also show both chips'
+icon glyph, shape, and (for `inlineCard`) blue tint visually matching the
+SwiftUI arm. A dark-mode spot-check
+(`t23_kitchensink_tk2_atoms_dark.png`, `xcrun simctl ui … appearance dark`)
+confirms the `inlineCard` chip's icon+text now render in the dynamic blue
+tint in dark mode too — closing the Task 13 dark-mode finding at its root
+(`AtomAttachment.swift`'s uniform-`.label` bug), not just re-observing it.
+
+### Step 2 — pure-atom-row `firstBaseline`
+
+`AtomAttachment` gained `pillAscent: CGFloat { pillFont.ascender }` — a pure
+function of `(atom, category)` (it only reads the already-resolved
+`pillFont`, itself selected purely from `(atom, category)` in `init`).
+`TextKit2RowView.firstBaseline` now falls through, when no `.text` segment
+exists at all, to `AtomAttachment(atom:, categoryRawValue:).pillAscent` for
+the row's leading atom, instead of the stale `0`. `pillAscent` deliberately
+mirrors the SAME "text-font ascent, ignoring the pill's own taller padded
+box" semantics `firstBaseline` already uses for an atom-LEADING row that
+DOES have a following text run (documented, established behavior since
+Task 10/11: that case falls through to the text chunk's ascender, not the
+pill's inflated height) — an earlier draft that instead returned
+`pillSize.height + originY` (the pill's own physical top-edge-above-baseline,
+including padding) was ~2.9pt off a plain-font-ascender comparison at
+`.large`/mention, exceeding the brief's 1pt bar; `pillFont.ascender` matches
+by construction (0pt residual) and keeps the fallback consistent with the
+non-fallback branch.
+
+New tests: `AtomAttachmentTests.pillAscentIsDeterministicAndGrowsWithCategory`
+/ `pillAscentWithin1ptOfTextAscent`, and a new
+`TextKit2RowViewFirstBaselineTests.swift` (iOS-lane): a single-atom pure row
+(`pureAtomRowReturnsNonZeroPillAscent`), two atoms glued with no separating
+text (`multiAtomRowWithNoTextUsesLeadingAtom` — leading atom wins, and the
+two atoms' fonts are proven to actually differ so the assertion is
+non-vacuous), a regression guard that an atom-LEADING row WITH following
+text is untouched (`atomLeadingRowWithFollowingTextStillUsesTextAscender`),
+and the brief's own ≤1pt bar
+(`pureAtomRowBaselineWithin1ptOfPillTextAscent`).
+
+### Step 3 — vertical-rhythm characterization + DECISION
+
+Re-measured the row-band drift Task 11 first observed (bulletList/panels
+region, kitchen-sink `-scrollToFraction 0.27`, iPhone 16 / iOS 18.2,
+`t23_lists_{off,tk2}[_step3].png`), using a panel-top-edge column scan (a
+single-column white→fill transition scan at a fixed x inside each panel's
+left margin, per screenshot) rather than Task 11's ink-bbox method — a
+different, independent measurement of the same phenomenon:
+
+| Panel (top-edge y, OFF vs TK2, default) | Cumulative drift | at `-fontSizeStep 3` |
+|---|---|---|
+| Info | 27px (9.0pt) | 21px (7.0pt) |
+| Note | 32px (10.7pt) | 25px (8.3pt) |
+| Tip | 37px (12.3pt) | 27px (9.0pt) |
+| Success | 42px (14.0pt) | 31px (10.3pt) |
+| Warning | 47px (15.7pt) | 35px (11.7pt) |
+| Error | 52px (17.3pt) | 39px (13.0pt) |
+| Custom | 57px (19.0pt) | *(clipped off-screen, matching Task 11)* |
+
+The drift grows ~5px (default) / ~3-4px (step3) per panel — the SAME
+per-row order of magnitude Task 11 measured for bullet rows (~5-6px/row) —
+confirming this is the same systemic `TextRowLayout`-vs-`Text` line-height
+differential, still present, still purely cumulative (it keeps growing
+monotonically down the page; there is no single fixed offset to chase). The
+~27px baseline already present at the first panel (above Task 11's bullet-
+row-only ~0-22px range) is consistent with the intervening 2-line `swift`
+code block contributing more drift per line than a plain paragraph row —
+not a new or different defect, just a longer sample column than Task 11's.
+
+**DECISION: the fix is DEFERRED to the production port, unchanged from the
+brief's own rationale** — recorded here, not re-derived, because it still
+holds after re-measurement: (a) this is a `TextRowLayout`-vs-SwiftUI-`Text`
+line-height difference that is cosmetic **only relative to the OFF arm**;
+once the port is complete and the OFF arm is removed, there is nothing left
+to drift from — the TK2 arm's own vertical rhythm is internally consistent
+(markers track their own row's baseline within ~1px, per Task 11). (b) Forcing
+a line-height multiple to match SwiftUI `Text` risks the deterministic-sizing
+/ `CollapsedRowHeight` exact-replay contract (§16) for no visual benefit once
+OFF is gone. No line-metric code was changed by this task.
+
+### Step 4 — verify
+
+- macOS `swift test`: **280/280 pass**, 42 suites (unchanged — all new tests
+  are iOS-only; `AtomAttachment.swift`/`TextKit2RowView.swift` are both
+  UIKit/iOS-gated and compile to nothing on macOS).
+- iOS `ADFRenderingTests` lane (`xcodebuild test`, dedicated sim
+  `ADF-Task23`, iPhone 16 / iOS 18.2): **161/161 pass**, 21 suites (152
+  baseline + 9 new: 5 in `AtomAttachmentTests`, 4 in
+  `TextKit2RowViewFirstBaselineTests`).
+- Build: 2-warning baseline held (no new warnings).
+- Screenshots (`t23_` prefix) committed under
+  `docs/assessment-assets/phase4-rendering/`: `t23_kitchensink_{off,tk2}_atoms.png`,
+  `t23_kitchensink_tk2_atoms_dark.png`, `t23_lists_{off,tk2}[_step3].png`.
+
+### Concerns / carried forward
+
+- Chip corner-rounding rows were excluded from the column-scan measurement
+  by construction (same method as Task 10); the 1px `attachment` residual is
+  plausibly sub-pixel hinting noise, not a remaining systematic gap, but
+  wasn't independently isolated further.
+- Vertical-rhythm magnitude was re-measured with a DIFFERENT column (panel
+  top edges vs Task 11's marker-to-text ink bboxes) and a longer span (7
+  panels vs 5 bullet rows) — the two measurements are complementary
+  evidence of the same phenomenon, not a like-for-like reproduction of
+  Task 11's exact numbers; both agree on the ~5px/row order of magnitude.
+- `AtomAttachment.pillAscent` is a NEW public surface on an otherwise
+  internal type; it exists solely for `TextKit2RowView.firstBaseline`'s
+  fallback and is not used anywhere else in the draw/sizing path.

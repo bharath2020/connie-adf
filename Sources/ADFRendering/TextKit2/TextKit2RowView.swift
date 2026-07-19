@@ -112,9 +112,13 @@ struct TextKit2RowView: UIViewRepresentable {
     /// Scans for the first `.text` run and returns its font ascender. An
     /// atom-LEADING row (a leading pill before any prose) falls through to the
     /// first following text chunk's ascender, which is the body ascent the
-    /// pill is baseline-aligned to — correct. A pure-atom row (no text at all)
-    /// returns the `0` fallback; recovering a pill's own ascent here without
-    /// measuring layout is a T13 baseline-fidelity item, not this task's.
+    /// pill is baseline-aligned to — correct. A pure-atom row (no text run at
+    /// all, e.g. a paragraph of nothing but atoms with no separating text)
+    /// recovers the leading atom's OWN pill ascent (Task 23) —
+    /// `AtomAttachment.pillAscent`, a pure function of `(atom, category)`
+    /// derived from the same geometry the pill draws with, never measured
+    /// layout (§16). Falls through to the `0` fallback only if `segments` is
+    /// empty (shouldn't happen for a real row, but keeps the function total).
     @MainActor
     static func firstBaseline(of segments: [InlineSegment], categoryRawValue: String) -> CGFloat {
         for segment in segments {
@@ -124,6 +128,9 @@ struct TextKit2RowView: UIViewRepresentable {
                 let spec = text.runs.first?[FontSpecAttribute.self] ?? .body
                 return FontSpecResolver.shared.font(for: spec, categoryRawValue: categoryRawValue).ascender
             }
+        }
+        if case .atom(let atom, _) = segments.first {
+            return AtomAttachment(atom: atom, categoryRawValue: categoryRawValue).pillAscent
         }
         return 0
     }
