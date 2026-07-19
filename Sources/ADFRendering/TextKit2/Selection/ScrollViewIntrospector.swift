@@ -161,7 +161,8 @@ struct ScrollViewIntrospector: UIViewRepresentable {
 
         /// Records the introspection outcome (which content container was the
         /// attachment target) for the assessment. Emitted only when
-        /// `-selection` is set — the probe is not installed otherwise.
+        /// `SelectionFlags.enabled` is true (TK2 rendering on) — the probe
+        /// is not installed otherwise.
         static let log = Logger(subsystem: "com.connie.adfreader", category: "selection")
     }
 }

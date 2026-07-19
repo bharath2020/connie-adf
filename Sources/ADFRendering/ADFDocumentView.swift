@@ -46,9 +46,10 @@ public struct ADFDocumentView: View {
 
     #if os(iOS)
     /// The read-only selection controller for this document (phase 4),
-    /// constructed once per view identity ONLY when `-selection` (+`-textkit2`)
-    /// is set — a plain launch constant, so a build without the flag never
-    /// allocates it and the `.background` probe below is a stable
+    /// constructed once per view identity ONLY when `SelectionFlags.enabled`
+    /// is true (TK2 rendering on, and `-noSelection` not set) — a plain
+    /// launch constant, so a build where it's false never allocates the
+    /// controller and the `.background` probe below is a stable
     /// `_ConditionalContent`, not a per-row `#available`/`AnyView` (§18-safe).
     /// `@State` for one stable instance per view identity, like the scroll
     /// registries above; it is never reassigned.
@@ -111,8 +112,9 @@ public struct ADFDocumentView: View {
                     .padding(.horizontal, model.theme.spacing * 2)
                     .frame(maxWidth: readableWidth)
                     .frame(maxWidth: .infinity)
-                    // Installs the selection controller behind `-selection` at
-                    // the document-CONTENT level (one probe over the whole
+                    // Installs the selection controller (gated on
+                    // `SelectionFlags.enabled` — wherever TK2 rendering is
+                    // on) at the document-CONTENT level (one probe over the whole
                     // LazyVStack, never per row). It MUST live inside the scroll
                     // content, not on the `ScrollView` itself: a `.background`
                     // on the `ScrollView` is hosted in a separate

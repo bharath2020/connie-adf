@@ -36,14 +36,24 @@ import UIKit
 ///   launch arg still wins, and either way the change applies on relaunch.
 /// - `-textkit2NoCells` (with `-textkit2`) keeps table-cell text on the
 ///   SwiftUI path — the giant-table gate fallback.
-/// - `-selection` (requires `-textkit2`) installs the phase-4 read-only
-///   selection engine (v3, Task 16b): a transparent, session-scoped overlay
-///   added to the introspected document scroll view's content container. The
-///   overlay is itself the `UITextInput` and hosts
-///   `UITextInteraction(.nonEditable)` + `UITextSelectionDisplayInteraction` +
-///   `UIEditMenuInteraction`; a container long-press starts a selection
-///   session over the real TK2 rows. Read once at launch by `SelectionFlags`,
-///   not parsed into `LaunchOptions` (same pattern as `-textkit2`).
+/// - The phase-4 read-only selection engine (v3, Task 16b) installs
+///   automatically wherever TK2 rendering is on — `TextKit2Flags.enabled`,
+///   whether set by `-textkit2` or the persisted in-app toggle — with no
+///   separate launch arg required (Task 28b: a TestFlight build can't pass
+///   launch args, so gating selection behind a literal `-selection` arg
+///   made it invisible outside `-textkit2 -selection` automation runs). It
+///   is a transparent, session-scoped overlay added to the introspected
+///   document scroll view's content container. The overlay is itself the
+///   `UITextInput` and hosts `UITextInteraction(.nonEditable)` +
+///   `UITextSelectionDisplayInteraction` + `UIEditMenuInteraction`; a
+///   container long-press starts a selection session over the real TK2
+///   rows. Read once at launch by `SelectionFlags`, not parsed into
+///   `LaunchOptions` (same pattern as `-textkit2`).
+/// - `-noSelection` (with `-textkit2`) is the A/B/automation escape hatch:
+///   TK2 renders, but the selection overlay above is withheld.
+/// - `-selection` is still accepted for backward compatibility with
+///   existing scripts but is a no-op — it is not read anywhere; selection
+///   no longer needs it.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles

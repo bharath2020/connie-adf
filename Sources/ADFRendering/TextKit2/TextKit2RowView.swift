@@ -208,11 +208,12 @@ final class TextKit2RowUIView: UIView {
         isAccessibilityElement = true
         // Task 21 — idle link/atom tap handling (gap #1/#2), a plain
         // descendant-level recognizer on the row itself: it works whether or
-        // not `-selection` is even on (`SelectionController` doesn't exist
-        // without that flag), which is exactly the case the phase-3 register
-        // flagged ("TK2-arm text links have no tap handler"). No `hitTest`
-        // override — see `handleRowTap` for the interplay with the v3
-        // selection overlay when `-selection` IS on.
+        // not `SelectionFlags.enabled` is even true (`SelectionController`
+        // doesn't exist when it's false), which is exactly the case the
+        // phase-3 register flagged ("TK2-arm text links have no tap
+        // handler"). No `hitTest` override — see `handleRowTap` for the
+        // interplay with the v3 selection overlay when
+        // `SelectionFlags.enabled` IS true.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleRowTap(_:)))
         // A held-then-released touch still satisfies a plain
         // `UITapGestureRecognizer` (it has no built-in maximum duration) —
@@ -225,7 +226,8 @@ final class TextKit2RowUIView: UIView {
         // `tap` a genuine maximum hold duration, self-contained on the row —
         // no reference to `SelectionController` (or its existence) needed —
         // so a long hold anywhere always resolves to "start selection, don't
-        // also open the link/atom," whether or not `-selection` is on.
+        // also open the link/atom," whether or not `SelectionFlags.enabled`
+        // is true.
         tap.require(toFail: tapDurationSentinel)
         addGestureRecognizer(tap)
         addGestureRecognizer(tapDurationSentinel)

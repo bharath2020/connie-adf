@@ -3196,3 +3196,10 @@ decisions (SwiftUI-arm removal, accessibility scope) that gate the rest.
 an assessment artifact (spec §12: never merged to `main` without a follow-up
 production decision); issue #5 stays **open** to track that decision and the
 production port it recommends.
+
+**Post-verdict gating fix (Task 28b).** The whole-branch review caught this
+doc's one blind spot: `SelectionFlags.enabled` required the literal
+`-selection` launch arg on top of `-textkit2`, a configuration no TestFlight
+build could ever reach, so the in-app TK2 toggle shipped TK2 rendering with
+zero selection; it now ships selection wherever `TextKit2Flags.enabled` is
+true (launch arg or toggle), with `-noSelection` as the new A/B escape hatch.
