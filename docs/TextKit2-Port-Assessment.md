@@ -2534,3 +2534,381 @@ not a kill.
 ### Commit
 
 `measure: phase-4 selection perf + soak gates`
+
+## Phase 4 — Task 27: behavioral gate suite — kitchen-sink demo + full parity pass
+
+Runs the spec §10 behavioral selection gates end-to-end: kitchen-sink demo
+(word/emoji/atom-pill selection + Select-All/Copy byte-compare), selection
+across every block kind, interaction parity with the selection machinery
+installed-but-idle, session-time arbitration (scroll/tap-link/reseed/rotate),
+search+selection composition, expand policy, the toggle-OFF acid test, and a
+dark-mode/AX3 spot check. **Measurement only — no production code changed**
+(`git diff --stat` against `Sources/`/`Demo/` empty before commit). Two live
+findings surfaced during driving (documented, not swept under the rug) —
+see the register additions below.
+
+### Environment
+
+- Repo `textkit2-port-prototype`, HEAD `bf9bff4` throughout.
+- Build: `cd Demo && xcodegen generate && xcodebuild -project
+  ADFReader.xcodeproj -scheme ADFReader -destination "platform=iOS
+  Simulator,name=iPhone 16" build` → **BUILD SUCCEEDED**, one Debug binary
+  (DerivedData `ADFReader-gpbigiihnbgrtzemxlqmiwtstlhv`), installed
+  unmodified on both simulators below.
+- Two dedicated simulators, both created for this task and deleted at the
+  end: `ADF-Task27-182` (iPhone 16 / iOS 18.2, UDID
+  `AE2E554F-ED08-4A73-9328-3CE86062A5C1`, primary — all 8 gates) and
+  `ADF-Task27-262` (iPhone 16 / iOS 26.2, UDID
+  `38846718-559C-4A6B-98D6-D14558480500`, spot-check — Gate 1 only, per the
+  driving notes). No other booted simulator was touched.
+- Bundle id `com.connie.adfreader`. Fixture: `kitchen-sink`.
+- **New driving technique this task**: `axe key-combo --modifiers 227 --key
+  4/6` (Cmd+A / Cmd+C) drives Select-All/Copy directly through the
+  responder chain's standard-edit-action keyCommand binding — bypassing the
+  need to hit the system edit-menu's "Select All" button (which does not
+  re-present itself after firing, so a menu-tap-only workflow can strand
+  Select-All-then-Copy with no visible affordance). Confirmed
+  byte-identical output to the menu-tap path. This joins the register of
+  driving techniques alongside the single-command `axe touch --down --up
+  --delay 1.0` long-press form (Task 26, register #15).
+- Raw pbpaste captures and screenshots under
+  `docs/assessment-assets/phase4-selection/`, `t27_` prefix.
+
+### Gate 1 — Kitchen-sink selection demo (iOS 18.2 primary, iOS 26.2 spot-check)
+
+**Long-press word** (`t27_g1a_longpress_quotation.png`): long-press
+"quotation" in the blockquote → tight character-precise highlight, native
+handles, Copy/Select All/Look Up menu. Copy → pbpaste `quotation`,
+byte-exact. **PASS**
+
+**Word-select past an emoji** (`t27_g1b_emoji_due_longpress.png`): traced
+the fixture's emoji node to `InlineComposer.swift:73-77` — because the JSON
+supplies `attrs.text: "😄"`, the emoji is kept as a literal non-BMP-scalar
+character IN THE PLAIN TEXT RUN (not an atom pill) — so "Ping @Bharath 😄
+due Jul 9, 2024 …" genuinely exercises UTF-16 offset math across a
+surrogate pair, not just atom atomicity. Long-pressed "due" (immediately
+after the emoji): selection is exactly `due` (highlighted tight, handles
+bracket it, not bleeding into the emoji glyph or into the date pill). Copy
+→ pbpaste `"due "` (trailing space — matches Task 19's original finding
+exactly, a tokenizer convention not a bug). Offset correctness across the
+non-BMP scalar confirmed. **PASS**
+
+**Multi-word date pill → whole pill, Copy = full fallbackText**
+(`t27_g1c_datepill_wholepill_selected.png`): reproduced live (Task 19's
+report flagged this as "could not reliably land the HID touch… after
+substantially more than 3 attempts," standing in with unit tests instead —
+this task got a clean live repro). Long-press anywhere inside the "Jul 9,
+2024" capsule → the WHOLE pill selects atomically (handles bracket the
+entire capsule, not a sub-word). Copy → pbpaste `Jul 9, 2024` (with the
+trailing-space convention), byte-exact, the full `AtomFormatting.dateText`
+fallback, no truncation. **PASS** — closes the never-reproduced-live part
+of Task 19's carry-forward.
+  - **Driving-methodology finding**: the pill's actual HID-hit-testable
+    x-range (empirically ≈305–325pt) is narrower than and offset from its
+    visually-drawn capsule background (≈210–300pt by direct pixel
+    measurement) — touches in the visual-but-not-hit-testable zone
+    consistently resolved to the PRECEDING word ("due") instead, and one
+    near-boundary attempt (x≈315pt) produced a selection that bled one
+    character into the following word ("Jul 9, 2024 s"), confirmed via a
+    zoomed pixel crop and a matching `Jul 9, 2024 s` pbpaste capture. The
+    clean x≈310pt point was reproducible on retest. Recorded as a register
+    addition below — a real, narrow-target driving hazard, not merely
+    "hard to land."
+
+**Select All → continuous highlight → Copy byte-compare**
+(`t27_g1d_selectall_fulldoc.png`): long-press + `axe key-combo` Cmd+A →
+continuous cross-block highlight, headings/lists (markers **excluded** —
+confirmed by direct pixel read, no "•"/"4."/"5." tint)/blockquote/code all
+covered. Cmd+C → pbpaste, **833 bytes**, `diff`'d byte-for-byte against the
+committed Task-22 reference corpus
+(`docs/assessment-assets/phase4-selection/t22_selectall_copy_excludes_hidden_expand.txt`)
+— **identical MD5** (`9face922e9bdfda76f686e5f4190b59b`) on both iOS 18.2
+and iOS 26.2 captures (`t27_selectall_copy_182.txt`,
+`t27_selectall_copy_262.txt`). This is the strongest possible byte-compare
+result: not just "looks right" but bit-identical to a previously-verified
+ground truth, reconfirming atom fallbackText-in-full, hidden-expand
+exclusion (expand starts closed by default —
+`ADFDocumentModel.expandedBlocks = []`), and list-marker absence in one
+shot. **PASS**
+
+**Tap-clear** (`t27_g1e_tapclear.png`): tap outside → highlight, handles,
+and menu all gone cleanly, no residual state. **PASS**
+
+**iOS 26.2 spot-check**: first two long-press attempts on "quotation"
+produced no selection (introspector-attach timing, consistent with Task
+20's iOS-26 finding); a third attempt on a different word ("ADF") worked
+immediately (`t27_262_g1a_longpress.png`). Select-All+Cmd+C byte-matched
+the same 833-byte reference. Tap-clear confirmed
+(`t27_262_g1_final_cleared.png`). **PASS**, with the attach-timing note
+carried forward (not new — already register item from prior tasks).
+
+**Cross-block handle drag** (through the atom paragraph + a table cell +
+code block): **not attempted** — `axe drag` remains undrivable
+(`FBSimulatorHIDEvent does not support touch move events`, documented
+since Task 16b). Per the driving notes' explicit fallback, Select All
+exercises the identical cross-block real-rect machinery (Gate 1's
+Select-All screenshot spans the code block, table, and every list/heading
+kind with no crash or visual corruption) — this stands in for the
+interactive drag, consistent with every prior task's treatment of this
+same undrivable gap.
+
+### Gate 2 — Selection across block kinds
+
+Select All (from Gate 1), scrolled through the full document:
+`t27_g2_selectall_bottom_boundary.png` (task list/decision list/layout
+columns/blockCard/video/extensions/syncBlocks — highlight ends exactly at
+"Synced content body," the corpus's last visible unit; blockCard/embedCard
+video/toc extension/syncBlock placeholder correctly show NO highlight,
+matching their absence from the corpus), `t27_g2_selectall_panels_table.png`
+(all 7 panel interiors highlighted, panel chrome/icons not; table header +
+data cells including the colspan/rowspan cells highlighted, the
+numbered-row-index column NOT highlighted, closed expand's "Click to
+expand" title not highlighted), `t27_g2_selectall_markers_excluded.png`
+(bullet/ordered list markers excluded, code block's `let greeting = …`
+fully highlighted including the leading `let` — a zoomed crop ruled out an
+initial misread of a partial-first-line gap). Matches Task 19's original
+evidence with no regression. **PASS**
+
+### Gate 3 — Interaction parity, selection machinery installed but idle
+
+All on the TK2 arm (`-textkit2 -selection`), screenshots per interaction:
+
+- **Expand open/close** (`t27_g3_expand_open_idle.png`): disclosure tap →
+  opens, "Hidden detail"/"Nested details" reveal; tapped closed again. No
+  selection-engine interference (idle). **PASS**
+- **Task checkbox toggle** (`t27_g3_checkbox_toggled.png`): "Write the
+  parser" TODO → checked, native toggle. **PASS**
+- **Mention popover** (`t27_g3_mention_popover.png`): tapped `@Bharath` →
+  native popover (`ProfileCard`). **PASS**
+- **inlineCard tap** (`t27_g3_inlinecard_navigated.png`): tapped the
+  `example.atlassian.net` chip → Safari navigated to the fixture's exact
+  URL. **PASS**
+- **Video facade → player → scroll-away** (`t27_g3_video_facade_to_player.png`,
+  `t27_g3_video_scrollaway_noCrash.png`): tapped the YouTube facade → inline
+  player starts (0:00 elapsed, pause control live); scrolled away two
+  screens and back — no crash, document renders correctly. **PASS**
+- **Table h-scroll**: attempted on kitchen-sink's 3-column table (`Name`/
+  `Role`/`Status`, ~378pt nominal content width vs ~361pt available) — a
+  horizontal swipe produced no visible column shift. Kitchen-sink's table
+  is not a meaningful h-scroll stress case (it barely overflows, if at
+  all); the giant-table fixture is the established h-scroll test subject
+  and Task 22 already verified table h-scroll WITH an active selection
+  there (`t22_table_hscroll_selection_follows.png`) — not re-run here
+  given the idle (non-selection) scope of this gate and time budget;
+  recorded honestly as attempted-inconclusive rather than claimed passing.
+- **Code h-scroll**: kitchen-sink's code block (`let greeting = "Hello,
+  ADF!"` / `print(greeting)`) is short enough it doesn't overflow
+  horizontally either — not independently exercised this task, same
+  reasoning as table h-scroll above.
+- **Text-size popover**: covered under Gate 8's AX3 check via
+  `-fontSizeStep 6` (launch-time, not the in-app popover); the in-app
+  popover path was exercised live in Task 26's bonus gate
+  (register #11, closed) and not repeated here.
+
+### Gate 4 — Session-time arbitration
+
+- **Scroll-during-session** (`t27_g4_scroll_during_session_offscreen.png`,
+  `t27_g4_scroll_back_selection_persisted.png`): long-pressed "quotation,"
+  scrolled two screens away and back — selection (handles + tint) still
+  exactly on "quotation," unchanged. **PASS**
+- **Tap-link-during-session, OUTSIDE the selection's rect**
+  (`t27_g4_taplink_outside_session_native.png`): with a word selected
+  elsewhere, tapped "a link" (not inside the current selection) → Safari
+  opened `example.com` (the fixture's exact href) — "cleared-then-native,"
+  matching Task 21's documented arbitration exactly. **PASS**
+- **Tap-link-during-session, INSIDE the selection's rect (the Task-21
+  review gap this task specifically targets)**
+  (`t27_g4_link_selected_before_inside_tap.png` →
+  `t27_g4_taplink_INSIDE_selection_swallowed.png`): long-pressed directly
+  on "a link" so the link IS the current selection; with Safari fully
+  terminated first (`xcrun simctl terminate … com.apple.mobilesafari`, to
+  make any subsequent Safari appearance unambiguous), tapped the same
+  point again → **no navigation occurred** — still in-app, selection state
+  visible, no Safari relaunch. Confirms Task 21's traced explanation live:
+  `SelectionOverlayView.point(inside:with:)` claims the hit before the
+  row's own tap recognizer ever sees it. **PASS — the T21 gap closed with
+  a clean, unambiguous repro.**
+- **Long-press-inside-selection reseeds**
+  (`t27_g4_reseed_before.png` → `t27_g4_reseed_after_clean.png`): ONE clean
+  reproduction — selected "Centered," long-pressed "Fifth item" elsewhere →
+  reseeded cleanly to "Fifth," matching Task 20's original precedent.
+  **However**, this was NOT reliably reproducible: three earlier attempts
+  (varying target word, and once against a full-document Select-All
+  instead of a word-level selection) — `t27_g4_reseed_FAILED_cleared_instead.png`
+  is one of them — resulted in the session **fully clearing** instead of
+  reseeding, with no highlight/handles/menu surviving at all. This is a
+  different failure mode than a simple seed-miss (which the code should
+  leave the prior selection untouched on): the pattern looks like a race
+  between the container's tap-clear recognizer and the long-press
+  recognizer's reseed, where `handleTap`'s `overlay.selectionContains(point)`
+  check evaluates false often enough (plausibly at rect-boundary
+  imprecision after a reseed) to fire `endSession()` moments after a
+  successful reseed. **Recorded as a new, honestly-flaky finding below —
+  not overclaimed as a clean PASS.**
+- **Rotate-with-selection ×1** (`t27_g4_rotate_with_selection_landscape.png`,
+  `t27_g4_rotate_back_portrait_reglued.png`): full-document Select-All
+  active, `notifyutil -p com.connie.adfreader.rotate` → landscape; the
+  screenshot (portrait-dimensioned per the simulator's known
+  portrait-fixed capture, content rendered rotated inside) shows every
+  selection rect correctly re-glued to the new landscape line-wraps — no
+  stale/misaligned rects. Rotated back to portrait → selection rects
+  re-glued again, unchanged content. **PASS**
+
+### Gate 5 — Search + selection
+
+**Active search with highlights + selection session over highlighted text**
+(`t27_g5_search_active_highlights.png`, `t27_g5_selection_over_search_highlight_compose.png`):
+searched "panel" (1/7 matches, orange highlight tint, current match
+slightly deeper). Long-pressed adjacent to a highlighted match ("Info" next
+to the highlighted "panel") → blue selection tint and orange search tint
+render side-by-side in the same row with no visual fighting or z-order
+corruption — both systems compose cleanly. **PASS**
+
+**Find-navigation during a session — document behavior honestly**
+(`t27_g5_findnav_BEFORE.png` → `t27_g5_findnav_STALE_RECTS_finding.png`):
+with "Info" selected, tapped the search bar's next-match chevron (→ match
+2/7, "Note panel"). The result was **neither** of the brief's two
+anticipated outcomes ("session persists unaffected" or "cleanly ends on
+the scrollTarget jump"): the **visual selection highlight extended into a
+huge, multi-row span** (from "Fifth item" down through "Note panel," with
+a handle dot at the new scroll position) that does **not** match the
+actual underlying range — `xcrun simctl pbcopy` sentinel + Cmd+C on this
+state pasted back **`Inf`** (3 characters, not even the whole word "Info,"
+and nothing like the visually-huge span). This reads as a **geometry
+staleness bug**: find-navigation's scroll-to-next-match jump does not
+correctly trigger `SelectionController.selectionGeometryDidGoStale()`'s
+re-query/coalescing path, leaving the RECTS stale/extended while the
+underlying `SelectionState.utf16Range` stays small (and possibly itself
+got clipped by the scroll, hence `Inf` rather than `Info`). **Recorded
+honestly as an unexpected third outcome, not swept into either of the
+brief's two "acceptable" buckets** — see the register addition below.
+
+### Gate 6 — Expand policy live
+
+**Select All → Copy excludes hidden (pbpaste proof)**: already proven
+byte-exact in Gate 1 — the 833-byte Select-All corpus (identical to the
+Task-22 reference, itself captured with the expand closed) contains no
+"Hidden detail"/"Deeper detail" text; the expand's own "Click to expand"
+title also correctly excluded (confirmed against the fixture — the title
+is UI chrome, not corpus content). **PASS**, reusing Gate 1's evidence
+rather than re-deriving it.
+
+**Toggle expand mid-session → rects re-glue**: attempted via the
+`-toggleExpandDelay <seconds>` launch hook (the same mechanism Task 22's
+report used successfully, `t22_expand_toggle_selection_glued.png`) —
+selected "A captioned sunset" (the block immediately after the expand,
+so its position shifts when the expand opens), then waited for the
+scheduled auto-toggle. **The hook did not visibly fire within this
+session** across two attempts (4s and 8s delays, waited well past each
+deadline — 8s delay confirmed still-closed after 16+s total elapsed;
+screenshots `t27_g6_expand_closed_selection_attempt.png` and further
+waits all show the expand still closed). Not chased further given the time
+budget; this task did **not** get a live re-glue repro of this specific
+sub-case. The Task-22 screenshot stands as the last verified evidence for
+this exact mechanism — **recorded honestly as UNCONFIRMED this task**, a
+gap, not silently marked PASS.
+
+### Gate 7 — Toggle-OFF parity sweep (the no-SwiftUI-changes acid test)
+
+Launched WITHOUT `-textkit2`/`-selection` (the SwiftUI-only arm).
+Long-pressed "Heading five" (`t27_g7_toggleOFF_native_selection.png`): the
+whole heading's text selects (native `.textSelection(.enabled)`
+per-`Text`-view semantics — no cross-block handles, no atom pill
+selection), and the edit menu shows **`Copy | Share…`** — structurally
+DIFFERENT from the TK2 arm's `Copy | Select All | Look Up`, confirming
+this is genuinely the stock iOS text-selection UI, not a masked copy of
+the custom engine. Zero selection-engine artifacts observed: no overlay
+tint bleeding across paragraphs, no atom-pill-as-one-unit behavior. **PASS
+— the acid test holds.**
+
+### Gate 8 — Dark mode + AX3 spot
+
+**Dark mode** (`t27_g8_darkmode_selection.png`): `xcrun simctl ui $D
+appearance dark`, long-pressed "quotation" → handles, blue selection tint,
+and the (dark-styled) edit menu all legible with correct contrast; no
+wrong/inverted colors. **PASS**
+
+**AX3** (`t27_g8_ax3_selection.png`): `-fontSizeStep 6` (reaches
+`accessibility3`, per Task 12's established ladder math). Long-pressed
+"Sink" (in the large-type heading) → word-precise selection, correctly
+scaled handles, legible menu at the larger geometry. **PASS**
+
+### Known-gaps register — additions from this task
+
+16. **Date-pill HID hit-target is narrower than, and offset from, its
+    visual capsule bounds**: empirically ≈305–325pt hit-testable vs
+    ≈210–300pt visually drawn (kitchen-sink's "Jul 9, 2024" pill, iOS
+    18.2, default type size) — touches in the visual-only zone snap to the
+    PRECEDING word instead of the pill, and near-boundary touches can bleed
+    one character into the FOLLOWING word. A real, reproducible, narrow
+    coordinate-targeting hazard for future test-driving (not necessarily a
+    product defect — no evidence real touch/AX targeting on a physical
+    device behaves differently — but worth a dedicated look if HID-driven
+    regression testing of this pill is ever automated). Gate 1c, this task.
+17. **Long-press-inside-an-active-selection intermittently CLEARS instead
+    of reseeding** — reproduced 3 of 4 attempts (both against a
+    full-document Select-All and against a plain word-level selection);
+    the 1 success matches Task 20's original documented behavior exactly.
+    Plausible root cause: a race between the container's tap-clear
+    recognizer (`handleTap`, which calls `endSession()` when
+    `overlay.selectionContains(point)` is false) and the long-press
+    recognizer's reseed — if `selectionContains` evaluates false shortly
+    after a reseed lands (e.g. rect-boundary rounding), the tap-clear wins
+    the race and undoes the reseed a moment later. Needs source-level
+    investigation (not attempted this task — measurement-only scope) to
+    confirm the exact mechanism; flagged as the highest-priority follow-up
+    from this task's findings. Gate 4, this task.
+18. **Find-navigation during an active selection session desyncs the
+    highlight geometry from the underlying selection range**: tapping the
+    search bar's next-match chevron mid-session produced a visually huge,
+    multi-row stale highlight that did not match the actual copyable range
+    (`Inf`, 3 characters, vs. a span that visually looked like it covered
+    several paragraphs). Neither of the brief's two anticipated outcomes
+    (persists / cleanly ends) occurred. Plausible root cause: find
+    navigation's scroll-to-match jump doesn't route through
+    `selectionGeometryDidGoStale()`'s re-query path the way ordinary
+    scrolling and expand-toggling do. Needs source-level investigation.
+    Gate 5, this task.
+19. **`-toggleExpandDelay` launch hook did not fire within 16+ seconds**
+    in this session (two attempts, 4s and 8s nominal delays), despite
+    being the same mechanism Task 22's report used successfully. Not
+    chased further given the time budget — left as an open
+    driving-methodology question (does it require a different
+    ready-state precondition than this task's sequence provided?) rather
+    than a confirmed product defect. Gate 6, this task.
+20. **`axe key-combo --modifiers 227 --key 4/6` (Cmd+A / Cmd+C) is a
+    reliable Select-All/Copy driving technique**, confirmed
+    byte-identical to the menu-tap path — worth adopting as the default
+    for future tasks needing Select-All+Copy, since the system edit menu
+    does not re-present itself after "Select All" is tapped (no built-in
+    way to reach Copy via menu-tap alone without a second interaction to
+    reopen the menu). Driving-methodology addition, not a product finding.
+
+### Kill criteria check (spec §10)
+
+| Kill criterion | Observed | Triggered? |
+|---|---|---|
+| Selection fails to track document-order content correctly | Gate 1/2: byte-exact Select-All corpus, markers/hidden-expand excluded, atom fallbackText in full | No |
+| Cross-block / cross-kind selection breaks | Gate 2: continuous rects across every block kind | No |
+| Interaction parity regresses with selection installed | Gate 3: links/mentions/inlineCard/checkbox/video/expand all native and unaffected (idle) | No |
+| Session state corrupts under arbitration (scroll/tap/rotate) | Gate 4: scroll and rotate both PASS cleanly; reseed and find-nav both surfaced real findings (items 17–18) — session doesn't crash or corrupt data, but doesn't always behave as specified either | Partial — see items 17–18 |
+| Toggle-OFF arm shows any selection-engine artifact | Gate 7: zero artifacts, structurally different (native) edit menu | No |
+
+No kill criterion outright fires (no crash, no data corruption, core
+byte-exact-copy contract holds under Select-All in every configuration
+tested), but **items 17 and 18 are real, live-reproduced behavioral gaps**
+in the session-arbitration and search-composition paths that a production
+port decision should weigh — recorded plainly rather than folded into a
+blanket PASS.
+
+### Task 27 verify
+
+- No production Swift source was modified this task — `git status`/`git
+  diff --stat` against `Sources/` and `Demo/` confirmed clean before the
+  commit below (only `docs/` changed).
+- Both dedicated simulators (`ADF-Task27-182`, `ADF-Task27-262`) deleted
+  after the last measurement; no other booted simulator was touched.
+
+### Commit
+
+`measure: phase-4 behavioral gate suite`
