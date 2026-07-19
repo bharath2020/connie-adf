@@ -36,6 +36,31 @@ struct TextKit2RowView: UIViewRepresentable {
     var subtleColor: UIColor = .clear
     var currentColor: UIColor = .clear
     var currentForeground: UIColor? = nil
+    /// Matched-atom id sets for the whole-pill tint (Task 21, gap #3), read
+    /// behind the same `search.isActive` zero-work gate as `spans` above —
+    /// empty when no session is active. Mirrors the SwiftUI arm's
+    /// `atomHighlight(for:)` (`SegmentedTextView.swift`), which paints the
+    /// SAME two sets over `AtomView`'s background.
+    var atomIDs: Set<String> = []
+    var currentAtomIDs: Set<String> = []
+    /// The pill corner radius the tint rect is drawn with — matches the
+    /// SwiftUI arm's `theme.chipCornerRadius` (`InlineTokenView`'s
+    /// `.background { RoundedRectangle(cornerRadius: theme.chipCornerRadius) }`),
+    /// applied uniformly to every atom kind there (capsule pills included),
+    /// so this stays byte-for-byte the same shape as the parity target.
+    var chipCornerRadius: CGFloat = 6
+
+    /// Host-supplied mention-popover content, mirrored from the SwiftUI arm's
+    /// `adfMentionContent` environment key (`AtomViews.MentionAtomView`) —
+    /// the TK2-arm hit-test route presents the SAME content in a native
+    /// popover anchored to the tapped pill. `nil` renders mentions read-only,
+    /// exactly like the SwiftUI arm with no host callback injected.
+    var mentionContent: (@MainActor (String) -> AnyView)? = nil
+    /// URL-open action, mirrored from the SwiftUI arm's `\.openURL`
+    /// environment (SwiftUI always supplies a concrete default —
+    /// `UIApplication.shared.open` — even with no host override, so this
+    /// property defaults the same way rather than being optional).
+    var openURL: @MainActor (URL) -> Void = { UIApplication.shared.open($0) }
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.layoutDirection) private var layoutDirection
@@ -47,6 +72,8 @@ struct TextKit2RowView: UIViewRepresentable {
         view.ownerID = ownerID
         view.registry = registry
         view.registerIfNeeded()
+        view.mentionContent = mentionContent
+        view.openURL = openURL
         view.apply(TextKit2RowUIView.Inputs(
             content: TextKit2RowUIView.Inputs.Content(
                 segments: segments,
@@ -60,7 +87,10 @@ struct TextKit2RowView: UIViewRepresentable {
                 dimCurrent: dimCurrent,
                 subtleColor: subtleColor,
                 currentColor: currentColor,
-                currentForeground: currentForeground)))
+                currentForeground: currentForeground,
+                atomIDs: atomIDs,
+                currentAtomIDs: currentAtomIDs,
+                chipCornerRadius: chipCornerRadius)))
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: TextKit2RowUIView, context: Context) -> CGSize? {
@@ -122,6 +152,11 @@ final class TextKit2RowUIView: UIView {
             let subtleColor: UIColor
             let currentColor: UIColor
             let currentForeground: UIColor?
+            /// Matched-atom id sets for the whole-pill tint (Task 21, gap
+            /// #3) — empty when no search session is active.
+            var atomIDs: Set<String> = []
+            var currentAtomIDs: Set<String> = []
+            var chipCornerRadius: CGFloat = 6
         }
         let content: Content
         let paint: Paint
@@ -139,6 +174,12 @@ final class TextKit2RowUIView: UIView {
     var ownerID: String?
     weak var registry: RowGeometryRegistry?
 
+    /// Task 21 — atom/link hit-testing routing targets, set every
+    /// `updateUIView` pass alongside `ownerID`/`registry` (a plain identity
+    /// concern, independent of `Inputs`/`apply`). See `handleRowTap`.
+    var mentionContent: (@MainActor (String) -> AnyView)?
+    var openURL: @MainActor (URL) -> Void = { UIApplication.shared.open($0) }
+
     /// Counts calls that actually rebuilt `TextRowContent` (i.e. ran
     /// `TextRowContent.make` + `TextRowLayout.setAttributedString`) —
     /// exposed so a paint-only `apply` (arrival flash, navigation to a new
@@ -151,7 +192,43 @@ final class TextKit2RowUIView: UIView {
         isOpaque = false
         backgroundColor = .clear
         contentMode = .redraw
+        // Task 21 — idle link/atom tap handling (gap #1/#2), a plain
+        // descendant-level recognizer on the row itself: it works whether or
+        // not `-selection` is even on (`SelectionController` doesn't exist
+        // without that flag), which is exactly the case the phase-3 register
+        // flagged ("TK2-arm text links have no tap handler"). No `hitTest`
+        // override — see `handleRowTap` for the interplay with the v3
+        // selection overlay when `-selection` IS on.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleRowTap(_:)))
+        // A held-then-released touch still satisfies a plain
+        // `UITapGestureRecognizer` (it has no built-in maximum duration) —
+        // confirmed on-device: a 1s hold on a link opened it via THIS
+        // recognizer even though `SelectionController`'s ancestor long-press
+        // (0.5s `minimumPressDuration`) had already started a word-select
+        // session on the SAME touch, since ancestor/descendant recognizers
+        // are independent by default (the same fact `touchHitsDescendantControl`
+        // exists to arbitrate for tap-to-clear). `tapDurationSentinel` gives
+        // `tap` a genuine maximum hold duration, self-contained on the row —
+        // no reference to `SelectionController` (or its existence) needed —
+        // so a long hold anywhere always resolves to "start selection, don't
+        // also open the link/atom," whether or not `-selection` is on.
+        tap.require(toFail: tapDurationSentinel)
+        addGestureRecognizer(tap)
+        addGestureRecognizer(tapDurationSentinel)
     }
+
+    /// Duration-only gate for `handleRowTap` — see `init`'s comment. Never
+    /// given a target/action: only its PASS/FAIL state matters, via
+    /// `tap.require(toFail:)`. `minimumPressDuration` sits just under
+    /// `SelectionController`'s long-press threshold (UIKit's 0.5s default)
+    /// so a deliberate long-press always fails this sentinel first, letting
+    /// the real long-press recognizer win the touch cleanly.
+    private let tapDurationSentinel: UILongPressGestureRecognizer = {
+        let recognizer = UILongPressGestureRecognizer()
+        recognizer.minimumPressDuration = 0.4
+        recognizer.cancelsTouchesInView = false
+        return recognizer
+    }()
     required init?(coder: NSCoder) { fatalError("unused") }
 
     /// Registers with `registry` when this row enters a window, evicts when
@@ -249,9 +326,11 @@ final class TextKit2RowUIView: UIView {
     private func drawHighlightBackgrounds(in ctx: CGContext) {
         guard let inputs, let content else { return }
         let paint = inputs.paint
-        guard !paint.spans.isEmpty || !paint.currentSpans.isEmpty else { return }
+        guard !paint.spans.isEmpty || !paint.currentSpans.isEmpty
+            || !paint.atomIDs.isEmpty || !paint.currentAtomIDs.isEmpty else { return }
         ctx.saveGState()
         defer { ctx.restoreGState() }
+        drawAtomPillHighlights(paint, content: content, in: ctx)
         for span in paint.spans {
             fillRects(for: span, color: paint.subtleColor, content: content, in: ctx)
         }
@@ -261,6 +340,36 @@ final class TextKit2RowUIView: UIView {
         let currentColor = paint.dimCurrent ? paint.subtleColor : paint.currentColor
         for span in paint.currentSpans {
             fillRects(for: span, color: currentColor, content: content, in: ctx)
+        }
+    }
+
+    /// Whole-pill search-match tint (Task 21, gap #3): a matched atom's ONE
+    /// U+FFFC attachment char (Task 10) tints entirely — a partial-glyph
+    /// highlight makes no sense for a pill, so this fills a rounded rect over
+    /// the WHOLE attachment glyph rect rather than routing atom segments
+    /// through `fillRects`' per-`Character` span math (which is a no-op for
+    /// them anyway: `content.segmentStrings[index] == ""` for every atom).
+    /// Mirrors the SwiftUI arm's `atomHighlight(for:)` +
+    /// `InlineTokenView.highlightColor(_:)` (`SegmentedTextView.swift`):
+    /// current-match wins over subtle, dimmed current uses the subtle color,
+    /// same `chipCornerRadius` shape for every atom kind (capsule pills
+    /// included) — a byte-for-byte parity match, not just a visual
+    /// approximation. Drawn BEFORE `fillRects` so a corner nicked by a
+    /// following span-based fill (there won't be one here, but the ordering
+    /// is the same "background before glyphs" contract) never draws over it.
+    private func drawAtomPillHighlights(_ paint: Inputs.Paint, content: TextRowContent, in ctx: CGContext) {
+        guard !paint.atomIDs.isEmpty || !paint.currentAtomIDs.isEmpty else { return }
+        guard let segments = inputs?.content.segments else { return }
+        for (index, segment) in segments.enumerated() {
+            guard case .atom(_, let id) = segment else { continue }
+            let isCurrent = paint.currentAtomIDs.contains(id)
+            guard isCurrent || paint.atomIDs.contains(id) else { continue }
+            let color = isCurrent ? (paint.dimCurrent ? paint.subtleColor : paint.currentColor) : paint.subtleColor
+            let nsRange = NSRange(location: content.segmentUTF16Starts[index], length: 1)
+            color.setFill()
+            for rect in selectionRects(forUTF16: nsRange) where rect.width > 0 && rect.height > 0 {
+                UIBezierPath(roundedRect: rect, cornerRadius: paint.chipCornerRadius).fill()
+            }
         }
     }
 
@@ -399,6 +508,113 @@ final class TextKit2RowUIView: UIView {
             let charOffset = TextRowContent.characterOffset(forUTF16Offset: within, inSegment: segment, of: content)
             return (.textSegment(index: segment), charOffset)
         }
+    }
+
+    // MARK: Atom/link hit-testing (Task 21)
+
+    /// A tap target resolved from the row's own committed layout: either a
+    /// text run's `.link` attribute, or an atom's structural node ID.
+    enum AtomOrLinkHit: Equatable {
+        case link(URL)
+        case atom(id: String)
+    }
+
+    /// The link or atom under `point` (row-local coordinates), or nil if
+    /// `point` isn't actually over a glyph/attachment's own drawn bounds.
+    ///
+    /// Unlike `closestUTF16Offset` (a "nearest" query used to seed a text
+    /// selection anywhere in the row, including blank trailing space),
+    /// this is an EXACT hit-test: it re-verifies the candidate character's
+    /// own glyph rect — via `selectionRects(forUTF16:)`, the same
+    /// `enumerateTextSegments(type: .selection)` geometry `RowGeometrySource`
+    /// already uses for atom rects — actually contains `point`, so a tap past
+    /// the end of a short line (or in the gutter beside a pill) never
+    /// resolves to that line's last character.
+    func hitTest(atomOrLinkAt point: CGPoint) -> AtomOrLinkHit? {
+        guard let offset = closestUTF16Offset(to: point) else { return nil }
+        let glyphRects = selectionRects(forUTF16: NSRange(location: offset, length: 1))
+        guard glyphRects.contains(where: { $0.contains(point) }) else { return nil }
+        guard let anchor = rowAnchor(atRowUTF16: offset) else { return nil }
+        if case .atom(let id) = anchor.source { return .atom(id: id) }
+        guard let attributed = content?.attributed, offset < attributed.length,
+              let url = attributed.attribute(.link, at: offset, effectiveRange: nil) as? URL
+        else { return nil }
+        return .link(url)
+    }
+
+    /// Idle tap handling (spec parity gaps #1/#2 — see `init`'s comment for
+    /// why this lives on the row rather than the container). Composes with
+    /// the v3 selection overlay (Task 20) purely through existing hit-test
+    /// mechanics: when a session is active, the overlay is frontmost and
+    /// spans the whole content, but `SelectionOverlayView.point(inside:with:)`
+    /// only claims points near the CURRENT selection's own rects — so a tap
+    /// there hit-tests to the overlay and never reaches this recognizer at
+    /// all (a sibling of the overlay, not an ancestor of the hit view, gets
+    /// no delivery — the exact "row taps only receive touches the overlay
+    /// declines" contract). A tap elsewhere in a live session (e.g. a link in
+    /// a DIFFERENT paragraph than the current selection) still reaches BOTH
+    /// this recognizer AND `SelectionController`'s ancestor tap-to-clear
+    /// recognizer — by design (documented, not fought): the link opens AND
+    /// the selection clears ("cleared-then-native"), matching how tapping
+    /// away from a native text selection elsewhere always clears it.
+    @objc private func handleRowTap(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, let hit = hitTest(atomOrLinkAt: gesture.location(in: self)) else { return }
+        switch hit {
+        case .link(let url):
+            openURL(url)
+        case .atom(let id):
+            routeAtomTap(id: id)
+        }
+    }
+
+    /// Routes an atom tap exactly like the SwiftUI arm's `AtomView` does:
+    /// only `.mention` (popover, if the host injected `adfMentionContent`)
+    /// and `.inlineCard` (open URL, mirroring `InlineCardChip`'s `Link`) are
+    /// interactive — `.status`/`.date`/`.emoji`/`.mediaInline`/
+    /// `.inlineExtension` render read-only pills there too, so a tap on one
+    /// here is a no-op, not a constrained gap.
+    private func routeAtomTap(id: String) {
+        guard let segments = inputs?.content.segments,
+              let segIndex = segmentIndex(forAtomID: id),
+              case .atom(let atom, _) = segments[segIndex] else { return }
+        switch atom {
+        case .mention(let raw):
+            guard let mentionContent, let content else { return }
+            let anchor = selectionRects(
+                forUTF16: NSRange(location: content.segmentUTF16Starts[segIndex], length: 1)
+            ).first ?? bounds
+            presentMentionPopover(mentionContent(AtomFormatting.mentionText(raw)), anchorRect: anchor)
+        case .inlineCard(let urlString):
+            guard let urlString, let url = URL(string: urlString) else { return }
+            openURL(url)
+        case .status, .date, .emoji, .mediaInline, .inlineExtension:
+            break
+        }
+    }
+
+    /// Presents host-supplied SwiftUI content in a native popover anchored to
+    /// the tapped pill — the UIKit-context equivalent of the SwiftUI arm's
+    /// `.popover(isPresented:)` (adapts to a sheet in a compact size class,
+    /// same as there). Found via the standard `next`-responder walk to the
+    /// nearest `UIViewController`; a miss (no host view controller reachable)
+    /// is a silent no-op rather than a crash.
+    private func presentMentionPopover(_ view: AnyView, anchorRect: CGRect) {
+        guard let presenter = nearestViewController() else { return }
+        let hosting = UIHostingController(rootView: view)
+        hosting.modalPresentationStyle = .popover
+        hosting.popoverPresentationController?.sourceView = self
+        hosting.popoverPresentationController?.sourceRect = anchorRect
+        hosting.popoverPresentationController?.permittedArrowDirections = .any
+        presenter.present(hosting, animated: true)
+    }
+
+    private func nearestViewController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let viewController = current as? UIViewController { return viewController }
+            responder = current.next
+        }
+        return nil
     }
 }
 #endif

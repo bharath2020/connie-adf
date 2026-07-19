@@ -32,6 +32,14 @@ struct SegmentedTextView: View {
 
     @Environment(\.adfDocumentSearch) private var search
     @Environment(\.adfTheme) private var theme
+    /// Task 21 — the TK2-arm's link-tap route reads the SAME `\.openURL`
+    /// action a `Text`/`Link` would use (always concrete; SwiftUI supplies a
+    /// platform default even with no host override).
+    @Environment(\.openURL) private var openURL
+    /// Task 21 — the TK2-arm's mention-tap route presents the SAME host
+    /// content the legacy arm's `MentionAtomView` would, in a native popover
+    /// anchored to the pill. `nil` renders mentions read-only there too.
+    @Environment(\.adfMentionContent) private var mentionContent
     #if os(iOS)
     /// Per-document row-geometry registry (Task 17), threaded into the TK2
     /// row so it can self-register for on-demand selection queries. `nil`
@@ -74,7 +82,12 @@ struct SegmentedTextView: View {
                     dimCurrent: flashDimmed,
                     subtleColor: UIColor(theme.searchHighlight),
                     currentColor: UIColor(theme.searchCurrentHighlight),
-                    currentForeground: theme.searchCurrentForeground.map { UIColor($0) }
+                    currentForeground: theme.searchCurrentForeground.map { UIColor($0) },
+                    atomIDs: paint.atomIDs,
+                    currentAtomIDs: paint.currentAtomIDs,
+                    chipCornerRadius: theme.chipCornerRadius,
+                    mentionContent: mentionContent,
+                    openURL: { url in openURL(url) }
                 )
                 .alignmentGuide(.firstTextBaseline) { _ in
                     TextKit2RowView.firstBaseline(
@@ -152,14 +165,19 @@ struct SegmentedTextView: View {
         TextKit2Flags.enabled && (!inTableCell || TextKit2Flags.cellsEnabled)
     }
 
-    /// Search-highlight spans for the TK2 draw pass, read directly off the
-    /// owner's highlight store — mirrors `displayedSegments`'s zero-work
-    /// gate exactly (same guard, same one-Bool idle read) but returns spans
-    /// for the view to draw instead of a painted copy of `segments`.
-    private var highlightPaint: (spans: [SearchHighlightSpan], currentSpans: [SearchHighlightSpan]) {
-        guard let ownerID, let search, search.isActive else { return ([], []) }
+    /// Search-highlight spans (+ matched-atom id sets, Task 21 gap #3) for
+    /// the TK2 draw pass, read directly off the owner's highlight store —
+    /// mirrors `displayedSegments`'s zero-work gate exactly (same guard, same
+    /// one-Bool idle read) but returns spans for the view to draw instead of
+    /// a painted copy of `segments`. The atom-id sets are the SAME ones
+    /// `atomHighlight(for:)` below reads for the legacy arm.
+    private var highlightPaint: (
+        spans: [SearchHighlightSpan], currentSpans: [SearchHighlightSpan],
+        atomIDs: Set<String>, currentAtomIDs: Set<String>
+    ) {
+        guard let ownerID, let search, search.isActive else { return ([], [], [], []) }
         let highlights = search.ownerHighlights(for: ownerID)
-        return (highlights.spans, highlights.currentSpans)
+        return (highlights.spans, highlights.currentSpans, highlights.atomIDs, highlights.currentAtomIDs)
     }
     #endif
 

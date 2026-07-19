@@ -196,6 +196,22 @@ struct SelectionControllerOffsetTests {
         #expect(r.snapIngestedRange(11..<15) == 4..<15)
     }
 
+    /// Task 21 Step 1 pin: atomicity holds for ANY range wholly inside the
+    /// atom, not just tokenizer-word-aligned ones (the three tests above all
+    /// happen to land on word boundaries). `6..<9` starts mid-"Jul" and ends
+    /// mid-"9," — both endpoints interior, no word boundary in sight — and
+    /// must still widen to the atom's full range. This is the same
+    /// `writeSelection` → `resolver.snapIngestedRange` path
+    /// `SelectionOverlayView.selectedTextRange`'s setter calls on EVERY range
+    /// set (handle drags included, not just the tokenizer word-seed), so
+    /// pinning it at the resolver level (macOS-testable) covers the
+    /// UIKit-only setter by construction.
+    @Test func midAtomRangeWithNoWordBoundaryWidensToWholeAtom() {
+        let model = dueDateModel()
+        let r = resolver(model, FakeGeometrySource())
+        #expect(r.snapIngestedRange(6..<9) == 4..<15)
+    }
+
     @Test func adjacentWordSeedOutsideAtomResolvesTight() {
         // Regression pin (Task 19 deviation note): a word seed adjacent to —
         // but not inside — an atom must NOT be pulled into it. "due" is
