@@ -98,6 +98,35 @@ struct SelectionEpochTests {
         #expect(fireCount == 2)
     }
 
+    // MARK: scrollTarget — structural-navigation callback (A1, register #18)
+
+    @Test("assigning a non-nil scrollTarget fires onScrollTargetChanged synchronously; nil does not")
+    func scrollTargetFiresChangeCallbackOnlyForNonNil() {
+        let model = ADFDocumentModel()
+        var fireCount = 0
+        model.onScrollTargetChanged = { fireCount += 1 }
+
+        model.scrollTarget = "heading-3"      // a jump — fires
+        #expect(fireCount == 1)
+
+        model.scrollTarget = "heading-7"      // another jump — fires again
+        #expect(fireCount == 2)
+
+        model.scrollTarget = nil              // the consumer's clear — does NOT fire
+        #expect(fireCount == 2)
+    }
+
+    @Test("load() clears scrollTarget to nil and never fires the structural-scroll callback")
+    func loadDoesNotFireScrollTargetCallback() {
+        let model = ADFDocumentModel()
+        model.scrollTarget = "heading-3"
+        var fireCount = 0
+        model.onScrollTargetChanged = { fireCount += 1 } // wired AFTER the initial set
+        model.load(data: Data(threeParagraphs.utf8))
+        #expect(fireCount == 0)               // load() sets scrollTarget = nil only
+        #expect(model.scrollTarget == nil)
+    }
+
     // MARK: bumpDocumentEpochIfNeeded — pure tail append vs structural change
 
     @Test("an insert whose afterID is nil on an EMPTY document is a pure tail append — no bump")

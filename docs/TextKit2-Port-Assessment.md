@@ -2858,6 +2858,28 @@ scaled handles, legible menu at the larger geometry. **PASS**
     investigation (not attempted this task — measurement-only scope) to
     confirm the exact mechanism; flagged as the highest-priority follow-up
     from this task's findings. Gate 4, this task.
+    **RESOLVED (Task 28).** Root cause confirmed on-simulator with temporary
+    recognizer instrumentation (iOS 18.2): the container's tap-to-clear
+    (`tapClear`, a plain `UITapGestureRecognizer` with no maximum hold
+    duration) fires on the touch-**up** of every reseed long-press — a
+    held-then-released touch satisfies a plain tap recognizer — and
+    `handleTap` then ends the session whenever the release point falls
+    outside the freshly-reseeded rect. Live trace of a whitespace-gap press:
+    `reseed OK range=245..<246` immediately followed by `handleTap
+    contains=false -> endSession`. No `UITextInteraction`/overlay collapse
+    was involved (no external `selectedTextRange` writes logged). Fix
+    (`SelectionController.attach`): `tapClear.require(toFail: longPress)` —
+    the same `tapDurationSentinel` pattern `TextKit2RowView` already uses for
+    its own row tap — so a deliberate long-press (which recognizes, i.e. does
+    NOT fail) suppresses tap-clear entirely; a held press is always a reseed,
+    never a clear, while a genuine quick tap still fails `longPress` fast and
+    clears normally when outside the selection. Live re-verify (iOS 18.2,
+    kitchen-sink `-textkit2 -selection`, pbpaste-sentinel protocol):
+    reseed-inside-selection **8/8** stay active (including two whitespace-gap
+    presses that previously cleared; disambiguated via Select-All → 830-char
+    whole-document copy proving the overlay was still first responder),
+    tap-clear (quick tap outside) still clears **8/8**, quick-tap link still
+    opens (Safari launched). Gate 4, Task 28.
 18. **Find-navigation during an active selection session desyncs the
     highlight geometry from the underlying selection range**: tapping the
     search bar's next-match chevron mid-session produced a visually huge,
@@ -2869,6 +2891,25 @@ scaled handles, legible menu at the larger geometry. **PASS**
     `selectionGeometryDidGoStale()`'s re-query path the way ordinary
     scrolling and expand-toggling do. Needs source-level investigation.
     Gate 5, this task.
+    **RESOLVED (Task 28).** Architectural decision: a find-navigation (or TOC)
+    `scrollTarget` jump is a STRUCTURAL navigation — the reader teleports to a
+    new region — so rather than trying to keep the old selection's rects glued
+    across the jump, the selection session is **ended cleanly** when
+    `model.scrollTarget` is set while a session is active. Wiring mirrors the
+    existing epoch path: a non-observed `ADFDocumentModel.onScrollTargetChanged`
+    closure (fired synchronously from `scrollTarget`'s `didSet` on a non-nil
+    assignment, so it runs BEFORE `ScrollTargetConsumer` performs the scroll)
+    is consumed by `SelectionController.endSessionOnStructuralScroll()` →
+    standard `endSession()` teardown. Zero SwiftUI-arm change, zero scroll-path
+    cost (fires only on an actual jump; a guarded no-op when no session is
+    active). macOS unit tests cover the callback policy (fires on non-nil, not
+    on the consumer's clear-to-nil, and `load()` never spuriously fires it).
+    Live re-verify (iOS 18.2, kitchen-sink `-textkit2 -selection`, search
+    "column" 1/3): started a selection session at match 1, tapped the
+    next-match chevron → view jumped to match 2/3 ("Left column", normal orange
+    arrival highlight) and the session **ended cleanly** — no stale multi-row
+    highlight, edit menu dismissed, and a post-jump Select-All+Copy returned
+    the sentinel (overlay no longer first responder). Gate 5, Task 28.
 19. **`-toggleExpandDelay` launch hook did not fire within 16+ seconds**
     in this session (two attempts, 4s and 8s nominal delays), despite
     being the same mechanism Task 22's report used successfully. Not

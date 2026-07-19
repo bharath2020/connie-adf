@@ -63,10 +63,28 @@ public final class ADFDocumentModel {
     /// search navigation can open expands programmatically.
     public var expandedBlocks: Set<String> = []
 
+    /// Fires synchronously when `scrollTarget` is assigned a **non-nil** value
+    /// — i.e. a structural scroll jump is requested (find-navigation to a
+    /// match, or a TOC jump). The (single, iOS-only) selection controller
+    /// tears its session down on this same run-loop turn, BEFORE
+    /// `ScrollTargetConsumer` performs the scroll, so a live selection's rects
+    /// can never desync from the post-jump layout (register #18). A plain
+    /// closure (not `Observation`), mirroring `onDocumentEpochChanged`: this
+    /// notification path must never be a per-touch-move selection write. The
+    /// consumer's own clear-to-`nil` is not a jump and does not fire it.
+    @ObservationIgnored public var onScrollTargetChanged: (() -> Void)?
+
     /// Set to a logical top-level item ID (typically a `headings` entry) to
     /// ask the visible `ADFDocumentView` to scroll there; initial full loads
     /// use block IDs. The view consumes and clears it.
-    public var scrollTarget: String?
+    public var scrollTarget: String? {
+        didSet {
+            // A non-nil assignment is a STRUCTURAL navigation (find-nav / TOC
+            // jump): notify synchronously so an active selection session ends
+            // before the scroll. Nil (the consumer/`load()` clear) is not.
+            if scrollTarget != nil { onScrollTargetChanged?() }
+        }
+    }
 
     /// Animation the reader applies when honoring `scrollTarget`. Defaults
     /// to `.snappy` (a TOC jump); hosts driving scripted scrolls can

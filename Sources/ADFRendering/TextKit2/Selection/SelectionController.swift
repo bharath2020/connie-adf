@@ -157,6 +157,17 @@ final class SelectionController: NSObject {
         // it here, guarded by `attached`, ties the callback to the ONE
         // instance that ever calls `attach` successfully.
         model?.onDocumentEpochChanged = { [weak self] in self?.documentDidChange() }
+        // A1 (register #18): a find-navigation / TOC scrollTarget jump is a
+        // STRUCTURAL navigation — the reader teleports to a new region, so any
+        // active selection's rects would desync from the post-jump layout
+        // (Task 27 saw a huge stale highlight while Copy returned a small
+        // stale range). End the session cleanly on the jump. Same non-observed
+        // callback wiring, and same `attached`-guard reasoning, as
+        // `onDocumentEpochChanged` above (a throwaway `SelectionController`
+        // from a later `ADFDocumentView` re-init must not overwrite the real,
+        // attached instance's closure). Zero scroll-path cost: fires only on
+        // an actual jump, and is a guarded no-op when no session is active.
+        model?.onScrollTargetChanged = { [weak self] in self?.endSessionOnStructuralScroll() }
 
         rebuildTextModel()
 
@@ -176,6 +187,22 @@ final class SelectionController: NSObject {
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.cancelsTouchesInView = false
         tap.delegate = self
+        // A2 (register #17) — tap-to-clear must NEVER fire on the RELEASE of a
+        // reseed long-press. A plain `UITapGestureRecognizer` has no maximum
+        // hold duration, so a held-then-released touch also satisfies it
+        // (the same fact `TextKit2RowView.tapDurationSentinel` exists to gate);
+        // without this requirement, every long-press-inside-a-selection ended
+        // with `handleTap` firing on touch-up, and it cleared the session
+        // whenever the release point fell outside the freshly-reseeded rect —
+        // e.g. a press in inter-word whitespace reseeds a 1-char fallback whose
+        // rect doesn't cover the release point (live-traced: `reseed OK
+        // range=245..<246` immediately followed by `handleTap contains=false ->
+        // endSession`). That is exactly the intermittent 3/4-clear of register
+        // #17. Requiring `lp` to fail means a deliberate long-press (which
+        // recognizes, i.e. does NOT fail) suppresses tap-clear entirely, so a
+        // held press is always a reseed and never a clear; a genuine quick tap
+        // still fails `lp` fast and clears normally when outside the selection.
+        tap.require(toFail: lp)
         container.addGestureRecognizer(tap)
         tapClear = tap
 
@@ -359,6 +386,17 @@ final class SelectionController: NSObject {
         guard sessionActive, let container else { return }
         let point = g.location(in: container)
         if overlay.selectionContains(point) { return }
+        endSession()
+    }
+
+    /// A1 (register #18) — reached from `ADFDocumentModel.onScrollTargetChanged`
+    /// when a find-navigation / TOC jump is requested mid-session. A structural
+    /// navigation ends the session via the ONE standard teardown; the fired
+    /// closure already runs on the main actor synchronously with the
+    /// `scrollTarget` write, so the session is gone before the scroll animates.
+    /// Guarded so a jump with no active session is a no-op.
+    func endSessionOnStructuralScroll() {
+        guard sessionActive else { return }
         endSession()
     }
 
