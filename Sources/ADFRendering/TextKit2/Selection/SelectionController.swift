@@ -63,6 +63,23 @@ final class SelectionController: NSObject {
 
     private var longPress: UILongPressGestureRecognizer?
     private var tapClear: UITapGestureRecognizer?
+    /// Passive observer of handle-drag touch-moves on the overlay: it never
+    /// steals touches (`cancelsTouchesInView = false`, simultaneous with the
+    /// `UITextInteraction` drag) — its only job is to feed the touch's
+    /// Y-in-viewport to `autoscroller` on `.changed` and stop it on end.
+    private var autoscrollPan: UIPanGestureRecognizer?
+
+    /// Drag-past-edge autoscroll (Task 20). Constructed in `attach` once the
+    /// scroll view is known; drives a `CADisplayLink` only during an active
+    /// edge-drag and writes `model.anchors.topRow` on each step (§8b).
+    private var autoscroller: SelectionAutoscroller?
+
+    /// `ownerID` → `topLevelBlockID`, rebuilt with the text model. The
+    /// autoscroll top-row lookup maps the live row at the viewport top to the
+    /// top-level block ID that `anchors.topRow` / `scrollTo` speak (a nested
+    /// row's owner is a sub-block; the scroll anchor is always its top-level
+    /// block).
+    private var ownerToTopLevel: [String: String] = [:]
 
     /// True from session start until teardown. Gates the recognizers on the
     /// gesture path without reading the observed `model.selectionSessionActive`.
@@ -107,6 +124,26 @@ final class SelectionController: NSObject {
         tap.delegate = self
         container.addGestureRecognizer(tap)
         tapClear = tap
+
+        // Drag-past-edge autoscroll. The provider maps the row now at the
+        // viewport top to its top-level block ID; the step closure writes it
+        // into the plain `anchors` box (§8b — invalidates no view). The pan
+        // observer on the overlay feeds touch-moves during a native handle drag.
+        let scroller = SelectionAutoscroller(scrollView: scrollView)
+        scroller.topRowProvider = { [weak self] _ in self?.topLevelBlockIDAtViewportTop() }
+        scroller.onScrollStep = { [weak self] rowID in
+            guard let rowID, let self else { return }
+            self.model?.anchors.topRow = rowID
+        }
+        autoscroller = scroller
+
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleAutoscrollPan(_:)))
+        pan.cancelsTouchesInView = false
+        pan.delaysTouchesBegan = false
+        pan.delaysTouchesEnded = false
+        pan.delegate = self
+        overlay.addGestureRecognizer(pan)
+        autoscrollPan = pan
     }
 
     /// Rebuilds the corpus text model from the search index's document-order
@@ -118,13 +155,35 @@ final class SelectionController: NSObject {
         textModel = SelectionTextModel.build(orderedItems: model.search.orderedIndexItems)
         overlay.textModel = textModel
         geometryRegistry.orderOf = { [textModel] ownerID in textModel.ownerOrder[ownerID] ?? .max }
+        ownerToTopLevel = Dictionary(
+            textModel.units.map { ($0.ownerID, $0.topLevelBlockID) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     // MARK: - Session lifecycle
 
     @objc private func handleLongPress(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began, !sessionActive, let container, let model else { return }
+        guard g.state == .began, let container, let model else { return }
         let point = g.location(in: container)
+
+        // Long-press DURING a live session → restart a fresh word session at
+        // the press point (spec §7 "long-press-inside-selection → new word
+        // session"). We re-seed only — the overlay stays first responder and
+        // the session stays active — so a press inside the current selection
+        // reselects the word under the finger rather than being swallowed by
+        // the interaction's own long-press. `tk2Row(at:)` can't be used here
+        // (the enabled overlay is frontmost and hit-tests to itself over the
+        // selection); `beginSession` resolves geometry via the registry, not
+        // hit-testing, and returns `false` on a miss without disturbing the
+        // existing selection.
+        if sessionActive {
+            if overlay.beginSession(atContainerPoint: point), overlay.selectedTextRange != nil {
+                presentMenu(near: point)
+            }
+            return
+        }
+
         guard tk2Row(at: point) != nil else { return }
 
         // Rebuild the corpus model from the CURRENT index: the introspector
@@ -164,6 +223,7 @@ final class SelectionController: NSObject {
     private func endSession() {
         guard sessionActive else { return }
         sessionActive = false
+        autoscroller?.stop()
         editMenu.dismissMenu()
         overlay.clearSelection()
         if overlay.isFirstResponder { _ = overlay.resignFirstResponder() }
@@ -180,6 +240,53 @@ final class SelectionController: NSObject {
             : CGPoint(x: rect.midX, y: rect.minY)
         let config = UIEditMenuConfiguration(identifier: nil, sourcePoint: source)
         editMenu.presentEditMenu(with: config)
+    }
+
+    // MARK: - Autoscroll
+
+    /// Feeds the autoscroller the touch's Y-in-viewport during a native handle
+    /// drag. `.began`/`.changed` engage/adjust the ramp; end/cancel tears the
+    /// display link down. Passive — it never affects the drag it observes.
+    @objc private func handleAutoscrollPan(_ g: UIPanGestureRecognizer) {
+        guard sessionActive, let scrollView, let autoscroller else { return }
+        switch g.state {
+        case .began, .changed:
+            // `location(in: scrollView)` is in content coordinates (bounds
+            // origin == contentOffset); subtracting the offset yields a
+            // viewport Y that stays stable under a stationary finger as the
+            // content autoscrolls beneath it.
+            let contentY = g.location(in: scrollView).y
+            let viewportY = contentY - scrollView.contentOffset.y
+            autoscroller.update(touchYInBounds: viewportY, viewportHeight: scrollView.bounds.height)
+        case .ended, .cancelled, .failed:
+            autoscroller.stop()
+        default:
+            break
+        }
+    }
+
+    /// The top-level block ID whose row currently sits at the viewport top —
+    /// the value `anchors.topRow` / `scrollTo` speak. Binary search over the
+    /// registry's LIVE, document-ordered rows (bounded to materialized rows;
+    /// never an all-registered scan): row bottoms are monotonic in document
+    /// order, so the first live row whose bottom is below the viewport-top line
+    /// is the top row. Runs per autoscroll step (an active edge-drag only).
+    private func topLevelBlockIDAtViewportTop() -> String? {
+        guard let scrollView else { return nil }
+        let topY = scrollView.contentOffset.y
+        let entries = geometryRegistry.liveEntriesInDocumentOrder()
+        guard !entries.isEmpty else { return nil }
+        func bottomInScrollView(_ i: Int) -> CGFloat {
+            let v = entries[i].view
+            return v.convert(v.bounds, to: scrollView).maxY
+        }
+        var lo = 0, hi = entries.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if bottomInScrollView(mid) <= topY { lo = mid + 1 } else { hi = mid }
+        }
+        let index = lo < entries.count ? lo : entries.count - 1
+        return ownerToTopLevel[entries[index].ownerID]
     }
 
     // MARK: - Helpers
@@ -208,8 +315,30 @@ extension SelectionController: UIGestureRecognizerDelegate {
         _ gestureRecognizer: UIGestureRecognizer,
         shouldReceive touch: UITouch
     ) -> Bool {
-        if gestureRecognizer === tapClear { return sessionActive }
+        // Tap-to-clear fires only during a session, and NOT when the touch
+        // hit-tests into an interactive descendant — a `UIControl` (checkbox /
+        // button facade) or a NESTED `UIScrollView` (code/table horizontal
+        // pan). Those own the tap so it must not be read as a blank-space
+        // clear; text links keep working through `cancelsTouchesInView =
+        // false` regardless. Spec §7: failure by delegate, never a `hitTest`
+        // override.
+        if gestureRecognizer === tapClear {
+            return sessionActive && !touchHitsDescendantControl(touch)
+        }
         return true
+    }
+
+    /// Walks up from the touch's hit view; true if a `UIControl` or a nested
+    /// scroll view (i.e. one that is not the document's own scroll view) is
+    /// encountered before the container.
+    private func touchHitsDescendantControl(_ touch: UITouch) -> Bool {
+        var view: UIView? = touch.view
+        while let current = view, current !== container {
+            if current is UIControl { return true }
+            if let sv = current as? UIScrollView, sv !== scrollView { return true }
+            view = current.superview
+        }
+        return false
     }
 }
 
@@ -640,6 +769,17 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         }
         return super.canPerformAction(action, withSender: sender)
     }
+    /// Writes the document-order corpus slice for the current selection to the
+    /// general pasteboard. The text is byte-identical to the search corpus
+    /// (`SelectionTextModel.text(inUTF16:isVisible:)`): `"\n"`-joined between
+    /// visible units, hidden expand units excluded by `isUnitVisible`.
+    ///
+    /// **Invariant — Copy inherits atom text from the corpus.** There is no
+    /// atom-specific formatting here: an atom's `InlineComposer.fallbackText`
+    /// (e.g. a date pill's "Jul 9, 2024", a mention's "@Bharath") is already
+    /// embedded in each unit's `plainText`, so a slice that overlaps an atom
+    /// reproduces its fallback text verbatim — whole-or-nothing, because the
+    /// endpoint snapping guarantees a range never bisects an atom.
     override func copy(_ sender: Any?) {
         guard let range = currentRange, !range.isEmpty,
               let text = text(in: SelectionTextRange(range)) else { return }
