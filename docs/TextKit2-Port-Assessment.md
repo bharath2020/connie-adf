@@ -1824,3 +1824,263 @@ flake was purely a test-harness scheduling artifact.
   after each task. No correctness risk (app state doesn't affect either
   measurement), but it is a deviation from the "one dedicated sim per task"
   convention prior reports followed.
+
+## Phase 4 — Task 25: accessibility — ancestor-collapse measurement, minimal exposure, production scope
+
+Closes phase-3 gap #8. Dedicated sim `ADF-Task25` (iPhone 16, iOS 26.2),
+created for this task, deleted at the end. HEAD at start: `9cbd4c3` (v3
+overlay + full selection engine live — the real hierarchy this task
+measures, not a spike).
+
+### Step 1 — measure the collapse on the real v3 hierarchy
+
+`axe describe-ui` against `-fixture kitchen-sink`, three launch
+configurations, same freshly-launched scroll position (so the on-screen
+element set is comparable), counting the *entire* returned tree (root
+`AXApplication` included):
+
+| Arm | Elements | Headings | Static text | Buttons/Groups | Labeled |
+|---|---|---|---|---|---|
+| SwiftUI (no `-textkit2`) | 32 | 6 | 21 | 2 / 1 | 31 |
+| TK2, no selection (`-textkit2`) | **8** | **0** | 3 | 2 / 1 | 7 |
+| TK2 + selection, idle (`-textkit2 -selection`, no session) | **8** | **0** | 3 | 2 / 1 | 7 |
+| TK2 + selection, ACTIVE session (long-pressed "Heading two") | 15 | 0 | 8 | 3 / 2 | 13 |
+
+Raw trees: `docs/assessment-assets/phase4-selection/t25_axe_trees/t25_{swiftui_kitchensink,tk2_before,tk2_selection_idle_before,tk2_selection_active_before}.json`.
+Screenshots: `t25_swiftui_reference.png`, `t25_before_tk2_selection_idle.png`
+(visually identical to bare `-textkit2` — the overlay is transparent/inert
+while idle), `t25_before_tk2_selection_active.png` (selection engaged:
+handles + edit menu with Copy, confirming Task 20's responder wiring still
+works — this screenshot is evidence for the arm, not a new selection test).
+
+**The bare TK2 arm's full tree** (`-textkit2`, no selection):
+
+```
+AXApplication 'ADFReader'
+   AXGroup None                    (nav bar, empty)
+   AXStaticText '4.'               (ordered-list marker)
+   AXStaticText '5.'               (ordered-list marker)
+   AXStaticText 'swift'            (code-block language label)
+   AXButton 'Copy code'
+   AXButton 'Click to expand'      (panel/expand affordance)
+   AXImage 'A sunset'               (media alt text)
+```
+
+Every heading, every paragraph, every link, every task checkbox is simply
+**absent** — not merged into one opaque element, just gone. This refines
+the phase-1 spike's prediction: the spike measured a `UITextInput`-
+conforming **ancestor** collapsing its descendants into one `AXTextArea`
+(a design SelectionController never actually shipped — Task 16 killed
+ancestor attachment and Tasks 16b–19 built the v3 **sibling overlay**
+instead). On the real v3 hierarchy, `SelectionOverlayView` (the `UITextInput`
+conformer) is a transparent sibling laid *over* the rows, not an ancestor of
+them, so it cannot swallow them structurally — and, measured here, it
+doesn't even register as an accessibility element of its own kind (no
+`AXTextArea`/`TextView` node appears in ANY of the three configurations,
+idle or active — see the full node-role tables in the raw JSON). The actual
+mechanism is simpler and, from a VoiceOver user's perspective, *worse* than
+"one opaque blob": bare `TextKit2RowUIView`s are plain `UIView`s with zero
+accessibility wiring (the Task 10 note the register already flagged),
+so they read as if the content doesn't exist at all. **Even during an
+active selection session**, the tree gains only the edit menu's own
+elements (`Copy`/`Select All`/`Look Up`, a `Forward` button) — the
+selected text itself is never announced or exposed as any element,
+confirming there is currently no VoiceOver path to "what got selected."
+
+### Step 2 — minimal exposure prototype
+
+**Files:**
+- New: `Sources/ADFRendering/TextKit2/RowAccessibilityLabel.swift` — pure,
+  macOS-testable helper (`Tests/ADFRenderingTests/RowAccessibilityLabelTests.swift`,
+  12 cases): `build(segments:segmentStrings:)` reconstructs one row's full
+  text by walking `[InlineSegment]` in order, taking each `.text` segment's
+  plain string from `TextRowContent.segmentStrings` (already extracted —
+  no re-walk of the source `AttributedString`) and substituting each
+  `.atom` segment's `InlineAtom.fallbackText` in its place, concatenated
+  with no separator — the exact shape `SearchIndexer.appendUnit`/
+  `ADFDocumentModel.plainTitle` already use for the search corpus and TOC
+  titles, so a VoiceOver label, a search hit, and a TOC entry describe a
+  row with the same words. `isHeading(_:)` approximates heading detection
+  from the first `.text` segment's first run's `FontSpec.style`.
+- Modified: `Sources/ADFRendering/TextKit2/TextKit2RowView.swift` —
+  `TextKit2RowUIView` gains `isAccessibilityElement = true` (set once in
+  `init`) plus lazy `override` getters for `accessibilityLabel` (built via
+  `RowAccessibilityLabel.build`, nil if the row has no content yet or an
+  empty label) and `accessibilityTraits` (`[.staticText, .header]` for
+  heading rows, `.staticText` otherwise). `accessibilityLanguage` is
+  deliberately left at UIKit's default (`nil`) — no per-run language data
+  exists in the ADF model to override it with.
+- Test (iOS lane): `Tests/ADFRenderingTests/TextKit2RowAccessibilityTests.swift`
+  (6 cases) — proves the getters read LIVE `apply()`-supplied content (not a
+  value cached at the first `apply()`), and end-to-end atom-fallback/heading
+  wiring through real `Inputs.Content`.
+
+**Zero-cost discipline:** `accessibilityLabel`/`accessibilityTraits` are
+`override var { get { ... } set {} }` computed properties, NOT stored —
+`apply()`, `draw(_:)`, and `layoutSubviews()` never read or write them, so
+building the label string only happens when an accessibility client
+(VoiceOver, `axe`, Accessibility Inspector) actually queries the row.
+Verified by code inspection (no call site anywhere in the scroll/paint/
+layout path) and by `accessibilityLabelUpdatesLiveAcrossReapply` (proves the
+getter re-derives from current state every call, i.e. nothing is being
+opportunistically cached on the content-change path either).
+
+**Heading approximation, documented tradeoff:** only levels 1–4
+(`.title`/`.title2`/`.title3`/`.headline`) are detected; levels 5–6 bake as
+`.subheadline`/`.footnote`, which `InlineComposer` ALSO uses (unbolded) for
+the small-text and superscript/subscript marks, so a style-only check risks
+a false positive on a bold run inside small/sup text. Confirmed via a
+throwaway diagnostic print (reverted before commit, not part of the shipped
+code) that a real "Heading five"/"Heading six" row's first run really does
+carry `FontSpec(style: .subheadline/.footnote, bold: true)` and `isHeading`
+correctly returns `false` for both — **and that `axe`/iOS's OWN heading
+heuristic promotes them to `AXHeading` anyway**, independent of the app's
+`.header` trait (visible in the "after" tree below). This app-level
+`.header` trait is still the semantically correct, spec-compliant signal
+(VoiceOver's rotor-based heading navigation is documented to rely on the
+explicit trait, not any visual heuristic), it's just not the only thing
+influencing `axe`'s reported `role` for large/bold text — a nuance recorded
+here so a future reader doesn't mistake the level-5/6 gap for a live bug.
+**One-label-per-row tradeoff:** an atom's `fallbackText`, not a per-attachment
+element, is what VoiceOver reads for a mention/date/status/link pill inside
+a row — matching this pass's stated bar ("one label per row"), not the
+production per-run element model (scope note below).
+
+**Verification — before/after `axe describe-ui`, same fixture/position:**
+
+| Arm | Elements | Headings | Static text | Labeled |
+|---|---|---|---|---|
+| TK2, no selection — BEFORE | 8 | 0 | 3 | 7 |
+| TK2, no selection — **AFTER** | **32** | **6** | **21** | **31** |
+| TK2 + selection, idle — **AFTER** | 32 | 6 | 21 | 31 |
+| TK2 + selection, ACTIVE session — **AFTER** | 45 | 6 | 32 | 43 |
+
+The "AFTER" bare-TK2 tree is not just closer to the SwiftUI arm — a
+role+label sequence diff between `t25_swiftui_kitchensink.json` and
+`t25_tk2_after.json` (32 elements each) is **empty**: byte-identical
+`(role, label)` pairs in the same order, including the heading text, the
+merged-paragraph blob (`"bold italic underline strike let x = 1 H2O and x2
+colored highlighted small a link annotated\nafter the break"` — SwiftUI's
+own `Text`-per-paragraph granularity ALSO merges an embedded link's visible
+text into the surrounding static-text label at this tree-dump level; see
+Concerns), list markers, panel labels, and the image alt text. During an
+active session the tree grows from 32 to 45 (the edit menu's own elements,
+same as the BEFORE active-session delta) — confirmed by screenshot
+(`t25_after_tk2_selection_active.png`) that the selection UI itself
+(handles, edit menu, Copy) is pixel-identical to the BEFORE screenshot, and
+by a live Copy-through-the-menu action (`xcrun simctl pbpaste` returned
+`"Heading"`, matching the visibly selected word) that nothing about
+selection was perturbed by making rows accessibility elements.
+
+**No `SelectionController`/overlay changes were needed.** The brief
+anticipated gating `SelectionController`'s `accessibilityElements`/the
+container's `isAccessibilityElement`; measured reality is that
+`SelectionOverlayView` never contributes an accessibility node in any
+state (idle or active, before or after this task's fix — 0 `AXTextArea`/
+`TextView` nodes in all seven captured trees), so there was nothing to gate
+around. Task 25's fix is scoped entirely to `TextKit2RowUIView`.
+
+### Step 3 — production accessibility scope (deferred, not built)
+
+What full parity with the SwiftUI arm — and with a real production reading
+experience — needs, beyond this task's one-label-per-row bar:
+
+1. **Per-run / interactive element model.** Links, mentions, inline cards,
+   and task checkboxes currently read as part of the row's flat label with
+   no way to activate them from VoiceOver (no rotor entry, no double-tap
+   action). Production needs `TextKit2RowUIView` (or a lightweight proxy
+   layer) to conform to `UIAccessibilityContainer` and return an
+   `accessibilityElements` array of custom `UIAccessibilityElement`s, one
+   per interactive segment plus one for the surrounding static prose —
+   keyed off the SAME segment/rect infrastructure this port already built
+   (`TextRowContent.segmentUTF16Starts`, `selectionRects(forUTF16:)`,
+   `AtomOrLinkHit`/`hitTest(atomOrLinkAt:)` from Task 21) rather than new
+   geometry. Each interactive element's `accessibilityActivationPoint` +
+   `accessibilityFrameInContainerSpace` would come directly from the
+   existing per-segment rect query; its action would call the same
+   `routeAtomTap`/`openURL` Task 21 already wired for touch. Estimated
+   size: comparable to Tasks 17 + 21 combined (a registry-style query layer
+   over already-real geometry, plus activation routing reusing existing
+   handlers) — roughly 1–2 tasks.
+2. **Text-selection rotor.** VoiceOver's built-in "rotor" for navigating by
+   character/word/line when a text element has focus is NOT free from
+   `UITextInput` conformance alone (measured here: `SelectionOverlayView`
+   conforms to `UITextInput` today and contributes zero accessibility
+   surface). Production would need to investigate `UIAccessibilityReadingContent`
+   (`accessibilityLineNumber`/`accessibilityContentForLine(_:)`/
+   `lineNumberForPoint(_:)`) on either the row or a synthetic per-document
+   reading-content proxy, coordinated with the per-run element model above
+   so VoiceOver doesn't double-announce a row's static label AND a
+   rotor-navigated sub-range. This is exploratory — genuinely unknown
+   whether `UITextInteraction`'s internals can be leveraged for any of it —
+   sized as its own KILL-FAST-style task, roughly half-to-one task just to
+   determine feasibility before committing to an implementation.
+3. **The overlay's `AXTextArea` interplay during sessions.** Measured this
+   task: `SelectionOverlayView` announces NOTHING today — not even the
+   worse-than-spike "one opaque `AXTextArea`" the phase-1 spike predicted.
+   Production needs the overlay (or session lifecycle) to explicitly call
+   `UIAccessibility.post(notification:argument:)` — `.announcement` when a
+   session starts/extends/ends, `.layoutChanged` pointing VoiceOver focus
+   at the new selection — mirroring what a stock `UITextView` does
+   automatically and a custom `UITextInput` must do by hand. This must be
+   designed together with item 1 (the per-row elements) so a VoiceOver user
+   isn't hearing both "row's full text" and "selection changed" as
+   conflicting, redundant announcements.
+4. **Selected-text announcements.** A specific instance of item 3: on
+   `copy(_:)`, VoiceOver should confirm what was copied (stock text views
+   post an announcement here too); currently silent.
+
+None of this is built here — this is a scope/estimate note per the brief,
+not an implementation. Rough total: **3–4 tasks**, similar in size to the
+Task 17/19/21 cluster that built the selection engine's own geometry/
+hit-testing layer, since items 1 and 3 above are designed to reuse that
+layer rather than duplicate it.
+
+### Verify
+
+- macOS `swift test`: **293/293 pass**, 43 suites (281 baseline + 12 new
+  `RowAccessibilityLabelTests`). 1 pre-existing warning observed on a clean
+  build (`ADFBeamTests` unhandled-resource); no new warnings from either
+  new file.
+- iOS `ADFRenderingTests` lane (dedicated sim `ADF-Task25`, iPhone 16 /
+  iOS 26.2): **179/179 pass**, 23 suites (161 baseline + 6 new
+  `TextKit2RowAccessibilityTests` + the pre-existing suites' own count
+  growth from unrelated parameterized cases already in the baseline).
+- Demo app: `xcodebuild build` clean for both the pre-fix and post-fix
+  binaries; `strings ADFReader.debug.dylib | grep RowAccessibilityLabel`
+  confirms the post-fix binary is the one measured.
+- `axe describe-ui` before/after comparison above; Copy-through-menu smoke
+  test after the fix confirms no selection-engine regression.
+- VoiceOver itself was NOT driven live (toggling VoiceOver headlessly via
+  `simctl`/`notifyutil` is unreliable per prior task notes) — `axe
+  describe-ui` element/role/label counts plus the `.header` trait unit
+  tests are the evidence, per the brief's stated fallback.
+
+### Concerns / carried forward
+
+- `axe describe-ui`'s tree dump does not reveal whether the SwiftUI arm's
+  embedded link ("a link" inside the merged paragraph blob) is independently
+  rotor-navigable in REAL VoiceOver (SwiftUI may expose it via
+  `accessibilityCustomActions`/an internal link sub-range VoiceOver reads at
+  runtime that a static tree dump doesn't surface) — so the "byte-identical
+  tree" result should be read as "same coarse element/label parity," not
+  "proof the SwiftUI arm's own link accessibility is itself complete." This
+  bears on item 1 of the production scope note either way.
+- The heading-heuristic nuance (axe/iOS promotes large/bold text to
+  `AXHeading` somewhat independently of the app's own `.header` trait) was
+  discovered via a temporary diagnostic `print()` added and removed during
+  this task, not left in the shipped code — reproducible by anyone who
+  wants to re-verify by re-adding a similar print, but not itself a
+  committed test (the committed tests instead pin `isHeading`'s OWN
+  contract — levels 1–4 true, 5–6 false — which is the part this code
+  actually controls).
+- `isAccessibilityElement = true` is unconditional — a row with genuinely
+  empty content (before its first `apply()`, or a defensively-empty label)
+  is still technically an accessibility element with a nil label. Not
+  observed to cause any VoiceOver-visible artifact in the trees captured
+  (bare `UIView`s with a nil label and no traits are typically skipped by
+  VoiceOver's own traversal), but not exhaustively verified against every
+  fixture/timing window.
+- Levels 5–6 heading detection remains a known gap (documented above and in
+  the source), consistent with the brief's "approximate is acceptable,
+  document" allowance rather than a bug to fix in this pass.

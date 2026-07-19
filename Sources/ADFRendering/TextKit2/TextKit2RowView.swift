@@ -199,6 +199,13 @@ final class TextKit2RowUIView: UIView {
         isOpaque = false
         backgroundColor = .clear
         contentMode = .redraw
+        // Task 25 — minimal accessibility exposure (gap #8): every row is a
+        // VoiceOver element. A stored `true` set once here, NOT recomputed
+        // per `apply()` — the expensive part (building the label string) is
+        // isolated to the lazily-evaluated `accessibilityLabel`/
+        // `accessibilityTraits` getters below, which UIKit only calls when
+        // an accessibility client actually queries the tree.
+        isAccessibilityElement = true
         // Task 21 — idle link/atom tap handling (gap #1/#2), a plain
         // descendant-level recognizer on the row itself: it works whether or
         // not `-selection` is even on (`SelectionController` doesn't exist
@@ -623,5 +630,52 @@ final class TextKit2RowUIView: UIView {
         }
         return nil
     }
+
+    // MARK: Accessibility (Task 25 — minimal exposure prototype, gap #8)
+
+    /// Measured baseline (`docs/TextKit2-Port-Assessment.md`, "Phase 4 —
+    /// Task 25"): a bare `TextKit2RowUIView` exposes NOTHING to VoiceOver —
+    /// not merged into one opaque `AXTextArea` (the phase-1 spike's
+    /// *ancestor*-`UITextInput* design), just entirely absent, because a
+    /// plain `UIView` carries no accessibility by default. This is the
+    /// minimal fix: one accessibility element per row, carrying the row's
+    /// full text as ONE label — proving a path exists, not the production
+    /// per-run element model (scope note in the assessment covers that).
+    ///
+    /// Computed ONLY when actually queried — never cached, never touched by
+    /// `apply()`/`draw()`/`layoutSubviews()` — so an idle scroll pass with
+    /// VoiceOver off pays exactly nothing beyond the one `isAccessibilityElement`
+    /// store in `init`. Built from `content.segmentStrings` (already
+    /// extracted by `TextRowContent.make` — no re-walk of the source
+    /// `AttributedString`) plus each atom's `fallbackText`, via
+    /// `RowAccessibilityLabel.build` (a pure, macOS-testable helper).
+    override var accessibilityLabel: String? {
+        get {
+            guard let content, let segments = inputs?.content.segments, !segments.isEmpty else { return nil }
+            let label = RowAccessibilityLabel.build(segments: segments, segmentStrings: content.segmentStrings)
+            return label.isEmpty ? nil : label
+        }
+        set {}
+    }
+
+    /// `.header` for heading rows (approximated from the first text run's
+    /// `FontSpec.style` — levels 1–4 only, see `RowAccessibilityLabel.isHeading`'s
+    /// doc comment for why 5–6 are out of scope), `.staticText` otherwise —
+    /// the same read-only-text baseline every other UIKit label carries.
+    /// Computed lazily, same discipline as `accessibilityLabel` above.
+    override var accessibilityTraits: UIAccessibilityTraits {
+        get {
+            guard let segments = inputs?.content.segments else { return .staticText }
+            return RowAccessibilityLabel.isHeading(segments) ? [.staticText, .header] : .staticText
+        }
+        set {}
+    }
+
+    // `accessibilityLanguage` is deliberately left at UIKit's default
+    // (`nil`): a row's text always renders in the host UI's own language —
+    // there is no per-run language override anywhere in the ADF model this
+    // minimal pass would have data for — so `nil` (inherit from the
+    // surrounding accessibility container) is already correct, not an
+    // omission.
 }
 #endif

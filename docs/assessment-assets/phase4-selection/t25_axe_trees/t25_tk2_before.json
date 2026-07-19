@@ -1,0 +1,217 @@
+[
+  {
+    "AXFrame" : "{{0, 0}, {393, 852}}",
+    "AXUniqueId" : null,
+    "frame" : {
+      "y" : 0,
+      "x" : 0,
+      "width" : 393,
+      "height" : 852
+    },
+    "role_description" : "application",
+    "AXLabel" : "ADFReader",
+    "content_required" : false,
+    "type" : "Application",
+    "title" : null,
+    "help" : null,
+    "custom_actions" : [
+
+    ],
+    "AXValue" : null,
+    "enabled" : true,
+    "role" : "AXApplication",
+    "children" : [
+      {
+        "AXFrame" : "{{0, 59}, {393, 54}}",
+        "AXUniqueId" : "kitchen-sink",
+        "frame" : {
+          "y" : 59,
+          "x" : 0,
+          "width" : 393,
+          "height" : 54
+        },
+        "role_description" : "Nav bar",
+        "AXLabel" : null,
+        "content_required" : false,
+        "type" : "Group",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXGroup",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 54393
+      },
+      {
+        "AXFrame" : "{{29, 670.77376302083326}, {15, 20.333333333333371}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 670.77376302083326,
+          "x" : 29,
+          "width" : 15,
+          "height" : 20.333333333333371
+        },
+        "role_description" : "text",
+        "AXLabel" : "4.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 54393
+      },
+      {
+        "AXFrame" : "{{29, 698.92057291666663}, {15, 20.333333333333371}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 698.92057291666663,
+          "x" : 29,
+          "width" : 15,
+          "height" : 20.333333333333371
+        },
+        "role_description" : "text",
+        "AXLabel" : "5.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 54393
+      },
+      {
+        "AXFrame" : "{{20, 742.06738281249989}, {29.333333333333329, 14.333333333333371}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 742.06738281249989,
+          "x" : 20,
+          "width" : 29.333333333333329,
+          "height" : 14.333333333333371
+        },
+        "role_description" : "text",
+        "AXLabel" : "swift",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 54393
+      },
+      {
+        "AXFrame" : "{{358.33333333333331, 741}, {14.666666666666686, 16.333333333333371}}",
+        "AXUniqueId" : "doc.on.doc",
+        "frame" : {
+          "y" : 741,
+          "x" : 358.33333333333331,
+          "width" : 14.666666666666686,
+          "height" : 16.333333333333371
+        },
+        "role_description" : "button",
+        "AXLabel" : "Copy code",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 54393
+      },
+      {
+        "AXFrame" : "{{16, 1425.6666666666665}, {361, 40.333333333333258}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1425.6666666666665,
+          "x" : 16,
+          "width" : 361,
+          "height" : 40.333333333333258
+        },
+        "role_description" : "button",
+        "AXLabel" : "Click to expand",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : "Collapsed",
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 54393
+      },
+      {
+        "AXFrame" : "{{76.333335876464844, 1482}, {240.33331298828125, 180.6666259765625}}",
+        "AXUniqueId" : "photo",
+        "frame" : {
+          "y" : 1482,
+          "x" : 76.333335876464844,
+          "width" : 240.33331298828125,
+          "height" : 180.6666259765625
+        },
+        "role_description" : "image",
+        "AXLabel" : "A sunset",
+        "content_required" : false,
+        "type" : "Image",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXImage",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 54393
+      }
+    ],
+    "subrole" : null,
+    "pid" : 54393
+  }
+]
