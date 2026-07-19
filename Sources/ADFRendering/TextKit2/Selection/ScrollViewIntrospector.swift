@@ -18,9 +18,22 @@ import os
 /// `HostingScrollView` and the walk reaches it on the first laid-out frame.
 struct ScrollViewIntrospector: UIViewRepresentable {
     let controller: SelectionController
+    /// The document's shared table h-scroll registry (Task 22 geometry
+    /// staleness). Wired straight into the controller here — independent of
+    /// `attachIfPossible`'s container search — so the callback hook
+    /// (`TableScrollSync.onOffsetChanged`) is live as soon as SwiftUI hands
+    /// the environment value over, even before the introspector finds its
+    /// attachment target.
+    let tableScrollSync: TableScrollSync
 
-    func makeUIView(context: Context) -> ProbeView { ProbeView(controller: controller) }
-    func updateUIView(_ view: ProbeView, context: Context) { view.controller = controller }
+    func makeUIView(context: Context) -> ProbeView {
+        controller.tableScrollSync = tableScrollSync
+        return ProbeView(controller: controller)
+    }
+    func updateUIView(_ view: ProbeView, context: Context) {
+        view.controller = controller
+        controller.tableScrollSync = tableScrollSync
+    }
 
     final class ProbeView: UIView {
         var controller: SelectionController

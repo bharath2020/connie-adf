@@ -20,6 +20,17 @@ public final class RowGeometryRegistry {
     /// index in document order; the registry re-sorts its live entries by it.
     public var orderOf: (String) -> Int = { _ in .max }
 
+    /// Fires on every `register` — a row (re)materializing, INCLUDING the
+    /// collapsed-height-correction-on-re-entry case: a formerly-collapsed
+    /// row's rect was interpolated from live neighbors, and this call is the
+    /// signal that the interpolation may now be stale (its real height rarely
+    /// matches the interpolated estimate exactly). Task 22's geometry-
+    /// staleness coalescing hooks this; a plain, unconditional closure call —
+    /// no `Observation` involved — so the cost outside a selection session is
+    /// exactly the `sessionActive` check the subscriber makes, not a
+    /// per-frame or per-scroll cost of this registry's own.
+    public var onRegister: ((String) -> Void)?
+
     private struct Entry { let ownerID: String; weak var view: ADFPlatformView? }
     private var entries: [Entry] = []               // sorted by orderOf(ownerID)
 
@@ -31,6 +42,7 @@ public final class RowGeometryRegistry {
         let entry = Entry(ownerID: ownerID, view: view)
         let idx = insertionIndex(forOrder: orderOf(ownerID))
         entries.insert(entry, at: idx)
+        onRegister?(ownerID)
     }
 
     public func unregister(ownerID: String) {

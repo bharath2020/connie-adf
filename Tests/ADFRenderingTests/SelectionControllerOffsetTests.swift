@@ -233,6 +233,103 @@ struct SelectionControllerOffsetTests {
         #expect(!rect.isNull)
     }
 
+    // MARK: Task 22 — expand endpoint policy: never land inside hidden text
+
+    /// "open" [0,4) → visible unit 0; "hidden" [5,11) → unit 1, closed under
+    /// "e0"; "tail" [12,16) → visible unit 2. Global offsets include the
+    /// `"\n"` joiners: unit 0 is 0..<4, unit 1 is 5..<11, unit 2 is 12..<16.
+    private func openHiddenTailModel() -> SelectionTextModel {
+        SelectionTextModel.build(orderedItems: [
+            item("b0", [textUnit(owner: "b0", "open")]),
+            item("b1", [textUnit(owner: "b1", "hidden", expands: ["e0"])]),
+            item("b2", [textUnit(owner: "b2", "tail")]),
+        ])
+    }
+
+    private func hiddenResolver(_ model: SelectionTextModel) -> SelectionGeometryResolver {
+        SelectionGeometryResolver(model: model, source: FakeGeometrySource(), isVisible: { unit in
+            !unit.expandAncestorIDs.contains("e0")
+        })
+    }
+
+    @Test func closestOffsetInsideHiddenUnitSnapsToNearerVisibleEdge() {
+        let model = openHiddenTailModel()
+        let r = hiddenResolver(model)
+        // Offset 7 is inside "hidden" (unit range 5..<11), nearer to the
+        // LEADING edge (5, distance 2) than the trailing edge (11, distance
+        // 4) — snaps backward, out of the hidden span entirely.
+        #expect(r.snapIngested(7) == 5)
+        // Offset 9 is nearer the TRAILING edge (11, distance 2) than the
+        // leading edge (5, distance 4) — snaps forward.
+        #expect(r.snapIngested(9) == 11)
+        // The exact midpoint (8: distance 3 either way) resolves via the
+        // same "backward wins ties" rule `snapIngested` already uses for
+        // atoms (`(grapheme - backward) <= (forward - grapheme)`).
+        #expect(r.snapIngested(8) == 5)
+    }
+
+    @Test func closestOffsetOnHiddenUnitEdgeIsUnchanged() {
+        let model = openHiddenTailModel()
+        let r = hiddenResolver(model)
+        // Exactly on the hidden unit's own edges — already a boundary,
+        // nothing to snap.
+        #expect(r.snapIngested(5) == 5)
+        #expect(r.snapIngested(11) == 11)
+    }
+
+    @Test func snapIngestedRangeWithOneEndpointInsideHiddenUnitPullsItOut() {
+        let model = openHiddenTailModel()
+        let r = hiddenResolver(model)
+        // A drag-derived range starting inside the visible "open" unit and
+        // ending inside the hidden "hidden" unit (offset 9, interior, nearer
+        // the TRAILING edge) must not persist an endpoint inside invisible
+        // text — the upper bound snaps to the hidden unit's nearer edge (11,
+        // the same single-offset result `snapIngested(9)` gives above),
+        // never staying at 9.
+        let snapped = r.snapIngestedRange(2..<9)
+        #expect(snapped.upperBound == 11)
+        #expect(snapped.lowerBound == 2)
+    }
+
+    @Test func selectAllStyleFullRangeIsUnaffectedByHiddenUnits() {
+        // Endpoints 0 and totalUTF16Length sit at the very edges of the WHOLE
+        // document, never strictly inside a hidden unit's own span, so a
+        // Select-All-style range must pass through unchanged — the endpoint
+        // policy only pulls an offset OUT of a hidden span it lands inside,
+        // never shrinks a range that merely spans across one (spec: keeps
+        // offsets, excludes hidden units from rects/copy only).
+        let model = openHiddenTailModel()
+        let r = hiddenResolver(model)
+        #expect(r.snapIngestedRange(0..<model.totalUTF16Length) == 0..<model.totalUTF16Length)
+    }
+
+    @Test func atomWhollyInsideAHiddenUnitDoesNotShortCircuitPastTheUnitsOwnEdges() {
+        // A pill atom [8,12) sits INSIDE a hidden unit spanning [5,15) —
+        // hidden plain text on BOTH sides of it ("xx " / " yy"). A word-seed
+        // landing wholly inside the atom must not resurrect the un-snapped
+        // ATOM range (8..<12 — still interior to the hidden unit on both
+        // ends, violating the endpoint policy); it must fall through to
+        // per-endpoint hidden-unit snapping, which pushes BOTH endpoints all
+        // the way out to the unit's own true boundaries [5,15).
+        let hiddenUnit = SearchTextUnit(
+            ownerID: "b1", topLevelBlockID: "b1", expandAncestorIDs: ["e0"],
+            plainText: "xx pill yy",
+            parts: [
+                .init(source: .textSegment(index: 0), range: 0..<3),
+                .init(source: .atom(id: "pill"), range: 3..<7),
+                .init(source: .textSegment(index: 1), range: 7..<10),
+            ]
+        )
+        let model = SelectionTextModel.build(orderedItems: [
+            item("b0", [textUnit(owner: "b0", "open")]),
+            item("b1", [hiddenUnit]),
+            item("b2", [textUnit(owner: "b2", "tail")]),
+        ])
+        let r = hiddenResolver(model)
+        // 9..<11 lands wholly inside the atom [8,12).
+        #expect(r.snapIngestedRange(9..<11) == 5..<15)
+    }
+
     @Test func hiddenExpandUnitsExcludedFromRects() {
         let model = SelectionTextModel.build(orderedItems: [
             item("b0", [textUnit(owner: "b0", "open")]),

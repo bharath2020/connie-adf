@@ -43,4 +43,25 @@ struct RowGeometryRegistryTests {
         r.register(ownerID: "b", view: bView)
         #expect(r.liveEntries(orderRange: 0...1).map(\.ownerID) == ["b"])
     }
+
+    @Test("onRegister fires once per register call, with the registering ownerID — Task 22's collapsed-height-correction-on-re-entry signal")
+    func onRegisterFiresPerRegistration() {
+        let r = RowGeometryRegistry()
+        r.orderOf = { ["a": 0, "b": 1][$0] ?? .max }
+        var registered: [String] = []
+        r.onRegister = { registered.append($0) }
+
+        let aView = view(y: 0, h: 20)
+        r.register(ownerID: "a", view: aView)
+        #expect(registered == ["a"])
+
+        // A row RE-registering (the re-entry case: a collapsed row's
+        // interpolated rect is superseded by real geometry) fires again.
+        r.register(ownerID: "a", view: aView)
+        #expect(registered == ["a", "a"])
+
+        let bView = view(y: 40, h: 20)
+        r.register(ownerID: "b", view: bView)
+        #expect(registered == ["a", "a", "b"])
+    }
 }

@@ -22,6 +22,16 @@ final class TableScrollSync {
     /// scrolling must never invalidate a view.
     @ObservationIgnored private var liveSlices: [String: Int] = [:]
 
+    /// Fires whenever `publish` actually records a new offset (never on the
+    /// deduped sub-half-point moves). Task 22's geometry-staleness
+    /// coalescing hook: the selection controller registers a plain closure
+    /// here instead of reading `offsets` via `Observation` — the brief's
+    /// "plain callback registration" pattern, so h-scroll panning never grows
+    /// an observable-read dependency on the selection controller's part, and
+    /// costs nothing beyond a nil-closure check when no controller is
+    /// listening (flag off, or macOS).
+    @ObservationIgnored var onOffsetChanged: ((String, CGFloat) -> Void)?
+
     func sharedOffset(for tableID: String) -> CGFloat? {
         offsets[tableID]
     }
@@ -32,6 +42,7 @@ final class TableScrollSync {
     func publish(_ offset: CGFloat, for tableID: String) {
         if let current = offsets[tableID], abs(current - offset) <= 0.5 { return }
         offsets[tableID] = offset
+        onOffsetChanged?(tableID, offset)
     }
 
     func retain(_ tableID: String) {

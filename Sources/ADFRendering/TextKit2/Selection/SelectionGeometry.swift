@@ -146,13 +146,55 @@ struct SelectionGeometryResolver {
         return snapIngested(global)
     }
 
-    /// Grapheme-snap then atom-snap (to the nearer edge) — the one place every
-    /// gesture-derived offset is aligned before entering the model.
+    /// Grapheme-snap, then atom-snap, then expand-visibility-snap (each to the
+    /// nearer edge) — the one place every gesture-derived offset is aligned
+    /// before entering the model. Expand visibility is snapped LAST, after the
+    /// atom snap, so an atom that itself sits inside a closed expand body
+    /// (its edge lies past the atom snap but still inside the hidden run) is
+    /// still pushed all the way out (spec §7 endpoint policy).
     func snapIngested(_ global: Int) -> Int {
         let grapheme = model.snapToGraphemeBoundary(global)
-        let forward = model.snapAcrossAtoms(grapheme, forward: true)
-        let backward = model.snapAcrossAtoms(grapheme, forward: false)
+        let atomForward = model.snapAcrossAtoms(grapheme, forward: true)
+        let atomBackward = model.snapAcrossAtoms(grapheme, forward: false)
+        let forward = snapAcrossHiddenUnits(atomForward, forward: true)
+        let backward = snapAcrossHiddenUnits(atomBackward, forward: false)
         return (grapheme - backward) <= (forward - grapheme) ? backward : forward
+    }
+
+    /// Snaps `offset` out of a hidden (closed-expand) unit — or a contiguous
+    /// RUN of them — in the requested direction: never let an endpoint land
+    /// inside invisible text (spec §7, "endpoints snap across closed ranges,
+    /// like selecting over an image"), generalizing
+    /// `SelectionTextModel.snapAcrossAtoms`'s single-span atomicity to expand
+    /// visibility, which the corpus model itself can't see (it depends on
+    /// `isVisible`, the caller-injected closure over `model.expandedBlocks`).
+    /// An offset already in a visible unit, or exactly on a hidden unit's
+    /// edge, passes through unchanged. Consecutive units under the same (or a
+    /// nested) closed expand are walked as ONE hidden span, so the caret
+    /// clears the whole run, not just the one unit it started in.
+    private func snapAcrossHiddenUnits(_ offset: Int, forward: Bool) -> Int {
+        let clamped = max(0, min(offset, model.totalUTF16Length))
+        guard let unitIndex = model.units.indices.first(where: { index in
+            unitStart(index) < clamped && clamped < unitEnd(index)
+        }), !isVisible(model.units[unitIndex]) else { return clamped }
+
+        var edge = unitIndex
+        if forward {
+            while edge + 1 < model.units.count, !isVisible(model.units[edge + 1]) { edge += 1 }
+            return unitEnd(edge)
+        } else {
+            while edge > 0, !isVisible(model.units[edge - 1]) { edge -= 1 }
+            return unitStart(edge)
+        }
+    }
+
+    /// Whether the unit an atom's global range falls within is visible — the
+    /// `snapIngestedRange` whole-atom short-circuit must not resurrect a
+    /// hidden-expand atom's un-snapped range (spec §7 endpoint policy applies
+    /// to atoms too: never land inside hidden text).
+    private func isAtomVisible(_ atomRange: Range<Int>) -> Bool {
+        guard let (unitIndex, _) = model.locate(utf16: atomRange.lowerBound) else { return true }
+        return isVisible(model.units[unitIndex])
     }
 
     /// Grapheme-snap then atom-aware-snap a RANGE as a whole — the
@@ -174,7 +216,7 @@ struct SelectionGeometryResolver {
         let gLower = model.snapToGraphemeBoundary(lowerRaw)
         let gUpper = model.snapToGraphemeBoundary(upperRaw)
         let grapheme = min(gLower, gUpper)..<max(gLower, gUpper)
-        if !grapheme.isEmpty, let atom = model.atomRange(containing: grapheme) {
+        if !grapheme.isEmpty, let atom = model.atomRange(containing: grapheme), isAtomVisible(atom) {
             return atom
         }
         let snappedLower = snapIngested(lowerRaw)

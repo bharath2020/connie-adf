@@ -16,6 +16,17 @@ import UIKit
 ///   persisted per-document value — so perf gates can run at large sizes.
 /// - `-selectionSpike` shows `SpikeScreen`, a throwaway feasibility spike for
 ///   the TextKit 2 port assessment (spec §11) — not production UI.
+/// - `-mutateDelay <seconds>` (Task 22 verification): once ready, waits
+///   `<seconds>` then applies ONE `.replace` mutation (via `model.apply`) to
+///   a mid-document paragraph — an on-demand document-epoch bump, timed so an
+///   operator can hold a selection session (long-press) before it lands. See
+///   `MutationAutomation`. Does not exit or navigate.
+/// - `-toggleExpandDelay <seconds>` (Task 22 verification): once ready,
+///   waits `<seconds>` then toggles the first `.expand` block's open/closed
+///   state directly on `model.expandedBlocks` (bypassing the SwiftUI
+///   `Button` — see `MutationAutomation.toggleFirstExpand`'s deviation
+///   note), timed so an operator can hold a selection on text below the
+///   expand before it lands. Does not exit or navigate.
 /// - `-textkit2` renders text leaves (paragraphs, headings, code blocks) with
 ///   the TextKit 2 pipeline instead of SwiftUI `Text` (A/B assessment). Read
 ///   once at launch by `TextKit2Flags`, not parsed into `LaunchOptions`. The
@@ -45,6 +56,8 @@ struct LaunchOptions: Sendable {
     var searchUpdates = 0
     var fontSizeStep: Int?
     var selectionSpike = false
+    var mutateDelay: Double?
+    var toggleExpandDelay: Double?
 
     static let none = LaunchOptions(arguments: [])
 
@@ -71,6 +84,12 @@ struct LaunchOptions: Sendable {
                 fontSizeStep = Int(arguments[index])
             case "-selectionSpike":
                 selectionSpike = true
+            case "-mutateDelay" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                mutateDelay = Double(arguments[index])
+            case "-toggleExpandDelay" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                toggleExpandDelay = Double(arguments[index])
             default:
                 break
             }

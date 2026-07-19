@@ -1,5 +1,6 @@
 #if os(iOS)
 import UIKit
+import Observation
 import ADFPreparation
 
 /// Read-only selection engine for the TextKit 2 arm — **v3, session-scoped
@@ -85,6 +86,32 @@ final class SelectionController: NSObject {
     /// gesture path without reading the observed `model.selectionSessionActive`.
     private var sessionActive = false
 
+    /// The document's shared table h-scroll registry (Task 22 geometry
+    /// staleness). Wired by `ScrollViewIntrospector` from the environment's
+    /// `TableScrollSync` — decoupled from `attach(to:scrollView:)`'s
+    /// container discovery so the hook is live as soon as SwiftUI hands it
+    /// over, independent of when (or whether) the introspector finds its
+    /// container. A plain callback registration (`onOffsetChanged`), not an
+    /// `Observation` read — see `TableScrollSync`'s doc comment.
+    var tableScrollSync: TableScrollSync? {
+        didSet {
+            // `ScrollViewIntrospector.updateUIView` assigns this every
+            // SwiftUI update pass (the environment value has no other
+            // natural injection point); skip re-wiring when it's the SAME
+            // stable `@State` instance so a hot update loop never churns the
+            // closure.
+            guard tableScrollSync !== oldValue else { return }
+            tableScrollSync?.onOffsetChanged = { [weak self] _, _ in
+                guard let self, self.sessionActive else { return }
+                self.selectionGeometryDidGoStale()
+            }
+        }
+    }
+
+    /// One-runloop-turn coalescing flag for `selectionGeometryDidGoStale()`
+    /// (Task 22 deliverable 4 — see the "Geometry staleness" section below).
+    private var geometryStaleQueued = false
+
     init(model: ADFDocumentModel) {
         self.model = model
         self.geometrySource = RowGeometrySource(registry: geometryRegistry)
@@ -94,6 +121,16 @@ final class SelectionController: NSObject {
         overlay.addInteraction(editMenu)
         overlay.onResign = { [weak self] in self?.endSession() }
         geometrySource.referenceView = overlay
+        // Collapsed-height corrections on row re-entry (Task 22): ANY live
+        // row (re)materializing can mean a formerly-interpolated rect was
+        // just superseded by the row's real geometry. A plain callback, not
+        // `Observation` — `RowGeometryRegistry` is the selection-only
+        // registry already, so this never adds a scroll-path read of its
+        // own; the `sessionActive` check keeps idle cost to that one guard.
+        geometryRegistry.onRegister = { [weak self] _ in
+            guard let self, self.sessionActive else { return }
+            self.selectionGeometryDidGoStale()
+        }
     }
 
     /// Installs the overlay + gesture recognizers on the introspected content
@@ -103,6 +140,23 @@ final class SelectionController: NSObject {
         attached = true
         self.container = container
         self.scrollView = scrollView
+
+        // Mid-gesture cancel / clamp (Task 22) — wired here, not in `init`:
+        // `ADFDocumentView.init()` constructs a `SelectionController(model:)`
+        // on EVERY SwiftUI re-init of the view struct (only the FIRST such
+        // construction's result ever becomes the persistent `@State`
+        // instance; every later one is a throwaway that this method's
+        // `attached` guard ensures never reaches here). Wiring the model
+        // callback in `init` would have the LATEST throwaway instance's
+        // closure silently overwrite the real, attached instance's — every
+        // subsequent epoch bump would then call `documentDidChange()` on a
+        // controller that was never attached (`sessionActive` permanently
+        // false, no overlay ever shown), leaving a REAL active session's
+        // native selection UI stuck on screen after a mutation, even though
+        // `model.selection.utf16Range` itself was correctly cleared. Setting
+        // it here, guarded by `attached`, ties the callback to the ONE
+        // instance that ever calls `attach` successfully.
+        model?.onDocumentEpochChanged = { [weak self] in self?.documentDidChange() }
 
         rebuildTextModel()
 
@@ -161,6 +215,96 @@ final class SelectionController: NSObject {
         )
     }
 
+    // MARK: - Document epoch (Task 22 — mid-gesture cancel / clamp)
+
+    /// Reacts to `ADFDocumentModel.onDocumentEpochChanged` (an epoch bump
+    /// from `load()` or a non-tail-append `apply()`, spec §7): rebuilds the
+    /// text model against the new document, then re-validates any live
+    /// selection through the pure `SelectionState.clampedRange` guard. A
+    /// mismatched or now-out-of-range range is cleared/clamped through
+    /// `inputDelegate` BEFORE the caller's next query, so no stale offset
+    /// ever reaches `text(in:)` / `selectionRects(for:)`. If a gesture is
+    /// mid-flight, the native interaction's own recognizers are cancelled
+    /// FIRST — there is no public "cancel" API, so this uses UIKit's
+    /// documented technique of disabling then re-enabling each one, which
+    /// drops whatever touch it is mid-tracking — so no further touch-move
+    /// can re-derive a position against the OLD layout. The session then
+    /// ends cleanly if the range didn't survive, or continues with the
+    /// clamped range (and a fresh rect re-query) if it did.
+    func documentDidChange() {
+        rebuildTextModel()
+        guard let model, let previous = model.selection.utf16Range else { return }
+
+        let clamped = SelectionState.clampedRange(
+            previous,
+            stampEpoch: model.selection.epoch,
+            currentEpoch: model.documentEpoch,
+            documentUTF16Length: textModel.totalUTF16Length
+        )
+        guard clamped != previous else { return } // fully unaffected — nothing to guard
+
+        if sessionActive { overlay.cancelActiveInteractionGesture() }
+
+        overlay.inputDelegate?.selectionWillChange(overlay)
+        model.selection.utf16Range = clamped
+        model.selection.epoch = model.documentEpoch
+        overlay.inputDelegate?.selectionDidChange(overlay)
+
+        if clamped == nil {
+            if sessionActive { endSession() }
+        } else {
+            overlay.nudgeSelectionDisplay()
+        }
+    }
+
+    // MARK: - Geometry staleness (Task 22 deliverable 4)
+
+    /// Coalesced-per-runloop geometry re-query: collapsed-height corrections
+    /// on row re-entry (`RowGeometryRegistry.onRegister`), expand toggles
+    /// (`observeExpandedBlocksIfActive`), and table h-scroll
+    /// (`TableScrollSync.onOffsetChanged`) all route here. Multiple signals
+    /// within one run-loop turn collapse into ONE
+    /// `selectionWillChange`/`DidChange` pair (via `SelectionOverlayView.
+    /// refreshGeometry()`), so UIKit re-queries `selectionRects`/`caretRect`
+    /// exactly once, not once per underlying signal. The range itself is
+    /// untouched — this is pure rect invalidation. Only meaningful while a
+    /// session is active; idle cost is the guard alone (no dispatch, no
+    /// work) — every caller already checks `sessionActive` before calling
+    /// this, and it checks again defensively.
+    func selectionGeometryDidGoStale() {
+        guard sessionActive, !geometryStaleQueued else { return }
+        geometryStaleQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.geometryStaleQueued = false
+            guard self.sessionActive else { return }
+            self.overlay.refreshGeometry()
+        }
+    }
+
+    /// Observes `model.expandedBlocks` (an `@Observable` property, so
+    /// `Observation` — not a plain callback — is the only mechanism
+    /// available) ONLY while a session is active: an expand toggle is a rect
+    /// invalidation, never a text-model change (offsets stay in the offset
+    /// space regardless of visibility — the offset-space-stability
+    /// decision), so this never touches `model.selection`. Re-arms itself on
+    /// every change; the `onChange` callback checks `sessionActive` before
+    /// re-registering, so the tracking chain — and its cost — ends the
+    /// instant a session ends, matching the zero-idle-cost discipline the
+    /// other two staleness signals get via plain callbacks.
+    private func observeExpandedBlocksIfActive() {
+        guard let model, sessionActive else { return }
+        withObservationTracking {
+            _ = model.expandedBlocks
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.selectionGeometryDidGoStale()
+                self.observeExpandedBlocksIfActive()
+            }
+        }
+    }
+
     // MARK: - Session lifecycle
 
     @objc private func handleLongPress(_ g: UILongPressGestureRecognizer) {
@@ -207,6 +351,7 @@ final class SelectionController: NSObject {
         sessionActive = true
         // The ONE observed flip at session start (first non-empty selection).
         model.setSelectionSessionActive(true)
+        observeExpandedBlocksIfActive()
         presentMenu(near: point)
     }
 
@@ -591,6 +736,49 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         selectionDisplay?.setNeedsSelectionUpdate()
     }
 
+    // MARK: Task 22 — mid-gesture cancel / geometry staleness
+
+    /// Force-cancels any touch the native `UITextInteraction`'s own
+    /// recognizers are mid-tracking, WITHOUT touching the range — there is no
+    /// public "cancel" API; UIKit's documented technique is disabling then
+    /// re-enabling a gesture recognizer, which drops whatever touch it is
+    /// tracking. Called by `SelectionController.documentDidChange()` BEFORE
+    /// the range itself is clamped/cleared, so no further touch-move can
+    /// re-derive a position against the OLD document layout. Safe to call
+    /// when nothing is in flight (a no-op recognizer state either way).
+    func cancelActiveInteractionGesture() {
+        for gesture in interaction.gesturesForFailureRequirements {
+            gesture.isEnabled = false
+            gesture.isEnabled = true
+        }
+    }
+
+    /// Nudges the display interaction to re-derive handle/rect geometry from
+    /// the CURRENT range, without bracketing `inputDelegate` — for callers
+    /// that already manage their own bracket around a range write
+    /// (`SelectionController.documentDidChange()`'s clamp path), so the
+    /// signal isn't doubled.
+    func nudgeSelectionDisplay() {
+        selectionDisplay?.setNeedsSelectionUpdate()
+        selectionDisplay?.layoutManagedSubviews()
+    }
+
+    /// Re-queries selection rects/carets from UIKit WITHOUT touching the
+    /// range itself (Task 22 geometry-staleness coalescing: expand toggles,
+    /// collapsed-height corrections on row re-entry, table h-scroll).
+    /// Brackets with `inputDelegate.selectionWillChange`/`DidChange` (the
+    /// spec's named re-query signal) and nudges the display interaction
+    /// directly, mirroring `beginSession`'s own pattern — the display
+    /// interaction's handle geometry only refreshes for certain on an
+    /// explicit `setNeedsSelectionUpdate()`. A no-op when there is no live
+    /// selection to refresh.
+    func refreshGeometry() {
+        guard currentRange != nil else { return }
+        inputDelegate?.selectionWillChange(self)
+        inputDelegate?.selectionDidChange(self)
+        nudgeSelectionDisplay()
+    }
+
     /// Is `point` (overlay coordinates) inside the current selection? Used to
     /// distinguish a native tap (inside) from a session-ending tap (outside).
     func selectionContains(_ point: CGPoint) -> Bool {
@@ -601,19 +789,19 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     // MARK: Selection state (the non-observed model box)
 
     /// The live range from `model.selection`, epoch-guarded and clamped to the
-    /// current document length. A stale epoch (a document generation that no
-    /// longer exists) reports no selection (Task 22 adds mid-gesture cancel).
+    /// current document length via `SelectionState.clampedRange` (Task 22's
+    /// pure, `swift test`-able core) — a stale epoch (a document generation
+    /// that no longer exists) or an out-of-range tail reports no selection,
+    /// not a degenerate zero-length caret that could still present a menu
+    /// (Task 19 review fix round 1, minor #1).
     private var currentRange: Range<Int>? {
-        guard let model, let range = model.selection.utf16Range else { return nil }
-        guard model.selection.epoch == model.documentRevision else { return nil }
-        let total = textModel.totalUTF16Length
-        let lower = max(0, min(range.lowerBound, total))
-        let upper = max(lower, min(range.upperBound, total))
-        // A degenerate/empty range (e.g. after clamping to a shrunk document)
-        // is NO SELECTION, not a zero-length caret that can still present a
-        // menu (Task 19 review fix round 1, minor #1 — was a dead ternary
-        // returning the same value on both branches).
-        return lower < upper ? lower..<upper : nil
+        guard let model else { return nil }
+        return SelectionState.clampedRange(
+            model.selection.utf16Range,
+            stampEpoch: model.selection.epoch,
+            currentEpoch: model.documentEpoch,
+            documentUTF16Length: textModel.totalUTF16Length
+        )
     }
 
     /// Writes a range into the model box (a non-observed write) via the
@@ -634,7 +822,7 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
             return
         }
         model.selection.utf16Range = snapped
-        model.selection.epoch = model.documentRevision // placeholder → documentEpoch in Task 22
+        model.selection.epoch = model.documentEpoch // Task 22: the real document epoch
         selectionDisplay?.setNeedsSelectionUpdate()
     }
 
@@ -644,7 +832,16 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
 
     func text(in range: UITextRange) -> String? {
         guard let range = range as? SelectionTextRange else { return nil }
-        return textModel.text(inUTF16: range.range, isVisible: { [weak self] in self?.isUnitVisible($0) ?? true })
+        // Explicit clamp guard (Task 22): a `SelectionTextRange` UIKit is
+        // still holding could, in principle, span past `textModel`'s bounds
+        // right after an epoch bump shrank the document (`documentDidChange`
+        // rebuilds `textModel` synchronously, but a `UITextRange` object
+        // captured by UIKit before that point is just inert data — clamping
+        // here, at the one `text(in:)` entry point, is defense-in-depth
+        // alongside `SelectionTextModel.text(inUTF16:)`'s own internal clamp.
+        let lower = clamp(range.range.lowerBound)
+        let upper = max(lower, clamp(range.range.upperBound))
+        return textModel.text(inUTF16: lower..<upper, isVisible: { [weak self] in self?.isUnitVisible($0) ?? true })
     }
     func replace(_ range: UITextRange, withText text: String) {}
     var selectedTextRange: UITextRange? {

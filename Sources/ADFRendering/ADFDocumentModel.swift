@@ -26,6 +26,25 @@ public final class ADFDocumentModel {
     /// Monotonic revision of explicit incremental mutations. Full document
     /// loads reset it to zero.
     public private(set) var documentRevision: UInt64 = 0
+    /// Monotonic document generation (spec §7 "document epoch is mandatory",
+    /// Task 22). Bumps once on every `load()` and on any `apply(_:revision:)`
+    /// batch that is not a **pure tail append** — see
+    /// `bumpDocumentEpochIfNeeded(for:)`. Unlike `documentRevision`, this is
+    /// **never reset to zero**: it is monotonic across documents, so a stale
+    /// offset stamped against a PRIOR document's epoch stays inert even when
+    /// a freshly loaded document reuses the same structural block IDs (the
+    /// spec's stated reason the epoch is mandatory, not just a revision
+    /// counter). The selection engine stamps every range write with this
+    /// value and treats a mismatch as "this range belongs to a document
+    /// generation that no longer exists."
+    public private(set) var documentEpoch: UInt64 = 0
+    /// Fires synchronously, in the same call that bumped `documentEpoch`, so
+    /// the (single, iOS-only) selection controller can clamp/clear its
+    /// session before anything else runs on this run-loop turn — no runloop
+    /// hop, so a bump landing mid-gesture is caught before the gesture's next
+    /// touch event. A plain closure (not `Observation`): a per-touch-move
+    /// selection write must never be on this notification path.
+    @ObservationIgnored public var onDocumentEpochChanged: (() -> Void)?
     /// Lazy-stack sections over `blocks`, maintained incrementally in
     /// `append` so `ADFDocumentView.body` never rebuilds the section
     /// structure during scroll (§8: no O(document) work in `body`). A table's
@@ -127,6 +146,11 @@ public final class ADFDocumentModel {
         sections = []
         headings = []
         documentRevision = 0
+        // Monotonic — never reset (see the property doc). Bumped once here,
+        // synchronously, so a session left over from the PREVIOUS document is
+        // invalidated before the async parse/prepare stream even starts.
+        documentEpoch &+= 1
+        onDocumentEpochChanged?()
         scrollTarget = nil
         scrollTargetPlacement = .top
         expandedBlocks = []
@@ -298,6 +322,10 @@ public final class ADFDocumentModel {
             return ADFDocumentSearch.ItemUpsert(id: id, block: block)
         }
 
+        // MUST read `itemIDs` (still the PRE-mutation set) before it's
+        // reassigned below — `bumpDocumentEpochIfNeeded` judges "pure tail
+        // append" against the tail as it stood BEFORE this batch.
+        bumpDocumentEpochIfNeeded(for: mutations)
         itemIDs = nextIDs
         blocks = nextBlocks
         itemPositionByID = Dictionary(uniqueKeysWithValues: nextIDs.indices.map { (nextIDs[$0], $0) })
@@ -375,6 +403,10 @@ public final class ADFDocumentModel {
             }
         }
 
+        // A replacement batch is, by construction (the `allSatisfy` guard
+        // above), never a pure tail append — every mutation here is
+        // `.replace`, which changes content offsets, so it always bumps.
+        bumpDocumentEpochIfNeeded(for: mutations)
         blocks = nextBlocks
         blockOwnerByID = nextBlockOwners
         documentRevision = revision
@@ -399,6 +431,49 @@ public final class ADFDocumentModel {
             order: nil,
             indexer: searchIndexer
         )
+        return true
+    }
+
+    // MARK: Document epoch (Task 22 — spec §7)
+
+    /// The last top-level item's logical ID in document order, or `nil` on an
+    /// empty document — the tail reference `bumpDocumentEpochIfNeeded`
+    /// compares an append's `afterID` against. `internal`: production callers
+    /// never need it (only `apply`'s own bump call does, via `itemIDs`
+    /// directly); exposed for the epoch-guard unit tests (`@testable`).
+    var lastItemID: String? { itemIDs.last }
+
+    /// Bumps `documentEpoch` unless `mutations` is a **pure tail append**:
+    /// every mutation is `.insert(_, afterID:)`, and walking them in order,
+    /// each one's `afterID` matches the accumulating tail — the document's
+    /// real last item ID before this batch, then each newly appended item in
+    /// turn. A single `.replace`/`.remove`/`.move`, or an `.insert` anywhere
+    /// but the tail, fails this and bumps. An EMPTY batch is a no-op (nothing
+    /// changed) and never bumps.
+    ///
+    /// Pure tail appends are end-stable: nothing before the append moved, so
+    /// every existing selection offset (all of which point somewhere at or
+    /// before the OLD tail) stays valid — the reason streaming `load()`
+    /// growth and this case are exempt while every other structural change
+    /// is not.
+    ///
+    /// Must be called while `itemIDs` still reflects the state BEFORE this
+    /// batch's mutations are committed — `apply(_:revision:)` and
+    /// `applyReplacementBatchIfPossible` both call this immediately before
+    /// they publish `itemIDs`/`blocks`.
+    func bumpDocumentEpochIfNeeded(for mutations: [ADFDocumentMutation]) {
+        guard !isPureTailAppend(mutations) else { return }
+        documentEpoch &+= 1
+        onDocumentEpochChanged?()
+    }
+
+    private func isPureTailAppend(_ mutations: [ADFDocumentMutation]) -> Bool {
+        guard !mutations.isEmpty else { return true }
+        var tail = lastItemID
+        for mutation in mutations {
+            guard case .insert(let item, let afterID) = mutation, afterID == tail else { return false }
+            tail = item.id
+        }
         return true
     }
 

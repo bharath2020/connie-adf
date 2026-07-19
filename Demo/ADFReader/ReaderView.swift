@@ -204,6 +204,12 @@ struct ReaderView: View {
         if let fraction = options.scrollToFraction {
             Task { await scrollToFraction(fraction) }
         }
+        if let delay = options.mutateDelay {
+            Task { await MutationAutomation.run(model: model, afterSeconds: delay) }
+        }
+        if let delay = options.toggleExpandDelay {
+            Task { await MutationAutomation.toggleFirstExpand(model: model, afterSeconds: delay) }
+        }
         if options.searchQuery != nil || options.autoscroll {
             Task {
                 if let query = options.searchQuery {

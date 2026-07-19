@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 @testable import ADFRendering
 
@@ -60,6 +61,30 @@ struct TableScrollSyncTests {
         sync.release("t0")
         sync.release("t0")
         #expect(sync.sharedOffset(for: "t0") == nil)
+    }
+
+    @Test("onOffsetChanged fires on a recorded publish, with the table ID and offset, but not on a deduped move")
+    func onOffsetChangedFiresOnlyOnRecordedPublishes() {
+        // Task 22 geometry-staleness coalescing: the selection controller
+        // hooks this plain callback instead of reading `offsets` via
+        // `Observation`, so h-scroll panning never grows an observable-read
+        // dependency on its part.
+        let sync = TableScrollSync()
+        sync.retain("t0")
+        var received: [(String, CGFloat)] = []
+        sync.onOffsetChanged = { tableID, offset in received.append((tableID, offset)) }
+
+        sync.publish(120, for: "t0")
+        #expect(received.count == 1)
+        #expect(received[0].0 == "t0")
+        #expect(received[0].1 == 120)
+
+        sync.publish(120.3, for: "t0") // sub-half-point move — deduped, no callback
+        #expect(received.count == 1)
+
+        sync.publish(121, for: "t0")
+        #expect(received.count == 2)
+        #expect(received[1].1 == 121)
     }
 
     @Test("an unbalanced release never underflows or evicts a live table")

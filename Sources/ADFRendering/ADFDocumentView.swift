@@ -127,7 +127,7 @@ public struct ADFDocumentView: View {
                     #if os(iOS)
                     .background {
                         if let selectionController {
-                            ScrollViewIntrospector(controller: selectionController)
+                            ScrollViewIntrospector(controller: selectionController, tableScrollSync: tableScrollSync)
                         }
                     }
                     #endif
