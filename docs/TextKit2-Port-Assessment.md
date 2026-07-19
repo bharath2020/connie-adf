@@ -2188,7 +2188,15 @@ runs.
   tap -x <x> -y <y> --udid <D>` at the edit menu's "Select All" button (its
   `AXFrame` center, read from `axe describe-ui`, is the most reliable
   target — `axe tap --label "Select All"` failed to match on this simulator
-  even while the menu was visibly on-screen). `axe drag` remains broken
+  even while the menu was visibly on-screen). The button is a ~44 pt-tall hit
+  target, so a few points of coordinate imprecision in the `AXFrame`-center
+  read still land inside it — the two per-runtime coordinates recorded in
+  Gate 3 ((135, 232) on 26.2, (132, 179) on 18.2) differ only because the
+  menu presents at a different anchor per session, not because either is
+  off-target. Task 28 confirmed the Cmd+A responder-chain path (`axe key-combo
+  --modifiers 227 --key 4`) as a coordinate-free alternative, though it can
+  need a second send when fired immediately after the long-press. `axe drag`
+  remains broken
   (documented since Task 16); handle-drags are not driven in this task
   either, consistent with that carried-forward gap.
 - Raw logs and screenshots: `docs/assessment-assets/phase4-selection/`,
@@ -2250,18 +2258,23 @@ then `axe touch --up` calls) produced no menu at all (screenshot
 single `--down --up --delay 1.0` form fixed it, recorded above as a
 driving-methodology finding, not a product bug.
 
-- **(a) fling burst CPU settle:** first attempt's `top -l 2 | tail -3`
-  capture was truncated/ambiguous (one row read `22.3%`); a full,
-  untruncated `top -l 2` re-capture immediately after showed **0.0% / 0.0%**,
-  `TIME` frozen at `00:59.94` both samples. A second, independent 12-swipe
-  burst was run to be sure: `ps` sampled mid-burst (expected to be busy)
-  showed `98.0%`, and the subsequent full `top -l 2` (after the swipe loop
-  and its 3 s settle wait had actually finished — the previous attempt's 30 s
-  Bash timeout had elapsed mid-loop) showed **0.0% / 0.0%**, `TIME` frozen at
-  `01:52.74` both samples. **Settles cleanly; no livelock.** Screenshot
-  `t26_262_g3a_after_fling_settled.png` shows the blue highlight riding the
-  newly-scrolled content (code block + warning panel now on-screen) —
-  selection geometry is content-space, confirmed scrolling for free.
+- **(a) fling burst CPU settle:** **Re-measured with committed raw captures
+  after evidence review (Task 28)** — the original session's first `top -l 2
+  | tail -3` capture was truncated/ambiguous (one row read `22.3%`) and its
+  two clean re-reads (`0.0%/0.0%`, `TIME` frozen at `00:59.94` / `01:52.74`)
+  were not independently re-derivable from a committed artifact. Task 28
+  re-ran the gate on a fresh dedicated 26.2 sim (`ADF-Task28-262`),
+  document-scale Select-All active over stress-5k, two independent 12-swipe
+  fling bursts, capturing the **full `top -l 2` (both samples)** each time to
+  `t26b_gate3a_262_fling.log`. Both bursts' second (instantaneous) sample
+  read **~11%** immediately after the burst+3 s (`10.7%` then `11.0%`, `TIME`
+  still advancing) — the residual scroll-deceleration tail, the same
+  behaviour the 18.2 sub-gate below documents. A settle check after ~11 s of
+  quiet (no interaction) then read **0.0% / 0.0%** with `TIME` frozen at
+  `00:47.32` on BOTH samples. **Settles cleanly to hard-zero; no livelock**
+  — just a slightly longer deceleration tail on a large fling than the 3 s
+  default window. Raw (both samples, both bursts + the settled read):
+  `t26b_gate3a_262_fling.log`.
 - **(b) autoscroll with selection active:** **N/A, documented.** `-autoscroll`
   is a launch-time-only mode (animates once, prints one `SCROLL_METRICS`
   line, exits the process 2 s later) — there is no way to trigger it against
@@ -2433,15 +2446,23 @@ budget (only Gate 8's media-gallery scenario does). Raw:
 
 ### Gate 8 — media-gallery memory < 150 MB, selection machinery live
 
-iOS 26.2, `-fixture media-gallery -textkit2 -selection`, PID `84666`. 8×
-horizontal swipes (0.3 s apart) settled, then `top -l 1 -pid`:
+iOS 26.2, `-fixture media-gallery -textkit2 -selection`. **Re-measured with a
+committed raw `top -l 1` capture after evidence review (Task 28)** — the
+original 56 MB reading was not backed by a committed raw artifact. Task 28
+re-ran on a fresh dedicated 26.2 sim (`ADF-Task28-262`, host PID `12419`): a
+live selection session started on a caption, then 14 vertical scroll swipes
+through the 300-image gallery to exercise the thumbnail cache, +3 s settle,
+then host `top -l 1`:
 
 | PID | MEM |
 |---|---|
-| 84666 | 56M |
+| 12419 | 66M |
 
-56 MB, well under the 150 MB budget (37% of budget) even with the
-selection engine installed. **PASS.** Screenshot: `t26_262_g8_media_gallery.png`.
+66 MB, well under the 150 MB budget (44% of budget) even with the selection
+engine installed and a live session — consistent with the original 56 MB
+reading (both no-network runs, external images render as gradient
+placeholders). **PASS.** Raw (full `top -l 1` output showing the MEM column):
+`t26b_gate8_media_mem.log`.
 
 ### Bonus gate — mid-scroll LIVE type-size (known-gaps register #11)
 

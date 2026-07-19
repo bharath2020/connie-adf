@@ -1,0 +1,21 @@
+=== t26b Gate 8 re-measure: media-gallery memory (< 150MB bar), selection live ===
+Re-measured with committed raw capture after evidence review (Task 28).
+Runtime: iOS 26.2 (dedicated sim ADF-Task28-262 / 7D64D368-D0BC-456E-BA76-A01E97F4F2F6)
+Fixture: media-gallery (300 external images) -textkit2 -selection; selection session live; host PID 12419
+Protocol: long-press caption -> 14 vertical scroll swipes through the gallery -> +3s settle -> host 'top -l 1'
+Date: 2026-07-19 01:32:02 PDT
+
+----- raw 'top -l 1 -pid 12419 -stats pid,command,cpu,time,mem' (MEM column) -----
+Processes: 2282 total, 4 running, 2278 sleeping, 8658 threads 
+2026/07/19 01:32:03
+Load Avg: 4.81, 9.00, 9.01 
+CPU usage: 12.33% user, 10.40% sys, 77.25% idle 
+SharedLibs: 497M resident, 107M data, 93M linkedit.
+MemRegions: 799793 total, 7217M resident, 970M private, 2483M shared.
+PhysMem: 47G used (7727M wired, 22G compressor), 575M unused.
+VM: 920T vsize, 17G framework vsize, 6383(0) swapins, 288696(0) swapouts.
+Networks: packets: 72080862/68G in, 50096343/35G out.
+Disks: 61160003/1193G read, 29934932/1018G written.
+
+PID    COMMAND   %CPU TIME     MEM
+12419  ADFReader 0.0  00:03.54 66M
