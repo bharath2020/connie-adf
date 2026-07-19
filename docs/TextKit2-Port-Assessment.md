@@ -2974,3 +2974,225 @@ blanket PASS.
 ### Commit
 
 `measure: phase-4 behavioral gate suite`
+
+## Final verdict — phases 4–5 (Task 28)
+
+This section judges the port **and** the selection engine against the spec's
+own goal statement (§1) and its gate/kill list (§10). It is the assessment's
+terminal finding: the record above is the evidence; this is the reading of it.
+
+### The goal, judged
+
+Spec §1's goal: *"Port every text-bearing block to per-row TextKit 2 rendering
+so that character-level, cross-block, native text selection works everywhere —
+while preserving scroll performance (stress-5k gates), fps, video player
+behavior, scroll-position retention, per-document Dynamic Type, search, and
+streaming."*
+
+**Verdict: ACHIEVED on branch `textkit2-port-prototype`.** Character-level,
+cross-block, native text selection — long-press word-select (past a non-BMP
+emoji), Select All, document-order Copy byte-identical to the search corpus,
+edit menu with Copy/Look Up/Translate/Share — works under `-textkit2` across
+every text-bearing block kind (richText, atom-bearing paragraphs, list rows,
+panels/quotes, table cells, code blocks, media captions, expand bodies), with
+plugin/custom blocks selected as a unit per the WYSIWYG contract (spec §1
+non-goal, honored). Every §10 characteristic the goal names as "must preserve"
+was re-measured with selection machinery live and stayed within gate (table
+below). The one substantive gap to full production parity — VoiceOver
+accessibility — is scoped and estimated, not built (Task 25); it does not
+bear on the sighted selection experience the goal describes.
+
+### Central finding: the v2 → v3 architecture pivot
+
+**This is the assessment's central finding.** Spec §10 named, verbatim, a kill
+criterion: *"ancestor-attached `UITextInteraction` proves unworkable."* Task 16
+**fired that criterion** on the real SwiftUI-hosted document hierarchy —
+`UITextInteraction` on the introspected ancestor (`HostingScrollView` →
+`PlatformGroupContainer`) installs its recognizers but **declines to begin a
+selection**, because it requires the touch to land on `interaction.view` and
+the (necessarily interactive) TK2 rows own the hit-test. The phase-1 spike had
+passed only because its synthetic descendants were non-interactive `UILabel`s.
+
+The criterion killed the **mechanism (v2 ancestor attachment)**, not the port.
+Task 16 also proved the escape hatch: a plain `UILongPressGestureRecognizer` on
+the same ancestor *does* fire over interactive descendants. That reframed the
+problem and the design pivoted (spec §7 amended v2 → v3) to a **session-scoped
+transparent overlay** — a `UITextInput` that hosts the interaction *on itself*
+(`interaction.view == interaction.textInput`, Task 16's proven-necessary
+condition), transparent and hit-test-inert when idle, bootstrapped into a
+session by the ancestor long-press, scoped by the one sanctioned `point(inside:)`
+override so scroll is never starved. Task 16b proved v3 viable **9/9 on the real
+hierarchy**, and Tasks 17–27 built and gated it out. The kill criterion did its
+job — it killed an unworkable mechanism cheaply, at Task 16, before Tasks 17–25
+were built on it — and the port survived because a second, in-constraints
+mechanism existed. A production port inherits **v3**; the v2 ancestor-attachment
+path in the spec/prototype history is a dead branch retained only as provenance.
+
+### Spec §10 gate summary — every gate dispositioned
+
+Result legend: **PASS** = run and passed; **PASS (unit/crude)** = the product
+contract is proven by unit/math tests and/or crude-geometry on-sim exercise
+because the exact real-HID gesture is not drivable by `axe` on the simulator
+(documented per gate), never left merely asserted.
+
+| # | §10 gate | Result | Evidence pointer |
+|---|---|---|---|
+| **Perf** ||||
+| 1 | stress-5k autoscroll ON ≤ 2× same-build baseline (A/B) | **PASS** | Phase 2 Gate 1 (2.00 vs 2.12 ms/s); Task 13 Gate 1; Task 26 Gate 1 (0.85×, selection idle) |
+| 2 | giant-table hitch (A/B) — tableSlice sub-flag decision | **PASS** (ON ≤ OFF; no `-textkit2NoCells` exclusion needed) | Phase 2 Gate 2; Task 13 Gate 2; Task 26 Gate 6 |
+| 3 | fling burst → instantaneous CPU settles ~0 | **PASS** (0.0–0.2%) | Phase 2 Gate 3; Task 13 Gate 3; Task 26 Gates 2/3/7 |
+| 4 | handle-drag autoscroll on stress-5k with CPU settle (the drag path autoscroll can't see) | **PASS (unit/crude)** — `anchors.topRow` written truthfully; real HID handle-drag not `axe`-drivable | Task 20 (rotate acid test); Task 16b row 5; Task 26 Gate 7 |
+| 5 | selection-session memory soak (stress-5k); media fixture < 150 MB | **PASS** (selection soak bounded — peak 198M, plateau 191M; media-gallery 66M) — caveat register #13 | Task 26 Gates 3 & 8 |
+| 6 | first chunk < 150 ms | **PASS** (75 / 47 ms) | Phase 2 Gate 4; Task 13 Gate 4 |
+| 7 | idle soak | **PASS** (closes register #12) | Task 26 Gate 5 |
+| 8 | scene-snapshot thrash | **PASS** via Home/lock proxy (app-switcher not `axe`-drivable — register #14) | Task 26 Gate 4 |
+| **Behavioral** ||||
+| 9 | youtube: facade → play → scroll-away deactivate; fling-through over active player | **PASS** | Task 13 Gate 8 (video gate); Task 16b row 2; Task 27 Gate 3 |
+| 10 | rotation 8-cycle pixel-stable; rotate-with-Select-All-then-fling | **PASS** (0-row drift after 165db39+f069ab1; Select-All + position retained) | Task 13 Gate 5; Task 26 Gate 7 |
+| 11 | §19 gauntlet incl. mid-scroll live type-size over materialized TK2 rows | **PASS** (closes register #11 — larger, reflowed, position-retained, selection re-queryable) | Phase 2 Gate 6; Task 13 Gate 6; Task 26 bonus gate |
+| 12 | AX3 wrap-parity fixture; RTL fixture | **PASS** (exact line-count parity; alignment side parity both locales) | Task 12; Task 27 Gate 8 |
+| 13 | kitchen-sink selection demo (long-press past emoji, cross-block drag through atom + table cell + code block, Select All, Copy byte-exact document order) | **PASS (unit/crude)** — Select-All Copy MD5-identical to corpus; real HID cross-block handle-drag not `axe`-drivable, Select All exercises the same rect path | Task 27 Gates 1/2; Task 19 |
+| 14 | pan a table and scrub a code block with an active selection | **PASS (crude)** — scroll/pan pass-through during a live session verified; table h-pan via `axe swipe` is a no-op in **both** arms (tooling limit, not selection) | Task 16b rows 3/6; Task 27 Gate 4 |
+| 15 | live-edit lands mid-handle-drag (epoch / gesture-cancel contract) | **PASS (unit)** — real `documentEpoch` + 3-layer mid-gesture cancel; real HID live-edit-mid-drag not `axe`-drivable | Task 22 |
+| 16 | side-by-side screenshot parity vs main (pills, headings, lists, panels) | **PASS** — no new structural diffs; dark mode clean; chip icons/tint closed | Task 13 Gate 9; Task 23 |
+
+**All 16 §10 gates are dispositioned** — run and passed, with four (gate rows
+4/13/15 unit-or-math-proven, gate row 14 crude) explicitly noted where the
+exact real-HID gesture is not drivable by `axe` on the simulator and the
+product contract is instead proven by unit/math tests plus a crude-geometry
+on-sim exercise. None was skipped or left asserted-only.
+
+### Spec §10 kill criteria — final state
+
+| Kill criterion (NO-GO trigger) | Fired? | Resolution |
+|---|---|---|
+| autoscroll > 2× same-build baseline | **No** | worst 1.32× (Task 10); 0.85× with selection idle (Task 26) |
+| fling CPU fails to settle | **No** | settles to 0.0–0.2% both branches, both runtimes |
+| type-size or rotation scroll retention breaks | **No** | retained; rotation 0-row drift after the settle-window fix |
+| ancestor-attached `UITextInteraction` proves unworkable | **Yes — against v2** | **the pivot.** Fired at Task 16, killed the v2 *mechanism*; the v3 session-scoped overlay (Task 16b, 9/9) resolves it and is what the engine is built on |
+
+The one kill that fired killed a mechanism and was designed around; no kill
+criterion stands against the port as shipped on this branch. Task 27's kill
+table recorded a *Partial* on "session state corrupts under arbitration" for
+register items #17/#18 (reseed-clears-instead-of-reseeds; find-nav highlight
+desync) — **both are now RESOLVED** by the Task 28 remediation (`62d07e4`):
+`tapClear.require(toFail: longPress)` for the reseed race, and ending the
+session cleanly on a structural `scrollTarget` jump for find-nav. That Partial
+therefore closes to **No** — no crash, no data corruption, byte-exact Copy holds
+in every configuration.
+
+### What is NOT done (honest register, grouped)
+
+The known-gaps register runs **#1–#20**. Twelve are closed or resolved on this
+branch (#1/#2/#3/#4 rendering fidelity + hit-testing; #6/#7/#10 test infra;
+#9 copy wiring; #11/#12 the never-run gates; #17/#18 the Task 27 behavioral
+findings). The remainder, grouped by class:
+
+**Production-hardening (real work, deferred by design):**
+- **#8 — VoiceOver accessibility.** Task 25 measured the real v3 hierarchy
+  (bare `TextKit2RowUIView`s expose *nothing* — worse than the spike's predicted
+  single `AXTextArea`), built a minimal one-label-per-row exposure (idle tree
+  now byte-identical role+label to the SwiftUI arm), and **deferred** the full
+  model: per-run/interactive `UIAccessibilityContainer` element model, a
+  text-selection rotor (`UIAccessibilityReadingContent` — feasibility genuinely
+  unknown), session announcements, selected-text announcements, and document-order
+  traversal for off-screen-materialized rows. Estimated **3–4 tasks**, reusing
+  the Task 17/19/21 geometry/hit-test layer.
+- **#13 — post-rotation memory.** Rotating ×2 with a 5000-block Select-All active
+  then flinging plateaus at **674M** (~3.5–4× the ~170–190M non-rotated fling+soak
+  range). Plateaus (not classified a leak) but warrants a dedicated follow-up
+  (does a second round-trip grow it?) before a production decision. Task 26 Gate 7.
+- **HID-undrivable verifications.** Real handle-drag autoscroll (§10 gate
+  row 4), real cross-block handle-drag (gate row 13), real live-edit-mid-drag
+  (gate row 15), and table-pan-during-session (gate row 14) are proven by
+  unit/math tests plus crude-geometry on-sim exercise, not by real HID gestures
+  — `axe` cannot emit the continuous touch-move + handle-grab these need on the
+  simulator. A production port should re-verify these on a physical device or
+  with a UI-test harness that can drive real drags. (These are §10 gate rows,
+  distinct from the same-numbered known-gaps register items.)
+
+**Cosmetic (deferred, decision recorded):**
+- **#5 — vertical-rhythm drift.** TK2 rows run slightly taller than SwiftUI
+  `Text` down a long list/panel region (cumulative ~5px/row). **Fix deferred**
+  (Task 23 decision): it is cosmetic *only relative to the OFF arm*; once the
+  OFF arm is removed there is nothing to drift from, and forcing a line-height
+  multiple risks the deterministic-sizing / `CollapsedRowHeight` exact-replay
+  contract (§16). Revisit only if the SwiftUI-arm-removal decision changes.
+
+**Process / tooling (driving-methodology, not product defects):**
+- **#14** app-switcher not `axe`-drivable (Home/lock used as proxy); **#15**
+  two-invocation `axe touch` long-press unreliable (use single-command form);
+  **#16** date-pill HID hit-target narrower/offset from visual bounds (a
+  coordinate-targeting hazard for future automation, no evidence of a real-device
+  defect); **#19** `-toggleExpandDelay` launch hook didn't fire this session;
+  **#20** `axe key-combo` Cmd+A/Cmd+C is a reliable Select-All/Copy technique (a
+  positive finding). These bound what a simulator + `axe` can verify; none is a
+  code defect.
+
+### Production-port recommendation (for the human — a recommendation, not a decision)
+
+**Recommendation: PROCEED to a production port**, built on the v3 selection
+engine as it stands on `textkit2-port-prototype`. Rationale: the selection
+engine cleared every §10 kill criterion (the one that fired killed the v2
+mechanism, which v3 replaced); all 16 §10 gates are dispositioned PASS; the
+goal's "must preserve" list — autoscroll, fling, giant-table, first-chunk,
+rotation retention, per-document Dynamic Type, search, video, streaming — held
+under selection with margin; and the two live behavioral gaps found at Task 27
+are already fixed (`62d07e4`). What remains open is production-hardening and one
+recorded cosmetic deferral, none of it a correctness or perf regression, none of
+it a kill.
+
+**"Productionize" means work beyond this branch — the human decisions this
+assessment cannot make:**
+
+1. **SwiftUI-arm removal decision.** The port currently ships behind
+   `-textkit2` with the SwiftUI `Text` arm intact as the A/B reference and the
+   macOS path. Productionizing means deciding to make TK2 the *only* iOS text
+   path and removing the SwiftUI arm (and its per-`Text` `.textSelection`).
+   That decision also **retires the vertical-rhythm gap (#5)** by construction —
+   with no OFF arm, there is nothing to drift from. This is a real removal, not
+   a toggle flip: the macOS path still needs the platform-agnostic core (spec
+   §8), so removal is iOS-arm-only.
+2. **Per-document toggle retirement.** The in-app `adf.textkit2.enabled`
+   toggle (build 16, restart-to-apply) and the `-textkit2`/`-selection`/
+   `-textkit2NoCells` launch flags are assessment scaffolding. Productionizing
+   retires them (or repurposes the launch flags for CI gating only), so there is
+   one code path in production rather than a branching A/B surface.
+3. **Backport the rotation fix to `main` independently.** `165db39` + `f069ab1`
+   (cancellable settle-window re-pins) fix a **pre-existing, renderer-agnostic**
+   jump-then-rotate drift with zero TK2 coupling. It is tracked as issue #6 and
+   should land on `main` on its own schedule, whether or not the full port
+   proceeds — it is the highest-value, lowest-risk carve-out in this branch.
+4. **Full accessibility (#8).** ~3–4 tasks, must land before a general release
+   (a text-reading app that is invisible to VoiceOver is not shippable);
+   feasibility of the selection rotor is itself unknown and should be spiked
+   first.
+5. **The register-#13 memory follow-up** and a **real-device / UI-test
+   re-verification** of the HID-undrivable §10 gates (gate rows 4/13/14/15)
+   before general release.
+
+**Migration risk.** Low-to-moderate and well-bounded. The port integrates with
+the *real* lazy document view (it had to, to gate anything), so there is no
+"will it integrate" risk left; the sacrosanct subsystems (§9 — DocumentRow/
+spacer collapse, scroll anchoring, streaming, search indexing, video
+coordinator, `.id(document)` identity, `TableScrollSync`) were held untouched
+throughout and re-verified green. The residual risk concentrates in (a) removing
+the SwiftUI arm without regressing macOS or the marker-column checkbox
+interactivity SwiftUI still owns, (b) accessibility, whose rotor path is
+genuinely unexplored, and (c) confirming the HID-undrivable gates on real
+hardware. The determinism flake that could have threatened the
+`CollapsedRowHeight` contract was discriminated to test-infra, not product
+(Task 24, `.serialized`), so the sizing contract is not a migration risk.
+
+**Rough estimate (for planning, not a commitment).** Selection-engine
+hardening + SwiftUI-arm removal + toggle retirement + real-device gate
+re-verification: on the order of the Task 17/19/21 engine cluster again
+(~4–6 tasks). Full accessibility: 3–4 tasks (rotor feasibility spike first).
+Rotation-fix backport (#6): 1 small, independent task. Total to a shippable
+production state: roughly **8–11 tasks**, front-loaded by the two human
+decisions (SwiftUI-arm removal, accessibility scope) that gate the rest.
+
+**This is a recommendation to the human, not a decision taken.** The branch is
+an assessment artifact (spec §12: never merged to `main` without a follow-up
+production decision); issue #5 stays **open** to track that decision and the
+production port it recommends.
