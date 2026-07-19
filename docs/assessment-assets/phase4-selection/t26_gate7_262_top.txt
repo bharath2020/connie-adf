@@ -1,0 +1,26 @@
+Processes: 2183 total, 3 running, 2180 sleeping, 8381 threads 
+2026/07/18 23:31:14
+Load Avg: 5.59, 9.85, 10.46 
+CPU usage: 18.96% user, 10.42% sys, 70.60% idle 
+SharedLibs: 588M resident, 105M data, 84M linkedit.
+MemRegions: 792153 total, 7639M resident, 741M private, 2678M shared.
+PhysMem: 46G used (7580M wired, 22G compressor), 1605M unused.
+VM: 880T vsize, 5361M framework vsize, 2702(0) swapins, 216672(0) swapouts.
+Networks: packets: 68414680/65G in, 45859196/30G out.
+Disks: 58494911/1137G read, 28715334/988G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM  PURG CMPRS PGRP  PPID  STATE   BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW   PAGEINS IDLEW POWER INSTRS CYCLES JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+84053  ADFReader 0.0  00:59.29 4/1 1   188    674M 0B   0B    84053 61805 running *13[4] 0.00000 0.00000    501 102723 1879 40320   11236   73588  166224  34103 33      34    0.0   0      0      180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  
+Processes: 2184 total, 5 running, 2179 sleeping, 8333 threads 
+2026/07/18 23:31:15
+Load Avg: 5.14, 9.69, 10.39 
+CPU usage: 13.40% user, 5.83% sys, 80.75% idle 
+SharedLibs: 588M resident, 105M data, 84M linkedit.
+MemRegions: 83 total, 1664K resident, 741M private, 2679M shared.
+PhysMem: 46G used (7578M wired, 22G compressor), 1604M unused.
+VM: 880T vsize, 5361M framework vsize, 2702(0) swapins, 216672(0) swapouts.
+Networks: packets: 68414708/65G in, 45859245/30G out.
+Disks: 58494914/1137G read, 28715335/988G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM   PURG CMPRS PGRP  PPID  STATE    BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW    PAGEINS IDLEW POWER INSTRS     CYCLES    JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+84053  ADFReader 7.0  00:59.41 4   1   184-   674M- 0B   0B    84053 61805 sleeping *13[4] 0.01586 0.00000    501 102723 1879 40633+  11415+  73789+ 167290+ 34358+ 33      43+   7.3   1815931671 481250823 180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  

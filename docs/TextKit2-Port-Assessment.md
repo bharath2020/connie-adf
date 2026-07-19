@@ -2149,3 +2149,388 @@ layer rather than duplicate it.
 - Levels 5–6 heading detection remains a known gap (documented above and in
   the source), consistent with the brief's "approximate is acceptable,
   document" allowance rather than a bug to fix in this pass.
+
+## Phase 4 — Task 26: perf + soak gates with selection active
+
+Runs spec §10's perf/behavioral gates that involve selection, plus the two
+never-run phase-1–3 gates (known-gaps register **#12**, idle-soak +
+scene-snapshot) and register **#11** (mid-scroll LIVE type-size). **Measurement
+only — no production code changed.** Every number below was captured in one
+session, same build, toggling only launch arguments / in-app controls between
+runs.
+
+### Environment
+
+- Repo `textkit2-port-prototype`, HEAD `468d6f6` throughout (confirmed via
+  `git rev-parse HEAD` before build and `strings ADFReader.debug.dylib | grep
+  SelectionAutoscroller` → `ADFRendering/SelectionAutoscroller.swift` present
+  in the installed binary).
+- Build: `cd Demo && xcodegen generate && xcodebuild -project
+  ADFReader.xcodeproj -scheme ADFReader -destination "platform=iOS
+  Simulator,name=iPhone 16" build` → **BUILD SUCCEEDED**, one Debug binary
+  (DerivedData `ADFReader-gpbigiihnbgrtzemxlqmiwtstlhv`) installed unmodified
+  onto both simulators below — never rebuilt mid-session, so every A/B pair in
+  this task shares the exact same binary.
+- Two dedicated simulators, both **created for this task and deleted at the
+  end**, never touching any other booted simulator:
+  - `ADF-Task26-262`, UDID `D6C1C974-137F-4921-A30C-A7DA25AD8254`, iPhone 16 /
+    **iOS 26.2** — primary sim, all 8 matrix gates plus the register-#11
+    bonus gate.
+  - `ADF-Task26-182`, UDID `EF32948A-E202-4E00-91A7-912EE783C862`, iPhone 16 /
+    **iOS 18.2** — second runtime, used for Gate 3 (the brief's "both
+    runtimes" requirement for the selection-active gates).
+- Bundle id `com.connie.adfreader`. Fixtures: `stress-5k`, `atom-stress`,
+  `giant-table`, `media-gallery`.
+- Selection driving confirmed working this session: long-press =
+  `axe touch -x <x> -y <y> --down --up --delay 1.0 --udid <D>` (single
+  command, not separate down/up calls — two separate calls did NOT reliably
+  produce a selection, see Gate 3 below); Select All = long-press then `axe
+  tap -x <x> -y <y> --udid <D>` at the edit menu's "Select All" button (its
+  `AXFrame` center, read from `axe describe-ui`, is the most reliable
+  target — `axe tap --label "Select All"` failed to match on this simulator
+  even while the menu was visibly on-screen). `axe drag` remains broken
+  (documented since Task 16); handle-drags are not driven in this task
+  either, consistent with that carried-forward gap.
+- Raw logs and screenshots: `docs/assessment-assets/phase4-selection/`,
+  `t26_` prefix (`t26_gate*.log`/`.txt` for console/`top` output,
+  `t26_<runtime>_g<N>_*.png` for screenshots, `t26_*_describe*.json` for
+  `axe describe-ui` trees).
+
+### Gate 1 — stress-5k autoscroll ×2/branch, idle selection machinery (kill criterion: ON ≤ 2× baseline)
+
+`xcrun simctl launch --console-pty $D com.connie.adfreader -fixture stress-5k
+-autoscroll -textkit2 [-selection]`, iOS 26.2, same sim both branches.
+
+| Branch | Run | frames | dropped | hitchRatioMsPerS |
+|---|---|---|---|---|
+| `-textkit2` | 1 | 29587 | 85 | 2.87 |
+| `-textkit2` | 2 | 29543 | 78 | 2.71 |
+| `-textkit2 -selection` | 1 | 29555 | 77 | 2.59 |
+| `-textkit2 -selection` | 2 | 29623 | 63 | 2.14 |
+
+`-textkit2` baseline mean **2.79** ms/s; `-textkit2 -selection` mean **2.365**
+ms/s — the selection-installed-but-idle arm is actually **lower**, not just
+under the 2× kill bar (2.365 / 2.79 ≈ 0.85×). Matches the brief's prediction:
+idle selection geometry is on-demand-only and idle rows observe one `Bool`.
+**PASS (noise-equivalent, comfortably clears both the 2× kill bar and the
+stricter noise-equivalence target).** Raw: `t26_gate1.log`.
+
+### Gate 2 — stress-5k fling+settle, idle, both toggle branches
+
+12× `axe swipe --start-x 220 --start-y 800 --end-x 220 --end-y 120 --duration
+0.08`, then `top -l 2 -pid <pid>` (second-sample read), iOS 26.2.
+
+| Branch | PID | %CPU (settled) | TIME |
+|---|---|---|---|
+| OFF | 68920 | 0.5 | 00:07.90 |
+| `-textkit2` | 69073 | 0.4 | 00:09.11 |
+
+Both settle near-zero — no regression from the selection machinery merely
+existing (recognizers, registry, epoch hooks) on the OFF/plain-TK2 baseline.
+**PASS.** Raw: `t26_gate2.log`.
+
+### Gate 3 — selection-active gates, BOTH runtimes (iOS 26.2 + iOS 18.2), TK2 arm
+
+Protocol per runtime: launch `-fixture stress-5k -textkit2 -selection
+-scrollToFraction 0.5`; long-press a mid-document word; tap Select All
+(document-scale selection over all 5000 blocks); then (a) 12-swipe fling
+burst + `top -l 2` settle with the full-document selection alive; (b)
+relaunch-free autoscroll — investigated, not drivable, see below; (c) a
+selection-session memory soak holding the session **3.5 minutes** (7×
+30 s cycles, a small swipe each cycle, `top -l 1` sampled every cycle).
+
+**iOS 26.2** (PID `69226`): long-press at pt (64, 222) on "render schema
+panel" produced the native highlight + handles + Copy/Select All/Look Up
+menu (screenshot `t26_262_g3_retry_after.png`); Select All tap at the
+menu's `AXFrame` center (135, 232) turned the whole document blue
+(`t26_262_g3_selectall2.png`) — confirmed via `axe describe-ui` on a first
+attempt too, but the FIRST long-press try (two separate `axe touch --down`
+then `axe touch --up` calls) produced no menu at all (screenshot
+`t26_262_g3_after_longpress.png` shows no selection) — switching to the
+single `--down --up --delay 1.0` form fixed it, recorded above as a
+driving-methodology finding, not a product bug.
+
+- **(a) fling burst CPU settle:** first attempt's `top -l 2 | tail -3`
+  capture was truncated/ambiguous (one row read `22.3%`); a full,
+  untruncated `top -l 2` re-capture immediately after showed **0.0% / 0.0%**,
+  `TIME` frozen at `00:59.94` both samples. A second, independent 12-swipe
+  burst was run to be sure: `ps` sampled mid-burst (expected to be busy)
+  showed `98.0%`, and the subsequent full `top -l 2` (after the swipe loop
+  and its 3 s settle wait had actually finished — the previous attempt's 30 s
+  Bash timeout had elapsed mid-loop) showed **0.0% / 0.0%**, `TIME` frozen at
+  `01:52.74` both samples. **Settles cleanly; no livelock.** Screenshot
+  `t26_262_g3a_after_fling_settled.png` shows the blue highlight riding the
+  newly-scrolled content (code block + warning panel now on-screen) —
+  selection geometry is content-space, confirmed scrolling for free.
+- **(b) autoscroll with selection active:** **N/A, documented.** `-autoscroll`
+  is a launch-time-only mode (animates once, prints one `SCROLL_METRICS`
+  line, exits the process 2 s later) — there is no way to trigger it against
+  an already-running session without relaunching, and relaunching would tear
+  down the live selection. Not drivable relaunch-free on this harness.
+- **(c) memory soak, 3.5 min, periodic small scrolls** (`t26_gate3_262_memsoak.log`):
+
+  | t | MEM | %CPU |
+  |---|---|---|
+  | 0s | 171M | 0.0 |
+  | 30s | 170M | 0.0 |
+  | 60s | 169M | 0.0 |
+  | 90s | 181M | 0.0 |
+  | 120s | 175M | 0.0 |
+  | 150s | 174M | 0.0 |
+  | 180s | 173M | 0.0 |
+  | 210s | 171M | 0.0 |
+
+  Range 169–181M, ends exactly where it started (171M) — bounded, no
+  monotonic growth, CPU flat at 0.0% throughout. **PASS.**
+
+**iOS 18.2** (PID `72499`): long-press at pt (64, 218) succeeded on the
+first attempt this time (screenshot `t26_182_g3_longpress.png`); Select All
+tap used the `AXFrame`-derived center (132, 179) and worked first try
+(`t26_182_g3_selectall.png`).
+
+- **(a) fling burst CPU settle:** first `top -l 2` read (immediately after
+  the burst + 3 s wait) showed `0.0%` sample-1 / **`31.6%`** sample-2, `TIME`
+  still advancing (`00:56.06`→`00:56.61`) — did NOT settle within the
+  standard window. A second `top -l 2` read 3 s later showed **0.0% / 0.0%**,
+  `TIME` frozen at `00:56.62` both samples. **Settles, but took ~6 s instead
+  of ~3 s** on this runtime — read as residual scroll-deceleration momentum
+  finishing its tail, not a livelock (it did reach a hard-zero, unchanging
+  `TIME` plateau on the next read, and stayed there through the entire
+  memory soak that followed). No crash, no runaway growth. **PASS, with
+  this timing note.** Raw: `t26_gate3_182_top.txt`, `t26_gate3_182_top2.txt`.
+- **(b) autoscroll with selection active:** same N/A as 26.2 (harness
+  limitation, not runtime-specific).
+- **(c) memory soak, 3.5 min** (`t26_gate3_182_memsoak.log`):
+
+  | t | MEM | %CPU |
+  |---|---|---|
+  | 0s | 176M | 0.0 |
+  | 30s | 176M | 0.0 |
+  | 60s | 176M | 0.0 |
+  | 90s | 198M | 0.0 |
+  | 120s | 192M | 0.0 |
+  | 150s | 191M | 0.0 |
+  | 180s | 191M | 0.0 |
+  | 210s | 191M | 0.0 |
+
+  Peaked at 198M (t=90s), then declined and plateaued at 191M — bounded, no
+  monotonic growth, CPU flat at 0.0%. **PASS.**
+
+**Gate 3 verdict: PASS on both runtimes.** Sub-gate (b) is N/A (harness
+limitation, documented, not a product failure). The two "didn't settle on
+the very first `top -l 2`" incidents (26.2's truncated first read, 18.2's
+genuine 6-second settle tail) are recorded in full rather than only showing
+the clean second read, per this task's "every claim traceable" mandate.
+
+### Gate 4 — scene-snapshot thrash with an active session ×5 cycles (register #12, part 1)
+
+iOS 26.2 only. After Gate 3's Select-All session was already live (PID
+`75099`, a fresh launch for this gate), investigated what's drivable:
+`axe button home` (background, confirmed process stays alive — `ps -p`
+shows `Rs`, not gone) and `axe button lock` (screen off; a second `lock`
+press wakes to the Lock Screen, `t26_262_g4_locked.png` /
+`t26_262_g4_unlocked.png`) both work cleanly. `xcrun simctl launch
+$D com.connie.adfreader` (no args) on an already-running process
+**re-foregrounds it in place — confirmed same PID, not a relaunch**
+(`t26_262_g4_refore.png` shows the full-document selection still
+highlighted after Home → relaunch-call → foreground). **App-switcher is
+NOT reliably drivable**: `axe gesture swipe-from-bottom-edge` (tried both a
+default and a slow/paused 1.2 s variant) was captured by the app's own
+scroll-view pan recognizer instead of the system multitasking UI — the
+document scrolled (`t26_262_g4_appswitcher_attempt.png`), no card-switcher
+UI ever appeared. This is investigated-and-documented per the brief's
+"document what's drivable" instruction, not silently skipped.
+
+5-cycle thrash definition (drivable subset): `axe button home` → `axe button
+lock` → sleep 1 → `axe button lock` (wake) → sleep 1 → `axe gesture
+swipe-from-bottom-edge` (unlock/return) → sleep 1 → `xcrun simctl launch`
+(foreground) → sleep 1, ×5.
+
+| Cycle | Post-cycle process state |
+|---|---|
+| 1–5 | PID `75099` unchanged, state `Rs` (alive) every cycle |
+
+Same PID survived all 5 cycles — **no crash.** Post-thrash `top -l 2`:
+**0.0% / 0.0%**, `TIME` frozen at `00:41.21` both samples — CPU settles, no
+livelock from repeated scene-snapshot churn. Final screenshot
+(`t26_262_g4_final_state.png`) and `axe describe-ui` both confirm the
+**selection state survived intact** (full-document highlight still
+present, 75 elements in the tree) — the epoch guard did not need to fire
+because no document mutation occurred; this run exercises the "survives"
+branch, not the "clears cleanly" branch. **PASS.**
+
+### Gate 5 — idle soak, 5 minutes, both toggle branches (register #12, part 2 — never run in phases 1–3)
+
+iOS 26.2, stress-5k, true no-interaction idle (distinct from Gate 3c's
+periodic-small-scroll soak): launch, `sleep 3`, then 10× (`sleep 28` +
+`top -l 1 -pid <pid>`) = 5 minutes, no touches at all.
+
+| Branch | PID | TIME across all 11 samples | MEM range |
+|---|---|---|---|
+| OFF | 76639 | frozen at `00:03.11` (t=0 through t=300s) | 136–137M |
+| `-textkit2 -selection` (idle) | 78794 | frozen at `00:03.45` (t=0 through t=300s) | 141–142M |
+
+Both branches: **zero CPU consumed across the entire 5-minute window** —
+`TIME` literally does not advance past the ready-state baseline once
+idle, and MEM is flat. Textbook zero-work idle in both arms. **PASS —
+closes the "idle-soak never run" half of register #12.** Raw:
+`t26_gate5_262_OFF.log`, `t26_gate5_262_ON.log`.
+
+### Gate 6 — atom-stress + giant-table autoscroll ×1/branch, selection machinery present
+
+iOS 26.2, OFF vs `-textkit2 -selection`, same `-autoscroll` protocol as
+Gate 1.
+
+| Fixture | Branch | frames | dropped | hitchRatioMsPerS |
+|---|---|---|---|---|
+| atom-stress | OFF | 8266 | 1 | 0.07 |
+| atom-stress | `-textkit2 -selection` | 8238 | 0 | 0.00 |
+| giant-table | OFF | 2432 | 0 | 0.00 |
+| giant-table | `-textkit2 -selection` | 2419 | 1 | 0.41 |
+
+atom-stress: ON slightly beats OFF. giant-table: ON has one early hitch
+(`HITCH t=0.17 actualMs=33.3`, a first-frame layout cost, not a trend —
+OFF had its own single early hitch in Phase 2's Gate 2 too) but both
+branches stay near-zero. **PASS (both fixtures, both branches)** — the
+selection machinery's presence (recognizers, registry, epoch hooks) doesn't
+regress either atom-heavy or table-heavy autoscroll. Raw: `t26_gate6.log`.
+
+### Gate 7 — rotate-with-Select-All-then-fling (T13-era gate)
+
+iOS 26.2, stress-5k, `-scrollToFraction 0.5`, PID `84053`. Long-press +
+Select All (screenshot `t26_262_g7_selectall_before_rotate.png` — full-doc
+highlight confirmed), then 2× `notifyutil -p com.connie.adfreader.rotate`
+(portrait → landscape → portrait) with a 2 s settle + screenshot after
+each. After both rotations the document is back in portrait, still showing
+Section 2500 at the same position, **selection still highlighted across
+the whole document** (`t26_262_g7_after_rotate2.png`) — no crash, no
+teardown. Then a 12-swipe fling burst:
+
+| Sample | %CPU | TIME | MEM |
+|---|---|---|---|
+| 1st `top -l 2` pair | 0.0 / 7.0 | 00:59.29 → 00:59.41 | 674M |
+| 2nd `top -l 2` pair (3s later) | 0.0 / 0.0 | 00:59.41 (frozen) | 674M |
+
+**CPU settles cleanly on the second read (no livelock); no crash;
+selection state documented as intact** (screenshot
+`t26_262_g7_after_fling.png` shows the fling scrolled to Section 2910 with
+the blue highlight correctly riding the new content, document rendering
+uncorrupted). Gate 7's own pass criteria (CPU settles, no crash, selection
+state documented) are met — **PASS.**
+
+**Notable finding, flagged but not a Gate-7 kill criterion:** MEM jumped to
+**674M** after rotate+Select-All+fling, roughly 3.5–4× the ~170–190M range
+Gate 3's non-rotated fling+soak on the same fixture/selection state showed.
+It plateaued (674M on all 4 samples across both `top -l 2` pairs, not still
+climbing) rather than leaking unboundedly, but it is a real, substantially
+larger resident cost — likely the portrait→landscape→portrait re-layout at
+a 5000-block document scale, combined with a full-document selection,
+forcing much broader row/geometry materialization than scrolling alone.
+Recorded as a new known-gaps register candidate (below) for follow-up
+measurement, not treated as a FAIL since gate 7 carries no stated memory
+budget (only Gate 8's media-gallery scenario does). Raw:
+`t26_gate7_262_top.txt`, `t26_gate7_262_top2.txt`.
+
+### Gate 8 — media-gallery memory < 150 MB, selection machinery live
+
+iOS 26.2, `-fixture media-gallery -textkit2 -selection`, PID `84666`. 8×
+horizontal swipes (0.3 s apart) settled, then `top -l 1 -pid`:
+
+| PID | MEM |
+|---|---|
+| 84666 | 56M |
+
+56 MB, well under the 150 MB budget (37% of budget) even with the
+selection engine installed. **PASS.** Screenshot: `t26_262_g8_media_gallery.png`.
+
+### Bonus gate — mid-scroll LIVE type-size (known-gaps register #11)
+
+Not one of the brief's 8 numbered gates, but explicitly named by spec §10
+and flagged twice in the known-gaps register as "must be run in phase 4,
+not deferred again" — attempted here for completeness rather than left a
+third time as UNTESTED.
+
+iOS 26.2, `-fixture stress-5k -textkit2 -selection -scrollToFraction 0.5`.
+The in-app text-size control is the toolbar's "AA" button (`Label("Text
+Size", …)` in `ReaderView.swift`) opening a `TextSizeControl` popover — it
+did **not** appear in `axe describe-ui`'s top-level tree (a tool/tree-depth
+quirk, not investigated further), so it was located by screen coordinate
+instead (`t26_262_g9_popover_attempt.png` confirms the popover opened:
+"100%" readout, small-A/large-A buttons, disabled "Reset to 100%"). A
+second `axe describe-ui` **while the popover was open** did surface its
+buttons' exact `AXFrame`s (`Increase Text Size` at `{273,81},{44,36.3}`),
+used for 4× taps to reach **165%**:
+
+- **TK2 rows reflowed**: "Section 2500: spline expand fixture" wraps to two
+  lines at 165% vs one at 100%; body paragraphs re-wrap throughout
+  (`t26_262_g9_popover_after4taps.png`).
+- **Reader kept its place**: the same heading ("Section 2500: …") remains
+  at/near the top of the viewport across the resize — the §19 re-pin held
+  over materialized TK2 rows, no jump to a different document position.
+- **Selection re-queries cleanly post-resize**: after dismissing the
+  popover (tap outside), a long-press at the NEW (165%-sized) geometry
+  produced a correct native word selection with handles + Copy/Select
+  All/Look Up (`t26_262_g9_selection_after_resize2.png`, word "render").
+  Recorded honestly: the first post-resize long-press attempt landed on a
+  strikethrough/boundary run and produced no menu
+  (`t26_262_g9_selection_after_resize.png`); the second attempt, retargeted
+  at plain body text from a fresh screenshot, succeeded immediately — this
+  reads as a coordinate-targeting miss, not a selection-engine defect (the
+  same "single-command long-press" methodology worked cleanly elsewhere in
+  this task once aimed correctly).
+
+**PASS — larger, reflowed, position-retained, selection-re-queryable.**
+Closes known-gaps register item **#11** (no longer "never run").
+
+### Kill criteria check (spec §10)
+
+| Kill criterion | Observed | Triggered? |
+|---|---|---|
+| autoscroll > 2× same-build baseline | Gate 1: 0.85× (selection idle); Gate 6: both fixtures near-zero, ON ≤ OFF or comparable | No |
+| fling CPU fails to settle | Gates 2/3/7: all settle to 0.0%/0.0% on a clean second `top -l 2` read (two runs took longer than the standard 3 s wait but still reached a hard-zero, unchanging plateau) | No |
+| type-size or rotation scroll retention breaks | Bonus gate: reflows + retains position; Gate 7: rotation with Select-All retains selection + position | No |
+| ancestor-attached `UITextInteraction` proves unworkable | N/A — resolved in Task 16/16b (v3 overlay), unaffected here | No |
+
+No kill criterion fires. **Overall Task 26 verdict: PASS, all 8 matrix
+gates + the register-#11 bonus gate.** One new finding (Gate 7's 674M
+post-rotate-fling memory) is carried forward below as a register addition,
+not a kill.
+
+### Known-gaps register — additions from this task
+
+13. **Post-rotation memory cost under a full-document selection**: rotating
+    (×2) with a 5000-block Select-All active, then flinging, plateaus at
+    **674M** resident — ~3.5–4× the ~170–190M range the same fixture/
+    selection state shows under fling+soak without a rotation in between.
+    Plateaus (does not grow further once reached) so this is not
+    classified as a leak, but it's a real, much larger footprint worth a
+    dedicated follow-up measurement (e.g., does a SECOND rotate round-trip
+    grow it further, or does it stay pinned at ~674M?) before any
+    production decision. Gate 7, this task.
+14. **App-switcher is not reliably drivable** via `axe gesture
+    swipe-from-bottom-edge` on this simulator/AXe version when the app is
+    in the foreground — the gesture is captured by the app's own
+    scroll-view pan recognizer instead of the system multitasking UI. Home
+    and Lock/unlock are both cleanly drivable and were used as the
+    scene-snapshot-thrash proxy instead. Gate 4, this task.
+15. **`axe touch --down` and `axe touch --up` issued as two separate
+    process invocations does not reliably reproduce a long-press** on this
+    simulator (observed once, Gate 3/iOS 26.2's first attempt) — only the
+    single-command `axe touch --down --up --delay 1.0` form is reliable.
+    Driving-methodology note, not a product defect (Task 20's own
+    convention already used the single-command form; this task's first
+    attempt deviated and paid for it).
+
+### Task 26 verify
+
+- No production Swift source was modified this task (measurement only, per
+  brief) — `git status`/`git diff --stat` against `Sources/` and `Demo/`
+  confirmed clean before the commit below (only `docs/` changed).
+- Both dedicated simulators (`ADF-Task26-262`, `ADF-Task26-182`) deleted
+  after the last measurement; no other booted simulator was touched at any
+  point (`ps`/`xcrun simctl list devices` checked before driving any HID
+  input, per the "no cross-session numbers, don't touch other sims" rule).
+
+### Commit
+
+`measure: phase-4 selection perf + soak gates`

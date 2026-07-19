@@ -1,0 +1,26 @@
+Processes: 2166 total, 13 running, 2153 sleeping, 8488 threads 
+2026/07/18 23:05:29
+Load Avg: 18.95, 12.67, 10.76 
+CPU usage: 20.23% user, 15.76% sys, 64.0% idle 
+SharedLibs: 566M resident, 101M data, 86M linkedit.
+MemRegions: 764922 total, 8634M resident, 860M private, 2783M shared.
+PhysMem: 45G used (7126M wired, 21G compressor), 1751M unused.
+VM: 872T vsize, 5361M framework vsize, 1881(0) swapins, 206104(0) swapouts.
+Networks: packets: 68313623/65G in, 45630913/29G out.
+Disks: 58288671/1132G read, 28644087/985G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM  PURG CMPRS PGRP  PPID  STATE    BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW   PAGEINS IDLEW POWER INSTRS CYCLES JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+72499  ADFReader 0.0  00:56.62 3   1   186    176M 0B   0B    72499 61753 sleeping *5[4]  0.00000 0.00000    501 65468  2042 31856   4655    73217  162461  33128 992     12    0.0   0      0      180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  
+Processes: 2167 total, 10 running, 2157 sleeping, 8513 threads 
+2026/07/18 23:05:30
+Load Avg: 18.95, 12.67, 10.76 
+CPU usage: 17.98% user, 10.60% sys, 71.41% idle 
+SharedLibs: 566M resident, 101M data, 86M linkedit.
+MemRegions: 39 total, 752K resident, 860M private, 2783M shared.
+PhysMem: 45G used (7125M wired, 21G compressor), 1798M unused.
+VM: 872T vsize, 5361M framework vsize, 1889(8) swapins, 206104(0) swapouts.
+Networks: packets: 68313674/65G in, 45630963/29G out.
+Disks: 58288996/1132G read, 28644090/985G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM  PURG CMPRS PGRP  PPID  STATE    BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW   PAGEINS IDLEW POWER INSTRS CYCLES JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+72499  ADFReader 0.0  00:56.62 3   1   186    176M 0B   0B    72499 61753 sleeping *5[4]  0.00000 0.00000    501 65468  2042 31856   4655    73217  162461  33128 992     12    0.0   0      0      180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  

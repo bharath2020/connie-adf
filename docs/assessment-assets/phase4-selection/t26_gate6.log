@@ -1,0 +1,18 @@
+=== atom-stress OFF ===
+READY fixture=atom-stress blocks=2001 firstChunkMs=153
+HITCH t=0.03 actualMs=26.3
+SCROLL_METRICS fixture=atom-stress frames=8266 dropped=1 hitchRatioMsPerS=0.07
+com.connie.adfreader: 81188
+=== atom-stress -textkit2 -selection ===
+READY fixture=atom-stress blocks=2001 firstChunkMs=100
+SCROLL_METRICS fixture=atom-stress frames=8238 dropped=0 hitchRatioMsPerS=0.00
+com.connie.adfreader: 82208
+=== giant-table OFF ===
+READY fixture=giant-table blocks=402 firstChunkMs=104
+SCROLL_METRICS fixture=giant-table frames=2432 dropped=0 hitchRatioMsPerS=0.00
+com.connie.adfreader: 83188
+=== giant-table -textkit2 -selection ===
+READY fixture=giant-table blocks=402 firstChunkMs=107
+HITCH t=0.17 actualMs=33.3
+SCROLL_METRICS fixture=giant-table frames=2419 dropped=1 hitchRatioMsPerS=0.41
+com.connie.adfreader: 83560

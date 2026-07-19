@@ -1,0 +1,26 @@
+Processes: 2166 total, 4 running, 2162 sleeping, 8567 threads 
+2026/07/18 23:05:17
+Load Avg: 21.75, 12.98, 10.84 
+CPU usage: 15.65% user, 10.60% sys, 73.73% idle 
+SharedLibs: 566M resident, 101M data, 86M linkedit.
+MemRegions: 764969 total, 8551M resident, 846M private, 2765M shared.
+PhysMem: 46G used (7534M wired, 21G compressor), 1626M unused.
+VM: 872T vsize, 5361M framework vsize, 1881(0) swapins, 206104(0) swapouts.
+Networks: packets: 68312664/65G in, 45626852/29G out.
+Disks: 58287170/1132G read, 28644053/985G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM  PURG CMPRS PGRP  PPID  STATE   BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW   PAGEINS IDLEW POWER INSTRS CYCLES JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+72499  ADFReader 0.0  00:56.06 3/1 1   186    176M 0B   0B    72499 61753 running *5[4]  0.00000 0.00000    501 65464  2042 31782   4600    73076  161622  33022 992     7     0.0   0      0      180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  
+Processes: 2167 total, 3 running, 2164 sleeping, 8527 threads 
+2026/07/18 23:05:18
+Load Avg: 21.75, 12.98, 10.84 
+CPU usage: 14.86% user, 6.62% sys, 78.50% idle 
+SharedLibs: 566M resident, 101M data, 86M linkedit.
+MemRegions: 39 total, 864K resident, 846M private, 2765M shared.
+PhysMem: 46G used (7537M wired, 21G compressor), 1630M unused.
+VM: 872T vsize, 5361M framework vsize, 1881(0) swapins, 206104(0) swapouts.
+Networks: packets: 68312680/65G in, 45626867/29G out.
+Disks: 58287170/1132G read, 28644053/985G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM   PURG CMPRS PGRP  PPID  STATE    BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW    PAGEINS IDLEW POWER INSTRS      CYCLES     JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+72499  ADFReader 31.6 00:56.61 3   1   186    176M+ 0B   0B    72499 61753 sleeping *5[4]  0.04071 0.00000    501 65464  2042 31841+  4649+   73203+ 162379+ 33112+ 992     11+   31.7  10020333712 2235314977 180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  

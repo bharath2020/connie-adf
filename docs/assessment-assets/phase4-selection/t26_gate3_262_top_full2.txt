@@ -1,0 +1,26 @@
+Processes: 2153 total, 2 running, 2151 sleeping, 8447 threads 
+2026/07/18 22:59:35
+Load Avg: 12.48, 9.00, 9.36 
+CPU usage: 11.40% user, 12.26% sys, 76.33% idle 
+SharedLibs: 561M resident, 100M data, 84M linkedit.
+MemRegions: 760033 total, 7976M resident, 650M private, 3199M shared.
+PhysMem: 46G used (8347M wired, 21G compressor), 1467M unused.
+VM: 867T vsize, 5361M framework vsize, 1103(0) swapins, 206104(0) swapouts.
+Networks: packets: 68147700/65G in, 45555142/29G out.
+Disks: 58243937/1131G read, 28615015/984G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM  PURG CMPRS PGRP  PPID  STATE    BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW   PAGEINS IDLEW POWER INSTRS CYCLES JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+69226  ADFReader 0.0  01:52.74 4   1   186    171M 0B   59M   69226 61805 sleeping *7[4]  0.00000 0.00000    501 84513  1877 84489   20317   137280 376112  79901 154     19    0.0   0      0      180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  
+Processes: 2153 total, 3 running, 2150 sleeping, 8457 threads 
+2026/07/18 22:59:36
+Load Avg: 12.48, 9.00, 9.36 
+CPU usage: 11.82% user, 7.29% sys, 80.88% idle 
+SharedLibs: 561M resident, 100M data, 84M linkedit.
+MemRegions: 0 total, 0B resident, 650M private, 3199M shared.
+PhysMem: 46G used (8321M wired, 21G compressor), 1477M unused.
+VM: 867T vsize, 5361M framework vsize, 1103(0) swapins, 206104(0) swapouts.
+Networks: packets: 68147744/65G in, 45555192/29G out.
+Disks: 58245739/1131G read, 28615083/984G written.
+
+PID    COMMAND   %CPU TIME     #TH #WQ #PORTS MEM  PURG CMPRS PGRP  PPID  STATE    BOOSTS %CPU_ME %CPU_OTHRS UID FAULTS COW  MSGSENT MSGRECV SYSBSD SYSMACH CSW   PAGEINS IDLEW POWER INSTRS CYCLES JETPRI USER        #MREGS RPRVT VPRVT VSIZE KPRVT KSHRD
+69226  ADFReader 0.0  01:52.74 4   1   186    171M 0B   59M   69226 61805 sleeping *7[4]  0.00000 0.00000    501 84513  1877 84489   20317   137280 376112  79901 154     19    0.0   0      0      180    bharath2020 N/A    N/A   N/A   N/A   N/A   N/A  

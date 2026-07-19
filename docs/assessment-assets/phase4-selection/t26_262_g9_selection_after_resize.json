@@ -1,0 +1,1135 @@
+[
+  {
+    "AXFrame" : "{{0, 0}, {393, 852}}",
+    "AXUniqueId" : null,
+    "frame" : {
+      "y" : 0,
+      "x" : 0,
+      "width" : 393,
+      "height" : 852
+    },
+    "role_description" : "application",
+    "AXLabel" : "ADFReader",
+    "content_required" : false,
+    "type" : "Application",
+    "title" : null,
+    "help" : null,
+    "custom_actions" : [
+
+    ],
+    "AXValue" : null,
+    "enabled" : true,
+    "role" : "AXApplication",
+    "children" : [
+      {
+        "AXFrame" : "{{0, 59}, {393, 54}}",
+        "AXUniqueId" : "stress-5k",
+        "frame" : {
+          "y" : 59,
+          "x" : 0,
+          "width" : 393,
+          "height" : 54
+        },
+        "role_description" : "Nav bar",
+        "AXLabel" : null,
+        "content_required" : false,
+        "type" : "Group",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXGroup",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{67.333333333333329, -1035.6666666666861}, {309.66666666666663, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -1035.6666666666861,
+          "x" : 67.333333333333329,
+          "width" : 309.66666666666663,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "inline inline expand quartz stream render",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{86.666666666666657, -961.51713843666948}, {24, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -961.51713843666948,
+          "x" : 86.666666666666657,
+          "width" : 24,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "1.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{118.66666666666666, -961.66666666668607}, {258.33333333333337, 34}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -961.66666666668607,
+          "x" : 118.66666666666666,
+          "width" : 258.33333333333337,
+          "height" : 34
+        },
+        "role_description" : "text",
+        "AXLabel" : "panel document",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{170, -921.66666666668607}, {207, 34}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -921.66666666668607,
+          "x" : 170,
+          "width" : 207,
+          "height" : 34
+        },
+        "role_description" : "text",
+        "AXLabel" : "table render",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{192.33333333333331, -881.50411760329735}, {21, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -881.50411760329735,
+          "x" : 192.33333333333331,
+          "width" : 21,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "a.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{221.33333333333331, -881.33333333337214}, {155.66666666666669, 102}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -881.33333333337214,
+          "x" : 221.33333333333331,
+          "width" : 155.66666666666669,
+          "height" : 102
+        },
+        "role_description" : "text",
+        "AXLabel" : "table inline actor inline block",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{191.66666666666666, -773.49760718661128}, {21.666666666666657, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -773.49760718661128,
+          "x" : 191.66666666666666,
+          "width" : 21.666666666666657,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "b.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{221.33333333333331, -773.33333333337214}, {155.66666666666669, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -773.33333333337214,
+          "x" : 221.33333333333331,
+          "width" : 155.66666666666669,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "raster actor panel",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{170, -699.33333333337214}, {207, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -699.33333333337214,
+          "x" : 170,
+          "width" : 207,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "scroll table fixture media",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{86.666666666666657, -625.48458635323914}, {24, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -625.48458635323914,
+          "x" : 86.666666666666657,
+          "width" : 24,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "2.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{118.66666666666666, -625.33333333337214}, {258.33333333333337, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -625.33333333337214,
+          "x" : 118.66666666666666,
+          "width" : 258.33333333333337,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "ledger kernel matrix layout inline",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{67.333333333333329, -551.33333333337214}, {309.66666666666663, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -551.33333333337214,
+          "x" : 67.333333333333329,
+          "width" : 309.66666666666663,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "panel matrix scroll signal actor table",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{67.333333333333329, -477.33333333337214}, {309.66666666666663, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -477.33333333337214,
+          "x" : 67.333333333333329,
+          "width" : 309.66666666666663,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "schema table panel media",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, -397.33333333337214}, {361.33333333333331, 87.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -397.33333333337214,
+          "x" : 16,
+          "width" : 361.33333333333331,
+          "height" : 87.666666666686069
+        },
+        "role_description" : "button",
+        "AXLabel" : "Expand 2495 [5]: cursor fixture mark",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : "Collapsed",
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, -293.66666666668607}, {361, 87.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -293.66666666668607,
+          "x" : 16,
+          "width" : 361,
+          "height" : 87.666666666686069
+        },
+        "role_description" : "button",
+        "AXLabel" : "Expand 2496 [6]: raster layout lazy",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : "Collapsed",
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, -190}, {361, 87.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -190,
+          "x" : 16,
+          "width" : 361,
+          "height" : 87.666666666686069
+        },
+        "role_description" : "button",
+        "AXLabel" : "Expand 2497 [7]: glyph table chunk",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : "Collapsed",
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, -86.333333333372138}, {361, 87.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : -86.333333333372138,
+          "x" : 16,
+          "width" : 361,
+          "height" : 87.666666666686069
+        },
+        "role_description" : "button",
+        "AXLabel" : "Expand 2498 [8]: kernel spline document",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : "Collapsed",
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, 17.333333333313931}, {361.33333333333331, 87.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 17.333333333313931,
+          "x" : 16,
+          "width" : 361.33333333333331,
+          "height" : 87.666666666686069
+        },
+        "role_description" : "button",
+        "AXLabel" : "Expand 2499 [9]: theme render theme",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : "Collapsed",
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, 123}, {361, 62}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 123,
+          "x" : 16,
+          "width" : 361,
+          "height" : 62
+        },
+        "role_description" : "heading",
+        "AXLabel" : "Section 2500: spline expand fixture",
+        "content_required" : false,
+        "type" : "Heading",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXHeading",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, 199}, {361, 215.33333333331393}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 199,
+          "x" : 16,
+          "width" : 361,
+          "height" : 215.33333333331393
+        },
+        "role_description" : "text",
+        "AXLabel" : "raster lazy vector quartz media vector corpus render batch signal spline vector token batch anchor swift stress panel vector corpus render schema panel ",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, 422.33333333331393}, {361, 102}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 422.33333333331393,
+          "x" : 16,
+          "width" : 361,
+          "height" : 102
+        },
+        "role_description" : "text",
+        "AXLabel" : "fixture matrix cursor token media block stream kernel theme token ",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{16, 532.33333333331393}, {361, 272}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 532.33333333331393,
+          "x" : 16,
+          "width" : 361,
+          "height" : 272
+        },
+        "role_description" : "text",
+        "AXLabel" : "batch batch kernel table chunk swift stress theme vector batch media glyph batch anchor glyph panel block block panel stress stress matrix signal corpus kernel raster media cursor anchor ",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{67.333333333333329, 812.33333333331393}, {309.66666666666663, 34}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 812.33333333331393,
+          "x" : 67.333333333333329,
+          "width" : 309.66666666666663,
+          "height" : 34
+        },
+        "role_description" : "text",
+        "AXLabel" : "token anchor inline actor",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{86.666666666666657, 852.20812198007479}, {24, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 852.20812198007479,
+          "x" : 86.666666666666657,
+          "width" : 24,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "1.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{118.66666666666666, 852.33333333331393}, {258.33333333333337, 102}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 852.33333333331393,
+          "x" : 118.66666666666666,
+          "width" : 258.33333333333337,
+          "height" : 102
+        },
+        "role_description" : "text",
+        "AXLabel" : "media corpus panel schema expand block",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{170, 960.33333333331393}, {207, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 960.33333333331393,
+          "x" : 170,
+          "width" : 207,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "confluence lazy layout",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{192.33333333333331, 1034.2211428134469}, {21, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1034.2211428134469,
+          "x" : 192.33333333333331,
+          "width" : 21,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "a.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{221.33333333333331, 1034.3333333333139}, {155.66666666666669, 102}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1034.3333333333139,
+          "x" : 221.33333333333331,
+          "width" : 155.66666666666669,
+          "height" : 102
+        },
+        "role_description" : "text",
+        "AXLabel" : "vector confluence vector mark",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{191.66666666666666, 1142.227653230133}, {21.666666666666657, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1142.227653230133,
+          "x" : 191.66666666666666,
+          "width" : 21.666666666666657,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "b.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{221.33333333333331, 1142.3333333333139}, {155.66666666666669, 34}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1142.3333333333139,
+          "x" : 221.33333333333331,
+          "width" : 155.66666666666669,
+          "height" : 34
+        },
+        "role_description" : "text",
+        "AXLabel" : "expand atlas",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{192.33333333333331, 1182.2341636468191}, {21, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1182.2341636468191,
+          "x" : 192.33333333333331,
+          "width" : 21,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "c.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{221.33333333333331, 1182.3333333333139}, {155.66666666666669, 136}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1182.3333333333139,
+          "x" : 221.33333333333331,
+          "width" : 155.66666666666669,
+          "height" : 136
+        },
+        "role_description" : "text",
+        "AXLabel" : "chunk anchor stream token table block",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{170, 1324.3333333333139}, {207, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1324.3333333333139,
+          "x" : 170,
+          "width" : 207,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "token schema inline",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{170, 1398.3333333333139}, {207, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1398.3333333333139,
+          "x" : 170,
+          "width" : 207,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "atlas lazy raster panel atlas actor",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{86.666666666666657, 1472.2536948968773}, {24, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1472.2536948968773,
+          "x" : 86.666666666666657,
+          "width" : 24,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "2.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{118.66666666666666, 1472.3333333333139}, {258.33333333333337, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1472.3333333333139,
+          "x" : 118.66666666666666,
+          "width" : 258.33333333333337,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "buffer spline matrix schema scroll cursor",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{86.666666666666657, 1546.2602053135633}, {24, 33.666666666686069}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1546.2602053135633,
+          "x" : 86.666666666666657,
+          "width" : 24,
+          "height" : 33.666666666686069
+        },
+        "role_description" : "text",
+        "AXLabel" : "3.",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{118.66666666666666, 1546.3333333333139}, {258.33333333333337, 34}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1546.3333333333139,
+          "x" : 118.66666666666666,
+          "width" : 258.33333333333337,
+          "height" : 34
+        },
+        "role_description" : "text",
+        "AXLabel" : "ledger mark fixture",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{67.333333333333329, 1586.3333333333139}, {309.66666666666663, 34}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1586.3333333333139,
+          "x" : 67.333333333333329,
+          "width" : 309.66666666666663,
+          "height" : 34
+        },
+        "role_description" : "text",
+        "AXLabel" : "mark expand buffer",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{67.333333333333329, 1626.3333333333139}, {309.66666666666663, 68}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 1626.3333333333139,
+          "x" : 67.333333333333329,
+          "width" : 309.66666666666663,
+          "height" : 68
+        },
+        "role_description" : "text",
+        "AXLabel" : "document confluence panel corpus mark",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      }
+    ],
+    "subrole" : null,
+    "pid" : 84960
+  }
+]

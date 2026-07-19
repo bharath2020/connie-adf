@@ -1,0 +1,163 @@
+[
+  {
+    "AXFrame" : "{{0, 0}, {393, 852}}",
+    "AXUniqueId" : null,
+    "frame" : {
+      "y" : 0,
+      "x" : 0,
+      "width" : 393,
+      "height" : 852
+    },
+    "role_description" : "application",
+    "AXLabel" : "ADFReader",
+    "content_required" : false,
+    "type" : "Application",
+    "title" : null,
+    "help" : null,
+    "custom_actions" : [
+
+    ],
+    "AXValue" : null,
+    "enabled" : true,
+    "role" : "AXApplication",
+    "children" : [
+      {
+        "AXFrame" : "{{0, 0}, {393, 852}}",
+        "AXUniqueId" : "PopoverDismissRegion",
+        "frame" : {
+          "y" : 0,
+          "x" : 0,
+          "width" : 393,
+          "height" : 852
+        },
+        "role_description" : "group",
+        "AXLabel" : "dismiss popup",
+        "content_required" : false,
+        "type" : "Group",
+        "title" : null,
+        "help" : "Activate to dismiss pop-up window.",
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXGroup",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{157, 81}, {44, 36.333333333333329}}",
+        "AXUniqueId" : "textformat.size.smaller",
+        "frame" : {
+          "y" : 81,
+          "x" : 157,
+          "width" : 44,
+          "height" : 36.333333333333329
+        },
+        "role_description" : "button",
+        "AXLabel" : "Decrease Text Size",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{215, 89.5}, {44, 19.333333333333329}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 89.5,
+          "x" : 215,
+          "width" : 44,
+          "height" : 19.333333333333329
+        },
+        "role_description" : "text",
+        "AXLabel" : "100%",
+        "content_required" : false,
+        "type" : "StaticText",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXStaticText",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{273, 81}, {44, 36.333333333333329}}",
+        "AXUniqueId" : "textformat.size.larger",
+        "frame" : {
+          "y" : 81,
+          "x" : 273,
+          "width" : 44,
+          "height" : 36.333333333333329
+        },
+        "role_description" : "button",
+        "AXLabel" : "Increase Text Size",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : true,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      },
+      {
+        "AXFrame" : "{{184.33333333333331, 137.66666666666666}, {105.33333333333331, 19.333333333333343}}",
+        "AXUniqueId" : null,
+        "frame" : {
+          "y" : 137.66666666666666,
+          "x" : 184.33333333333331,
+          "width" : 105.33333333333331,
+          "height" : 19.333333333333343
+        },
+        "role_description" : "button",
+        "AXLabel" : "Reset Text Size",
+        "content_required" : false,
+        "type" : "Button",
+        "title" : null,
+        "help" : null,
+        "custom_actions" : [
+
+        ],
+        "AXValue" : null,
+        "enabled" : false,
+        "role" : "AXButton",
+        "children" : [
+
+        ],
+        "subrole" : null,
+        "pid" : 84960
+      }
+    ],
+    "subrole" : null,
+    "pid" : 84960
+  }
+]
