@@ -17,6 +17,16 @@
 //                       colspans and cell backgrounds
 //   media-gallery.json  300 mediaSingle nodes with width/height attrs,
 //                       external urls "placeholder://<n>", every layout value
+//   text-dense.json     3,000 text-only top-level blocks for the TextKit 2
+//                       perf gate: mixed-mark paragraphs (occasional hard
+//                       breaks and emoji characters) with a heading every
+//                       8th block (levels cycle 1–6). No inline atoms, so
+//                       every block is TextKit 2 eligible.
+//   long-paragraph.json one ~20,000-character paragraph (mixed marks, hard
+//                       breaks, emoji and combining sequences as plain text)
+//                       between an H1 and a closing paragraph — the per-row
+//                       full-layout worst case. The trailing block gives the
+//                       autoscroller a leg that crosses the whole paragraph.
 //
 // Fully deterministic: seeded LCG, no Date(), no system randomness.
 // Output is byte-stable across runs (JSONSerialization + .sortedKeys,
@@ -595,6 +605,68 @@ func makeMediaGallery() -> [String: Any] {
     return doc(blocks)
 }
 
+// MARK: - Fixture 4: text-dense.json
+
+/// Emoji and combining sequences carried as plain text (emoji *nodes* are
+/// inline atoms, which the TextKit 2 path does not cover yet).
+let textEmoji = ["🚀", "👩🏽‍💻", "🇯🇵", "❤️", "✅", "e\u{0301}", "🧪", "👍🏿"]
+
+func textDenseParagraph(_ rng: inout LCG, index: Int) -> [String: Any] {
+    let runCount = rng.int(1 ..< 6)
+    var runs: [[String: Any]] = []
+    runs.reserveCapacity(runCount + 2)
+    for r in 0 ..< runCount {
+        var text = sentence(&rng, wordCount: rng.int(4 ..< 14))
+        if rng.oneIn(6) { text += " " + rng.pick(textEmoji) }
+        runs.append(textNode(text + " ", marks: randomMarks(&rng, index: index)))
+        if r < runCount - 1, rng.oneIn(10) {
+            runs.append(["type": "hardBreak"])
+        }
+    }
+    return paragraph(runs)
+}
+
+func makeTextDense() -> [String: Any] {
+    var rng = LCG(seed: 0x5EED_3000)
+    var blocks: [[String: Any]] = []
+    blocks.reserveCapacity(3000)
+    for i in 0 ..< 3000 {
+        if i % 8 == 0 {
+            blocks.append(heading(&rng, index: i))
+        } else {
+            blocks.append(textDenseParagraph(&rng, index: i))
+        }
+    }
+    return doc(blocks)
+}
+
+// MARK: - Fixture 5: long-paragraph.json
+
+func makeLongParagraph() -> [String: Any] {
+    var rng = LCG(seed: 0x5EED_2000)
+    let targetCharacters = 20_000
+    var runs: [[String: Any]] = []
+    var characters = 0
+    var runIndex = 0
+    while characters < targetCharacters {
+        var text = sentence(&rng, wordCount: rng.int(6 ..< 15))
+        if runIndex % 5 == 4 { text += " " + rng.pick(textEmoji) }
+        text += " "
+        runs.append(textNode(text, marks: randomMarks(&rng, index: runIndex)))
+        characters += text.count
+        runIndex += 1
+        if runIndex % 12 == 0 {
+            runs.append(["type": "hardBreak"])
+            characters += 1
+        }
+    }
+    return doc([
+        ["type": "heading", "attrs": ["level": 1], "content": [textNode("Long paragraph: \(targetCharacters) characters")]],
+        paragraph(runs),
+        paragraph([textNode("End of the long paragraph.")]),
+    ])
+}
+
 // MARK: - Emit
 
 let repoRoot = URL(fileURLWithPath: #filePath)
@@ -607,6 +679,8 @@ let fixtures: [(name: String, document: [String: Any])] = [
     ("stress-5k.json", makeStress5K()),
     ("giant-table.json", makeGiantTable()),
     ("media-gallery.json", makeMediaGallery()),
+    ("text-dense.json", makeTextDense()),
+    ("long-paragraph.json", makeLongParagraph()),
 ]
 
 for (name, document) in fixtures {
