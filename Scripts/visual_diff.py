@@ -4,7 +4,8 @@
 USAGE
     python3 -I Scripts/visual_diff.py --out <dir>
         --pair <KIND> <NAME> <REF.png> <CAND.png> [--pair ...]
-        [--mask x0,y0,x1,y1]... [--top-band 0] [--bottom-band 0]
+        [--mask x0,y0,x1,y1]... [--exact-mask x0,y0,x1,y1]...
+        [--top-band 0] [--bottom-band 0]
         [--threshold 24] [--exact-threshold 0] [--search 100]
         [--max-noise-pct 0] [--max-exact-pct 0]
         [--max-raw-pct 0.5] [--max-crop-pct 0.5] [--max-offset-px 0]
@@ -34,6 +35,10 @@ MASKS
     bottom edge) are excluded from every score: viewport %, crop detection,
     crop % and offset search (masked pixels are set to the background level in
     both images before the shift search).
+    --exact-mask x0,y0,x1,y1 (repeatable) is excluded from noise and exact
+    pairs only: chrome that legitimately differs at the 0 threshold but not
+    at the tolerant one (e.g. the soft shadow a toolbar capsule of another
+    width casts onto content) — tolerant pairs still score those pixels.
 
 METRICS (per pair)
     viewport_pct     differing pixels / unmasked pixels × 100, at the kind's
@@ -243,7 +248,8 @@ def pct_limit(kind: str, args: argparse.Namespace) -> tuple[float, float]:
 
 
 def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Path,
-               rects: list[tuple[int, int, int, int]], args: argparse.Namespace) -> Score:
+               rects: list[tuple[int, int, int, int]], exact_rects: list[tuple[int, int, int, int]],
+               args: argparse.Namespace) -> Score:
     ref = load_rgb(ref_path)
     cand = load_rgb(cand_path)
     notes: list[str] = []
@@ -253,7 +259,8 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
         h, w = min(ref.shape[0], cand.shape[0]), min(ref.shape[1], cand.shape[1])
         ref, cand = ref[:h, :w], cand[:h, :w]
     height, width = ref.shape[:2]
-    masked = build_mask(height, width, rects, args.top_band, args.bottom_band)
+    masked = build_mask(height, width, rects + (exact_rects if kind != "tolerant" else []),
+                        args.top_band, args.bottom_band)
     valid = ~masked
     valid_count = int(valid.sum())
 
@@ -347,7 +354,7 @@ CSV_FIELDS = ["kind", "name", "verdict", "viewport_pct", "viewport_pct_aa", "cro
 
 
 def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int, int, int]],
-                  args: argparse.Namespace) -> None:
+                  exact_rects: list[tuple[int, int, int, int]], args: argparse.Namespace) -> None:
     with (out_dir / "scores.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
         writer.writeheader()
@@ -355,7 +362,7 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
             writer.writerow({f: getattr(s, f) for f in CSV_FIELDS})
 
     settings = {
-        "masks": [list(r) for r in rects], "top_band": args.top_band, "bottom_band": args.bottom_band,
+        "masks": [list(r) for r in rects], "exact_masks": [list(r) for r in exact_rects], "top_band": args.top_band, "bottom_band": args.bottom_band,
         "threshold": args.threshold, "exact_threshold": args.exact_threshold, "search": args.search,
         "max_noise_pct": args.max_noise_pct, "max_exact_pct": args.max_exact_pct,
         "max_raw_pct": args.max_raw_pct, "max_crop_pct": args.max_crop_pct, "max_offset_px": args.max_offset_px,
@@ -371,7 +378,7 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         f"Pixel rule: noise/exact any channel |Δ| > {args.exact_threshold}; tolerant |Δ| > {args.threshold}. "
         f"Limits: noise ≤ {args.max_noise_pct}%, exact ≤ {args.max_exact_pct}%, tolerant viewport ≤ "
         f"{args.max_raw_pct}% and every crop ≤ {args.max_crop_pct}% with |offset| ≤ {args.max_offset_px}px. "
-        f"Masks: {settings['masks'] or 'none'}; top band {args.top_band}px, bottom band {args.bottom_band}px. "
+        f"Masks: {settings['masks'] or 'none'}; noise/exact-only masks: {settings['exact_masks'] or 'none'}; top band {args.top_band}px, bottom band {args.bottom_band}px. "
         f"No registration; shift search ±{args.search}px is diagnostic only.",
         "",
         "| kind | pair | verdict | viewport % | viewport % (aa) | crops (fail) | max crop % | "
@@ -400,6 +407,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--pair", nargs=4, action="append", metavar=("KIND", "NAME", "REF", "CAND"), required=True,
                         help="KIND is noise | exact | tolerant")
     parser.add_argument("--mask", action="append", default=[], metavar="x0,y0,x1,y1")
+    parser.add_argument("--exact-mask", action="append", default=[], metavar="x0,y0,x1,y1",
+                        help="excluded from noise/exact pairs only")
     parser.add_argument("--top-band", type=int, default=0, help="rows excluded at the top")
     parser.add_argument("--bottom-band", type=int, default=0, help="rows excluded at the bottom")
     parser.add_argument("--threshold", type=int, default=24, help="tolerant pixel rule: per-channel |Δ| above this")
@@ -424,14 +433,15 @@ def main(argv: list[str]) -> int:
         if args.top_band < 0 or args.bottom_band < 0:
             raise InputError("bands must be >= 0")
         rects = [parse_mask(m) for m in args.mask]
+        exact_rects = [parse_mask(m) for m in args.exact_mask]
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
-        scores = [score_pair(kind, name, ref, cand, out_dir, rects, args) for kind, name, ref, cand in args.pair]
+        scores = [score_pair(kind, name, ref, cand, out_dir, rects, exact_rects, args) for kind, name, ref, cand in args.pair]
     except InputError as error:
         print(f"visual_diff: error: {error}", file=sys.stderr)
         return 2
 
-    write_outputs(scores, out_dir, rects, args)
+    write_outputs(scores, out_dir, rects, exact_rects, args)
     for s in scores:
         print(f"{s.verdict}  {s.kind:8s} {s.name}: viewport {s.viewport_pct:.4f}% (aa {s.viewport_pct_aa:.4f}%)  "
               f"crops {s.crops} fail {s.failing_crops}  max crop {s.max_crop_pct:.3f}%  "

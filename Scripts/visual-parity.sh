@@ -11,6 +11,7 @@
 #       [--size-steps "0 3"] [--arms "A A2 B C"] [--content-size large]
 #       [--settle 3] [--scroll-wait 2] [--ready-timeout 90]
 #       [--mask x0,y0,x1,y1]... [--top-band 330] [--bottom-band 102]
+#       [--exact-mask x0,y0,x1,y1]... [--no-exact-mask]
 #       [--threshold 24] [--max-noise-pct 0] [--max-exact-pct 0]
 #       [--max-raw-pct 0.5] [--max-crop-pct 0.5] [--max-offset-px 0]
 #       [--no-renderer-stats] [--keep-booted] [--skip-capture] [--dry-run]
@@ -52,6 +53,12 @@
 #              in pixels of an iPhone 17 Pro screenshot (1206x2622, 3x). When
 #              no band/mask flag is given and a screenshot has another size,
 #              the run stops: pass masks for that device explicitly.
+#              Noise/exact pairs also mask --exact-mask 300,330,640,460: the
+#              soft shadow the toolbar's glass capsule casts below the band
+#              (measured: |Δ| <= 7 down to row 436, cols 329–588, when the
+#              capsule's width changes with the renderer label — main has
+#              none). Tolerant pairs (threshold 24) still score it.
+#              --exact-mask replaces that default; --no-exact-mask drops it.
 #   --out      $TMPDIR/adfreader-parity/<timestamp>
 #
 # OUTPUTS (<out>/)
@@ -97,6 +104,8 @@ MASKS=()
 TOP_BAND=330
 BOTTOM_BAND=102
 MASKS_EXPLICIT=0
+EXACT_MASKS=("300,330,640,460")
+EXACT_MASKS_DEFAULT=1
 THRESHOLD=24
 MAX_NOISE_PCT=0
 MAX_EXACT_PCT=0
@@ -131,6 +140,10 @@ while [[ $# -gt 0 ]]; do
         --mask) need_value "$@"; MASKS+=("$2"); MASKS_EXPLICIT=1; shift 2 ;;
         --top-band) need_value "$@"; TOP_BAND="$2"; MASKS_EXPLICIT=1; shift 2 ;;
         --bottom-band) need_value "$@"; BOTTOM_BAND="$2"; MASKS_EXPLICIT=1; shift 2 ;;
+        --exact-mask) need_value "$@"
+            [[ $EXACT_MASKS_DEFAULT -eq 1 ]] && EXACT_MASKS=()
+            EXACT_MASKS+=("$2"); EXACT_MASKS_DEFAULT=0; MASKS_EXPLICIT=1; shift 2 ;;
+        --no-exact-mask) EXACT_MASKS=(); EXACT_MASKS_DEFAULT=0; MASKS_EXPLICIT=1; shift ;;
         --threshold) need_value "$@"; THRESHOLD="$2"; shift 2 ;;
         --max-noise-pct) need_value "$@"; MAX_NOISE_PCT="$2"; shift 2 ;;
         --max-exact-pct) need_value "$@"; MAX_EXACT_PCT="$2"; shift 2 ;;
@@ -218,6 +231,7 @@ DIFF_ARGS=(--top-band "$TOP_BAND" --bottom-band "$BOTTOM_BAND" --threshold "$THR
     --max-noise-pct "$MAX_NOISE_PCT" --max-exact-pct "$MAX_EXACT_PCT"
     --max-raw-pct "$MAX_RAW_PCT" --max-crop-pct "$MAX_CROP_PCT" --max-offset-px "$MAX_OFFSET_PX")
 for mask in ${MASKS[@]+"${MASKS[@]}"}; do DIFF_ARGS+=(--mask "$mask"); done
+for mask in ${EXACT_MASKS[@]+"${EXACT_MASKS[@]}"}; do DIFF_ARGS+=(--exact-mask "$mask"); done
 
 # pair_args <require-files:0|1>: the --pair arguments for every configuration.
 PAIR_ARGS=()
