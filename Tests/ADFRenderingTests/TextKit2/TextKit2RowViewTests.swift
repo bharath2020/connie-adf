@@ -146,6 +146,38 @@ struct TextKit2RowViewTests {
         #expect(view.measuredSize(forProposedWidth: 300).height > size.height)
     }
 
+    @Test("the placed layout: guides and drawing use the measurement SwiftUI placed, without a relayout")
+    func placedLayout() {
+        let view = TextKit2RowView()
+        view.apply(inputs("Short line"))
+        let hugging = view.layoutResult(forProposedWidth: 370)
+        #expect(hugging.size.width < 370)
+        let relayouts = view.relayoutCount
+        // A guide is read at the placed (hugging) size, not the proposal.
+        #expect(view.placedResult(for: hugging.size) == hugging)
+        #expect(view.relayoutCount == relayouts, "the guide lookup must hit the cache")
+        // A later measurement at another width does not move it off A.
+        view.apply(inputs(Self.sentence))
+        let a = view.layoutResult(forProposedWidth: 300)
+        _ = view.layoutResult(forProposedWidth: 640)
+        #expect(view.placedResult(for: a.size) == a)
+    }
+
+    @Test("new inputs at a placed row lay out only when SwiftUI measures or draws them")
+    func noEagerRelayout() {
+        let view = TextKit2RowView()
+        view.apply(inputs("one"))
+        let size = view.measuredSize(forProposedWidth: 300)
+        view.frame = CGRect(origin: .zero, size: size)
+        view.layoutIfNeeded()
+        let relayouts = view.relayoutCount
+        view.apply(inputs("one", size: .accessibility3))
+        #expect(view.relayoutCount == relayouts, "no layout at the stale bounds width")
+        let ax3 = view.measuredSize(forProposedWidth: 300)
+        #expect(view.relayoutCount == relayouts + 1)
+        #expect(ax3.height > size.height)
+    }
+
     @Test("a Dynamic Type change re-measures at the new size")
     func dynamicTypeChange() {
         let view = TextKit2RowView()

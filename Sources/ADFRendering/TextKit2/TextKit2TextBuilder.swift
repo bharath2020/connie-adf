@@ -63,11 +63,17 @@ extension NSAttributedString.Key {
 enum TextKit2TextBuilder {
     /// The Dynamic Type factor SwiftUI's `@ScaledMetric(relativeTo: .body)`
     /// reports for a value of 1 at this category — what `SegmentedTextView`
-    /// multiplies baked sub/superscript baseline offsets by.
+    /// multiplies baked sub/superscript baseline offsets by. Memoized per
+    /// category.
     static func baselineScale(for category: UIContentSizeCategory) -> CGFloat {
-        UIFontMetrics(forTextStyle: .body)
+        if let cached = baselineScales[category] { return cached }
+        let scale = UIFontMetrics(forTextStyle: .body)
             .scaledValue(for: 1, compatibleWith: UITraitCollection(preferredContentSizeCategory: category))
+        baselineScales[category] = scale
+        return scale
     }
+
+    private static var baselineScales: [UIContentSizeCategory: CGFloat] = [:]
 
     /// Builds the TextKit string. Foreground precedence per run: the
     /// prepared foreground (an author `textColor`, or the contrast colour

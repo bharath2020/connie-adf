@@ -185,7 +185,10 @@ final class TextKit2RowView: UIView {
         case .right: alignmentFactor = 1
         default: alignmentFactor = 0
         }
-        syncToBounds()
+        // No layout here: SwiftUI re-measures after new inputs and the row
+        // syncs on its next bounds change or draw (`syncToBounds`). Laying
+        // out at the old bounds width now would usually be wasted — a
+        // hugging row's next size differs.
         canvas.setNeedsDisplay()
     }
 
@@ -209,6 +212,20 @@ final class TextKit2RowView: UIView {
     /// The size for a proposed width (see `layoutResult(forProposedWidth:)`).
     func measuredSize(forProposedWidth proposed: CGFloat?) -> CGSize {
         layoutResult(forProposedWidth: proposed).size
+    }
+
+    /// The layout SwiftUI placed this row from: the most recent bounded
+    /// measurement whose reported size is `size` — matching the height
+    /// too, since two proposals that hug to the same width can wrap
+    /// differently — else one of that width (a parent that stretches the
+    /// height), else a layout at `size.width`. (A natural-size
+    /// measurement's container is unbounded, useless for alignment.)
+    func placedResult(for size: CGSize) -> TextKit2LayoutResult {
+        guard inputs != nil, size.width > 0 else { return .zero }
+        let bounded = { (result: TextKit2LayoutResult) in result.width != Self.unboundedWidth }
+        return cache.mostRecent { $0.size == size && bounded($0) }
+            ?? cache.mostRecent { $0.size.width == size.width && bounded($0) }
+            ?? result(atWidth: size.width)
     }
 
     private func result(atWidth width: CGFloat) -> TextKit2LayoutResult {
@@ -256,7 +273,11 @@ final class TextKit2RowView: UIView {
                     range: range
                 ))
                 belows.append((metrics.below, metrics.raised))
-                maxLineWidth = max(maxLineWidth, self.measuredLineWidth(line, range: range, text: text, leftToRight: leftToRight))
+                // Once a line fills a bounded width, the reported width is
+                // that width; no further line needs measuring.
+                if width == Self.unboundedWidth || maxLineWidth < width {
+                    maxLineWidth = max(maxLineWidth, self.measuredLineWidth(line, range: range, text: text, leftToRight: leftToRight))
+                }
             }
             return true
         }
@@ -440,8 +461,9 @@ final class TextKit2RowView: UIView {
         syncToBounds()
     }
 
-    /// Re-syncs the layout manager to the layout this view is drawn with
-    /// and sizes the canvas: the bounds horizontally (SwiftUI's `Text`
+    /// Re-syncs the layout manager to the layout SwiftUI placed this row
+    /// from (`placedResult(for:)`, whose container width can be wider than
+    /// the bounds of a hugging row) and sizes the canvas: the bounds horizontally (SwiftUI's `Text`
     /// clips glyph overhang at its frame's edges — measured: a line-initial
     /// "j" under an indentation loses its tail) and the bounds plus the ink
     /// overhang vertically. Called on bounds changes, on new inputs, and
@@ -449,12 +471,7 @@ final class TextKit2RowView: UIView {
     @discardableResult
     private func syncToBounds() -> TextKit2LayoutResult? {
         guard inputs != nil, bounds.width > 0 else { return nil }
-        // The measurement SwiftUI sized this row from: its reported width is
-        // the bounds width. (A natural-size measurement's container is
-        // unbounded, useless for alignment.) Otherwise lay out at the
-        // bounds width.
-        let current = cache.mostRecent { $0.size.width == bounds.width && $0.width != Self.unboundedWidth }
-            ?? result(atWidth: bounds.width)
+        let current = placedResult(for: bounds.size)
         ensureContainer(width: current.width)
         drawn = current
         drawnShift = alignmentFactor * (bounds.width - current.width)
@@ -628,11 +645,6 @@ private struct LayoutCache {
     private var entries: [(width: CGFloat, result: TextKit2LayoutResult)] = []
 
     var keys: [CGFloat] { entries.map(\.width) }
-
-    /// A cached result without touching the recency order.
-    func peek(_ width: CGFloat) -> TextKit2LayoutResult? {
-        entries.first { $0.width == width }?.result
-    }
 
     /// The most recently used result matching `predicate`.
     func mostRecent(where predicate: (TextKit2LayoutResult) -> Bool) -> TextKit2LayoutResult? {

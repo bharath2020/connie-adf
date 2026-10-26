@@ -65,18 +65,20 @@ struct TextKit2TextRow: View {
     let style: TextBlockStyle
     var ownerID: String? = nil
 
+    /// The alignment guides query the live row view's layout cache through
+    /// it. State only so its identity is stable across evaluations (the
+    /// representable's fields then compare equal); never written.
+    @State private var handle = TextKit2RowHandle()
+
     var body: some View {
-        // A handle per evaluation (not state): the alignment guides query
-        // the live row view's layout cache through it.
-        let handle = TextKit2RowHandle()
         TextKit2RowRepresentable(text: text, style: style, ownerID: ownerID, handle: handle)
             .alignmentGuide(.firstTextBaseline) { dimensions in
-                let width = dimensions.width
-                return MainActor.assumeIsolated { handle.firstBaseline(width: width) } ?? dimensions.height
+                let size = CGSize(width: dimensions.width, height: dimensions.height)
+                return MainActor.assumeIsolated { handle.firstBaseline(placedAt: size) } ?? dimensions.height
             }
             .alignmentGuide(.lastTextBaseline) { dimensions in
-                let width = dimensions.width
-                return MainActor.assumeIsolated { handle.lastBaseline(width: width) } ?? dimensions.height
+                let size = CGSize(width: dimensions.width, height: dimensions.height)
+                return MainActor.assumeIsolated { handle.lastBaseline(placedAt: size) } ?? dimensions.height
             }
     }
 }
@@ -87,12 +89,15 @@ struct TextKit2TextRow: View {
 final class TextKit2RowHandle {
     weak var view: TextKit2RowView?
 
-    func firstBaseline(width: CGFloat) -> CGFloat? {
-        view?.layoutResult(forProposedWidth: width).firstBaseline
+    /// Baselines of the layout the row was placed from: a guide is read at
+    /// the placed (hugging) size, which a proposal-keyed lookup would miss
+    /// and lay out again.
+    func firstBaseline(placedAt size: CGSize) -> CGFloat? {
+        view?.placedResult(for: size).firstBaseline
     }
 
-    func lastBaseline(width: CGFloat) -> CGFloat? {
-        view?.layoutResult(forProposedWidth: width).lastBaseline
+    func lastBaseline(placedAt size: CGSize) -> CGFloat? {
+        view?.placedResult(for: size).lastBaseline
     }
 }
 
