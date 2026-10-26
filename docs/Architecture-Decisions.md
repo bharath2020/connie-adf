@@ -221,6 +221,18 @@ The extension is MV3 with no build step (`pako`/`qrcode-generator` vendored; CSP
 
 ---
 
+## 21. TextKit 2 renderer behind a switch; top-level rich text only in PR 1; sizing/cache contract
+
+**Chosen (2026-10-25):** TextKit 2 returns (revisiting §2) as an opt-in second text engine, built as a stack of incremental PRs toward parity with the SwiftUI renderer; the driver is §2's stated trigger, continuous cross-block selection. Public `ADFTextRenderer` (`.swiftUI` default, `.textKit2`) is passed as `ADFDocumentView(textRenderer:)`; the demo toggles it live (`adf.textkit2.enabled`, `-textkit2` / `-rendererReset` / `-rendererStats`). TK2 is off by default. Stack order, coverage, the parity inventory, the selection contract and the gates: `docs/TextKit2-Stack.md`.
+
+- **Scoped by environment, chosen at the leaf.** `DocumentRow` sets the internal `adfTextRenderer` value to the host's choice only for top-level `.richText` rows and resets it to `.swiftUI` everywhere else, so nothing leaks into containers. `RichTextBlockView` picks the engine with a plain `if`/`else` (§18: no `AnyView` / `#available` at a lazy per-item position). `RenderBlock.Kind` is unchanged: TOC, search index and collapsed-height profiles still switch on it.
+- **PR 1 moves only top-level, atom-free paragraphs and headings whose runs all carry an `ADFFontSpec`.** Atom paragraphs, every container and its contents, lists, code, tables, captions and plugin content stay SwiftUI; TK2 rows have no search highlight or selection yet. Each later PR moves one more kind; anything not yet moved renders exactly as main. Rejected: one big port. The previous attempt showed how many parity defects hide in a single large change (rows 1.67 pt taller per line, accumulating; one-word-later wrapping; link tint overriding author colours).
+- **Sizing/cache contract.** A TK2 row's size is a pure function of (content, width, size category, display scale, direction, legibility), computed in the same layout pass, and **equal to SwiftUI's**. That equality is what lets the live switch swap engines without touching collapsed spacers (§16: no re-materialisation, no memo reset). Layout results sit in a 4-entry LRU keyed by render inputs and width; before drawing or hit-testing, the row re-syncs its layout manager to `bounds.width`. No `invalidateIntrinsicContentSize` and no SwiftUI state bound to visibility. Height parity is proven by a suite across categories, scales, directions and widths, never assumed. A height correction must be sign-correct, because leading is negative at the largest accessibility sizes; subtracting a constant is not allowed.
+- **Proof that TK2 actually ran** comes from diagnostics counters and `tk2-row:<ownerID>` identifiers asserted in unit and UI tests, not from a launch flag or a toolbar label.
+- **Gates (every PR, against a Release build of main):** parity suites, a masked document-level visual diff, a fail-closed perf gate with calibrated paired noise bounds where both arms must pass (switch ON and OFF), and an e2e video tied to the exact binary. There is no separate performance PR.
+
+---
+
 ## Summary of measurement-driven reversals
 
 | Initial choice | Measured problem | Final choice |
