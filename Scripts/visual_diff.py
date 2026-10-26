@@ -60,6 +60,11 @@ METRICS (per pair)
     max_abs_offset   largest |offset| over the crops; last_offset = the last
                      crop's offset (cumulative drift shows up here)
 
+EMPTY CONTENT
+    A pair with zero text crops (no ink in either unmasked viewport) is
+    INVALID: two blank captures prove nothing about text rendering. Pass
+    --allow-empty only for pairs that are meant to be blank.
+
 OUTPUTS (in --out)
     <name>.sbs.png          reference | candidate | difference map
     crops/<name>-cNN.png    each failing crop: reference | candidate | diff
@@ -67,8 +72,8 @@ OUTPUTS (in --out)
     scores.json             every pair with its crops
     summary.md              pair table + failing-crop table
 
-EXIT STATUS  0 every pair PASS, 1 any pair FAIL, 2 usage/input error
-    (unreadable or missing image, bad mask, bands covering the image).
+EXIT STATUS  0 every pair PASS, 1 any pair FAIL or INVALID, 2 usage/input
+    error (unreadable or missing image, bad mask, bands covering the image).
 """
 
 from __future__ import annotations
@@ -326,10 +331,11 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
     max_abs_offset = max((abs(c.offset) for c in crops), default=0)
     last_offset = crops[-1].offset if crops else 0
     max_residual = max((c.residual for c in crops), default=0.0)
+    verdict = "PASS"
     if not crops:
         notes.append("no text blocks found in the unmasked viewport")
-
-    verdict = "PASS"
+        if not args.allow_empty:
+            verdict = "INVALID"
     if not size_match:
         verdict = "FAIL"
     if viewport_pct > vp_limit:
@@ -432,6 +438,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--max-raw-pct", type=float, default=0.5)
     parser.add_argument("--max-crop-pct", type=float, default=0.5)
     parser.add_argument("--max-offset-px", type=int, default=0)
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="a pair with no text crops may PASS (default: INVALID)")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exit_:

@@ -91,6 +91,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/sim.sh
+. "$SCRIPT_DIR/lib/sim.sh"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUNDLE_ID="com.connie.adfreader"
 EXPECTED_SIZE="1206x2622"
@@ -290,28 +292,6 @@ mkdir -p "$CAPTURES"
 
 # ---------------------------------------------------------------- simulator --
 
-# Prints "<state>\t<name>\t<runtime>" for a udid, or nothing.
-device_record() {
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-udid = sys.argv[1]
-for rt, devices in json.load(sys.stdin).get("devices", {}).items():
-    for d in devices:
-        if d["udid"] == udid:
-            print(d.get("state", "?"), d.get("name", "?"), rt, sep="\t")
-' "$1"
-}
-
-booted_udids() {
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-for devices in json.load(sys.stdin).get("devices", {}).values():
-    for d in devices:
-        if d.get("state") == "Booted":
-            print(d["udid"])
-'
-}
-
 BOOTED_BY_US=0
 DEVICE_READY=0
 ORIG_APPEARANCE=""
@@ -320,14 +300,12 @@ LAUNCH_PID=""
 
 prepare_device() {
     local record state other
-    record="$(device_record "$UDID")"
+    record="$(sim_device_record "$UDID")"
     [[ -n "$record" ]] || die "no simulator with udid $UDID (the script never creates devices)"
     IFS=$'\t' read -r state DEVICE_NAME DEVICE_RUNTIME <<<"$record"
     log "device: $DEVICE_NAME ($UDID) $DEVICE_RUNTIME, state $state"
-    while read -r other; do
-        [[ -z "$other" || "$other" == "$UDID" ]] && continue
-        die "another simulator is already booted ($other); shut it down first"
-    done < <(booted_udids)
+    other="$(sim_other_booted "$UDID" | head -n 1)"
+    [[ -z "$other" ]] || die "another simulator is already booted ($other); shut it down first"
     if [[ "$state" != "Booted" ]]; then
         log "booting $UDID"
         xcrun simctl boot "$UDID"

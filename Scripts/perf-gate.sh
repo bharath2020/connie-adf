@@ -118,6 +118,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRIAL_PY="$SCRIPT_DIR/perf_trial.py"
 SUMMARIZE_PY="$SCRIPT_DIR/perf_summarize.py"
+# shellcheck source=lib/sim.sh
+. "$SCRIPT_DIR/lib/sim.sh"
 
 # ---------------------------------------------------------------- defaults
 UDID=""
@@ -192,36 +194,12 @@ sha256_of_app() {
     shasum -a 256 "$app/$exe" | awk '{print $1}'
 }
 
-device_field() {   # device_field <udid> <state|name|runtime>
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-want, field = sys.argv[1].lower(), sys.argv[2]
-for runtime, devices in json.load(sys.stdin).get("devices", {}).items():
-    for d in devices:
-        if d.get("udid", "").lower() == want:
-            print({"state": d.get("state", "?"), "name": d.get("name", "?"), "runtime": runtime}[field])
-            sys.exit(0)
-print("Missing" if field == "state" else "?")
-' "$1" "$2"
-}
-
-other_booted() {
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-me = sys.argv[1].lower()
-for devices in json.load(sys.stdin).get("devices", {}).values():
-    for d in devices:
-        if d.get("state") == "Booted" and d.get("udid", "").lower() != me:
-            print(d["udid"])
-' "$1"
-}
-
 BOOTED_BY_US=0
 ensure_booted() {
     local state others
-    others=$(other_booted "$UDID")
+    others=$(sim_other_booted "$UDID")
     [ -z "$others" ] || die "another simulator is booted ($others); one device at a time"
-    state=$(device_field "$UDID" state)
+    state=$(sim_device_field "$UDID" state)
     case "$state" in
         Booted) log "device $UDID already booted (will be left booted)" ;;
         Shutdown) log "booting $UDID"; xcrun simctl boot "$UDID"; BOOTED_BY_US=1 ;;
@@ -626,7 +604,7 @@ main() {
             echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "host=$(hostname) $(sw_vers -productVersion 2>/dev/null || true) $(uname -m)"
             echo "xcodebuild=$(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
-            echo "udid=$UDID device=$(device_field "$UDID" name) runtime=$(device_field "$UDID" runtime)"
+            echo "udid=$UDID device=$(sim_device_field "$UDID" name) runtime=$(sim_device_field "$UDID" runtime)"
             echo "mode=$MODE design=$DESIGN pilot=$PILOT fixtures=$FIXTURES runs=$RUNS warmup=$WARMUP settle=$SETTLE"
             echo "sampler=$SAMPLER rss_ms=$RSS_MS footprint_ms=$FOOTPRINT_MS"
             echo "host_start=$HOST_START_JSON"

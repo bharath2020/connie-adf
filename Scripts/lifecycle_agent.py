@@ -17,7 +17,8 @@ REQUESTS ({"kind": ..., params})
                                   the -scrollToFraction block, no animation)
     relief                     -> posts com.connie.adfreader.relief (the app,
                                   launched with -memoryReliefHook, calls
-                                  malloc_zone_pressure_relief(nil, 0))
+                                  malloc_zone_pressure_relief(nil, 0));
+                                  diagnostics only, no gate uses it
     cpu_settle  threshold_pct=2.0 timeout_s=15
                                -> {settle_s, settled, samples:[[t_s, cpu_pct]]}
                                   CPU from `top -l 2 -s 1 -pid <pid>` (second

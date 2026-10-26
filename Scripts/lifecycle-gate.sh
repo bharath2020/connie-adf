@@ -36,6 +36,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/sim.sh
+. "$SCRIPT_DIR/lib/sim.sh"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEMO_DIR="$ROOT/Demo"
 AGENT_PY="$SCRIPT_DIR/lifecycle_agent.py"
@@ -104,29 +106,6 @@ select_xctestrun() {
     printf '%s\n' "$found"
 }
 
-device_field() {   # device_field <udid> <state|name|runtime>
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-want, field = sys.argv[1].upper(), sys.argv[2]
-for rt, devices in json.load(sys.stdin).get("devices", {}).items():
-    for d in devices:
-        if d["udid"].upper() == want:
-            print({"state": d.get("state", "?"), "name": d.get("name", "?"), "runtime": rt}[field]); sys.exit(0)
-print("Missing" if field == "state" else "?")
-' "$1" "$2"
-}
-
-other_booted() {
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-me = sys.argv[1].upper()
-for devices in json.load(sys.stdin).get("devices", {}).values():
-    for d in devices:
-        if d.get("state") == "Booted" and d["udid"].upper() != me:
-            print(d["udid"])
-' "$1"
-}
-
 BOOTED_BY_US=0; AGENT_PID=""; XCODEBUILD_PID=""
 cleanup() {
     local status=$?
@@ -143,7 +122,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 # ------------------------------------------------------------------- build
-STATE="$(device_field "$UDID" state)"
+STATE="$(sim_device_field "$UDID" state)"
 [[ "$STATE" != "Missing" ]] || die "no simulator with udid $UDID (this script never creates devices)"
 if [[ $SKIP_BUILD -eq 0 ]]; then
     if [[ -n "$(find "$DERIVED_DATA/Build/Products" -maxdepth 1 -name '*.xctestrun' 2>/dev/null)" ]]; then
@@ -159,9 +138,9 @@ XCTESTRUN="$(select_xctestrun "$DERIVED_DATA")" || die "cannot pick the xctestru
 BUILD_SHA="$(shasum -a 256 "$APP/ADFReader" | awk '{print $1}')"
 
 # ------------------------------------------------------------------ device
-OTHERS="$(other_booted "$UDID")"
+OTHERS="$(sim_other_booted "$UDID")"
 [[ -z "$OTHERS" ]] || die "another simulator is booted ($OTHERS); one device at a time"
-STATE="$(device_field "$UDID" state)"
+STATE="$(sim_device_field "$UDID" state)"
 if [[ "$STATE" != "Booted" ]]; then
     log "booting $UDID"
     xcrun simctl boot "$UDID"
@@ -224,7 +203,7 @@ REPORT_STATUS=0
 python3 -I "$AGENT_PY" report --results "$RESULTS" --out "$OUT/lifecycle.md" \
     --meta "git_head=$(git -C "$ROOT" rev-parse HEAD) ($(git -C "$ROOT" status --porcelain | grep -c . || true) uncommitted paths)" \
     --meta "build=$([[ $SKIP_BUILD -eq 1 ]] && echo "reused $DERIVED_DATA" || echo "fresh $DERIVED_DATA") sha256=$BUILD_SHA" \
-    --meta "device=$UDID $(device_field "$UDID" name) $(device_field "$UDID" runtime)" \
+    --meta "device=$UDID $(sim_device_field "$UDID" name) $(sim_device_field "$UDID" runtime)" \
     --meta "tests=$TESTS" --meta "xcresult=$RESULT_BUNDLE" --meta "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     || REPORT_STATUS=$?
 [[ $REPORT_STATUS -eq 0 ]] || problems=$((problems + 1))

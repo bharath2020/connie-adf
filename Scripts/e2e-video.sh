@@ -21,7 +21,10 @@
 #   --derived-data     isolated derived-data dir (default <base>.DerivedData).
 #                      A fresh build refuses a dir that already holds an
 #                      .xctestrun, so the xctestrun used is the one THIS build
-#                      produced. --skip-build reuses an existing dir (recorded).
+#                      produced, and writes <dd>/e2e-build-manifest.txt (source
+#                      identity + product digests, pinned at build time).
+#                      --skip-build reuses an existing dir only when that
+#                      manifest exists and its digests still match.
 #   --keep-booted      leave a device this invocation booted running. A device
 #                      that was already booted is never shut down.
 #   --expected-sha256  override the digest handed to the test (default: the
@@ -35,10 +38,17 @@
 #                      and run no xcodebuild.
 #
 # PROCEDURE
-#   1. Unless --skip-build: xcodegen generate; xcodebuild build-for-testing
+#   1. Unless --skip-build: record HEAD and `git status --porcelain
+#      --untracked-files=all`; xcodegen generate; xcodebuild build-for-testing
 #      -configuration Release CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
-#      -destination 'platform=iOS Simulator,id=<udid>' into the isolated dir.
-#      Exactly one .xctestrun must exist under <dd>/Build/Products.
+#      -destination 'platform=iOS Simulator,id=<udid>' into the isolated dir;
+#      record the source state again (a change during the build FAILs) and
+#      write the build manifest: source state, build command, Xcode, and the
+#      sha256 of the app binary, the UI-test bundle binary and the
+#      .xctestrun. With --skip-build the manifest is imported and every
+#      digest re-verified; the provenance names the manifest's commit, not
+#      the current checkout's. Exactly one .xctestrun must exist under
+#      <dd>/Build/Products.
 #   2. Refuse if any other simulator is booted; boot --udid if shut down
 #      (remembered: only that device is shut down on exit); status bar pinned
 #      (9:41, full battery/signal); light appearance; uninstall ADFReader.
@@ -49,16 +59,22 @@
 #   4. TEST_RUNNER_ADF_EXPECTED_BUILD_SHA256=<digest> xcodebuild
 #      test-without-building -xctestrun <exact> -destination id=<udid>
 #      -only-testing:<test id> -resultBundlePath <base>.xcresult > <base>.log
-#   5. Stop the recorder only after the named test's result line
+#   5. The recorder must stay alive until the named test's result line (an
+#      earlier exit FAILs). Stop it only after that line
 #      `Test Case '-[ADFReaderUITests.RendererSwitchUITests
 #      testLiveSwitchSwiftUIToTextKit2AndBack]' passed|failed`: SIGINT, wait
-#      for the recorder to exit, then check the file (ffprobe when available).
+#      for the recorder to exit, then check the file with ffprobe (required):
+#      its duration must cover the interval from recorder-ready to the result
+#      line (2 s tolerance).
 #      xcodebuild gets --xcodebuild-grace s (default 120) to finish, then is
 #      killed (it can idle ~10 min after the last test case).
-#   6. Write <base>.provenance.txt and decide.
+#   6. For a fresh build, the source state must still equal the build-time
+#      state. Write <base>.provenance.txt and decide.
 #
-# FAILS (exit 1) on: recorder error or never ready; missing/empty/unreadable
-#   video; empty expected digest; OBSERVED_BUILD_SHA256 absent from both the
+# FAILS (exit 1) on: recorder error, never ready, or exited before the result
+#   line; missing/empty/unreadable video, no ffprobe, or a duration shorter
+#   than the test; source changed during the build or the run; --skip-build
+#   without a matching build manifest; empty expected digest; OBSERVED_BUILD_SHA256 absent from both the
 #   log and the xcresult; missing named-test result line; build/installed/
 #   observed sha mismatch; expected digest != build sha (normal mode); test
 #   failure (normal mode) or test pass (negative mode). Usage errors exit 2.
@@ -66,11 +82,13 @@
 # OUTPUTS  <base>.mp4, <base>.log (xcodebuild test), <base>.build.log,
 #   <base>.recorder.log, <base>.xcresult (kept), <base>.provenance.txt
 #
-# REQUIRES  Xcode (xcodebuild, simctl), xcodegen, python3, shasum; ffprobe
-#   optional (video duration / readability). bash 3.2 compatible.
+# REQUIRES  Xcode (xcodebuild, simctl), xcodegen, python3, shasum, ffprobe.
+#   bash 3.2 compatible.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/sim.sh
+. "$SCRIPT_DIR/lib/sim.sh"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEMO_DIR="$ROOT/Demo"
 SCHEME="ADFReader"
@@ -191,6 +209,18 @@ observed_sha_in() {
 
 is_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
 
+# "<HEAD>" then `git status --porcelain --untracked-files=all` of a checkout.
+source_state() {
+    git -C "$1" rev-parse HEAD 2>/dev/null || echo unknown
+    git -C "$1" status --porcelain --untracked-files=all 2>/dev/null || true
+}
+
+# Value of "<key>: <value>" in a manifest file (first match), or nothing.
+manifest_field() {
+    [[ -f "$1" ]] || return 0
+    awk -v key="$2:" '$1 == key { sub(/^[^:]*:[ \t]*/, ""); print; exit }' "$1"
+}
+
 # A digest guaranteed to differ from $1 (for --negative).
 wrong_digest_for() {
     local wrong
@@ -246,6 +276,8 @@ RESULT_BUNDLE="$BASE.xcresult"
 PROVENANCE="$BASE.provenance.txt"
 TEST_CASE="$(test_case_name "$TEST_ID")"
 APP="$DERIVED_DATA/Build/Products/Release-iphonesimulator/ADFReader.app"
+UITEST_BINARY="$DERIVED_DATA/Build/Products/Release-iphonesimulator/ADFReaderUITests-Runner.app/PlugIns/ADFReaderUITests.xctest/ADFReaderUITests"
+BUILD_MANIFEST="$DERIVED_DATA/e2e-build-manifest.txt"
 MODE="normal"; [[ $NEGATIVE -eq 0 ]] || MODE="negative"
 
 set_build_cmd() {
@@ -292,6 +324,7 @@ fi
 
 [[ -e "$RESULT_BUNDLE" ]] && die "$RESULT_BUNDLE already exists; choose another --out"
 command -v xcrun >/dev/null || die "xcrun not found"
+command -v ffprobe >/dev/null || die "ffprobe not found (needed to check the recording's duration)"
 command -v python3 >/dev/null || die "python3 not found"
 
 # ---------------------------------------------------------------- simulator --
@@ -310,28 +343,6 @@ print(best[1] if best else "")
 '
 }
 
-# Prints "<state>\t<name>\t<runtime>" for a udid, or nothing.
-device_record() {
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-udid = sys.argv[1].upper()
-for rt, devices in json.load(sys.stdin).get("devices", {}).items():
-    for d in devices:
-        if d["udid"].upper() == udid:
-            print(d.get("state", "?"), d.get("name", "?"), rt, sep="\t")
-' "$1"
-}
-
-booted_udids() {
-    xcrun simctl list devices -j | python3 -I -c '
-import json, sys
-for devices in json.load(sys.stdin).get("devices", {}).values():
-    for d in devices:
-        if d.get("state") == "Booted":
-            print(d["udid"])
-'
-}
-
 CREATED_DEVICE="no"
 BOOTED_BY_US=0
 DEVICE_STATE_AT_START=""
@@ -346,7 +357,7 @@ resolve_device() {
         CREATED_DEVICE="yes ($CREATE_DEVICE, $DEVICE_TYPE, $runtime)"
     fi
     local record
-    record="$(device_record "$UDID")"
+    record="$(sim_device_record "$UDID")"
     [[ -n "$record" ]] || die "no simulator with udid $UDID (the script creates devices only with --create-device)"
     DEVICE_STATE_AT_START="$(cut -f1 <<<"$record")"
     DEVICE_NAME="$(cut -f2 <<<"$record")"
@@ -356,11 +367,8 @@ resolve_device() {
 
 assert_only_booted_device() {
     local other
-    while read -r other; do
-        [[ -z "$other" ]] && continue
-        [[ "$(printf '%s' "$other" | tr 'a-f' 'A-F')" == "$(printf '%s' "$UDID" | tr 'a-f' 'A-F')" ]] && continue
-        die "another simulator is already booted ($other); this script uses one device at a time"
-    done < <(booted_udids)
+    other="$(sim_other_booted "$UDID" | head -n 1)"
+    [[ -z "$other" ]] || die "another simulator is already booted ($other); this script uses one device at a time"
 }
 
 boot_device() {
@@ -425,17 +433,53 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
         die "$DERIVED_DATA already holds an .xctestrun; a fresh build needs an empty derived-data dir (or pass --skip-build)"
     fi
     mkdir -p "$DERIVED_DATA"
+    SOURCE_BEFORE="$(source_state "$ROOT")"
     log "xcodegen generate"
     ( cd "$DEMO_DIR" && "$XCODEGEN" generate ) >"$BUILD_LOG" 2>&1 || die "xcodegen failed (see $BUILD_LOG)"
     log "build-for-testing (Release) → $DERIVED_DATA (log $BUILD_LOG)"
     "${BUILD_CMD[@]}" >>"$BUILD_LOG" 2>&1 || die "build-for-testing failed (see $BUILD_LOG)"
+    SOURCE_AFTER="$(source_state "$ROOT")"
+    [[ "$SOURCE_AFTER" == "$SOURCE_BEFORE" ]] || die "the checkout changed during the build (HEAD or status differs); rebuild"
 fi
 [[ -x "$APP/ADFReader" ]] || die "no Release app at $APP"
 XCTESTRUN="$(select_xctestrun "$DERIVED_DATA")" || die "cannot pick the xctestrun"
+[[ -f "$UITEST_BINARY" ]] || die "no UI-test bundle binary at $UITEST_BINARY"
 BUILD_SHA="$(sha256_file "$APP/ADFReader")"
+UITEST_SHA="$(sha256_file "$UITEST_BINARY")"
+XCTESTRUN_SHA="$(sha256_file "$XCTESTRUN")"
+
+if [[ $SKIP_BUILD -eq 0 ]]; then
+    SOURCE_HEAD="$(printf '%s\n' "$SOURCE_BEFORE" | head -n 1)"
+    SOURCE_STATUS="$(printf '%s\n' "$SOURCE_BEFORE" | tail -n +2)"
+    {
+        echo "ADFReader e2e build manifest (pinned at build time)"
+        echo "built_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "git_head: $SOURCE_HEAD"
+        echo "git_branch: $(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+        echo "git_dirty_count: $(printf '%s' "$SOURCE_STATUS" | grep -c . || true)"
+        echo "build_command: ( cd $DEMO_DIR && $XCODEGEN generate ) && ${BUILD_CMD[*]}"
+        echo "xcode: $(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
+        echo "app_sha256: $BUILD_SHA"
+        echo "uitest_sha256: $UITEST_SHA"
+        echo "xctestrun: $XCTESTRUN"
+        echo "xctestrun_sha256: $XCTESTRUN_SHA"
+        echo "git_status:"
+        printf '%s\n' "$SOURCE_STATUS" | sed '/^$/d; s/^/  /'
+    } >"$BUILD_MANIFEST"
+else
+    [[ -f "$BUILD_MANIFEST" ]] || die "--skip-build: $BUILD_MANIFEST missing (that derived data was not built by this script)"
+    for pair in "app_sha256:$BUILD_SHA" "uitest_sha256:$UITEST_SHA" "xctestrun_sha256:$XCTESTRUN_SHA" \
+        "xctestrun:$XCTESTRUN"; do
+        key="${pair%%:*}"; have="${pair#*:}"
+        want="$(manifest_field "$BUILD_MANIFEST" "$key")"
+        [[ "$want" == "$have" ]] || die "--skip-build: $key is $have, the build manifest says ${want:-nothing}"
+    done
+    SOURCE_HEAD="$(manifest_field "$BUILD_MANIFEST" git_head)"
+    log "reusing the build of $SOURCE_HEAD (manifest $BUILD_MANIFEST, digests verified)"
+fi
 log "app: $APP"
 log "xctestrun: $XCTESTRUN"
-log "build sha256: $BUILD_SHA"
+log "build sha256: $BUILD_SHA; UI-test bundle $UITEST_SHA; xctestrun $XCTESTRUN_SHA"
 
 if [[ $NEGATIVE -eq 1 ]]; then
     EXPECTED_SHA="$(wrong_digest_for "$BUILD_SHA")"
@@ -486,6 +530,7 @@ if [[ -z "$RECORDER_READY" ]]; then
     die "recorder not ready after ${RECORDER_READY_TIMEOUT}s (see $RECORDER_LOG)"
 fi
 log "recorder ready: $RECORDER_READY"
+RECORDER_READY_EPOCH="$(date +%s)"
 
 # ------------------------------------------------------------------- test ----
 
@@ -500,9 +545,14 @@ XCODEBUILD_PID=$!
 
 deadline=$(( SECONDS + TEST_TIMEOUT ))
 TEST_RESULT=""
+RECORDER_DIED_EARLY="no"
 while :; do
     TEST_RESULT="$(named_test_result "$LOG" "$TEST_CASE")"
     [[ -n "$TEST_RESULT" ]] && break
+    if [[ "$RECORDER_DIED_EARLY" == "no" ]] && ! kill -0 "$RECORDER_PID" 2>/dev/null; then
+        RECORDER_DIED_EARLY="yes ($(date -u +%H:%M:%S), before the named test's result line)"
+        log "recorder exited before the test finished"
+    fi
     if ! kill -0 "$XCODEBUILD_PID" 2>/dev/null; then
         log "xcodebuild exited without the named test's result line"
         break
@@ -513,6 +563,10 @@ while :; do
     fi
     sleep 1
 done
+TEST_RESULT_EPOCH="$(date +%s)"
+if [[ "$RECORDER_DIED_EARLY" == "no" ]] && ! kill -0 "$RECORDER_PID" 2>/dev/null; then
+    RECORDER_DIED_EARLY="yes (gone when the result line arrived)"
+fi
 sleep 1    # let the final frame land in the recording
 stop_recorder
 log "recorder stopped (exit $RECORDER_STATUS)"
@@ -556,23 +610,35 @@ fi
 
 VIDEO_SHA=""
 VIDEO_DURATION=""
-VIDEO_READABLE="unchecked (no ffprobe)"
+VIDEO_READABLE="no"
+RECORDED_INTERVAL_S=$(( TEST_RESULT_EPOCH - RECORDER_READY_EPOCH ))
 if [[ -s "$OUT" ]]; then
     VIDEO_SHA="$(sha256_file "$OUT")"
-    if command -v ffprobe >/dev/null 2>&1; then
-        if VIDEO_DURATION="$(ffprobe -v error -show_entries format=duration \
-            -of default=noprint_wrappers=1:nokey=1 "$OUT" 2>/dev/null)" && [[ -n "$VIDEO_DURATION" ]]; then
-            VIDEO_READABLE="yes"
-        else
-            VIDEO_READABLE="no"; VIDEO_DURATION=""
-        fi
+    if VIDEO_DURATION="$(ffprobe -v error -show_entries format=duration \
+        -of default=noprint_wrappers=1:nokey=1 "$OUT" 2>/dev/null)" && [[ -n "$VIDEO_DURATION" ]]; then
+        VIDEO_READABLE="yes"
+    else
+        VIDEO_DURATION=""
     fi
 fi
+# The recording must cover recorder-ready -> result line (2 s tolerance).
+VIDEO_COVERS="no"
+if [[ -n "$VIDEO_DURATION" ]] && python3 -I -c 'import sys; sys.exit(0 if float(sys.argv[1]) + 2 >= float(sys.argv[2]) > 0 else 1)' \
+    "$VIDEO_DURATION" "$RECORDED_INTERVAL_S"; then
+    VIDEO_COVERS="yes"
+fi
 
-GIT_HEAD="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-GIT_BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-GIT_DIRTY="$(git -C "$ROOT" status --porcelain 2>/dev/null || true)"
-GIT_DIRTY_COUNT="$(printf '%s' "$GIT_DIRTY" | grep -c . || true)"
+# Source identity: the build's (fresh: pinned before xcodegen; reused: the
+# imported build manifest's). A fresh build's checkout must not have moved.
+GIT_HEAD="$SOURCE_HEAD"
+GIT_BRANCH="$(manifest_field "$BUILD_MANIFEST" git_branch)"
+GIT_DIRTY="$(awk 'f { sub(/^  /, ""); print } /^git_status:/ { f = 1 }' "$BUILD_MANIFEST")"
+GIT_DIRTY_COUNT="$(manifest_field "$BUILD_MANIFEST" git_dirty_count)"
+CHECKOUT_NOW="$(source_state "$ROOT")"
+SOURCE_STABLE="n/a (reused build)"
+if [[ $SKIP_BUILD -eq 0 ]]; then
+    if [[ "$CHECKOUT_NOW" == "$SOURCE_BEFORE" ]]; then SOURCE_STABLE="yes"; else SOURCE_STABLE="no"; fi
+fi
 XCODE_VERSION="$(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
 
 problems=()
@@ -589,25 +655,30 @@ fi
 [[ -n "$INSTALLED_SHA" ]] || problems+=("installed app not found on $UDID")
 [[ -z "$INSTALLED_SHA" || "$INSTALLED_SHA" == "$BUILD_SHA" ]] || problems+=("installed $INSTALLED_SHA != build $BUILD_SHA")
 [[ "$RECORDER_STATUS" == "0" ]] || problems+=("recorder exit status $RECORDER_STATUS (see $RECORDER_LOG)")
+[[ "$RECORDER_DIED_EARLY" == "no" ]] || problems+=("recorder exited early: $RECORDER_DIED_EARLY")
 [[ -s "$OUT" ]] || problems+=("video missing or empty: $OUT")
-[[ "$VIDEO_READABLE" != "no" ]] || problems+=("ffprobe cannot read $OUT")
+[[ "$VIDEO_READABLE" == "yes" ]] || problems+=("ffprobe cannot read $OUT")
+[[ "$VIDEO_READABLE" != "yes" || "$VIDEO_COVERS" == "yes" ]] || \
+    problems+=("video lasts ${VIDEO_DURATION}s, shorter than the ${RECORDED_INTERVAL_S}s from recorder-ready to the result line")
+[[ "$SOURCE_STABLE" != "no" ]] || problems+=("the checkout changed between the build and the end of the run")
 
 {
     echo "ADFReader end-to-end video provenance"
     echo "date:                $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "mode:                $MODE"
-    echo "git_head:            $GIT_HEAD ($GIT_BRANCH)"
+    echo "git_head:            $GIT_HEAD ($GIT_BRANCH)  [pinned at build time: $BUILD_MANIFEST]"
     if [[ "$GIT_DIRTY_COUNT" == "0" ]]; then
         echo "git_status:          clean"
     else
         echo "git_status:          dirty, $GIT_DIRTY_COUNT path(s):"
         printf '%s\n' "$GIT_DIRTY" | sed 's/^/                     /'
     fi
+    echo "source_stable:       $SOURCE_STABLE (checkout now: $(printf '%s\n' "$CHECKOUT_NOW" | head -n 1), $(printf '%s\n' "$CHECKOUT_NOW" | tail -n +2 | grep -c . || true) dirty path(s))"
     echo "xcode:               $XCODE_VERSION"
     echo "simulator:           $UDID  $DEVICE_NAME  $DEVICE_RUNTIME"
     echo "simulator_state:     $DEVICE_STATE_AT_START at start; booted_by_script=$([[ $BOOTED_BY_US -eq 1 ]] && echo yes || echo no); created_by_script=$CREATED_DEVICE"
     if [[ $SKIP_BUILD -eq 1 ]]; then
-        echo "build:               SKIPPED (--skip-build); reused derived data"
+        echo "build:               SKIPPED (--skip-build); reused derived data, build manifest digests verified"
     else
         echo "build_command:       ( cd $DEMO_DIR && $XCODEGEN generate ) && ${BUILD_CMD[*]}"
     fi
@@ -620,6 +691,8 @@ fi
     fi
     echo "app:                 $APP"
     echo "xctestrun:           $XCTESTRUN"
+    echo "xctestrun_sha256:    $XCTESTRUN_SHA"
+    echo "uitest_sha256:       $UITEST_SHA  ADFReaderUITests.xctest/ADFReaderUITests"
     echo "build_sha256:        $BUILD_SHA  ADFReader"
     echo "companions_sha256:"
     companions="$(list_companions "$APP")"
@@ -656,13 +729,16 @@ fi
     echo "xcodebuild_exit:     $XCODEBUILD_STATUS (killed after grace: $XCODEBUILD_KILLED)"
     echo "test_log:            $LOG"
     echo "result_bundle:       $RESULT_BUNDLE $([[ -d "$RESULT_BUNDLE" ]] && echo '(kept)' || echo '(missing)')"
-    echo "recorder_ready:      $RECORDER_READY"
+    echo "recorder_ready:      $RECORDER_READY (at $(date -u -r "$RECORDER_READY_EPOCH" +%H:%M:%SZ))"
+    echo "test_result_at:      $(date -u -r "$TEST_RESULT_EPOCH" +%H:%M:%SZ) (${RECORDED_INTERVAL_S}s after recorder-ready)"
+    echo "recorder_died_early: $RECORDER_DIED_EARLY"
     echo "recorder_exit:       $RECORDER_STATUS"
     echo "recorder_log:        $RECORDER_LOG"
     echo "video:               $OUT"
     echo "video_sha256:        ${VIDEO_SHA:-(missing)}"
     echo "video_duration_s:    ${VIDEO_DURATION:-(unknown)}"
     echo "video_readable:      $VIDEO_READABLE"
+    echo "video_covers_test:   $VIDEO_COVERS"
     if (( ${#problems[@]} > 0 )); then
         echo "verdict:             FAIL"
         for p in "${problems[@]}"; do echo "problem:             $p"; done
