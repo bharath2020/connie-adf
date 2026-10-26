@@ -7,7 +7,7 @@ import UIKit
 /// - `-scrollToFraction <f>` scrolls, once the document is ready, to the
 ///   block at fraction `f` of `model.blocks` (animated, then re-jumped
 ///   without animation ~1.5 s after ready so the landing is exact).
-/// - `-autoscroll` waits 1s after ready, animates through the entire
+/// - `-autoscroll` waits 3s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
 ///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
 ///   scrollMs= completed=`), then exits after 2s.
