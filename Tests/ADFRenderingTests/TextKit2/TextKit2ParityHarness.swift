@@ -345,10 +345,13 @@ enum TK2Parity {
         for (index, band) in lineBands(layout, scale: a.scale).enumerated() {
             let ea = inkExtent(a, rows: band, dark: env.dark)
             let eb = inkExtent(b, rows: band, dark: env.dark)
+            let range = layout.lines[index].range
+            let lineText = range.location + range.length <= text.length ? text.substring(with: range) : "?"
             if ea != eb {
-                let range = layout.lines[index].range
-                let lineText = range.location + range.length <= text.length ? text.substring(with: range) : "?"
                 mismatches.append("line \(index) swiftUI=\(String(describing: ea)) textKit2=\(String(describing: eb)) tk2Text='\(lineText)'")
+            } else if ea == nil, lineText.contains(where: { !$0.isWhitespace }) {
+                // Both blank on a line with visible text: nothing was compared.
+                mismatches.append("line \(index) has no ink on either arm tk2Text='\(lineText)'")
             }
         }
         return mismatches

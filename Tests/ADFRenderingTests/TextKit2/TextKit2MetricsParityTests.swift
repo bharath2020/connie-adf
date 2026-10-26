@@ -111,6 +111,8 @@ struct TextKit2MetricsParityTests {
                 // Every SwiftUI ink pixel lies inside TextKit's ink bounds
                 // (the canvas covers them, so nothing is clipped).
                 let profile = TK2Parity.inkProfile(a, dark: false)
+                let blank = fixture.describableText.map { $0.characters.allSatisfy(\.isWhitespace) } ?? true
+                #expect(blank || profile.firstInkRow != nil, "\(label): SwiftUI rendered no ink; nothing was compared")
                 if let first = profile.firstInkRow, let last = profile.lastInkRow {
                     let ink = layout.inkBounds
                     #expect(CGFloat(first) / a.scale >= ink.minY - 1 / a.scale, "\(label): ink above inkBounds (\(first) px vs \(ink.minY) pt)")
