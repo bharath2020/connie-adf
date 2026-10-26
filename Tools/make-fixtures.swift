@@ -13,6 +13,9 @@
 //                       lists/tasks/decisions, tables with nestedExpand,
 //                       layout columns, media, cards, inline nodes,
 //                       extensions and sync blocks)
+//   stress-1k.json      the first 1,000 blocks of stress-5k, byte for byte
+//                       the same nodes — the per-PR perf gate's stress
+//                       fixture (a full stress-5k scroll is ~8.5 min/trial)
 //   giant-table.json    800 data rows x 6 columns, header row, sprinkled
 //                       colspans and cell backgrounds
 //   media-gallery.json  300 mediaSingle nodes with width/height attrs,
@@ -491,6 +494,13 @@ func makeStress5K() -> [String: Any] {
     return doc(blocks)
 }
 
+/// The first 1,000 blocks of stress-5k (the per-PR perf gate's stress
+/// fixture; the reference build gets this one file added).
+func makeStress1K(from stress5K: [String: Any]) -> [String: Any] {
+    let blocks = stress5K["content"] as? [[String: Any]] ?? []
+    return doc(Array(blocks.prefix(1000)))
+}
+
 // MARK: - Fixture 2: giant-table.json
 
 func makeGiantTable() -> [String: Any] {
@@ -675,8 +685,10 @@ let repoRoot = URL(fileURLWithPath: #filePath)
 let fixturesDir = repoRoot.appendingPathComponent("Fixtures")
 try FileManager.default.createDirectory(at: fixturesDir, withIntermediateDirectories: true)
 
+let stress5K = makeStress5K()
 let fixtures: [(name: String, document: [String: Any])] = [
-    ("stress-5k.json", makeStress5K()),
+    ("stress-5k.json", stress5K),
+    ("stress-1k.json", makeStress1K(from: stress5K)),
     ("giant-table.json", makeGiantTable()),
     ("media-gallery.json", makeMediaGallery()),
     ("text-dense.json", makeTextDense()),
