@@ -57,18 +57,15 @@ struct TextKit2RenderInputs: Hashable {
 }
 
 extension NSAttributedString.Key {
-    /// Run background fill, drawn by the row itself (see
-    /// `TextKit2RowView`) so its extent matches SwiftUI's; kept out of
+    /// Run background fill of text without a link, drawn by the row itself
+    /// (see `TextKit2RowView`) so its extent matches SwiftUI's; kept out of
     /// `.backgroundColor` so TextKit does not draw a second, shorter one.
+    /// (Text with a link is drawn by TextKit 1, which fills
+    /// `.backgroundColor` as SwiftUI does.)
     static let adfRunBackground = NSAttributedString.Key("adf.runBackground")
     /// A link's destination. Kept out of `.link`, which makes TextKit
     /// restyle the run with its own link colour and underline.
     static let adfLink = NSAttributedString.Key("adf.link")
-    /// Underline and strikethrough of text containing a link, drawn by the
-    /// row itself with the geometry SwiftUI uses for such text (see
-    /// `TextKit2RowView.drawLinkTextDecorations`).
-    static let adfUnderline = NSAttributedString.Key("adf.underline")
-    static let adfStrikethrough = NSAttributedString.Key("adf.strikethrough")
 }
 
 /// Converts a prepared SwiftUI `AttributedString` into the
@@ -117,13 +114,13 @@ enum TextKit2TextBuilder {
                 attributes[.foregroundColor] = UIColor.label
             }
             if let background = run.backgroundColor {
-                attributes[.adfRunBackground] = UIColor(background)
+                attributes[hasLink ? .backgroundColor : .adfRunBackground] = UIColor(background)
             }
             if run.underlineStyle != nil {
-                attributes[hasLink ? .adfUnderline : .underlineStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             if run.strikethroughStyle != nil {
-                attributes[hasLink ? .adfStrikethrough : .strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             }
             if let link = run.link {
                 attributes[.adfLink] = link

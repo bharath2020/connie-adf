@@ -41,6 +41,48 @@ struct TextKit2PixelParityTests {
         return try await TK2Parity.fixture("every-mark", content: content)
     }
 
+    /// The demo's kitchen-sink paragraph, verbatim: its link sits on a line
+    /// after one holding a subscript, whose baseline is fractional.
+    static func kitchenSinkParagraph() async throws -> TK2Parity.Fixture {
+        func t(_ string: String, _ marks: String = "") -> String { TK2Parity.adfText(string, marks: marks) }
+        let content = [
+            t("bold", "{\"type\":\"strong\"}"), t(" italic", "{\"type\":\"em\"}"),
+            t(" underline", "{\"type\":\"underline\"}"), t(" strike", "{\"type\":\"strike\"}"),
+            t(" let x = 1", "{\"type\":\"code\"}"), t(" H"),
+            t("2", "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sub\"}}"), t("O and x"),
+            t("2", "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sup\"}}"),
+            t(" colored", "{\"type\":\"textColor\",\"attrs\":{\"color\":\"#ff5630\"}}"),
+            t(" highlighted", "{\"type\":\"backgroundColor\",\"attrs\":{\"color\":\"#fedec8\"}}"),
+            t(" small", "{\"type\":\"fontSize\",\"attrs\":{\"size\":\"small\"}}"),
+            t(" a link", "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\",\"title\":\"Example\"}}"),
+            t(" annotated", "{\"type\":\"annotation\",\"attrs\":{\"id\":\"anno-1\",\"annotationType\":\"inlineComment\"}}"),
+            TK2Parity.hardBreak, t("after the break"),
+        ].joined(separator: ",")
+        return try await TK2Parity.fixture("kitchen-sink-paragraph", content: content)
+    }
+
+    /// A linked, struck paragraph wrapping below a subscript line: every
+    /// later line has a fractional baseline.
+    static func linkAfterSubscript() async throws -> TK2Parity.Fixture {
+        let medium = "Ten tired otters cheer while a careful heron stares at the outer rim of the sunlit marsh in late autumn"
+        return try await TK2Parity.fixture("link-after-subscript", content: [
+            TK2Parity.adfText("H"),
+            TK2Parity.adfText("2", marks: "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sub\"}}"),
+            TK2Parity.adfText("O " + medium + " " + medium, marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}},{\"type\":\"strike\"}"),
+        ].joined(separator: ","))
+    }
+
+    /// A centred, highlighted paragraph opening with a link: TextKit 1
+    /// fills whole line fragments, extends line-ending whitespace to the
+    /// frame's edge, and sizes the frame by its lines' used rects.
+    static func centredHighlightAfterLink() async throws -> TK2Parity.Fixture {
+        let medium = "The quick brown fox jumps over the lazy dog while seventeen purple elephants rehearse"
+        return try await TK2Parity.fixture("centred-highlight-after-link", blockMarks: "{\"type\":\"alignment\",\"attrs\":{\"align\":\"center\"}}", content: [
+            TK2Parity.adfText("go", marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}}"),
+            TK2Parity.adfText(" " + medium + " " + medium, marks: "{\"type\":\"backgroundColor\",\"attrs\":{\"color\":\"#fedec8\"}}"),
+        ].joined(separator: ","))
+    }
+
     static func h1() async throws -> TK2Parity.Fixture {
         try await TK2Parity.heading(1, "Release notes for the TextKit 2 reader port and its parity harness")
     }
@@ -66,6 +108,18 @@ struct TextKit2PixelParityTests {
     @Test("H1 heading renders identically", arguments: sizes, [false, true])
     func headingPixels(size: DynamicTypeSize, dark: Bool) async throws {
         try compare(try await Self.h1(), env: TK2Parity.Environment(size: size, dark: dark))
+    }
+
+    @Test("link decorations on lines with fractional baselines", arguments: sizes, [false, true])
+    func fractionalBaselineLinkPixels(size: DynamicTypeSize, dark: Bool) async throws {
+        let env = TK2Parity.Environment(size: size, dark: dark)
+        try compare(try await Self.kitchenSinkParagraph(), env: env)
+        try compare(try await Self.linkAfterSubscript(), env: env)
+    }
+
+    @Test("text with a link: backgrounds and frame as TextKit 1 draws them", arguments: sizes, [false, true])
+    func linkTextBackgroundPixels(size: DynamicTypeSize, dark: Bool) async throws {
+        try compare(try await Self.centredHighlightAfterLink(), env: TK2Parity.Environment(size: size, dark: dark))
     }
 
     @Test("a paragraph carrying every mark renders identically", arguments: sizes, [false, true])
