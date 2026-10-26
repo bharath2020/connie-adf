@@ -318,23 +318,29 @@ Scripts/visual-parity.sh --udid <UDID> --ref-app <main ADFReader.app> \
 python3 -I Scripts/visual_diff.py --out <dir> --pair <noise|exact|tolerant> <name> <ref.png> <cand.png> ...
 #   [--mask ...] [--exact-mask ...] [--top-band N] [--bottom-band N] [--threshold 24] [--exact-threshold 0] [--search 100]
 
-# Performance (§8.3). Per-PR gate, design pr45 (~40 min, no calibration):
-Scripts/perf-gate.sh --udid <UDID> --app-a <main .app> --app-b <branch .app> --app-c <branch .app> \
+# Performance (§8.3). Per-PR gate, design pr45 (~40 min, no calibration); arm A is
+# <data>/builds/main-a9e6aa2+stress1k (main + the stress-1k JSON):
+Scripts/perf-gate.sh --udid <UDID> --app-a <main+stress1k .app> --app-b <branch .app> --app-c <branch .app> \
     --out <data>/perf/pr45-<sha>
 # Full gate, design full (~8 h, once before the final parity PR): calibrate, then gate.
 Scripts/perf-gate.sh --calibrate --udid <UDID> --app-a <main .app> --out <data>/perf/calibration
 Scripts/perf-gate.sh --design full --udid <UDID> --app-a <main .app> --app-b <branch .app> \
     --app-c <branch .app> --calibration <data>/perf/calibration/calibration.json --out <data>/perf/full-<sha>
-#   [--settle 300] [--ledger <jsonl>] [--arm-c-args "-textkit2"] [--candidate-args "-rendererStats"]
+#   [--settle 300] [--host-wait 1200] [--host-poll 30] [--ledger <jsonl>]
+#   [--arm-c-args "-textkit2"] [--candidate-args "-rendererStats"]
 #   [--extra-args "<flags>"] [--expected-blocks "f=n ..."] [--trial-timeout 120] [--trial-timeout-for "f=s ..."]
 #   [--ready-timeout 60] [--rss-ms 200] [--footprint-ms 1000] [--coverage "<text>"] [--appearance light|dark]
 #   [--bundle-id <id>] [--keep-booted] [--dry-run]
-#   pilot only: [--pilot] [--fixtures "..."] [--runs n] [--warmup 0] [--no-sampler] [--no-candidate-markers]
-python3 -I Scripts/perf_summarize.py <out>/trials.csv [--json summary.json] [--out summary.md] [--ledger <jsonl>]
+#   pilot only: [--pilot] [--fixtures "..."] [--fixture-arms "f=A,B,C ..."] [--runs n] [--warmup 0]
+#   [--no-sampler] [--no-candidate-markers]
+python3 -I Scripts/perf_summarize.py <out>/trials.csv [--json summary.json] [--out summary.md] [--ledger <jsonl>] \
+    [--bounds Scripts/perf-bounds.json]
 python3 -I Scripts/perf_summarize.py <cal>/trials.csv --calibrate --write-calibration <cal>/calibration.json [--attempt 1]
 python3 -I Scripts/perf_summarize.py <out>/trials.csv --calibration <cal>/calibration.json [--json ...] [--out ...]
 python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot [--suggest-timeouts]
 python3 -I Scripts/perf_summarize.py --print-design pr45|full
+# Resolution bounds (READY gating) from an A–A′ run of untouched main:
+python3 -I Scripts/perf_summarize.py <cal>/trials.csv --measure-bounds --write-bounds Scripts/perf-bounds.json
 # Offline tests (no simulator): summarizer cases, driver scenarios on a fake simctl, comparator cases.
 python3 -I Scripts/tests/perf_summarize_tests.py <scratch>/sum
 Scripts/tests/perf-gate-scenarios.sh <scratch>/scen [scenario...]
@@ -414,16 +420,36 @@ Interleaved A/B/C trials on one simulator: launch to `READY` (labelled "preparat
 
 | Design | Fixtures × arms × pairs | Rule | When |
 |---|---|---|---|
-| `pr45` (default) | kitchen-sink, stress-1k (the first 1,000 blocks of stress-5k; arm A is a clean `git archive` of main plus that one JSON, data only, sha recorded), giant-table × A/B/C × 3, one discarded warm-up per (fixture, arm) | median-relative | every PR, ~40 min |
+| `pr45` (default) | kitchen-sink, stress-1k (the first 1,000 blocks of stress-5k), giant-table × A/B/C × 3, one discarded warm-up per (fixture, arm) | median-relative | every PR, ~40 min |
 | `full` | kitchen-sink, stress-5k, giant-table × A/B/C × ≥ 10, frozen A–A′ calibration | calibrated-ucb | once, before the final parity PR, ~8 h |
 
-- **pr45 rule:** FAIL if the median paired delta (candidate − A) exceeds 15 % of A's median for memory (RSS and footprint), for the first chunk (with a 20 ms absolute floor), and for launch→READY on kitchen-sink. READY on stress-1k and giant-table is reported as ADVISORY, never gating: three pairs cannot resolve 15 % there (95th percentile of the median of three A–A′ deltas on untouched main: READY kitchen-sink 11 %, stress-5k 22 %, giant-table 42 %; first chunk 11–20 %; memory 0.5–10 %). Dropped frames FAIL when the median Δ > 2.
+Full stress-5k is covered only by the one full gate before the final parity PR. Main a9e6aa2 has no scroll-length knob, so three pairs of full stress-5k (≈518 s a trial) do not fit 45 minutes; stress-1k is data only, and arm A is a clean `git archive a9e6aa2` plus that one JSON (`<data>/builds/main-a9e6aa2+stress1k/`, `FILES-ADDED.txt`, sha256 recorded). A design names, per fixture, the arms it runs (`DESIGNS` in `perf_summarize.py`, `fixture_arms` in `plan.json`), so another shape is configuration, not code.
+
+**Bounds and the 15 % rule** (per PR description too). Rule: the median over 3 pairs of (cand − A) / A median, for B and C separately. From calibration attempt 1 (10 A–A′ pairs of untouched main, 2026-10-26) we took the 95th percentile of |median of 3 AA′ deltas| over all 120 triples. That's the smallest change 3 pairs can tell apart from noise:
+
+| metric | kitchen-sink | stress-5k | giant-table | gated per PR |
+|---|---:|---:|---:|---|
+| launch→READY | 11 % (64 ms) | 22 % (282 ms) | 42 % (249 ms) | kitchen-sink only; stress-1k (no measured bound) and giant-table advisory |
+| first chunk | 20 % (11 ms) | 11 % (8 ms) | 15 % (11 ms) | yes, 15 % with a 20 ms absolute floor |
+| RSS at READY / peak | 0.5 % / 3.7 % | 3.7 % / 3.8 % | 1.0 % / 0.7 % | yes |
+| footprint at READY / peak | 2.1 % / 3.1 % | 10.2 % / 8.0 % | 4.3 % / 1.6 % | yes |
+
+- READY: kitchen-sink 11 %, stress 22 %, giant-table 42 %. First chunk: 11–20 % (8–11 ms absolute). RSS and footprint at READY and peak: 0.5–10 %.
+- So the 15 % FAIL rule gates memory and kitchen-sink READY. First chunk gets 15 % with a 20 ms absolute floor. READY on stress and giant-table is advisory: 3 pairs can't resolve 15 % there.
+- The gating is data, not a fixture list: `Scripts/perf-bounds.json` (written by `--measure-bounds`) holds the bounds, and launch→READY gates a fixture only when its bound is ≤ 15 % (or ≤ its absolute floor); a fixture without a measured bound is advisory. The plan records the bounds sha256 and the gated fixtures when the run starts; a later change makes the run INVALID.
+- Frame metrics have median ≈ 0, so relative deltas are meaningless; only the ceilings and an absolute Δ ≤ 2 frames apply.
+
+**What it can and can't catch** (per PR description too):
+- Catches: stalls (the 27/27 kitchen-sink stall at 940 ms/s, the post-boot 197 ms/s), sustained ≥ 1 % drops, ≥ 15 % memory growth, ≥ 15 % kitchen-sink READY.
+- Misses: shifts under 15 %, about half of true 15 % shifts on noisier metrics (stress footprint at READY has a 10 % floor), rare stalls that don't land in 3 trials, and READY regressions under about 25 % (stress) or 45 % (giant-table).
+
 - **full rule:** per-metric allowance = max(max \|ΔAA′\|, absolute floor), frozen in `calibration.json` before any candidate result exists (its `created_utc` must predate the first trial), with a ceiling of 15 % of A's median; the summary prints each allowance as a % of the median. PASS if the one-sided 95 % upper bound of the mean paired delta ≤ the allowance. A calibration over the ceiling is INCONCLUSIVE: quiesce and recalibrate once.
-- **Per-trial ceilings (both designs):** hitch > 10 ms/s, or dropped rate > 1 % (more than 3 dropped frames when a trial has < 2,000 frames). A candidate breach FAILs; a breach in A makes the run INVALID.
+- **Per-trial ceilings (both designs):** hitch > 10 ms/s, or dropped rate > 1 % (more than 3 dropped frames when a trial has < 2,000 frames). A candidate breach FAILs; a breach in A makes the run INVALID (environment; one predeclared rerun). Worst main values in calibration attempt 1: 6.0 ms/s (one frame on kitchen-sink) and 0.14 elsewhere.
 - **Traversal and renderer proof:** B and C must reach the last block (`endRow` = blocks − 1) with frames within ±15 % of A's median, or the trial FAILs. C must report `renderer=textkit2` at READY and after the scroll, with `tk2Layouts > 0` and `tk2NativeDraws > 0`; B must report every TK2 counter 0. The TextKit 1-backed share (`linkRoots / eligibleRoots`, `tk1BackedDraws / tk2Draws`) is printed per fixture.
-- **Refused before any trial** (exit 2): a gate run with less than its design (arm B, a fixture, pairs, the warm-up, the sampler, the candidate markers or `-rendererStats`), pr45 with a calibration or full without one, and a busy host. After the settle (300 s when the run booted the device) the host check records the load averages and the three busiest processes in `plan.json`; it refuses when the 1-min load is above 4.0 or a non-simulator process is above 100 % CPU, and kills nothing. Every trial records its start time, load and busiest processes; any trial above 6.0 makes the run INVALID. A pilot only warns.
-- **Fail closed:** a result counts only with every declared pair present, every metric finite, exit 0, the expected `READY` line, and the installed sha256 and argv matching the arm. The summarizer reads the design and the pilot flag from `plan.json`, never from its own flags, and marks a reduced plan INCOMPLETE. Precedence: candidate crash → FAIL; invalid trial or baseline failure → INVALID; candidate failure → FAIL; too few pairs → INVALID; calibration INCONCLUSIVE; statistical or ceiling failure → FAIL; PILOT; INCOMPLETE; PASS. Exit codes: PASS 0, FAIL 1, INVALID/REFUSED 2, INCONCLUSIVE 3, PILOT 4, INCOMPLETE 5.
-- **Reruns:** every verdict is appended to `perf-ledger.jsonl` beside the run directory. A FAIL with the same candidate binaries and design is never rerun (REFUSED); after two INCONCLUSIVE/INVALID runs the next is REFUSED. Pilots do not count.
+- **Refused before any trial** (exit 2): a gate run with less than its design (arm B, a fixture, an arm of a fixture, pairs, the warm-up, the sampler, the candidate markers or `-rendererStats`), and pr45 with a calibration or full without one.
+- **Host (firstmate policy):** quiet = 1-min load ≤ 4.0 and no non-simulator process above 100 % CPU. After the settle (300 s when the run booted the device) the driver samples the host every 30 s for up to 20 min (`--host-poll`, `--host-wait`) and starts when it is quiet, or after the wait regardless. `plan.json` records the last sample and the wait; every trial row records its start time, load and busiest processes. A run that was not quiet at the start or in any counted trial is **HOST-BUSY**: its PASS counts; its FAIL is reported as `FAIL-HOST-BUSY` (exit 6) and is re-run once at the next quiet window before it counts as a FAIL. Nothing is ever killed or reniced.
+- **Fail closed:** a result counts only with every declared pair present, every metric finite, exit 0, the expected `READY` line, and the installed sha256 and argv matching the arm. The summarizer reads the design and the pilot flag from `plan.json`, never from its own flags, and marks a reduced plan INCOMPLETE. Precedence: candidate crash → FAIL; invalid trial, baseline failure or A ceiling breach → INVALID; candidate failure → FAIL; too few pairs → INVALID; calibration INCONCLUSIVE; statistical or ceiling failure → FAIL; PILOT; INCOMPLETE; PASS; then a FAIL on a HOST-BUSY run → FAIL-HOST-BUSY. Exit codes: PASS 0, FAIL 1, INVALID/REFUSED 2, INCONCLUSIVE 3, PILOT 4, INCOMPLETE 5, FAIL-HOST-BUSY 6.
+- **Reruns:** every verdict is appended to `perf-ledger.jsonl` beside the run directory. A FAIL with the same candidate binaries and design is never rerun (REFUSED); a FAIL-HOST-BUSY allows one rerun, and a second FAIL-HOST-BUSY for the same binaries counts as FAIL; after two INCONCLUSIVE/INVALID runs the next is REFUSED. Pilots do not count.
 - **Deadlines:** per-fixture trial timeouts default to 1.5 × the pilot's longest scroll + 30 s (kitchen-sink 45 s, stress-1k 180, stress-5k 775, giant-table 95, text-dense 425, long-paragraph 45); `--suggest-timeouts` recomputes them from a pilot.
 - **Fixtures:** `text-dense` (~3,000 text-only paragraphs/headings) and `long-paragraph` (one ~20,000-character paragraph; the per-row layout worst case) are generated with `Tools/make-fixtures.swift`. Main does not bundle them, so the gated designs keep to fixtures arm A can open; text-dense and long-paragraph are reported as B-vs-C information only (a pilot-shaped run, uncalibrated), and the fixture sweep (§8.1) covers text-dense heights. Later PRs add their feature-dense fixture.
 - **Report:** per fixture × metric — A, B and C median (min–max), paired Δ (median, or mean with its 95 % upper bound), limit, verdict — with the coverage line and the TK1 share.
