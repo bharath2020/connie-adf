@@ -11,6 +11,7 @@ public struct ADFDocumentView: View {
     private let interactionHandler: (@MainActor (ADFInteraction) -> Void)?
     private let taskStates: [String: Bool]
     private let mentionContent: (@MainActor (String) -> AnyView)?
+    private let textRenderer: ADFTextRenderer
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -38,12 +39,14 @@ public struct ADFDocumentView: View {
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
                 taskStates: [String: Bool] = [:],
-                mentionContent: (@MainActor (String) -> AnyView)? = nil) {
+                mentionContent: (@MainActor (String) -> AnyView)? = nil,
+                textRenderer: ADFTextRenderer = .swiftUI) {
         self.model = model
         self.mediaProvider = mediaProvider
         self.interactionHandler = interactionHandler
         self.taskStates = taskStates
         self.mentionContent = mentionContent
+        self.textRenderer = textRenderer
     }
 
     /// TOC jumps use `ScrollViewReader.scrollTo` rather than writing the
@@ -210,7 +213,8 @@ public struct ADFDocumentView: View {
                             item: item,
                             margin: model.theme.spacing * 2,
                             containerWidth: containerWidth,
-                            visibility: model.search.visibleRows
+                            visibility: model.search.visibleRows,
+                            textRenderer: textRenderer
                         )
                         .modifier(reporter(item.id, model.search.visibleRows))
                     }
@@ -264,6 +268,13 @@ private struct DocumentRow: View {
     /// `ADFDocumentView`, constant during scroll).
     let containerWidth: CGFloat
     let visibility: VisibleRowRegistry
+    /// The host's text engine choice. Applied to this row's environment only
+    /// when the block is a top-level `.richText` (paragraph/heading): nested
+    /// text — panels, quotes, lists, captions, table cells — always renders
+    /// with SwiftUI, so the environment is reset to `.swiftUI` for every
+    /// other kind (an environment value would otherwise leak into a
+    /// container's children).
+    let textRenderer: ADFTextRenderer
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -293,10 +304,16 @@ private struct DocumentRow: View {
         heights.height(at: containerWidth, scaling: block.kind.heightScaling)
     }
 
+    private var rowTextRenderer: ADFTextRenderer {
+        if case .richText = block.kind { return textRenderer }
+        return .swiftUI
+    }
+
     var body: some View {
         Group {
             if isInRenderRegion || heights.isEmpty {
                 BlockView(block: block)
+                    .environment(\.adfTextRenderer, rowTextRenderer)
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
                     // Full width so the size measured below reports the
