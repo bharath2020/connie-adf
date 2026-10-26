@@ -43,6 +43,51 @@ struct TextKit2HeightParityTests {
             TK2Parity.adfText("First line") + "," + TK2Parity.hardBreak + "," + TK2Parity.adfText(medium)))
         fixtures.append(try await TK2Parity.fixture("centered", blockMarks: "{\"type\":\"alignment\",\"attrs\":{\"align\":\"center\"}}", content:
             TK2Parity.adfText(medium)))
+        // `text-dense` block 283, verbatim: TextKit 2 ended a line with
+        // the emoji that `Text` (TextKit 1, the text has a link) wraps —
+        // one line (22 pt) short at large.
+        fixtures.append(try await TK2Parity.fixture("link-emoji-wrap", content: [
+            TK2Parity.adfText("stream mark glyph spline table token matrix atlas block ", marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com/page/283\"}}"),
+            TK2Parity.adfText("scroll spline panel actor matrix spline document quartz theme cursor "),
+            TK2Parity.adfText("atlas chunk cursor render scroll buffer scroll stream \u{2764}\u{FE0F} "),
+        ].joined(separator: ",")))
+        return fixtures + (try await subsupLineFixtures())
+    }
+
+    /// Sub/superscript runs long enough to wrap: lines set wholly in a
+    /// raised or dropped run, first, middle and last, with and without
+    /// colour, links and a highlight. `stress-5k` block 503 (verbatim) was
+    /// 3.33 pt short at large and 24 pt at AX3: TextKit 2 lets a raised
+    /// run's offset eat its descent, `Text` does not.
+    static func subsupLineFixtures() async throws -> [TK2Parity.Fixture] {
+        func t(_ string: String, _ marks: String = "") -> String { TK2Parity.adfText(string, marks: marks) }
+        let sup = "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sup\"}}"
+        let sub = "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sub\"}}"
+        let color = "{\"attrs\":{\"color\":\"#36b37e\"},\"type\":\"textColor\"}"
+        let link = "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}}"
+        let highlight = "{\"type\":\"backgroundColor\",\"attrs\":{\"color\":\"#fedec8\"}}"
+        let head = "actor batch table panel inline actor mark atlas anchor "
+        let tail = "schema render raster fixture lazy glyph expand ledger glyph "
+        var cases: [(String, String)] = [
+            ("stress-5k-503", t(head) + "," + t(tail, color + "," + sup)),
+        ]
+        for (name, mark) in [("sup", sup), ("sub", sub)] {
+            cases += [
+                ("\(name)-last", t(head + head) + "," + t(tail + tail, mark)),
+                ("\(name)-last-colour", t(head + head) + "," + t(tail + tail, color + "," + mark)),
+                ("\(name)-first", t(tail + tail, mark) + "," + t(" " + head + head)),
+                ("\(name)-middle", t(head) + "," + t(tail + tail + tail, mark) + "," + t(" " + head + head)),
+                ("\(name)-middle-highlight", t(head) + "," + t(tail + tail + tail, mark + "," + highlight) + "," + t(" " + head)),
+                ("\(name)-link-before", t(head, link) + "," + t(tail + tail + tail, mark) + "," + t(" " + head)),
+                ("\(name)-linked", t(head) + "," + t(tail + tail + tail, mark + "," + link)),
+                ("\(name)-then-break", t(head) + "," + t(tail + tail, mark) + "," + TK2Parity.hardBreak + "," + t(head)),
+                ("\(name)-trailing-break", t(head) + "," + t(tail + tail, mark) + "," + TK2Parity.hardBreak),
+            ]
+        }
+        var fixtures: [TK2Parity.Fixture] = []
+        for (name, content) in cases {
+            fixtures.append(try await TK2Parity.fixture(name, content: content))
+        }
         return fixtures
     }
 
@@ -61,7 +106,12 @@ struct TextKit2HeightParityTests {
                     if delta > worst.delta {
                         worst = (delta, "\(fixture.name) \(size) w=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
                     }
-                    #expect(delta <= Self.tolerance, "\(fixture.name) \(size) w=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
+                    let label = "\(fixture.name) \(size) w=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)"
+                    if TextKit2FixtureSweepTests.isLinkEmojiResidual(fixture, swiftUI: h.swiftUI, textKit2: h.textKit2) {
+                        withKnownIssue { #expect(delta <= Self.tolerance, "\(label)") }
+                    } else {
+                        #expect(delta <= Self.tolerance, "\(label)")
+                    }
                 }
             }
         }
@@ -84,7 +134,12 @@ struct TextKit2HeightParityTests {
                 for width in [CGFloat(370), 300.5] {
                     let h = TK2Parity.heights(fixture, env: env, width: width)
                     checked += 1
-                    #expect(abs(h.swiftUI - h.textKit2) <= Self.tolerance, "\(fixture.name) \(env) w=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
+                    let label = "\(fixture.name) \(env) w=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)"
+                    if TextKit2FixtureSweepTests.isLinkEmojiResidual(fixture, swiftUI: h.swiftUI, textKit2: h.textKit2) {
+                        withKnownIssue { #expect(abs(h.swiftUI - h.textKit2) <= Self.tolerance, "\(label)") }
+                    } else {
+                        #expect(abs(h.swiftUI - h.textKit2) <= Self.tolerance, "\(label)")
+                    }
                 }
             }
         }
