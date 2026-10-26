@@ -18,7 +18,8 @@ struct TextKit2PixelParityTests {
     nonisolated static let sizes: [DynamicTypeSize] = [.large, .xxxLarge, .accessibility3]
     nonisolated static let maxDifferingFraction = 0.002
 
-    /// Every mark a TextKit 2 row draws (a link would send it to SwiftUI).
+    /// Every mark TextKit 2 draws natively (a link makes the row TextKit
+    /// 1-backed: `kitchenSinkParagraph()`).
     static func everyMark() async throws -> TK2Parity.Fixture {
         func t(_ string: String, _ marks: String = "") -> String { TK2Parity.adfText(string, marks: marks) }
         let content = [
@@ -41,9 +42,9 @@ struct TextKit2PixelParityTests {
         return try await TK2Parity.fixture("every-mark", content: content)
     }
 
-    /// The demo's kitchen-sink paragraph, verbatim (it stays on SwiftUI:
-    /// it has a link — `TextKit2FallbackTests`), and the same without its
-    /// link: underline, strike and annotation on lines after one holding a
+    /// The demo's kitchen-sink paragraph, verbatim (TextKit 1-backed: it
+    /// has a link), and the same without its link (native TextKit 2):
+    /// underline, strike and annotation on lines after one holding a
     /// subscript, whose baseline is fractional.
     static func kitchenSinkParagraph(linked: Bool = true) async throws -> TK2Parity.Fixture {
         func t(_ string: String, _ marks: String = "") -> String { TK2Parity.adfText(string, marks: marks) }
@@ -63,6 +64,38 @@ struct TextKit2PixelParityTests {
             TK2Parity.hardBreak, t("after the break"),
         ].joined(separator: ",")
         return try await TK2Parity.fixture(linked ? "kitchen-sink-paragraph" : "kitchen-sink-paragraph-unlinked", content: content)
+    }
+
+    /// A linked, struck paragraph wrapping below a subscript line: every
+    /// later line has a fractional baseline (TextKit 1-backed).
+    static func linkAfterSubscript() async throws -> TK2Parity.Fixture {
+        let medium = "Ten tired otters cheer while a careful heron stares at the outer rim of the sunlit marsh in late autumn"
+        return try await TK2Parity.fixture("link-after-subscript", content: [
+            TK2Parity.adfText("H"),
+            TK2Parity.adfText("2", marks: "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sub\"}}"),
+            TK2Parity.adfText("O " + medium + " " + medium, marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}},{\"type\":\"strike\"}"),
+        ].joined(separator: ","))
+    }
+
+    /// A centred, highlighted paragraph opening with a link: TextKit 1
+    /// fills whole line fragments, extends line-ending whitespace to the
+    /// frame's edge, and sizes the frame by its lines' used rects.
+    static func centredHighlightAfterLink() async throws -> TK2Parity.Fixture {
+        let medium = "The quick brown fox jumps over the lazy dog while seventeen purple elephants rehearse"
+        return try await TK2Parity.fixture("centred-highlight-after-link", blockMarks: "{\"type\":\"alignment\",\"attrs\":{\"align\":\"center\"}}", content: [
+            TK2Parity.adfText("go", marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}}"),
+            TK2Parity.adfText(" " + medium + " " + medium, marks: "{\"type\":\"backgroundColor\",\"attrs\":{\"color\":\"#fedec8\"}}"),
+        ].joined(separator: ","))
+    }
+
+    /// A link between emoji wrapping over several lines: the lines a
+    /// default TextKit 1 stack grew by the emoji face's metrics.
+    static func linkEmojiLines() async throws -> TK2Parity.Fixture {
+        try await TK2Parity.fixture("link-emoji-lines", content: [
+            TK2Parity.adfText("stream mark glyph spline table token matrix atlas block ", marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com/page/283\"}}"),
+            TK2Parity.adfText("scroll spline panel \u{2764}\u{FE0F} actor matrix spline document \u{1F680} quartz theme cursor "),
+            TK2Parity.adfText("atlas chunk cursor render scroll buffer scroll stream \u{2764}\u{FE0F} "),
+        ].joined(separator: ","))
     }
 
     /// A struck paragraph wrapping below a subscript line: every later line
@@ -122,6 +155,23 @@ struct TextKit2PixelParityTests {
         try compare(try await Self.strikeAfterSubscript(), env: env)
     }
 
+    @Test("link decorations on lines with fractional baselines (TextKit 1-backed)", arguments: sizes, [false, true])
+    func fractionalBaselineLinkPixels(size: DynamicTypeSize, dark: Bool) async throws {
+        let env = TK2Parity.Environment(size: size, dark: dark)
+        try compare(try await Self.kitchenSinkParagraph(), env: env)
+        try compare(try await Self.linkAfterSubscript(), env: env)
+    }
+
+    @Test("text with a link: backgrounds and frame as TextKit 1 draws them", arguments: sizes, [false, true])
+    func linkTextBackgroundPixels(size: DynamicTypeSize, dark: Bool) async throws {
+        try compare(try await Self.centredHighlightAfterLink(), env: TK2Parity.Environment(size: size, dark: dark))
+    }
+
+    @Test("linked lines with emoji sit where Text puts them", arguments: [DynamicTypeSize.large, .accessibility3, .accessibility5])
+    func linkEmojiLinePixels(size: DynamicTypeSize) async throws {
+        try compare(try await Self.linkEmojiLines(), env: TK2Parity.Environment(size: size))
+    }
+
     @Test("a centred highlight renders identically", arguments: sizes, [false, true])
     func centredHighlightPixels(size: DynamicTypeSize, dark: Bool) async throws {
         try compare(try await Self.centredHighlight(), env: TK2Parity.Environment(size: size, dark: dark))
@@ -133,6 +183,8 @@ struct TextKit2PixelParityTests {
         var env = TK2Parity.Environment(size: .large, dark: dark)
         env.foreground = .purple
         try compare(fixture, env: env)
+        // Links keep the tint under a host colour, on both arms.
+        try compare(try await Self.kitchenSinkParagraph(), env: env)
         // Matching arms alone would also pass if neither applied the colour:
         // the coloured SwiftUI render must differ from the uncoloured one.
         let height = max(TK2Parity.height(fixture, arm: .swiftUI, env: env, width: Self.width) + 40, 200)

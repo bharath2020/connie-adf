@@ -6,10 +6,13 @@ import ADFPreparation
 ///
 /// Every counter is about TextKit 2 rows only: text that falls back renders
 /// through SwiftUI's `Text` and is not counted here (see
-/// `ADFTextKit2Coverage` for which roots fall back). `liveRowCount` counts
-/// TextKit 2 row views currently alive (it returns to zero once a switch
-/// back to `.swiftUI` has released them); the others are cumulative since
-/// launch. Always zero on platforms without UIKit.
+/// `ADFTextKit2Coverage` for which roots fall back). A row whose text has
+/// a link is laid out and drawn by its own TextKit 1 stack, as `Text` lays
+/// out linked text: such rows and their draws are counted apart
+/// (`textKit1Backed…`) and never as native TextKit 2 draws. `liveRowCount`
+/// and `textKit1BackedRowCount` count row views currently alive (back to
+/// zero once a switch to `.swiftUI` has released them); the others are
+/// cumulative since launch. Always zero on platforms without UIKit.
 public struct ADFTextKit2Stats: Sendable, Hashable {
     /// TextKit 2 row views currently alive.
     public var liveRowCount: Int
@@ -21,12 +24,23 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
     /// `NSTextLayoutFragment`) — the proof that native TextKit 2 rendering
     /// ran, not merely that a row view existed.
     public var nativeDrawCount: Int
+    /// Of `liveRowCount`: rows laid out and drawn by their TextKit 1 stack
+    /// (text with a link).
+    public var textKit1BackedRowCount: Int
+    /// Of `drawCount`: draw passes TextKit 1 performed (never counted in
+    /// `nativeDrawCount`).
+    public var textKit1BackedDrawCount: Int
 
-    public init(liveRowCount: Int, layoutCount: Int, drawCount: Int, nativeDrawCount: Int = 0) {
+    public init(
+        liveRowCount: Int, layoutCount: Int, drawCount: Int, nativeDrawCount: Int = 0,
+        textKit1BackedRowCount: Int = 0, textKit1BackedDrawCount: Int = 0
+    ) {
         self.liveRowCount = liveRowCount
         self.layoutCount = layoutCount
         self.drawCount = drawCount
         self.nativeDrawCount = nativeDrawCount
+        self.textKit1BackedRowCount = textKit1BackedRowCount
+        self.textKit1BackedDrawCount = textKit1BackedDrawCount
     }
 }
 
@@ -41,18 +55,18 @@ public struct ADFTextKit2Coverage: Sendable, Hashable {
     public var eligibleRoots: Int
     public var fallbackRoots: Int
     /// Of `fallbackRoots`: top-level paragraphs and headings that stay on
-    /// SwiftUI (inline atoms, links, undescribable theme fonts, empty text,
+    /// SwiftUI (inline atoms, undescribable theme fonts, empty text,
     /// trailing hard breaks before iOS 26).
     public var textFallbackRoots: Int
-    /// Of `textFallbackRoots`: those that stay on SwiftUI because they
-    /// contain a link (and no inline atom).
-    public var linkFallbackRoots: Int
+    /// Of `eligibleRoots`: those containing a link, which the row lays out
+    /// and draws with TextKit 1 (`ADFTextKit2Stats.textKit1BackedRowCount`).
+    public var linkRoots: Int
 
-    public init(eligibleRoots: Int, fallbackRoots: Int, textFallbackRoots: Int = 0, linkFallbackRoots: Int = 0) {
+    public init(eligibleRoots: Int, fallbackRoots: Int, textFallbackRoots: Int = 0, linkRoots: Int = 0) {
         self.eligibleRoots = eligibleRoots
         self.fallbackRoots = fallbackRoots
         self.textFallbackRoots = textFallbackRoots
-        self.linkFallbackRoots = linkFallbackRoots
+        self.linkRoots = linkRoots
     }
 }
 
@@ -68,27 +82,29 @@ extension ADFTextRenderer {
     public static func textKit2Coverage(of blocks: [RenderBlock]) -> ADFTextKit2Coverage {
         var eligible = 0
         var textFallback = 0
-        var linkFallback = 0
+        var linked = 0
         for block in blocks {
             guard case .richText(let segments, _) = block.kind else { continue }
             switch TextKit2Eligibility.verdict(segments) {
-            case .eligible:
+            case .eligible(let text):
                 eligible += 1
-            case .fallback(let reason):
+                if text.runs.contains(where: { $0.link != nil }) { linked += 1 }
+            case .fallback:
                 textFallback += 1
-                if reason == .link { linkFallback += 1 }
             }
         }
         return ADFTextKit2Coverage(
             eligibleRoots: eligible, fallbackRoots: blocks.count - eligible,
-            textFallbackRoots: textFallback, linkFallbackRoots: linkFallback
+            textFallbackRoots: textFallback, linkRoots: linked
         )
     }
 }
 
 /// Which prepared rich text the TextKit 2 arm draws. Anything else stays
 /// on SwiftUI's `Text`, unchanged — the arm only takes text whose size and
-/// pixels it reproduces exactly (`docs/TextKit2-Stack.md` §6.4).
+/// pixels it reproduces exactly (`docs/TextKit2-Stack.md` §6.4). Text with
+/// a link is eligible: the row lays it out and draws it with TextKit 1, as
+/// `Text` does.
 enum TextKit2Eligibility {
     /// Why a paragraph or heading stays on SwiftUI.
     enum Fallback: Sendable, Hashable {
@@ -101,10 +117,6 @@ enum TextKit2Eligibility {
         /// A run without a font spec (a theme font supplied as a raw
         /// SwiftUI `Font`): TextKit cannot resolve the font `Text` would.
         case undescribable
-        /// A link. `Text` lays out and draws linked text with TextKit 1,
-        /// whose wrapping, line heights and decorations TextKit 2 does not
-        /// reproduce; native links are a later stack item.
-        case link
         /// Two or more trailing hard breaks before iOS 26, where `Text`
         /// also drops the middle empty line's negative leading at AX3+
         /// (0.333–1.333 pt shorter, no exact rule found).
@@ -133,12 +145,9 @@ enum TextKit2Eligibility {
         }
         guard let text = SegmentedTextView.mergedText(segments) else { return .fallback(.atom) }
         guard !text.characters.isEmpty else { return .fallback(.empty) }
-        var hasLink = false
-        for run in text.runs {
-            if run.adfFontSpec == nil { return .fallback(.undescribable) }
-            if run.link != nil { hasLink = true }
+        for run in text.runs where run.adfFontSpec == nil {
+            return .fallback(.undescribable)
         }
-        if hasLink { return .fallback(.link) }
         if !trailingBreaksMatchText, text.characters.reversed().prefix(while: \.isNewline).count >= 2 {
             return .fallback(.trailingBreaks)
         }
@@ -165,13 +174,16 @@ final class TextKit2Diagnostics {
     private(set) var layoutCount = 0
     private(set) var drawCount = 0
     private(set) var nativeDrawCount = 0
+    private(set) var textKit1BackedRowCount = 0
+    private(set) var textKit1BackedDrawCount = 0
     /// Live rows per owner (block) id.
     private var owners: [String: Int] = [:]
 
     var snapshot: ADFTextKit2Stats {
         ADFTextKit2Stats(
             liveRowCount: liveRowCount, layoutCount: layoutCount,
-            drawCount: drawCount, nativeDrawCount: nativeDrawCount
+            drawCount: drawCount, nativeDrawCount: nativeDrawCount,
+            textKit1BackedRowCount: textKit1BackedRowCount, textKit1BackedDrawCount: textKit1BackedDrawCount
         )
     }
 
@@ -184,9 +196,16 @@ final class TextKit2Diagnostics {
         liveRowCount += 1
     }
 
-    func rowDestroyed(ownerID: String?) {
+    func rowDestroyed(ownerID: String?, textKit1Backed: Bool = false) {
         liveRowCount -= 1
+        if textKit1Backed { textKit1BackedRowCount -= 1 }
         release(ownerID)
+    }
+
+    /// A live row started (`true`) or stopped being laid out and drawn by
+    /// its TextKit 1 stack.
+    func row(textKit1Backed: Bool) {
+        textKit1BackedRowCount += textKit1Backed ? 1 : -1
     }
 
     func row(changedOwnerFrom old: String?, to new: String?) {
@@ -199,10 +218,12 @@ final class TextKit2Diagnostics {
         layoutCount += 1
     }
 
-    /// A draw pass; `native`: TextKit 2 drew at least one layout fragment.
-    func didDraw(native: Bool) {
+    /// A draw pass; `native`: TextKit 2 drew at least one layout fragment;
+    /// `textKit1`: the row's TextKit 1 stack drew it.
+    func didDraw(native: Bool, textKit1: Bool = false) {
         drawCount += 1
         if native { nativeDrawCount += 1 }
+        if textKit1 { textKit1BackedDrawCount += 1 }
     }
 
     private func release(_ ownerID: String?) {

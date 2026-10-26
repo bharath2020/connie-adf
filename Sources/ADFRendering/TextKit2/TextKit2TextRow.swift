@@ -41,8 +41,8 @@ struct TextKit2Leaf<Fallback: View>: View {
     /// spacing, text case, a line limit (with its truncation and
     /// tightening), shrink-to-fit and redaction all change how `Text`
     /// lays out or draws, and the row reproduces none of them. Colour comes
-    /// through `adfTextForeground`; tint only colours links, which never
-    /// reach the row.
+    /// through `adfTextForeground`. Tint, which `Text` uses for links, is
+    /// not readable from UIKit: rows draw links in the accent colour.
     static func supportsEnvironment(
         lineSpacing: CGFloat, textCase: Text.Case?, lineLimit: Int?,
         minimumScaleFactor: CGFloat, redactionReasons: RedactionReasons
@@ -126,6 +126,8 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
     private func update(_ view: TextKit2RowView, context: Context) {
         handle.view = view
         view.apply(Self.inputs(text: text, style: style, environment: context.environment), ownerID: ownerID)
+        let action = context.environment.openURL
+        view.openURL = { url in action(url) }
     }
 
     static func inputs(text: AttributedString, style: TextBlockStyle, environment: EnvironmentValues) -> TextKit2RenderInputs {

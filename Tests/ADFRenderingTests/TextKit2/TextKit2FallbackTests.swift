@@ -6,13 +6,13 @@ import ADFModel
 import ADFPreparation
 @testable import ADFRendering
 
-/// What the TextKit 2 arm must NOT draw stays on SwiftUI's `Text`, so the
-/// switch cannot move it: text with a link (`Text` lays it out with
-/// TextKit 1, whose wrapping and line heights the row does not reproduce —
-/// it measured 1 px to 22 pt off), two or more trailing hard breaks before
-/// iOS 26, and inherited `Text` styling the row does not implement. Fixed
-/// regression cases: each formerly measured mismatch, asserted as a
-/// fallback, plus the document-level consequence the switch budget guards.
+/// Content that measured off under the TextKit 2 arm, as fixed regression
+/// cases: text with a link (laid out by the row's TextKit 1 stack, as
+/// `Text` lays it out — once 22 pt short under TextKit 2, then 1 px (AX3)
+/// to 4 px (AX5) tall where an emoji's fallback font grew a TextKit 1
+/// line) must now measure exactly; two or more trailing hard breaks before
+/// iOS 26 and inherited `Text` styling the row does not implement stay on
+/// SwiftUI. Plus the document-level consequence the switch budget guards.
 @Suite("TextKit 2 fallbacks", .serialized)
 @MainActor
 struct TextKit2FallbackTests {
@@ -31,8 +31,8 @@ struct TextKit2FallbackTests {
         let tail = "schema render raster fixture lazy glyph expand ledger glyph "
         return [
             // `text-dense` block 283, verbatim: TextKit 2 ends a line with the
-            // emoji `Text` wraps (22 pt short at large); laid out by TextKit 1
-            // it was still 1 px (AX3) to 4 px (AX5) taller than `Text`.
+            // emoji `Text` wraps (22 pt short at large); laid out by a default
+            // TextKit 1 stack it was 1 px (AX3) to 4 px (AX5) taller.
             try await TK2Parity.fixture("link-emoji-wrap", content: [
                 t("stream mark glyph spline table token matrix atlas block ", "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com/page/283\"}}"),
                 t("scroll spline panel actor matrix spline document quartz theme cursor "),
@@ -75,20 +75,20 @@ struct TextKit2FallbackTests {
         return found
     }
 
-    @Test("text with a link stays on SwiftUI under .textKit2 and measures as Text does")
-    func linkedTextFallsBack() async throws {
+    @Test("text with a link is a TextKit 1-backed row that measures exactly as Text does")
+    func linkedTextIsExact() async throws {
         let short = try await TK2Parity.fixture("short-link", content: Self.t("see ", Self.link) + "," + Self.t("plain"))
         for fixture in try await Self.linkedFixtures() + [short] {
-            guard case .fallback(.link) = TextKit2Eligibility.verdict(fixture.segments) else {
-                Issue.record("\(fixture.name) must fall back for its link")
+            guard case .eligible = TextKit2Eligibility.verdict(fixture.segments) else {
+                Issue.record("\(fixture.name) must be eligible")
                 continue
             }
             for size in [DynamicTypeSize.large, .accessibility3, .accessibility5] {
                 let h = TK2Parity.heights(fixture, size: size, width: Self.width)
-                #expect(h.swiftUI == h.textKit2, "\(fixture.name) \(size): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
+                #expect(abs(h.swiftUI - h.textKit2) <= 0.01, "\(fixture.name) \(size): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
             }
             let rows = Self.rowViews(hosting: TK2Parity.hosted(fixture, arm: .textKit2, env: .init(size: .accessibility5)))
-            #expect(rows.isEmpty, "\(fixture.name) created \(rows.count) TextKit 2 row(s)")
+            #expect(rows.count == 1 && rows.allSatisfy(\.isTextKit1Backed), "\(fixture.name): \(rows.count) row(s), TextKit 1-backed: \(rows.map(\.isTextKit1Backed))")
         }
     }
 
@@ -139,7 +139,7 @@ struct TextKit2FallbackTests {
     }
 
     @Test("a heading below formerly mismatched rows does not move on a switch, either way", arguments: [DynamicTypeSize.accessibility3, .accessibility5])
-    func headingBelowFallbacksStaysPut(size: DynamicTypeSize) async throws {
+    func headingBelowStaysPut(size: DynamicTypeSize) async throws {
         let rows = try await Self.linkedFixtures() + (try await Self.twoTrailingBreaks())
         let heading = try await TK2Parity.heading(2, "Below the formerly mismatched rows")
         let box = TK2Parity.GuideBox()
@@ -197,20 +197,20 @@ struct TextKit2FallbackTests {
             return Self.rows(in: host.view).map { $0.inputs?.inheritedForeground }
         }
         func drawn(_ row: TextKit2RowView) throws -> UIColor? {
-            TextKit2TextBuilder.attributedString(for: try #require(row.inputs)).attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
+            TextKit2TextBuilder.attributedString(for: try #require(row.inputs), linkColor: .blue).attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
         }
 
         let purple = try await foregrounds()
-        #expect(purple.count == 2 && purple.allSatisfy { $0 == .purple }, "\(purple)")
+        #expect(purple.count == 3 && purple.allSatisfy { $0 == .purple }, "\(purple)")
         if let row = Self.rows(in: host.view).first {
             #expect(try drawn(row)?.cgColor.components == UIColor(Color.purple).cgColor.components)
         }
         host.rootView = document(.orange)
         let orange = try await foregrounds()
-        #expect(orange.count == 2 && orange.allSatisfy { $0 == .orange }, "\(orange)")
+        #expect(orange.count == 3 && orange.allSatisfy { $0 == .orange }, "\(orange)")
         host.rootView = document(nil)
         let inherited = try await foregrounds()
-        #expect(inherited.count == 2 && inherited.allSatisfy { $0 == nil }, "\(inherited)")
+        #expect(inherited.count == 3 && inherited.allSatisfy { $0 == nil }, "\(inherited)")
 
         window.isHidden = true
         window.rootViewController = nil

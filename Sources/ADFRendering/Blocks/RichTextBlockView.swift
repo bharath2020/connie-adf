@@ -7,7 +7,7 @@ import ADFPreparation
 ///
 /// Two text engines share this leaf. The SwiftUI arm is the shipping path.
 /// When the environment selects `.textKit2` AND the content is eligible
-/// (`TextKit2Eligibility`: no inline atom, no link, every run with a font
+/// (`TextKit2Eligibility`: no inline atom, every run with a font
 /// spec) AND no inherited styling the row cannot reproduce is set
 /// (`TextKit2Leaf`), a UIKit-hosted TextKit 2 row draws it instead — plain
 /// `if`/`else` at the leaf (never `AnyView`, never `#available`: §18's

@@ -13,9 +13,9 @@ import ADFPreparation
 /// preparer did not colour: the host's `ADFDocumentView(textForeground:)`
 /// today, a container's contrast foreground in later PRs — styling a
 /// container applies through view modifiers reaches a UIKit row only
-/// through this explicit channel (`TextKit2RowRepresentable`). Tint needs
-/// no input: `Text` uses it only for links, and linked text stays on
-/// SwiftUI. Inherited font weight (table headers) joins with tables (PR 5).
+/// through this explicit channel (`TextKit2RowRepresentable`). Links take
+/// the row's link colour (`attributedString(for:linkColor:)`). Inherited
+/// font weight (table headers) joins with tables (PR 5).
 struct TextKit2RenderInputs: Hashable {
     var text: AttributedString
     var alignment: ADFAlignment?
@@ -51,10 +51,15 @@ struct TextKit2RenderInputs: Hashable {
 }
 
 extension NSAttributedString.Key {
-    /// Run background fill, drawn by the row itself (see
-    /// `TextKit2RowView`) so its extent matches SwiftUI's; kept out of
+    /// Run background fill of text without a link, drawn by the row itself
+    /// (see `TextKit2RowView`) so its extent matches SwiftUI's; kept out of
     /// `.backgroundColor` so TextKit does not draw a second, shorter one.
+    /// (Text with a link is drawn by TextKit 1, which fills
+    /// `.backgroundColor` as SwiftUI does.)
     static let adfRunBackground = NSAttributedString.Key("adf.runBackground")
+    /// A link's destination. Kept out of `.link`, which makes TextKit
+    /// restyle the run with its own link colour and underline.
+    static let adfLink = NSAttributedString.Key("adf.link")
 }
 
 /// Converts a prepared SwiftUI `AttributedString` into the
@@ -77,14 +82,16 @@ enum TextKit2TextBuilder {
 
     /// Builds the TextKit string. Foreground precedence per run: the
     /// prepared foreground (an author `textColor`, or the contrast colour
-    /// the composer derived from a `backgroundColor` mark) first; then the
-    /// inherited foreground; else `.label`. Rows never carry a link
-    /// (`TextKit2Eligibility`).
-    static func attributedString(for inputs: TextKit2RenderInputs) -> NSAttributedString {
+    /// the composer derived from a `backgroundColor` mark) first; then, for
+    /// a link run, `linkColor` (`Text` colours links with the tint, which a
+    /// foreground style does not override); then the inherited foreground;
+    /// else `.label`.
+    static func attributedString(for inputs: TextKit2RenderInputs, linkColor: UIColor) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let scale = baselineScale(for: inputs.sizeCategory)
         let fallbackSpec = ADFFontSpec(textStyle: .body)
         let inheritedForeground = inputs.inheritedForeground.map(UIColor.init)
+        let hasLink = inputs.text.runs.contains { $0.link != nil }
 
         for run in inputs.text.runs {
             let string = String(inputs.text[run.range].characters)
@@ -98,19 +105,24 @@ enum TextKit2TextBuilder {
 
             if let foreground = run.foregroundColor {
                 attributes[.foregroundColor] = UIColor(foreground)
+            } else if run.link != nil {
+                attributes[.foregroundColor] = linkColor
             } else if let inheritedForeground {
                 attributes[.foregroundColor] = inheritedForeground
             } else {
                 attributes[.foregroundColor] = UIColor.label
             }
             if let background = run.backgroundColor {
-                attributes[.adfRunBackground] = UIColor(background)
+                attributes[hasLink ? .backgroundColor : .adfRunBackground] = UIColor(background)
             }
             if run.underlineStyle != nil {
                 attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             if run.strikethroughStyle != nil {
                 attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            }
+            if let link = run.link {
+                attributes[.adfLink] = link
             }
             if let offset = run.baselineOffset {
                 attributes[.baselineOffset] = offset * scale

@@ -21,9 +21,10 @@ struct TextKit2FixtureSweepTests {
     nonisolated static let width: CGFloat = 370
     nonisolated static let tolerance: CGFloat = 0.01
     /// Eligible roots per document (default theme; the same on iOS 18 and
-    /// 26 — no root ends in two hard breaks). Pinned so a regression that
+    /// 26 — no root ends in two hard breaks), linked roots included: 1, 507
+    /// and 808 of them are TextKit 1-backed. Pinned so a regression that
     /// makes text ineligible cannot pass the sweep by measuring nothing.
-    nonisolated static let expectedEligible = ["kitchen-sink": 9, "stress-5k": 1_893, "text-dense": 2_192]
+    nonisolated static let expectedEligible = ["kitchen-sink": 10, "stress-5k": 2_400, "text-dense": 3_000]
 
     static func fixtureData(_ name: String) throws -> Data {
         var url = URL(fileURLWithPath: #filePath)
