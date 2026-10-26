@@ -7,7 +7,7 @@ import ADFPreparation
 /// the same semantic `Font` at a given content size category.
 ///
 /// Fonts come from the text style's *preferred* descriptor
-/// (`UIFont.preferredFont(forTextStyle:compatibleWith:)`), then symbolic
+/// (`UIFontDescriptor.preferredFontDescriptor(withTextStyle:compatibleWith:)`), then symbolic
 /// traits (bold / italic) and the monospaced design are layered on that
 /// descriptor. That is what keeps the style's line metrics — ascent,
 /// descent, leading — identical to SwiftUI's: a font created from a point
@@ -18,31 +18,45 @@ enum TextKit2FontResolver {
     private struct Key: Hashable {
         let spec: ADFFontSpec
         let category: UIContentSizeCategory
+        let legibilityWeight: LegibilityWeight?
     }
 
     private static var cache: [Key: UIFont] = [:]
 
-    /// The platform font for `spec` at `category`. Memoized: the same
-    /// (spec, category) always returns the same `UIFont` instance.
-    static func font(for spec: ADFFontSpec, category: UIContentSizeCategory) -> UIFont {
-        let key = Key(spec: spec, category: category)
+    /// The platform font for `spec` at `category` (and the Bold Text
+    /// accessibility setting, `legibilityWeight == .bold`, which makes
+    /// SwiftUI's semantic fonts heavier). Memoized: the same inputs always
+    /// return the same `UIFont` instance.
+    static func font(for spec: ADFFontSpec, category: UIContentSizeCategory, legibilityWeight: LegibilityWeight? = nil) -> UIFont {
+        let key = Key(spec: spec, category: category, legibilityWeight: legibilityWeight)
         if let cached = cache[key] { return cached }
-        let font = resolve(spec, category: category)
+        let font = resolve(key)
         cache[key] = font
         return font
     }
 
-    private static func resolve(_ spec: ADFFontSpec, category: UIContentSizeCategory) -> UIFont {
-        let traits = UITraitCollection(preferredContentSizeCategory: category)
-        let base = UIFont.preferredFont(forTextStyle: uiTextStyle(spec.textStyle), compatibleWith: traits)
-        var descriptor = base.fontDescriptor
+    private static func resolve(_ key: Key) -> UIFont {
+        // Measured against SwiftUI's `Text` widths: with the Bold Text
+        // setting the preferred descriptor resolves body → semibold,
+        // headline → heavy, title1 + bold → bold, monospaced → mono
+        // semibold, italic → regular italic, exactly as SwiftUI's semantic
+        // fonts do. Two traps, both measured: the descriptor of
+        // `preferredFont(…)` drops the weight, and so does reading
+        // `symbolicTraits` from the preferred descriptor before the font is
+        // created (it resolves and caches the regular face) — hence only the
+        // spec's own traits are applied, never a read-modify-write.
+        let traits = UITraitCollection(preferredContentSizeCategory: key.category).modifyingTraits { traits in
+            if key.legibilityWeight == .bold { traits.legibilityWeight = .bold }
+        }
+        let spec = key.spec
+        var descriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: uiTextStyle(spec.textStyle), compatibleWith: traits)
         if spec.monospaced, let mono = descriptor.withDesign(.monospaced) {
             descriptor = mono
         }
-        var symbolic = descriptor.symbolicTraits
+        var symbolic: UIFontDescriptor.SymbolicTraits = []
         if spec.bold { symbolic.insert(.traitBold) }
         if spec.italic { symbolic.insert(.traitItalic) }
-        if symbolic != descriptor.symbolicTraits, let traited = descriptor.withSymbolicTraits(symbolic) {
+        if !symbolic.isEmpty, let traited = descriptor.withSymbolicTraits(symbolic) {
             descriptor = traited
         }
         // Size 0 keeps the descriptor's (text-style) point size.

@@ -4,23 +4,71 @@ import UIKit
 import ADFModel
 import ADFPreparation
 
-/// Everything the TextKit 2 row's layout depends on. `Hashable` so the
-/// representable re-applies only when something actually changed, and so a
-/// measurement is a pure function of (inputs, width).
-struct TextKit2TextInputs: Hashable {
-    let text: AttributedString
-    let alignment: ADFAlignment?
-    let isHeading: Bool
-    let sizeCategory: UIContentSizeCategory
-    let layoutDirection: LayoutDirection
-    let displayScale: CGFloat
+/// Everything a TextKit 2 row's layout and drawing depend on, resolved from
+/// the prepared block and the SwiftUI environment. `Hashable` so the row
+/// re-applies only when something actually changed, and so a measurement is
+/// a pure function of (inputs, width) — the cache key of §2.8.
+///
+/// The `inherited…` fields stand for styling a container applies to its
+/// text through view modifiers (a table header's semibold, a dark-mode
+/// contrast foreground). Top-level rows have none; the fields exist so the
+/// later container adapters feed them here instead of inventing their own
+/// channel. `inheritedForeground` is honoured by the builder;
+/// `inheritedFontWeight` is carried (cache key, redraw decision) and is
+/// applied by the first adapter that sets it.
+struct TextKit2RenderInputs: Hashable {
+    var text: AttributedString
+    var alignment: ADFAlignment?
+    var isHeading: Bool
+    var sizeCategory: UIContentSizeCategory
+    var layoutDirection: LayoutDirection
+    var displayScale: CGFloat
+    var legibilityWeight: LegibilityWeight?
+    var colorScheme: ColorScheme
+    var inheritedForeground: Color?
+    var inheritedFontWeight: Font.Weight?
+    var inheritedTint: Color?
+
+    init(
+        text: AttributedString,
+        alignment: ADFAlignment? = nil,
+        isHeading: Bool = false,
+        sizeCategory: UIContentSizeCategory = .large,
+        layoutDirection: LayoutDirection = .leftToRight,
+        displayScale: CGFloat = 3,
+        legibilityWeight: LegibilityWeight? = nil,
+        colorScheme: ColorScheme = .light,
+        inheritedForeground: Color? = nil,
+        inheritedFontWeight: Font.Weight? = nil,
+        inheritedTint: Color? = nil
+    ) {
+        self.text = text
+        self.alignment = alignment
+        self.isHeading = isHeading
+        self.sizeCategory = sizeCategory
+        self.layoutDirection = layoutDirection
+        self.displayScale = displayScale
+        self.legibilityWeight = legibilityWeight
+        self.colorScheme = colorScheme
+        self.inheritedForeground = inheritedForeground
+        self.inheritedFontWeight = inheritedFontWeight
+        self.inheritedTint = inheritedTint
+    }
 }
 
 extension NSAttributedString.Key {
     /// Run background fill, drawn by the row itself (see
-    /// `TextKit2RowView.draw`) so its extent matches SwiftUI's; kept out of
+    /// `TextKit2RowView`) so its extent matches SwiftUI's; kept out of
     /// `.backgroundColor` so TextKit does not draw a second, shorter one.
     static let adfRunBackground = NSAttributedString.Key("adf.runBackground")
+    /// A link's destination. Kept out of `.link`, which makes TextKit
+    /// restyle the run with its own link colour and underline.
+    static let adfLink = NSAttributedString.Key("adf.link")
+    /// Underline and strikethrough of text containing a link, drawn by the
+    /// row itself with the geometry SwiftUI uses for such text (see
+    /// `TextKit2RowView.drawLinkTextDecorations`).
+    static let adfUnderline = NSAttributedString.Key("adf.underline")
+    static let adfStrikethrough = NSAttributedString.Key("adf.strikethrough")
 }
 
 /// Converts a prepared SwiftUI `AttributedString` into the
@@ -35,24 +83,36 @@ enum TextKit2TextBuilder {
             .scaledValue(for: 1, compatibleWith: UITraitCollection(preferredContentSizeCategory: category))
     }
 
-    /// Builds the TextKit string. `linkColor` is used only for link runs that
-    /// carry no `textColor` / `backgroundColor`-derived mark colour — SwiftUI
-    /// lets an explicit mark colour win over the link tint.
-    static func attributedString(for inputs: TextKit2TextInputs, linkColor: UIColor) -> NSAttributedString {
+    /// Builds the TextKit string. Foreground precedence per run: the
+    /// prepared foreground (an author `textColor`, or the contrast colour
+    /// the composer derived from a `backgroundColor` mark) first; then the
+    /// inherited foreground; then the link tint, only for link runs nothing
+    /// else coloured; else `.label`. `linkColor` is the row's tint
+    /// (`inheritedTint` wins when set).
+    static func attributedString(for inputs: TextKit2RenderInputs, linkColor: UIColor) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let scale = baselineScale(for: inputs.sizeCategory)
         let fallbackSpec = ADFFontSpec(textStyle: .body)
+        let inheritedForeground = inputs.inheritedForeground.map(UIColor.init)
+        let tint = inputs.inheritedTint.map(UIColor.init) ?? linkColor
+        let hasLink = inputs.text.runs.contains { $0.link != nil }
 
         for run in inputs.text.runs {
             let string = String(inputs.text[run.range].characters)
             var attributes: [NSAttributedString.Key: Any] = [:]
+            // Rows are only built for fully described text
+            // (`TextKit2Eligibility`); the fallback never applies there.
             let spec = run.adfFontSpec ?? fallbackSpec
-            attributes[.font] = TextKit2FontResolver.font(for: spec, category: inputs.sizeCategory)
+            attributes[.font] = TextKit2FontResolver.font(
+                for: spec, category: inputs.sizeCategory, legibilityWeight: inputs.legibilityWeight
+            )
 
             if let foreground = run.foregroundColor {
                 attributes[.foregroundColor] = UIColor(foreground)
+            } else if let inheritedForeground {
+                attributes[.foregroundColor] = inheritedForeground
             } else if run.link != nil {
-                attributes[.foregroundColor] = linkColor
+                attributes[.foregroundColor] = tint
             } else {
                 attributes[.foregroundColor] = UIColor.label
             }
@@ -60,13 +120,13 @@ enum TextKit2TextBuilder {
                 attributes[.adfRunBackground] = UIColor(background)
             }
             if run.underlineStyle != nil {
-                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                attributes[hasLink ? .adfUnderline : .underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             if run.strikethroughStyle != nil {
-                attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                attributes[hasLink ? .adfStrikethrough : .strikethroughStyle] = NSUnderlineStyle.single.rawValue
             }
             if let link = run.link {
-                attributes[.link] = link
+                attributes[.adfLink] = link
             }
             if let offset = run.baselineOffset {
                 attributes[.baselineOffset] = offset * scale
@@ -83,17 +143,27 @@ enum TextKit2TextBuilder {
         return result
     }
 
-    /// Measured (parity corpus, see `TextKit2WrapParityTests`): SwiftUI's
-    /// `Text` places line breaks exactly where TextKit does with no push-out
-    /// strategy; `.standard` / `.pushOut` would move a word onto the last
-    /// line where SwiftUI does not.
-    static let lineBreakStrategy: NSParagraphStyle.LineBreakStrategy = []
+    /// Measured, not assumed (`TextKit2LineBreakParityTests`; plan §4.2):
+    /// SwiftUI's `Text` breaks lines exactly as TextKit does with the
+    /// `.standard` strategy. Per-line ink extents of 2,052 near-full Latin
+    /// strings at large/xxxLarge × 370/640/353.333 pt matched with
+    /// `.standard` and `.pushOut` and missed 66 times with no strategy (one
+    /// word later on nearly full lines); 1,278 Korean, Japanese, Arabic and
+    /// accented-Latin strings matched only with `.standard` (`.pushOut`
+    /// alone missed 257 Korean strings — `.standard` adds Hangul word
+    /// priority).
+    static let lineBreakStrategy: NSParagraphStyle.LineBreakStrategy = .standard
 
+    /// The paragraph alignment SwiftUI's `multilineTextAlignment` produces:
+    /// leading / trailing resolve against the SwiftUI layout direction, not
+    /// the text's own direction (`.natural` would right-align an Arabic
+    /// paragraph in a left-to-right layout, where SwiftUI keeps it left).
     static func nsAlignment(_ alignment: ADFAlignment?, layoutDirection: LayoutDirection) -> NSTextAlignment {
+        let rtl = layoutDirection == .rightToLeft
         switch alignment {
-        case nil: return .natural
+        case nil: return rtl ? .right : .left
         case .center: return .center
-        case .end: return layoutDirection == .rightToLeft ? .left : .right
+        case .end: return rtl ? .left : .right
         }
     }
 }
