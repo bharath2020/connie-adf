@@ -284,11 +284,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         let height = Self.pixelCeil(last.baseline + last.descent, scale: scale)
         // Text with a link is sized as TextKit 1 sizes it (SwiftUI lays it
         // out there, see `drawTextKit1`): by the union of its lines' used
-        // rects — narrower than the widest line when lines are centred or
-        // end-aligned (their trailing whitespace hangs past the edge).
-        // Measured: 350.667 for the 353.333 the line-width rule gives.
+        // rects, which stop at the container's edges — narrower than the
+        // widest line when lines are centred or end-aligned (their trailing
+        // whitespace hangs past the edge). Measured: 350.667 for the 353.333
+        // the line-width rule gives. (TextKit 2 clamps a hanging line's frame
+        // to the container on iOS 26 but not on iOS 18, so clamp here.)
         let union = lines.reduce(CGRect.null) { $0.union($1.frame) }
-        let hugging = Self.pixelCeil(textKit1 == nil ? maxLineWidth : union.width, scale: scale)
+        let usedWidth = min(union.maxX, width) - max(union.minX, 0)
+        let hugging = Self.pixelCeil(textKit1 == nil ? maxLineWidth : usedWidth, scale: scale)
         let reportedWidth = width == Self.unboundedWidth ? hugging : min(hugging, Self.pixelCeil(width, scale: scale))
         return TextKit2LayoutResult(
             width: width,
