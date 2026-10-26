@@ -60,8 +60,10 @@ struct HostAgent {
     }
 
     /// The app's settled phys_footprint in KB (CPU idle first, median of 3).
-    func settledFootprintKB() throws -> Int {
-        let answer = try request("footprint_settled", ["threshold_pct": 2.0], timeout: 60)
+    /// Settled phys_footprint; `relieved` first has the app return its free
+    /// malloc pages (`MemoryReliefHook`, needs `-memoryReliefHook`).
+    func settledFootprintKB(relieved: Bool = false) throws -> Int {
+        let answer = try request("footprint_settled", ["threshold_pct": 2.0, "relieve": relieved], timeout: 60)
         guard let value = answer["footprint_kb"] as? Int else {
             throw Failure(description: "footprint_settled returned no footprint_kb")
         }
