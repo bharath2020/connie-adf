@@ -40,7 +40,10 @@ struct TextKit2LinkTests {
         func centres(of substring: String) throws -> [CGPoint] {
             let range = text.range(of: substring)
             try #require(range.location != NSNotFound, "'\(substring)' not in the row text")
-            return view.segmentRects(for: range).map { CGPoint(x: $0.midX, y: $0.midY) }
+            let rects = view.segmentRects(for: range)
+            // Never vacuous: every caller loops over these.
+            try #require(!rects.isEmpty, "'\(substring)' has no glyph rects")
+            return rects.map { CGPoint(x: $0.midX, y: $0.midY) }
         }
     }
 
