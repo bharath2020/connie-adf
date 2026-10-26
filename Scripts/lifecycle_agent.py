@@ -13,6 +13,8 @@ REQUESTS ({"kind": ..., params})
     pid                        -> {pid}
     rotate                     -> posts com.connie.adfreader.rotate via
                                   `xcrun simctl spawn <udid> notifyutil -p`
+    rejump                     -> posts com.connie.adfreader.rejump (re-land on
+                                  the -scrollToFraction block, no animation)
     cpu_settle  threshold_pct=2.0 timeout_s=15
                                -> {settle_s, settled, samples:[[t_s, cpu_pct]]}
                                   CPU from `top -l 2 -s 1 -pid <pid>` (second
@@ -147,9 +149,9 @@ def handle(req: dict, args: argparse.Namespace) -> dict:
         with open(args.results, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, sort_keys=True) + "\n")
         return {}
-    if kind == "rotate":
+    if kind in ("rotate", "rejump"):
         res = subprocess.run(["xcrun", "simctl", "spawn", args.udid, "notifyutil", "-p",
-                              "com.connie.adfreader.rotate"], capture_output=True, text=True)
+                              f"com.connie.adfreader.{kind}"], capture_output=True, text=True)
         if res.returncode != 0:
             raise RuntimeError(f"notifyutil failed: {res.stderr.strip()}")
         return {}
