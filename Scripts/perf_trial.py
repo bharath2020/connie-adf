@@ -20,9 +20,11 @@ SUBCOMMANDS
         Waits for the app's process on that simulator (pgrep on
         `Devices/<udid>/…/<exe>.app/<exe>`), then samples it on two
         independent threads, each on its own fixed schedule and with its own
-        timestamps: RSS (`ps -o rss=`) every --rss-ms, and phys_footprint +
-        phys_footprint_peak (`/usr/bin/footprint`) every --footprint-ms.
-        Rows: `<epoch_ns>\\trss\\t<kb>\\t` and
+        timestamps: RSS and %CPU (`ps -o rss=,%cpu=`) every --rss-ms, and
+        phys_footprint + phys_footprint_peak (`/usr/bin/footprint`) every
+        --footprint-ms. The CPU column tells an app busy during a stall from
+        one waiting on something outside it.
+        Rows: `<epoch_ns>\\trss\\t<kb>\\t<cpu%>` and
         `<epoch_ns>\\tfootprint\\t<kb>\\t<peak_kb>`; records `#PID`, `#END`.
         Stops when the process disappears or on SIGTERM.
 
@@ -82,7 +84,7 @@ CSV_COLUMNS = [
     "tk2_native_draws", "tk1_backed_rows", "tk1_backed_draws",
     "eligible_roots", "fallback_roots", "text_fallback_roots", "link_roots", "renderer_stats_extra",
     "rss_ready_kb", "rss_peak_kb", "footprint_ready_kb", "footprint_peak_kb",
-    "memory_samples", "footprint_samples",
+    "memory_samples", "footprint_samples", "app_cpu_median_pct", "app_cpu_max_pct",
     "rss_interval_ms_median", "rss_interval_ms_max",
     "footprint_interval_ms_median", "footprint_interval_ms_max",
     "trial_wall_ms", "log", "samples",
@@ -202,10 +204,10 @@ def cmd_sample(args: argparse.Namespace) -> int:
             stop.wait(delay)
 
     def rss_once() -> None:
-        res = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True)
-        value = res.stdout.strip()
-        if value.isdigit():
-            emit(f"{time.time_ns()}\trss\t{value}\t")
+        res = subprocess.run(["ps", "-o", "rss=,%cpu=", "-p", str(pid)], capture_output=True, text=True)
+        fields = res.stdout.split()
+        if fields and fields[0].isdigit():
+            emit(f"{time.time_ns()}\trss\t{fields[0]}\t{fields[1] if len(fields) > 1 else ''}")
 
     def footprint_once() -> None:
         stamp = time.time_ns()
@@ -334,6 +336,7 @@ def read_log(path: str) -> dict:
 
 def read_samples(path: str) -> dict:
     rss: list[tuple[int, int]] = []
+    cpu: list[tuple[int, float]] = []
     fp: list[tuple[int, int, int | None]] = []
     if path and path != "-" and os.path.exists(path):
         with open(path, encoding="utf-8") as handle:
@@ -345,10 +348,14 @@ def read_samples(path: str) -> dict:
                     continue
                 if parts[1] == "rss":
                     rss.append((int(parts[0]), int(parts[2])))
+                    try:
+                        cpu.append((int(parts[0]), float(parts[3])))
+                    except (IndexError, ValueError):
+                        pass
                 elif parts[1] == "footprint":
                     peak = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else None
                     fp.append((int(parts[0]), int(parts[2]), peak))
-    return {"rss": rss, "fp": fp}
+    return {"rss": rss, "fp": fp, "cpu": cpu}
 
 
 def intervals(stamps: list[int]) -> tuple[str, str]:
@@ -438,6 +445,10 @@ def derive(log_path: str, samples_path: str, meta: dict[str, str]) -> dict[str, 
         after_fp = [v for t, v, _ in fp if t >= ready_ns]
         if after_fp:
             row["footprint_ready_kb"] = str(after_fp[0])
+    cpu_values = [v for _, v in samples["cpu"]]
+    if cpu_values:
+        row["app_cpu_median_pct"] = f"{statistics.median(cpu_values):.1f}"
+        row["app_cpu_max_pct"] = f"{max(cpu_values):.1f}"
     row["rss_interval_ms_median"], row["rss_interval_ms_max"] = intervals([t for t, _ in rss])
     row["footprint_interval_ms_median"], row["footprint_interval_ms_max"] = intervals([t for t, _, _ in fp])
 
