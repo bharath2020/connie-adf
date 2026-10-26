@@ -3,7 +3,9 @@ import SwiftUI
 import ADFRendering
 
 /// "About This Build": version/build, the SHA-256 of the running executable,
-/// and the active text renderer. The checksum lets a screen recording be
+/// the active text renderer and how many TextKit 2 rows are alive (the
+/// renderer proof: > 0 while TextKit 2 draws rows on screen, 0 after a
+/// switch back to SwiftUI). The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -12,6 +14,11 @@ struct BuildInfoView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var executableSHA256: String?
     @State private var checksumUnavailable = false
+    /// Polled from the diagnostics counter while the sheet is open — never
+    /// bound to row visibility, so reading it cannot feed back into layout.
+    /// `nil` until the first read, shown as "…" so a UI test never mistakes
+    /// the placeholder for a count.
+    @State private var liveTextKit2Rows: Int?
 
     var body: some View {
         NavigationStack {
@@ -23,6 +30,11 @@ struct BuildInfoView: View {
                 Section("Text Renderer") {
                     Text(renderer.displayName)
                         .accessibilityIdentifier("build-renderer")
+                }
+                Section("Live TextKit 2 Rows") {
+                    Text(liveTextKit2Rows.map(String.init) ?? "…")
+                        .monospacedDigit()
+                        .accessibilityIdentifier("tk2-live-rows")
                 }
                 Section {
                     checksumRow
@@ -45,6 +57,12 @@ struct BuildInfoView: View {
                     executableSHA256 = sha
                 } else {
                     checksumUnavailable = true
+                }
+            }
+            .task {
+                while !Task.isCancelled {
+                    liveTextKit2Rows = ADFTextRenderer.textKit2Stats.liveRowCount
+                    try? await Task.sleep(for: .milliseconds(250))
                 }
             }
         }

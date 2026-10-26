@@ -8,7 +8,8 @@ import UIKit
 ///   block at fraction `f` of `model.blocks`.
 /// - `-autoscroll` waits 1s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
-///   `SCROLL_METRICS …` line, then exits after 2s.
+///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
+///   scrollMs= completed=`), then exits after 2s.
 /// - `-searchQuery <text>` runs a settled find-in-page query after loading.
 /// - `-searchUpdates <n>` measures `n` replacements while that query is active.
 /// - `-fontSizeStep <n>` opens the reader with the text-size control at
@@ -21,6 +22,10 @@ import UIKit
 /// - `-rendererReset` removes that key first, so a UI test always starts on
 ///   SwiftUI regardless of what a previous run left behind. With both flags
 ///   the reset applies first, then `-textkit2`.
+/// - `-rendererStats` prints one `RENDERER_STATS …` line (active renderer,
+///   live/cumulative TextKit 2 row counters, eligible/fallback roots) right
+///   after READY and again right after `SCROLL_METRICS` — the perf gate's
+///   proof of which engine drew (see `RendererStats`).
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -34,6 +39,7 @@ struct LaunchOptions: Sendable {
     var fontSizeStep: Int?
     var textKit2 = false
     var rendererReset = false
+    var rendererStats = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -62,6 +68,8 @@ struct LaunchOptions: Sendable {
                 textKit2 = true
             case "-rendererReset":
                 rendererReset = true
+            case "-rendererStats":
+                rendererStats = true
             default:
                 break
             }

@@ -259,6 +259,9 @@ struct ReaderView: View {
                 + "firstChunkMs=\(Int(firstChunk.rounded()))"
         )
         fflush(stdout)
+        if options.rendererStats {
+            RendererStats.print(blocks: model.blocks)
+        }
         if let fraction = options.scrollToFraction {
             Task { await scrollToFraction(fraction) }
         }
@@ -273,7 +276,12 @@ struct ReaderView: View {
                     )
                 }
                 if options.autoscroll {
-                    await AutoScroller.run(model: model, metrics: metrics, fixtureName: source.title)
+                    await AutoScroller.run(
+                        model: model,
+                        metrics: metrics,
+                        fixtureName: source.title,
+                        rendererStats: options.rendererStats
+                    )
                 } else {
                     try? await Task.sleep(for: .seconds(1))
                     exit(0)
