@@ -61,7 +61,8 @@ struct HostAgent {
 
     /// The app's settled phys_footprint in KB (CPU idle first, median of 3).
     /// Settled phys_footprint; `relieved` first has the app return its free
-    /// malloc pages (`MemoryReliefHook`, needs `-memoryReliefHook`).
+    /// malloc pages (`MemoryReliefHook`, needs `-memoryReliefHook`) —
+    /// diagnostics only: no gate reads a relieved figure.
     func settledFootprintKB(relieved: Bool = false) throws -> Int {
         let answer = try request("footprint_settled", ["threshold_pct": 2.0, "relieve": relieved], timeout: 60)
         guard let value = answer["footprint_kb"] as? Int else {
@@ -89,6 +90,7 @@ struct ReaderDriver {
         static let rendererTextKit2 = "renderer-textkit2"
         static let about = "renderer-about"
         static let buildVersion = "build-version"
+        static let buildSHA256 = "build-sha256"
         static let buildRenderer = "build-renderer"
         static let buildDone = "build-info-done"
         static let liveTextKit2Rows = "tk2-live-rows"
@@ -167,18 +169,30 @@ struct ReaderDriver {
 
     /// Opens About, waits up to `timeout` for the live TextKit 2 row count to
     /// satisfy `condition`, closes About and returns the last number read.
-    func liveTextKit2Rows(until condition: (Int) -> Bool, timeout: TimeInterval = 5) -> Int? {
+    /// With `settled`, a value counts only once two consecutive reads 250 ms
+    /// apart agree, so a read taken mid-materialisation is never accepted.
+    func liveTextKit2Rows(until condition: (Int) -> Bool, settled: Bool = false, timeout: TimeInterval = 5) -> Int? {
         openAbout()
+        let value = readLiveTextKit2Rows(until: condition, settled: settled, timeout: timeout)
+        closeAbout()
+        return value
+    }
+
+    /// The open About sheet's live TextKit 2 row count (it shows "…" until
+    /// its first read and refreshes every 250 ms); waits up to `timeout` for
+    /// a value satisfying `condition` and returns the last number read.
+    func readLiveTextKit2Rows(until condition: (Int) -> Bool, settled: Bool = false, timeout: TimeInterval = 5) -> Int? {
         let field = app.staticTexts[Identifier.liveTextKit2Rows]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "tk2-live-rows missing from About This Build")
         let deadline = Date().addingTimeInterval(timeout)
         var value: Int?
+        var previous: Int?
         repeat {
             value = Int(field.label)
-            if let value, condition(value) { break }
+            if let value, condition(value), !settled || previous == value { break }
+            previous = value
             pause(0.25)
         } while Date() < deadline
-        closeAbout()
         return value
     }
 
@@ -190,6 +204,13 @@ struct ReaderDriver {
 
     func element(labelPrefix prefix: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
+    }
+
+    func textKit2Row(labelled text: String) -> XCUIElement {
+        let predicate = NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", Identifier.textKit2RowPrefix, text
+        )
+        return app.descendants(matching: .any).matching(predicate).firstMatch
     }
 
     func textKit2Row(labelPrefix prefix: String) -> XCUIElement {

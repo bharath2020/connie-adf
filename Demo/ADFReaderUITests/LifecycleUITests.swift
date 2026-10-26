@@ -289,16 +289,24 @@ final class LifecycleUITests: XCTestCase {
 
         let flingOK = (fling.seconds ?? .infinity) <= Self.maxSettleSeconds
         let thrashOK = (thrashSettle.seconds ?? .infinity) <= Self.maxSettleSeconds
-        let pass = flingOK && thrashOK && growth <= Self.maxGrowthKB && cpuMean <= 2.0 && rendererKept
+        // Each stop must actually have left the foreground, or the "thrash"
+        // could be five Home presses (the lock is a private selector and the
+        // switcher a coordinate gesture).
+        let leftForeground = ["home", "locked", "switcher"].allSatisfy {
+            thrashStates[$0] != nil && thrashStates[$0] != "foreground"
+        }
+        let pass = flingOK && thrashOK && leftForeground && growth <= Self.maxGrowthKB && cpuMean <= 2.0
+            && rendererKept
         try agent.record("3.5 fling + thrash + 60 s soak (stress-5k, \(arm))", pass: pass, [
             "fling_settle_s": fling.seconds ?? -1, "thrash_settle_s": thrashSettle.seconds ?? -1,
             "soak_growth_kb": growth, "soak_cpu_mean_pct": cpuMean, "soak_cpu_max_pct": soak["cpu_max"] ?? -1,
             "soak_start_kb": soak["start_kb"] ?? -1, "soak_end_kb": soak["end_kb"] ?? -1,
             "renderer_rows_as_expected_after_thrash": rendererKept, "thrash_cycles": 5,
-            "first_cycle_app_states": thrashStates,
+            "first_cycle_app_states": thrashStates, "thrash_left_foreground": leftForeground,
         ])
         XCTAssertTrue(flingOK, "CPU did not settle within 5 s after the fling: \(fling.samples)")
         XCTAssertTrue(thrashOK, "CPU did not settle within 5 s after the thrash: \(thrashSettle.samples)")
+        XCTAssertTrue(leftForeground, "a thrash stop did not background the app: \(thrashStates)")
         XCTAssertTrue(rendererKept, "renderer rows changed across the thrash")
         XCTAssertLessThanOrEqual(growth, Self.maxGrowthKB, "settled memory grew \(growth) KB over the soak")
         XCTAssertLessThanOrEqual(cpuMean, 2.0, "idle CPU averaged \(cpuMean) % over the soak")
@@ -361,71 +369,70 @@ final class LifecycleUITests: XCTestCase {
     // MARK: - §3.6 twenty flips
 
     /// Twenty switches at a parked stress-5k position: OFF → 0 live TextKit 2
-    /// rows, ON → the same render-region count every time; settled memory
-    /// before vs after <= 5 MB.
+    /// rows, ON → the same render-region count every time.
     ///
-    /// Memory metric (changed after the first runs, see lifecycle.md): the
-    /// gate compares *relieved* settled phys_footprint — measured right after
-    /// the app returns its free malloc pages (`MemoryReliefHook`,
-    /// malloc_zone_pressure_relief, what the OS does under pressure). The raw
-    /// footprint also counts free-but-dirty pages the allocator keeps as a
-    /// high-water mark of the per-flip transient; tk2-core's in-process heap
-    /// histogram showed live malloc flat (−384 B over 10 pairs) while raw
-    /// footprint rose 20 MB. Both raw series and the SwiftUI-only control
-    /// stay in the record.
+    /// Memory (captain's rule, 2026-10-26, after the plan's raw 5 MB figure
+    /// failed): the raw settled phys_footprint growth over the twenty flips
+    /// must be within 5 MB of a SwiftUI-only control's growth over twenty of
+    /// the same probe cycles (renderer menu pick + About sheet) in the same
+    /// launch, measured identically — Δ_TK2 − Δ_control ≤ 5,120 KB. No
+    /// pressure relief anywhere in this test: raw footprint also counts the
+    /// allocator's free-but-dirty high-water pages, which is what the control
+    /// subtracts. Both series stay in the record.
     func test7TwentyFlipsReleaseRows() throws {
         let agent = try HostAgent.fromEnvironment()
-        let reader = ReaderDriver(launching: [
-            "-fixture", "stress-5k", "-rendererReset", "-rendererStats", "-memoryReliefHook",
-        ])
+        let reader = ReaderDriver(launching: ["-fixture", "stress-5k", "-rendererReset", "-rendererStats"])
         reader.waitForRenderer("SwiftUI")
         XCTAssertTrue(reader.element(labelPrefix: "Section 0:").waitForExistence(timeout: 30), "stress-5k missing")
         for _ in 0 ..< 3 {
             reader.drag(by: 300)
         }
-        // Control: twenty of the same probe cycles (renderer menu pick + About
-        // sheet) without TextKit 2, so the flip figure below is the
-        // renderer's, not the probe UI's. Reported, not gated.
-        let controlStartRelieved = try agent.settledFootprintKB(relieved: true)
+
+        // Control: twenty probe cycles on SwiftUI; a settled reading after
+        // every second cycle (ten), the last one closing the control.
+        let controlStart = try agent.settledFootprintKB()
         var controlSeries: [Int] = []
         for cycle in 1 ... 20 {
             reader.chooseRenderer(textKit2: false)
             XCTAssertEqual(reader.liveTextKit2Rows(until: { $0 == 0 }), 0, "TextKit 2 rows alive before any flip")
             if cycle % 2 == 0 { controlSeries.append(try agent.settledFootprintKB()) }
         }
-        let beforeRelieved = try agent.settledFootprintKB(relieved: true)
+        let controlEnd = controlSeries.last ?? controlStart
 
-        var onCounts: [Int] = [], offCounts: [Int] = [], afterOff: [Int] = []
+        // Flips: the same twenty cycles alternating ON/OFF, a settled reading
+        // after every OFF (ten), the last one closing the flips.
+        var onCounts: [Int] = [], offCounts: [Int] = [], flipSeries: [Int] = []
         for flip in 1 ... 20 {
             let on = flip % 2 == 1
             reader.chooseRenderer(textKit2: on)
             let firstOn = onCounts.first
             let live = reader.liveTextKit2Rows(until: { count in
                 on ? count > 0 && (firstOn == nil || count == firstOn) : count == 0
-            }) ?? -1
+            }, settled: on) ?? -1
             if on { onCounts.append(live) } else { offCounts.append(live) }
-            // Raw settled footprint after every OFF (information).
-            if !on { afterOff.append(try agent.settledFootprintKB()) }
+            if !on { flipSeries.append(try agent.settledFootprintKB()) }
         }
-        let afterRelieved = try agent.settledFootprintKB(relieved: true)
-        let growth = afterRelieved - beforeRelieved
+        let flipEnd = flipSeries.last ?? controlEnd
+        let controlGrowth = controlEnd - controlStart
+        let flipGrowth = flipEnd - controlEnd
+        let excess = flipGrowth - controlGrowth
         let onStable = !onCounts.isEmpty && onCounts.allSatisfy { $0 > 0 && $0 == onCounts[0] }
         let offZero = offCounts.allSatisfy { $0 == 0 }
-        let pass = onStable && offZero && growth <= Self.maxGrowthKB
+        let pass = onStable && offZero && excess <= Self.maxGrowthKB
         try agent.record("3.6 twenty flips (stress-5k)", pass: pass, [
             "on_live_rows": onCounts, "off_live_rows": offCounts,
-            "gated_metric": "relieved settled phys_footprint (malloc_zone_pressure_relief)",
-            "relieved_before_kb": beforeRelieved, "relieved_after_kb": afterRelieved, "relieved_growth_kb": growth,
-            "raw_after_each_off_kb": afterOff,
-            "raw_growth_kb": (afterOff.last ?? beforeRelieved) - beforeRelieved,
-            "control_relieved_start_kb": controlStartRelieved,
-            "control_relieved_growth_kb": beforeRelieved - controlStartRelieved,
-            "control_raw_after_each_pair_kb": controlSeries,
-            "control_raw_growth_kb": (controlSeries.last ?? controlStartRelieved) - controlStartRelieved,
+            "gated_metric": "raw settled phys_footprint growth, TextKit 2 flips minus SwiftUI-only control "
+                + "(<= 5,120 KB; no pressure relief)",
+            "control_start_kb": controlStart, "control_end_kb": controlEnd, "control_growth_kb": controlGrowth,
+            "control_after_each_pair_kb": controlSeries,
+            "flips_start_kb": controlEnd, "flips_end_kb": flipEnd, "flips_growth_kb": flipGrowth,
+            "flips_after_each_off_kb": flipSeries,
+            "flips_minus_control_kb": excess,
         ])
         XCTAssertTrue(onStable, "live TextKit 2 rows when ON vary or are 0: \(onCounts)")
         XCTAssertTrue(offZero, "TextKit 2 rows stay alive when OFF: \(offCounts)")
-        XCTAssertLessThanOrEqual(growth, Self.maxGrowthKB, "relieved settled memory grew \(growth) KB over 20 flips")
+        XCTAssertLessThanOrEqual(excess, Self.maxGrowthKB,
+                                 "flips grew \(flipGrowth) KB vs the control's \(controlGrowth) KB (excess \(excess) KB)")
     }
 
     // MARK: - Helpers
