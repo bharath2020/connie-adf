@@ -31,6 +31,7 @@ import UIKit
 ///   streamed chunk arrives (the document is still loading), prints
 ///   `SWITCH_DURING_LOAD blocks=<n>` and shows `<n>` in About This Build —
 ///   the lifecycle gate's "switch during a streaming load" check.
+/// - `-memoryReliefHook` installs `MemoryReliefHook` (lifecycle gate only).
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -48,6 +49,7 @@ struct LaunchOptions: Sendable {
     var rendererReset = false
     var rendererStats = false
     var switchDuringLoad = false
+    var memoryReliefHook = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -80,6 +82,8 @@ struct LaunchOptions: Sendable {
                 rendererStats = true
             case "-switchDuringLoad":
                 switchDuringLoad = true
+            case "-memoryReliefHook":
+                memoryReliefHook = true
             default:
                 break
             }
@@ -98,6 +102,9 @@ struct ADFReaderApp: App {
         RendererPreference.apply(options)
         RotationHook.install()
         RejumpHook.install()
+        if options.memoryReliefHook {
+            MemoryReliefHook.install()
+        }
     }
 
     var body: some Scene {
@@ -172,6 +179,33 @@ enum RejumpHook {
                 Task { @MainActor in NotificationCenter.default.post(name: RejumpHook.notification, object: nil) }
             },
             "com.connie.adfreader.rejump" as CFString,
+            nil,
+            .deliverImmediately
+        )
+    }
+}
+
+/// Returns free malloc pages to the system on request:
+/// `xcrun simctl spawn <udid> notifyutil -p com.connie.adfreader.relief`
+/// calls `malloc_zone_pressure_relief(nil, 0)` — what the OS does under
+/// memory pressure. Installed only with `-memoryReliefHook`. The lifecycle
+/// gate's flip check measures settled phys_footprint after it, because the
+/// raw footprint also counts free-but-dirty pages the allocator keeps as a
+/// high-water mark (live malloc stayed flat over the flips; see the
+/// lifecycle gate's report).
+enum MemoryReliefHook {
+    static func install() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    let released = malloc_zone_pressure_relief(nil, 0)
+                    print("RELIEF released=\(released)")
+                    fflush(stdout)
+                }
+            },
+            "com.connie.adfreader.relief" as CFString,
             nil,
             .deliverImmediately
         )
