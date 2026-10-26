@@ -32,6 +32,7 @@ ADFDocumentView(model:mediaProvider:interactionHandler:taskStates:mentionContent
 - `RichTextBlockView` picks the engine with a plain `if`/`else` at the leaf (never `AnyView`, never `#available` at a lazy per-item position — ADR §18).
 - `textForeground` colours text the document does not colour itself. It is **renderer-independent**: every row gets it as `.foregroundStyle` (what SwiftUI text, including every fallback, inherits) and TK2 rows draw the same colour from their render inputs, so switching `textRenderer` never changes text colour (pixel-tested on both arms, light and dark, `TextKit2PixelParityTests`; §6.5). A `foregroundStyle` a host applies *around* the document reaches SwiftUI text only — SwiftUI gives UIKit-hosted views no way to read it — so hosts that colour document text pass it here.
 - On platforms without UIKit (`swift test` on macOS), `.textKit2` behaves as `.swiftUI`.
+- **All public surface PR 1 adds:** `ADFTextRenderer` (+ `displayName`); the two `ADFDocumentView` parameters; the diagnostics read-outs below (`ADFTextKit2Stats`, `ADFTextKit2Coverage`, `ADFTextRenderer.textKit2Stats`, `.textKit2Coverage(of:)` — public because the demo reads them across the module boundary); in `ADFPreparation`, `ADFFontSpec` (+ `Font(adfFontSpec:)`, `TextStyle.swiftUITextStyle`), the `adf` attribute scope carrying it, `ADFTheme.bodyFontSpec` / `codeFontSpec` / `headingFontSpec(_:)`, and `InlineComposer.compose(_:baseFont:baseFontSpec:)`. The small-text and sub/superscript specs stay internal, like their `Font` twins.
 
 ### Demo app
 
@@ -227,15 +228,16 @@ Collapsed rows replay exact heights (`CollapsedRowHeight`), and the live switch 
 
 - **Cache key:** (render-inputs hash including content revision, width, size category, display scale, direction, legibility). Bounded width cache: **4 entries, LRU**.
 - **Proposals:** `nil` width → natural width (unbounded container; cached under the natural width); zero → `.zero` without layout; infinite → natural width.
-- **Re-sync before geometry:** the single `NSTextLayoutManager` may currently be laid out for a different width than a cached answer. Before drawing or hit-testing, `layoutSubviews` makes the container width equal `bounds.width` and re-runs `ensureLayout` if it differs. Cached numbers are never used for geometry without that re-sync.
-- **Baselines:** the representable exposes `.firstTextBaseline` / `.lastTextBaseline` from the layout result, equal to SwiftUI's for single- and multi-line text (PR 2's list markers depend on it).
+- **Re-sync before geometry:** the single `NSTextLayoutManager` may currently be laid out for a different width than a cached answer. On a bounds change and before drawing, the row takes the layout SwiftUI placed it from (`placedResult(for:)`: the cached bounded measurement whose reported *size* equals the bounds — height included, since two proposals that hug to the same width can wrap differently — else one of that width, else a fresh layout at `bounds.width`), sets the container to *that layout's* container width (wider than the bounds for a hugging row) and re-runs `ensureLayout` if it differs. Cached numbers are never used for geometry without that re-sync.
+- **No eager layout on new inputs:** `apply` rebuilds the string and clears the cache; the next layout happens when SwiftUI measures the row or before it draws, never at the stale bounds width.
+- **Baselines:** the representable exposes `.firstTextBaseline` / `.lastTextBaseline` from the placed layout (the same lookup at the guide's size, so reading a guide never lays out again), equal to SwiftUI's for single- and multi-line text (PR 2's list markers depend on it).
 - **Covered by tests:** repeated and reordered proposals (A, B, A — height at A unchanged, draw geometry at A correct), content change at a stable row id, Dynamic Type change, teardown after switch or collapse, baseline exposure.
 
 ### 6.3 Line-pitch rule
 
 - The TK2 row's height is a **measurement rule over TextKit's layout**, not a layout change: the first baseline already sits at the ascent, as in SwiftUI.
 - Any correction must be **sign-correct** at every size category (leading is negative at the largest accessibility sizes) — never subtract a constant.
-- The drawn area must never clip ink: the layout's ink bounds must lie within it (asserted).
+- The drawn area must never clip ink: the layout's ink bounds must lie within it. Covered by tests (`TextKit2RowViewTests` "the canvas covers the bounds and the ink's vertical reach", `TextKit2MetricsParityTests`), not asserted at runtime.
 - Backgrounds, underline/strike, hit-testing and (later) selection rects use **the same geometry as drawing**.
 - Monospaced runs resolve through the preferred text-style descriptor with `.monospaced` design, keeping ascent, descent and leading identical to body at every category. Fonts resolve with `UIFont.preferredFont(forTextStyle:compatibleWith:)`, never `UIFontMetrics` point scaling.
 
@@ -276,6 +278,12 @@ Formerly residuals, now SwiftUI fallbacks (fixed regression cases assert the fal
 - **Styling the row does not reproduce falls back:** readable `Text` environment — line spacing, text case, line limit, minimum scale factor, redaction — keeps the paragraph on SwiftUI (`TextKit2Leaf`, only built when the switch is ON). A `foregroundStyle` or font weight applied around the document is not readable and is not detected: with `.textKit2`, hosts colour text through `textForeground`.
 - Later PRs extend the same channel: media captions' `.footnote` / `.secondary` with containers (**PR 4**, the first container case — the foreground/font part ships no later than it), table header weight and contrast foregrounds with tables (PR 5).
 - Foreground precedence: a prepared foreground (author `textColor`, or the contrast colour derived from a background mark) first; then the inherited foreground; else `.label`.
+
+### 6.6 Known costs and limitations (PR 1)
+
+- **Colour-scheme flip:** the scheme is part of the render inputs and colours are baked into the `NSAttributedString`, so a light/dark flip rebuilds and re-lays out every live TK2 row in one frame (metrics are scheme-independent). A flip is a one-off, not a scroll path. Fix in PR 2: dynamic colours, so a scheme-only change redraws without relayout.
+- **Canvas backing stores:** each TK2 row draws into a non-opaque canvas sized to its bounds plus ink overhang (≈ 0.9 MB for a 353 × 70 pt row at 3x). This is Core Animation memory, which a live-malloc check does not see. Resting `phys_footprint`, C vs B on text-dense at a fixed position: <!-- TODO(final-gates) --> measured after the perf calibration. The canvas cannot be opaque: it overhangs the row onto its neighbours and sits on container backgrounds.
+- **iOS 17:** the package minimum, but no iOS 17 runtime is installed on the build host. Parity is measured on iOS 26.3 (3x and 2x) and iOS 18.5 only; on iOS 17 TK2 is unverified (the pre-26 eligibility rules apply).
 
 ---
 
