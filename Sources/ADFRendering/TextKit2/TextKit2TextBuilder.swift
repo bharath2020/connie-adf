@@ -10,10 +10,12 @@ import ADFPreparation
 /// a pure function of (inputs, width) — the cache key of §2.8.
 ///
 /// `inheritedForeground` is the colour `Text` would inherit for runs the
-/// preparer did not colour (a container's contrast foreground in later
-/// PRs). Tint needs no input: `Text` uses it only for links, and linked
-/// text stays on SwiftUI. Inherited font weight (table headers) joins with
-/// tables (PR 5).
+/// preparer did not colour: the host's `ADFDocumentView(textForeground:)`
+/// today, a container's contrast foreground in later PRs — styling a
+/// container applies through view modifiers reaches a UIKit row only
+/// through this explicit channel (`TextKit2RowRepresentable`). Tint needs
+/// no input: `Text` uses it only for links, and linked text stays on
+/// SwiftUI. Inherited font weight (table headers) joins with tables (PR 5).
 struct TextKit2RenderInputs: Hashable {
     var text: AttributedString
     var alignment: ADFAlignment?

@@ -127,6 +127,13 @@ struct TextKit2PixelParityTests {
         try compare(try await Self.centredHighlight(), env: TK2Parity.Environment(size: size, dark: dark))
     }
 
+    @Test("a host text colour renders identically on both arms", arguments: [false, true])
+    func hostForegroundPixels(dark: Bool) async throws {
+        var env = TK2Parity.Environment(size: .large, dark: dark)
+        env.foreground = .purple
+        try compare(try await Self.kitchenSinkParagraph(linked: false), env: env)
+    }
+
     @Test("lines set wholly in a sub/superscript run sit where Text puts them", arguments: sizes, [false, true])
     func subsupLinePixels(size: DynamicTypeSize, dark: Bool) async throws {
         let env = TK2Parity.Environment(size: size, dark: dark)

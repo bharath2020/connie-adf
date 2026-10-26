@@ -30,12 +30,15 @@ enum TK2Parity {
         var direction: LayoutDirection = .leftToRight
         var legibility: LegibilityWeight? = nil
         var dark = false
+        /// The host's `ADFDocumentView(textForeground:)`.
+        var foreground: Color? = nil
 
         var description: String {
             var parts = ["\(size)"]
             if direction == .rightToLeft { parts.append("rtl") }
             if legibility == .bold { parts.append("boldText") }
             if dark { parts.append("dark") }
+            if let foreground { parts.append("foreground=\(foreground)") }
             return parts.joined(separator: " ")
         }
     }
@@ -88,6 +91,7 @@ enum TK2Parity {
     static func hosted(_ fixture: Fixture, arm: ADFTextRenderer, env: Environment) -> some View {
         RichTextBlockView(segments: fixture.segments, style: fixture.style)
             .environment(\.adfTextRenderer, arm)
+            .modifier(DocumentTextForeground(color: env.foreground))
             .environment(\.adfTheme, theme)
             .environment(\.layoutDirection, env.direction)
             .environment(\.legibilityWeight, env.legibility)
@@ -126,6 +130,7 @@ enum TK2Parity {
         values.legibilityWeight = env.legibility
         values.colorScheme = env.dark ? .dark : .light
         values.displayScale = nativeScale
+        values.adfTextForeground = env.foreground
         return TextKit2RowRepresentable.inputs(text: try #require(fixture.describableText), style: fixture.style, environment: values)
     }
 

@@ -10,7 +10,7 @@ import ADFPreparation
 /// switch cannot move it: text with a link (`Text` lays it out with
 /// TextKit 1, whose wrapping and line heights the row does not reproduce —
 /// it measured 1 px to 22 pt off), two or more trailing hard breaks before
-/// iOS 26. Fixed
+/// iOS 26, and inherited `Text` styling the row does not implement. Fixed
 /// regression cases: each formerly measured mismatch, asserted as a
 /// fallback, plus the document-level consequence the switch budget guards.
 @Suite("TextKit 2 fallbacks", .serialized)
@@ -114,6 +114,30 @@ struct TextKit2FallbackTests {
         }
     }
 
+    @Test("inherited Text styling the row does not reproduce keeps the row on SwiftUI")
+    func environmentStylingFallsBack() async throws {
+        typealias Leaf = TextKit2Leaf<EmptyView>
+        #expect(Leaf.supportsEnvironment(lineSpacing: 0, textCase: nil, lineLimit: nil, minimumScaleFactor: 1, redactionReasons: []))
+        #expect(!Leaf.supportsEnvironment(lineSpacing: 4, textCase: nil, lineLimit: nil, minimumScaleFactor: 1, redactionReasons: []))
+        #expect(!Leaf.supportsEnvironment(lineSpacing: 0, textCase: .uppercase, lineLimit: nil, minimumScaleFactor: 1, redactionReasons: []))
+        #expect(!Leaf.supportsEnvironment(lineSpacing: 0, textCase: nil, lineLimit: 2, minimumScaleFactor: 1, redactionReasons: []))
+        #expect(!Leaf.supportsEnvironment(lineSpacing: 0, textCase: nil, lineLimit: nil, minimumScaleFactor: 0.5, redactionReasons: []))
+        #expect(!Leaf.supportsEnvironment(lineSpacing: 0, textCase: nil, lineLimit: nil, minimumScaleFactor: 1, redactionReasons: .placeholder))
+
+        let fixture = try await TK2Parity.plain("styled", TextKit2HeightParityTests.long)
+        let plainRows = Self.rowViews(hosting: TK2Parity.hosted(fixture, arm: .textKit2, env: .init()))
+        #expect(plainRows.count == 1, "an unstyled eligible paragraph is a TextKit 2 row")
+        let styled = TK2Parity.hosted(fixture, arm: .textKit2, env: .init()).lineSpacing(6)
+        #expect(Self.rowViews(hosting: styled).isEmpty, "line spacing must keep the paragraph on SwiftUI")
+
+        func height(_ arm: ADFTextRenderer) -> CGFloat {
+            let host = UIHostingController(rootView: TK2Parity.hosted(fixture, arm: arm, env: .init()).lineSpacing(6))
+            host.safeAreaRegions = []
+            return host.sizeThatFits(in: CGSize(width: Self.width, height: .greatestFiniteMagnitude)).height
+        }
+        #expect(height(.swiftUI) == height(.textKit2))
+    }
+
     @Test("a heading below formerly mismatched rows does not move on a switch, either way", arguments: [DynamicTypeSize.accessibility3, .accessibility5])
     func headingBelowFallbacksStaysPut(size: DynamicTypeSize) async throws {
         let rows = try await Self.linkedFixtures() + (try await Self.twoTrailingBreaks())
@@ -156,6 +180,40 @@ struct TextKit2FallbackTests {
         #expect(abs(on - off) * scale <= Self.switchBudgetPixels, "\(size) switch ON moved the heading \((on - off) * scale) px")
         #expect(abs(back - on) * scale <= Self.switchBudgetPixels, "\(size) switch OFF moved the heading \((back - on) * scale) px")
         print("TK2 fallback switch \(size): heading top OFF \(off) ON \(on) OFF \(back)")
+    }
+
+    @Test("a host text colour reaches TextKit 2 rows, including a change while ON")
+    func hostForegroundReachesRows() async throws {
+        let model = try await TextKit2DiagnosticsTests.loadedModel()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
+        func document(_ colour: Color?) -> ADFDocumentView {
+            ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2, textForeground: colour)
+        }
+        let host = UIHostingController(rootView: document(.purple))
+        window.rootViewController = host
+        window.isHidden = false
+        func foregrounds() async throws -> [Color?] {
+            try await TextKit2DiagnosticsTests.settle(window)
+            return Self.rows(in: host.view).map { $0.inputs?.inheritedForeground }
+        }
+        func drawn(_ row: TextKit2RowView) throws -> UIColor? {
+            TextKit2TextBuilder.attributedString(for: try #require(row.inputs)).attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
+        }
+
+        let purple = try await foregrounds()
+        #expect(purple.count == 2 && purple.allSatisfy { $0 == .purple }, "\(purple)")
+        if let row = Self.rows(in: host.view).first {
+            #expect(try drawn(row)?.cgColor.components == UIColor(Color.purple).cgColor.components)
+        }
+        host.rootView = document(.orange)
+        let orange = try await foregrounds()
+        #expect(orange.count == 2 && orange.allSatisfy { $0 == .orange }, "\(orange)")
+        host.rootView = document(nil)
+        let inherited = try await foregrounds()
+        #expect(inherited.count == 2 && inherited.allSatisfy { $0 == nil }, "\(inherited)")
+
+        window.isHidden = true
+        window.rootViewController = nil
     }
 }
 #endif

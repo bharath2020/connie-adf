@@ -12,6 +12,9 @@ public struct ADFDocumentView: View {
     private let taskStates: [String: Bool]
     private let mentionContent: (@MainActor (String) -> AnyView)?
     private let textRenderer: ADFTextRenderer
+    /// Colour for text the document does not colour itself; `nil` inherits
+    /// (see `DocumentTextForeground`).
+    private let textForeground: Color?
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -40,13 +43,15 @@ public struct ADFDocumentView: View {
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
                 taskStates: [String: Bool] = [:],
                 mentionContent: (@MainActor (String) -> AnyView)? = nil,
-                textRenderer: ADFTextRenderer = .swiftUI) {
+                textRenderer: ADFTextRenderer = .swiftUI,
+                textForeground: Color? = nil) {
         self.model = model
         self.mediaProvider = mediaProvider
         self.interactionHandler = interactionHandler
         self.taskStates = taskStates
         self.mentionContent = mentionContent
         self.textRenderer = textRenderer
+        self.textForeground = textForeground
     }
 
     /// TOC jumps use `ScrollViewReader.scrollTo` rather than writing the
@@ -214,13 +219,15 @@ public struct ADFDocumentView: View {
                             margin: model.theme.spacing * 2,
                             containerWidth: containerWidth,
                             visibility: model.search.visibleRows,
-                            textRenderer: textRenderer
+                            textRenderer: textRenderer,
+                            textForeground: textForeground
                         )
                         .modifier(reporter(item.id, model.search.visibleRows))
                     }
                 } header: {
                     if let item = section.header {
                         DocumentHeader(item: item)
+                            .modifier(DocumentTextForeground(color: textForeground))
                     }
                 }
             }
@@ -245,6 +252,27 @@ public struct ADFDocumentView: View {
             )
         case .idle, .ready:
             EmptyView()
+        }
+    }
+}
+
+/// `ADFDocumentView(textForeground:)`: the host's colour for text the
+/// document does not colour itself, applied per row as a `foregroundStyle`
+/// (what `Text` inherits) plus the explicit environment copy TextKit 2 rows
+/// read (`adfTextForeground`). `nil` leaves the row exactly as without the
+/// parameter. A `foregroundStyle` a host applies around the document
+/// reaches SwiftUI text only: SwiftUI gives UIKit-hosted views no way to
+/// read it, so hosts that colour text and use `.textKit2` pass it here.
+struct DocumentTextForeground: ViewModifier {
+    let color: Color?
+
+    func body(content: Content) -> some View {
+        if let color {
+            content
+                .foregroundStyle(color)
+                .environment(\.adfTextForeground, color)
+        } else {
+            content
         }
     }
 }
@@ -275,6 +303,8 @@ private struct DocumentRow: View {
     /// other kind (an environment value would otherwise leak into a
     /// container's children).
     let textRenderer: ADFTextRenderer
+    /// The host's text colour, `nil` to inherit (`DocumentTextForeground`).
+    let textForeground: Color?
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -314,6 +344,7 @@ private struct DocumentRow: View {
             if isInRenderRegion || heights.isEmpty {
                 BlockView(block: block)
                     .environment(\.adfTextRenderer, rowTextRenderer)
+                    .modifier(DocumentTextForeground(color: textForeground))
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
                     // Full width so the size measured below reports the
