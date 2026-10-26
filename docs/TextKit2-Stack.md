@@ -318,23 +318,32 @@ Scripts/visual-parity.sh --udid <UDID> --ref-app <main ADFReader.app> \
 python3 -I Scripts/visual_diff.py --out <dir> --pair <noise|exact|tolerant> <name> <ref.png> <cand.png> ...
 #   [--mask ...] [--exact-mask ...] [--top-band N] [--bottom-band N] [--threshold 24] [--exact-threshold 0] [--search 100]
 
-# Performance (§8.3): calibrate once (main as both arms), then gate.
-Scripts/perf-gate.sh --calibrate --udid <UDID> --app-a <main ADFReader.app> \
-    --out <data>/perf/calibration [--fixtures "..."] [--runs 10]
+# Performance (§8.3). Per-PR gate, design pr45 (~40 min, no calibration):
 Scripts/perf-gate.sh --udid <UDID> --app-a <main .app> --app-b <branch .app> --app-c <branch .app> \
-    --calibration <data>/perf/calibration/calibration.json --out <data>/perf/gate [--fixtures "..."] [--runs 10]
-#   [--pilot] [--arm-c-args "-textkit2"] [--candidate-args "-rendererStats"] [--no-candidate-markers]
+    --out <data>/perf/pr45-<sha>
+# Full gate, design full (~8 h, once before the final parity PR): calibrate, then gate.
+Scripts/perf-gate.sh --calibrate --udid <UDID> --app-a <main .app> --out <data>/perf/calibration
+Scripts/perf-gate.sh --design full --udid <UDID> --app-a <main .app> --app-b <branch .app> \
+    --app-c <branch .app> --calibration <data>/perf/calibration/calibration.json --out <data>/perf/full-<sha>
+#   [--settle 300] [--ledger <jsonl>] [--arm-c-args "-textkit2"] [--candidate-args "-rendererStats"]
 #   [--extra-args "<flags>"] [--expected-blocks "f=n ..."] [--trial-timeout 120] [--trial-timeout-for "f=s ..."]
-#   [--ready-timeout 60] [--rss-ms 200] [--footprint-ms 1000] [--no-sampler] [--prior-summary <json>]
-#   [--coverage "<text>"] [--appearance light|dark] [--bundle-id <id>] [--keep-booted] [--dry-run]
+#   [--ready-timeout 60] [--rss-ms 200] [--footprint-ms 1000] [--coverage "<text>"] [--appearance light|dark]
+#   [--bundle-id <id>] [--keep-booted] [--dry-run]
+#   pilot only: [--pilot] [--fixtures "..."] [--runs n] [--warmup 0] [--no-sampler] [--no-candidate-markers]
+python3 -I Scripts/perf_summarize.py <out>/trials.csv [--json summary.json] [--out summary.md] [--ledger <jsonl>]
 python3 -I Scripts/perf_summarize.py <cal>/trials.csv --calibrate --write-calibration <cal>/calibration.json [--attempt 1]
-python3 -I Scripts/perf_summarize.py <out>/trials.csv --calibration <cal>/calibration.json \
-    [--json summary.json] [--out summary.md] [--prior-summary <earlier summary.json>]
-python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot [--calibration ...] [--suggest-timeouts]
+python3 -I Scripts/perf_summarize.py <out>/trials.csv --calibration <cal>/calibration.json [--json ...] [--out ...]
+python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot [--suggest-timeouts]
+python3 -I Scripts/perf_summarize.py --print-design pr45|full
+# Offline tests (no simulator): summarizer cases, driver scenarios on a fake simctl, comparator cases.
+python3 -I Scripts/tests/perf_summarize_tests.py <scratch>/sum
+Scripts/tests/perf-gate-scenarios.sh <scratch>/scen [scenario...]
+python3 -I Scripts/tests/visual_diff_tests.py <scratch>/vd
 
 # End-to-end video (§8.4); a negative control (wrong digest) must fail.
 Scripts/e2e-video.sh --udid <UDID> --out <data>/videos/<name>.mp4
 #   [--derived-data <dir>] [--skip-build] [--keep-booted] [--expected-sha256 <hex> | --negative]
+#   (--skip-build needs the e2e-build-manifest.txt of an earlier build in the same derived data)
 #   [--test-timeout <s>] [--recorder-ready-timeout 20] [--xcodebuild-grace <s>] [--dry-run]
 #   (--create-device <name> instead of --udid: explicit opt-in, never deleted)
 
@@ -395,25 +404,38 @@ Captures the reference build and the branch build on one simulator and scores th
 - **Captures:** identical device, appearance, size category, locale and status bar; `kitchen-sink` at two scroll positions and `stress-5k` at fractions 0 and 0.5 (`-scrollToFraction`); light and dark; `-fontSizeStep 0` and `3`; 2 s scroll wait + 3 s settle after `READY` (frames are identical from 2 s to 20 s after `READY`).
 - **Scoring:** chrome (status bar, navigation/toolbar band, home band) is masked so only the content viewport is compared; whole-viewport % plus a separate score per text-block crop. Noise/exact pairs also mask the full-width band below the toolbar (0,330,1206,460): the glass capsules' shadows and the scroll-edge effect change with the renderer label (A–B |Δ| ≤ 14 over rows 330–450 while A–A' is 0); tolerant pairs still score it. Every pair reports its differing-pixel count and bbox, so a nonzero diff never prints as 0 %.
 - **PR 1 result** <!-- TODO(final-gates) --> (refreshed after the final-head gates) (`<data>/visual/gate-4ded1a4/`, branch 4ded1a4 vs a9e6aa2 + scrolljump): 48/48 pairs PASS — A–A', A–B and A–C all 0 px in 16 configurations, every crop 0 % with a 0 px offset; `RENDERER_STATS` confirmed swiftui on every B and textkit2 on every C. `gate-8518d01/` keeps the pre-fix run (nondeterministic stress-5k p0.5 s3 landing) as root-cause evidence.
-- **Pass:** A–A' noise recorded (expected 0.00 %); A–B 0.00 %; A–C ≤ 0.5 % whole-viewport **and** every text-block crop ≤ 0.5 % with a vertical offset of 0 px.
+- **Pass:** A–A' noise recorded (expected 0.00 %); A–B 0.00 %; A–C ≤ 0.5 % whole-viewport **and** every text-block crop ≤ 0.5 % with a vertical offset of 0 px. A pair with no text-block crop (a blank or chrome-only viewport) is INVALID, not PASS (`visual_diff.py --allow-empty` overrides this for a deliberately empty capture).
+- **Restores the device:** the run ends with the appearance and content size the device had when it started (`<data>/visual/restore-check.txt`).
+- **Chrome differs from main even with the switch OFF**, and is masked for that reason: the demo's toolbar leads with the renderer menu ("SwiftUI" / "TextKit 2"), which also holds the HUD toggle and "About This Build…", so the trailing items are [renderer] [Find] [Text Size] [TOC] against main's [Find] [Text Size] [TOC] [HUD]. Only the demo app changes; the library has no chrome. The capsule widths follow the label, which is why noise/exact pairs mask the band below the toolbar.
 
 ### 8.3 Performance — `Scripts/perf-gate.sh` + `Scripts/perf_summarize.py`
 
-Interleaved A/B/C trials on one simulator: launch to `READY` (labelled "preparation readiness", not first visible content), first chunk, autoscroll dropped frames / dropped rate / hitch ratio, memory (RSS and `footprint`, sampled peak).
+Interleaved A/B/C trials on one simulator: launch to `READY` (labelled "preparation readiness", not first visible content), first chunk, autoscroll dropped frames / dropped rate / hitch ratio, memory (RSS and `footprint`, sampled peak; the app's %CPU is sampled with RSS so a stall can be told apart from host starvation). A = main (Release), B = branch with the switch OFF (`-rendererReset -rendererStats`; it carries the font-spec baking and switch plumbing on the shipping path), C = branch with `-textkit2 -rendererStats`. **Both B and C must pass.**
 
-- **Fail closed:** a result is valid only with the full count of counted runs for every fixture and arm, every metric present and finite, exit 0, the expected `READY` line, and the installed sha256 and argv matching the arm. Anything else is INVALID (non-zero exit), never PASS. A candidate crash or timeout FAILs.
-- **Calibrate first:** 10 paired A-vs-A' trials per fixture with the main app as both arms; per-metric allowance = max(max \|ΔAA'\|, absolute floor); frozen in `calibration.json` before any candidate result is inspected. Too noisy → INCONCLUSIVE, quiesce and recalibrate once.
-- **Gate:** ≥ 10 counted pairs per fixture and arm pair, balanced order, one discarded warm-up. PASS if the one-sided 95 % upper bound of the mean paired delta ≤ the allowance. **Both C (ON) and B (OFF) must pass** — B carries the font-spec baking and switch plumbing on the shipping path. A FAIL is never rerun to green without a code change.
-- **Fixtures (PR 1):** `kitchen-sink`, `stress-5k`, `giant-table`, plus `text-dense` (~3,000 text-only paragraphs/headings) and `long-paragraph` (one ~20,000-character paragraph; the per-row layout worst case), generated with `Tools/make-fixtures.swift`. Later PRs add their feature-dense fixture.
-- **Report:** per fixture × metric — A and C (and B) median (min–max), mean paired Δ with its 95 % upper bound, allowance, verdict — with the §3 coverage line.
+| Design | Fixtures × arms × pairs | Rule | When |
+|---|---|---|---|
+| `pr45` (default) | kitchen-sink, stress-1k (the first 1,000 blocks of stress-5k; arm A is a clean `git archive` of main plus that one JSON, data only, sha recorded), giant-table × A/B/C × 3, one discarded warm-up per (fixture, arm) | median-relative | every PR, ~40 min |
+| `full` | kitchen-sink, stress-5k, giant-table × A/B/C × ≥ 10, frozen A–A′ calibration | calibrated-ucb | once, before the final parity PR, ~8 h |
 
-The autoscroll gate alone provably misses livelocks. Also run, in **both** arms: a real fling with an instantaneous-CPU settle check (`top -l 2 -pid <pid>` → ~0 % within 5 s), scene-snapshot thrash (Home / lock / app switcher ×5), a 60-second idle soak, and for the switch, twenty flips on stress-5k (live TK2 row count back to 0 when OFF; settled memory growth ≤ 5 MB). Measured at 9bf45ff: raw `phys_footprint` growth across flips is allocator high-water, not retention — over 10 flip pairs live malloc stayed at 63.84 MB (−384 B; largest class +2 KB, in-process zone histogram) while the footprint rose 139 → 159 MB, and `malloc_zone_pressure_relief` returns it each time (102 / 99 / 101 MB warm / +10 / +20 pairs). A footprint threshold should be read after relief, or on live malloc bytes. Evidence: `<data>/memory-phase2/`.
+- **pr45 rule:** FAIL if the median paired delta (candidate − A) exceeds 15 % of A's median for memory (RSS and footprint), for the first chunk (with a 20 ms absolute floor), and for launch→READY on kitchen-sink. READY on stress-1k and giant-table is reported as ADVISORY, never gating: three pairs cannot resolve 15 % there (95th percentile of the median of three A–A′ deltas on untouched main: READY kitchen-sink 11 %, stress-5k 22 %, giant-table 42 %; first chunk 11–20 %; memory 0.5–10 %). Dropped frames FAIL when the median Δ > 2.
+- **full rule:** per-metric allowance = max(max \|ΔAA′\|, absolute floor), frozen in `calibration.json` before any candidate result exists (its `created_utc` must predate the first trial), with a ceiling of 15 % of A's median; the summary prints each allowance as a % of the median. PASS if the one-sided 95 % upper bound of the mean paired delta ≤ the allowance. A calibration over the ceiling is INCONCLUSIVE: quiesce and recalibrate once.
+- **Per-trial ceilings (both designs):** hitch > 10 ms/s, or dropped rate > 1 % (more than 3 dropped frames when a trial has < 2,000 frames). A candidate breach FAILs; a breach in A makes the run INVALID.
+- **Traversal and renderer proof:** B and C must reach the last block (`endRow` = blocks − 1) with frames within ±15 % of A's median, or the trial FAILs. C must report `renderer=textkit2` at READY and after the scroll, with `tk2Layouts > 0` and `tk2NativeDraws > 0`; B must report every TK2 counter 0. The TextKit 1-backed share (`linkRoots / eligibleRoots`, `tk1BackedDraws / tk2Draws`) is printed per fixture.
+- **Refused before any trial** (exit 2): a gate run with less than its design (arm B, a fixture, pairs, the warm-up, the sampler, the candidate markers or `-rendererStats`), pr45 with a calibration or full without one, and a busy host. After the settle (300 s when the run booted the device) the host check records the load averages and the three busiest processes in `plan.json`; it refuses when the 1-min load is above 4.0 or a non-simulator process is above 100 % CPU, and kills nothing. Every trial records its start time, load and busiest processes; any trial above 6.0 makes the run INVALID. A pilot only warns.
+- **Fail closed:** a result counts only with every declared pair present, every metric finite, exit 0, the expected `READY` line, and the installed sha256 and argv matching the arm. The summarizer reads the design and the pilot flag from `plan.json`, never from its own flags, and marks a reduced plan INCOMPLETE. Precedence: candidate crash → FAIL; invalid trial or baseline failure → INVALID; candidate failure → FAIL; too few pairs → INVALID; calibration INCONCLUSIVE; statistical or ceiling failure → FAIL; PILOT; INCOMPLETE; PASS. Exit codes: PASS 0, FAIL 1, INVALID/REFUSED 2, INCONCLUSIVE 3, PILOT 4, INCOMPLETE 5.
+- **Reruns:** every verdict is appended to `perf-ledger.jsonl` beside the run directory. A FAIL with the same candidate binaries and design is never rerun (REFUSED); after two INCONCLUSIVE/INVALID runs the next is REFUSED. Pilots do not count.
+- **Deadlines:** per-fixture trial timeouts default to 1.5 × the pilot's longest scroll + 30 s (kitchen-sink 45 s, stress-1k 180, stress-5k 775, giant-table 95, text-dense 425, long-paragraph 45); `--suggest-timeouts` recomputes them from a pilot.
+- **Fixtures:** `text-dense` (~3,000 text-only paragraphs/headings) and `long-paragraph` (one ~20,000-character paragraph; the per-row layout worst case) are generated with `Tools/make-fixtures.swift`. Main does not bundle them, so the gated designs keep to fixtures arm A can open; text-dense and long-paragraph are reported as B-vs-C information only (a pilot-shaped run, uncalibrated), and the fixture sweep (§8.1) covers text-dense heights. Later PRs add their feature-dense fixture.
+- **Report:** per fixture × metric — A, B and C median (min–max), paired Δ (median, or mean with its 95 % upper bound), limit, verdict — with the coverage line and the TK1 share.
+
+The autoscroll gate alone provably misses livelocks. Also run, in **both** arms: a real fling with an instantaneous-CPU settle check (`top -l 2 -pid <pid>` → ~0 % within 5 s), scene-snapshot thrash (Home / lock / app switcher ×5), a 60-second idle soak, and for the switch, twenty flips on stress-5k (`LifecycleUITests` test 7, via `Scripts/lifecycle-gate.sh`): the live TK2 row count is back to 0 after every OFF, and the raw settled `phys_footprint` growth over the twenty flips minus the growth over twenty SwiftUI-only probe cycles in the same process is ≤ 5,120 KB, with no pressure relief (a settled read is two equal reads 250 ms apart). The thrash cycles assert that Home, lock and the switcher each left the foreground. Measured at 9bf45ff: raw `phys_footprint` growth across flips is allocator high-water, not retention — over 10 flip pairs live malloc stayed at 63.84 MB (−384 B; largest class +2 KB, in-process zone histogram) while the footprint rose 139 → 159 MB, and `malloc_zone_pressure_relief` returns it each time (102 / 99 / 101 MB warm / +10 / +20 pairs). That is why the twenty-flip rule subtracts a SwiftUI control run in the same process rather than reading after relief; `-memoryReliefHook` stays for diagnostics only. Evidence: `<data>/memory-phase2/`.
 
 ### 8.4 End-to-end video — `Scripts/e2e-video.sh`
 
 Records `ADFReaderUITests/RendererSwitchUITests` (SwiftUI → TextKit 2 → SwiftUI on `kitchen-sink`, launched with `-rendererReset -rendererStats`) and writes a provenance manifest that ties the video to one binary.
 
 - One isolated `build-for-testing` (Release, unsigned), then `test-without-building` with the exact generated `.xctestrun` and an explicit `--udid` (a device is created only on request, and only a device this run booted is shut down).
-- The test requires the expected digest (fails when it is absent), reads the **app-observed** sha256 off the About sheet, asserts `tk2-row:<id>` / `tk2-live-rows` in both directions, and checks scroll preservation (stable element |ΔY| ≤ 2 px per switch, five round trips).
-- Recording starts before the test launches and stops only after the named test's `passed` line. The manifest records the build command, commit and clean/dirty state, sha256 of the built, companion and installed binaries and of each bundled fixture, the observed digest, the test result and xcresult path, the simulator and Xcode versions, and the video's sha256 and duration. A run with a deliberately wrong digest must fail.
+- The test requires the expected digest (fails when it is absent), reads the **app-observed** sha256 off the About sheet, asserts `tk2-row:<id>` / `tk2-live-rows` in both directions, and checks scroll preservation (stable element |ΔY| ≤ 2 px per switch, five round trips). After the scroll-to-top under TextKit 2 the H1's settled top (three reads 1 s apart within 0.01 pt) must be within 2 px of the SwiftUI arm's; the final switch back to SwiftUI happens with a TextKit 2 heading on screen.
+- The build pins its source: the commit and clean/dirty state are read before `xcodegen generate` and again after the build (a change aborts), and `e2e-build-manifest.txt` records them with the sha256 of the app, the UI-test bundle binary and the `.xctestrun`. `--skip-build` requires that manifest and re-verifies every digest; the source is checked again at the end.
+- Recording starts before the test launches and stops only after the named test's `passed` line. The recorder must stay alive throughout, and the video must cover the test (duration + 2 s ≥ recorder-ready → result), or the run fails. The manifest records the build command, commit and clean/dirty state, sha256 of the built, companion and installed binaries and of each bundled fixture, the observed digest, the test result and xcresult path, the simulator and Xcode versions, and the video's sha256 and duration. A run with a deliberately wrong digest must fail.
 - Videos go in the task's data directory and the PR description, never in the repo.
