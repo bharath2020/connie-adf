@@ -89,4 +89,7 @@ targets:
         SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: ADFReader
+        # Same as the app target: no App Intents, so skip the extractor's
+        # "no AppIntents.framework dependency" warning.
+        LM_SKIP_METADATA_EXTRACTION: YES
         DEVELOPMENT_TEAM: G47HJC6S26

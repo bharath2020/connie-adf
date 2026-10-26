@@ -5,12 +5,19 @@ import XCTest
 /// — no relaunch. Paced for a screen recording (`Scripts/e2e-video.sh`):
 /// every step pauses briefly and attaches a screenshot.
 ///
-/// Launch arguments: `-fixture kitchen-sink` opens the fixture directly and
+/// Launch arguments: `-fixture kitchen-sink` opens the fixture directly,
 /// `-rendererReset` clears the persisted choice so the run always starts on
-/// SwiftUI. Set `ADF_EXPECTED_BUILD_SHA256` in the runner's environment
-/// (`TEST_RUNNER_ADF_EXPECTED_BUILD_SHA256=…` on the xcodebuild command line)
-/// to also assert the checksum shown in About This Build; without it that
-/// one assertion is skipped and noted in the result.
+/// SwiftUI, and `-rendererStats` keeps the diagnostics line in the app log.
+/// `ADF_EXPECTED_BUILD_SHA256` must be set in the runner's environment
+/// (`TEST_RUNNER_ADF_EXPECTED_BUILD_SHA256=…` on the xcodebuild command line):
+/// the test fails without it, and fails when the checksum About This Build
+/// shows differs from it.
+///
+/// Renderer proof (not the toolbar label): with TextKit 2 on, the anchor
+/// heading and "Heading two" are `tk2-row:<block id>` elements and About This
+/// Build counts live TextKit 2 rows > 0; back on SwiftUI no `tk2-row:` element
+/// remains and the count is 0. Scroll preservation: a parked heading's top
+/// moves at most 2 px per switch and 2 px in total over five round trips.
 ///
 /// Fixture strings come from `Fixtures/kitchen-sink.json` and must match the
 /// rendered accessibility labels exactly.
@@ -23,6 +30,8 @@ final class RendererSwitchUITests: XCTestCase {
         static let headings = [
             "Heading two", "Heading three", "Heading four", "Heading five", "Heading six",
         ]
+        /// The heading whose TextKit 2 row is asserted at the top of the document.
+        static let proofHeading = "Heading two"
         /// Top-level paragraphs without inline atoms — the TextKit 2 path.
         static let plainParagraphs = ["Centered paragraph", "Indented paragraph"]
         /// Anything stable that can anchor a scroll position further down.
@@ -45,6 +54,8 @@ final class RendererSwitchUITests: XCTestCase {
         static let buildVersion = "build-version"
         static let buildRenderer = "build-renderer"
         static let buildDone = "build-info-done"
+        static let liveTextKit2Rows = "tk2-live-rows"
+        static let textKit2RowPrefix = "tk2-row:"
     }
 
     override func setUpWithError() throws {
@@ -53,7 +64,7 @@ final class RendererSwitchUITests: XCTestCase {
 
     func testLiveSwitchSwiftUIToTextKit2AndBack() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-fixture", "kitchen-sink", "-rendererReset"]
+        app.launchArguments = ["-fixture", "kitchen-sink", "-rendererReset", "-rendererStats"]
         app.launch()
 
         try step("1. Launch on the SwiftUI renderer") {
@@ -62,16 +73,13 @@ final class RendererSwitchUITests: XCTestCase {
                 element(labelled: KitchenSink.title, in: app).waitForExistence(timeout: 15),
                 "kitchen-sink did not render its title"
             )
+            XCTAssertFalse(anyTextKit2Row(in: app).exists, "a TextKit 2 row exists while SwiftUI is active")
             pause()
             attach(app, "01-launch-swiftui")
         }
 
-        try step("2. About This Build shows the executable checksum") {
-            openRendererMenu(app)
-            let about = menuItem(identifier: Identifier.about, label: "About This Build…", in: app)
-            XCTAssertTrue(about.waitForExistence(timeout: 5), "About This Build… missing from the menu")
-            about.tap()
-
+        try step("2. About This Build shows the executable checksum and no live TextKit 2 rows") {
+            openAbout(app)
             let sha = app.staticTexts[Identifier.buildSHA256]
             XCTAssertTrue(sha.waitForExistence(timeout: 20), "checksum never appeared")
             let observed = sha.label
@@ -86,22 +94,20 @@ final class RendererSwitchUITests: XCTestCase {
             print("OBSERVED_BUILD_SHA256=\(observed)")
             XCTContext.runActivity(named: "OBSERVED_BUILD_SHA256=\(observed)") { _ in }
 
-            let environment = ProcessInfo.processInfo.environment
-            if let expected = environment["ADF_EXPECTED_BUILD_SHA256"]?.lowercased(), !expected.isEmpty {
-                XCTAssertEqual(observed, expected, "on-screen checksum differs from the built binary")
-            } else {
-                XCTContext.runActivity(
-                    named: "ADF_EXPECTED_BUILD_SHA256 not set — checksum equality not asserted"
-                ) { _ in }
-            }
+            let expected = (ProcessInfo.processInfo.environment["ADF_EXPECTED_BUILD_SHA256"] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            XCTAssertFalse(
+                expected.isEmpty,
+                "ADF_EXPECTED_BUILD_SHA256 is not set; pass TEST_RUNNER_ADF_EXPECTED_BUILD_SHA256 to xcodebuild"
+            )
+            XCTAssertEqual(observed, expected, "on-screen checksum differs from the built binary")
+
+            let live = readLiveTextKit2Rows(in: app, until: { $0 == 0 })
+            XCTAssertEqual(live, 0, "TextKit 2 rows are alive on the SwiftUI renderer")
             pause()
             attach(app, "02-about-this-build")
-
-            let done = app.buttons[Identifier.buildDone]
-            XCTAssertTrue(done.waitForExistence(timeout: 5), "Done button missing")
-            done.tap()
-            XCTAssertTrue(waitForDisappearance(of: sha, timeout: 5), "About sheet did not dismiss")
-            pause(0.5)
+            closeAbout(app)
         }
 
         try step("3. Scroll down two screens and back to the top") {
@@ -140,7 +146,40 @@ final class RendererSwitchUITests: XCTestCase {
             attach(app, "04-swiftui-anchor-\(anchor)")
         }
 
-        try step("5. Switch to TextKit 2 — live, in place") {
+        try step("5. Five round trips: the anchor stays within 2 px per switch, 2 px in total") {
+            let scale = pixelScale(of: app)
+            let anchorElement = element(labelled: anchor, in: app)
+            var lastY = try anchorTop(anchorElement, in: app)
+            var totalPixels: CGFloat = 0
+            for trip in 1 ... Self.roundTrips {
+                for (identifier, name) in [
+                    (Identifier.rendererTextKit2, "TextKit 2"), (Identifier.rendererSwiftUI, "SwiftUI"),
+                ] {
+                    chooseRenderer(identifier: identifier, label: name, in: app)
+                    waitForRenderer(name, in: app)
+                    pause()
+                    let y = try anchorTop(anchorElement, in: app)
+                    let deltaPixels = abs(y - lastY) * scale
+                    totalPixels += deltaPixels
+                    XCTContext.runActivity(
+                        named: String(format: "Trip %ld → %@: %@ top %.3f pt, |ΔY| %.2f px (total %.2f px)",
+                                      trip, name, anchor, y, deltaPixels, totalPixels)
+                    ) { _ in }
+                    XCTAssertLessThanOrEqual(
+                        deltaPixels, Self.maxShiftPixels + 0.01,
+                        "\(anchor) moved \(deltaPixels) px when switching to \(name) (trip \(trip))"
+                    )
+                    lastY = y
+                }
+            }
+            XCTAssertLessThanOrEqual(
+                totalPixels, Self.maxShiftPixels + 0.01,
+                "\(anchor) drifted \(totalPixels) px in total over \(Self.roundTrips) round trips"
+            )
+            attach(app, "05-round-trips-done")
+        }
+
+        try step("6. Switch to TextKit 2 — live, in place, drawn by TextKit 2 rows") {
             chooseRenderer(identifier: Identifier.rendererTextKit2, label: "TextKit 2", in: app)
             waitForRenderer("TextKit 2", in: app)
             pause()
@@ -153,11 +192,26 @@ final class RendererSwitchUITests: XCTestCase {
                 isVisible(element(labelled: KitchenSink.title, in: app), within: viewport),
                 "the document jumped back to the top when the renderer changed"
             )
-            attach(app, "05-textkit2-anchor-retained")
+            XCTAssertTrue(
+                textKit2Row(labelled: anchor, in: app).waitForExistence(timeout: 5),
+                "\(anchor) is not drawn by a TextKit 2 row (no tk2-row:<id> element)"
+            )
+            attach(app, "06a-textkit2-anchor-retained")
+            openAbout(app)
+            let live = readLiveTextKit2Rows(in: app, until: { $0 > 0 })
+            XCTAssertGreaterThan(live ?? 0, 0, "About This Build reports no live TextKit 2 rows")
+            XCTAssertEqual(app.staticTexts[Identifier.buildRenderer].label, "TextKit 2")
+            pause()
+            attach(app, "06b-about-live-textkit2-rows")
+            closeAbout(app)
         }
 
-        try step("6. TextKit 2 rows expose their text") {
+        try step("7. TextKit 2 rows expose their text") {
             scrollToTop(app)
+            XCTAssertTrue(
+                textKit2Row(labelled: KitchenSink.proofHeading, in: app).waitForExistence(timeout: 5),
+                "\(KitchenSink.proofHeading) is not drawn by a TextKit 2 row"
+            )
             for paragraph in KitchenSink.plainParagraphs {
                 XCTAssertTrue(
                     element(labelled: paragraph, in: app).waitForExistence(timeout: 5),
@@ -168,20 +222,20 @@ final class RendererSwitchUITests: XCTestCase {
                 XCTAssertTrue(element(labelled: heading, in: app).exists, "\(heading) is not exposed")
             }
             pause()
-            attach(app, "06-textkit2-top")
+            attach(app, "07-textkit2-top")
         }
 
-        try step("7. Scroll through the document on TextKit 2") {
+        try step("8. Scroll through the document on TextKit 2") {
             let scroll = app.scrollViews.firstMatch
             scroll.swipeUp(velocity: .slow)
             pause()
-            attach(app, "07a-textkit2-scrolled-once")
+            attach(app, "08a-textkit2-scrolled-once")
             scroll.swipeUp(velocity: .slow)
             pause()
-            attach(app, "07b-textkit2-scrolled-twice")
+            attach(app, "08b-textkit2-scrolled-twice")
         }
 
-        try step("8. Switch back to SwiftUI") {
+        try step("9. Switch back to SwiftUI — every TextKit 2 row is released") {
             var landmark = visibleLandmark(from: KitchenSink.landmarks, in: app)
             if landmark == nil {
                 scrollToTop(app)
@@ -196,9 +250,24 @@ final class RendererSwitchUITests: XCTestCase {
                 isVisible(element(labelled: anchorBack, in: app), within: viewport(of: app)),
                 "\(anchorBack) left the viewport when switching back"
             )
-            attach(app, "08-back-on-swiftui")
+            XCTAssertTrue(
+                waitForDisappearance(of: anyTextKit2Row(in: app), timeout: 5),
+                "a TextKit 2 row is still on screen after switching back to SwiftUI"
+            )
+            attach(app, "09a-back-on-swiftui")
+            openAbout(app)
+            let live = readLiveTextKit2Rows(in: app, until: { $0 == 0 })
+            XCTAssertEqual(live, 0, "TextKit 2 rows are still alive after switching back to SwiftUI")
+            XCTAssertEqual(app.staticTexts[Identifier.buildRenderer].label, "SwiftUI")
+            pause()
+            attach(app, "09b-about-no-live-rows")
+            closeAbout(app)
         }
     }
+
+    /// §3 of the stack plan: per switch and in total over five round trips.
+    private static let roundTrips = 5
+    private static let maxShiftPixels: CGFloat = 2
 
     // MARK: - Steps and pacing
 
@@ -206,8 +275,8 @@ final class RendererSwitchUITests: XCTestCase {
         try XCTContext.runActivity(named: name) { _ in try body() }
     }
 
-    /// Short pauses make the recording readable; the whole test stays well
-    /// under 90 seconds.
+    /// Short pauses make the recording readable; the whole test runs in about
+    /// two minutes.
     private func pause(_ seconds: TimeInterval = 1) {
         Thread.sleep(forTimeInterval: seconds)
     }
@@ -253,7 +322,82 @@ final class RendererSwitchUITests: XCTestCase {
         return app.descendants(matching: .any).matching(predicate).firstMatch
     }
 
+    // MARK: - About This Build
+
+    private func openAbout(_ app: XCUIApplication) {
+        openRendererMenu(app)
+        let about = menuItem(identifier: Identifier.about, label: "About This Build…", in: app)
+        XCTAssertTrue(about.waitForExistence(timeout: 5), "About This Build… missing from the menu")
+        about.tap()
+        XCTAssertTrue(
+            app.staticTexts[Identifier.buildVersion].waitForExistence(timeout: 5),
+            "About This Build did not open"
+        )
+    }
+
+    private func closeAbout(_ app: XCUIApplication) {
+        let done = app.buttons[Identifier.buildDone]
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "Done button missing")
+        done.tap()
+        XCTAssertTrue(
+            waitForDisappearance(of: app.staticTexts[Identifier.buildVersion], timeout: 5),
+            "About sheet did not dismiss"
+        )
+        pause(0.5)
+    }
+
+    /// The sheet's live TextKit 2 row count (it shows "…" until its first
+    /// read and refreshes every 250 ms); waits up to `timeout` for a value
+    /// satisfying `condition` and returns the last number read.
+    private func readLiveTextKit2Rows(
+        in app: XCUIApplication,
+        until condition: (Int) -> Bool,
+        timeout: TimeInterval = 5
+    ) -> Int? {
+        let field = app.staticTexts[Identifier.liveTextKit2Rows]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "tk2-live-rows missing from About This Build")
+        let deadline = Date().addingTimeInterval(timeout)
+        var value: Int?
+        repeat {
+            value = Int(field.label)
+            if let value, condition(value) { break }
+            pause(0.25)
+        } while Date() < deadline
+        XCTContext.runActivity(named: "Live TextKit 2 rows: \(value.map(String.init) ?? field.label)") { _ in }
+        return value
+    }
+
+    // MARK: - TextKit 2 rows
+
+    private func textKit2Row(labelled text: String, in app: XCUIApplication) -> XCUIElement {
+        let predicate = NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@", Identifier.textKit2RowPrefix, text
+        )
+        return app.descendants(matching: .any).matching(predicate).firstMatch
+    }
+
+    private func anyTextKit2Row(in app: XCUIApplication) -> XCUIElement {
+        let predicate = NSPredicate(format: "identifier BEGINSWITH %@", Identifier.textKit2RowPrefix)
+        return app.descendants(matching: .any).matching(predicate).firstMatch
+    }
+
     // MARK: - Document geometry
+
+    /// Device pixels per point, from a screenshot of the current screen.
+    private func pixelScale(of app: XCUIApplication) -> CGFloat {
+        let pixels = CGFloat(XCUIScreen.main.screenshot().image.cgImage?.width ?? 0)
+        let points = app.windows.firstMatch.frame.width
+        XCTAssertGreaterThan(pixels, 0, "screenshot has no pixels")
+        XCTAssertGreaterThan(points, 0, "window has no width")
+        return points > 0 ? pixels / points : 1
+    }
+
+    /// The anchor's top edge in screen points; it must be visible.
+    private func anchorTop(_ anchor: XCUIElement, in app: XCUIApplication) throws -> CGFloat {
+        XCTAssertTrue(anchor.waitForExistence(timeout: 5), "anchor element missing")
+        XCTAssertTrue(isVisible(anchor, within: viewport(of: app)), "anchor left the viewport")
+        return anchor.frame.minY
+    }
 
     private func element(labelled text: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", text)).firstMatch
