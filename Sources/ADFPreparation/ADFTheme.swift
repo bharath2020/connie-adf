@@ -32,6 +32,12 @@ public struct ADFTheme: Sendable, Hashable {
     /// Foreground forced over `searchCurrentHighlight` so the current match
     /// stays legible in both schemes. `nil` keeps the run's own foreground.
     public var searchCurrentForeground: Color?
+    /// Semantic description of `body`, baked on every unmarked body run so
+    /// a non-SwiftUI text engine can resolve the same platform font. Keep
+    /// it in step with `body` when customizing either.
+    public var bodyFontSpec: ADFFontSpec
+    /// Semantic description of `code` (see `bodyFontSpec`).
+    public var codeFontSpec: ADFFontSpec
 
     public init(
         body: Font = .body,
@@ -43,7 +49,9 @@ public struct ADFTheme: Sendable, Hashable {
         cardCornerRadius: CGFloat = 10,
         searchHighlight: Color = .yellow.opacity(0.3),
         searchCurrentHighlight: Color = Color(red: 1.0, green: 0.78, blue: 0.16),
-        searchCurrentForeground: Color? = .black
+        searchCurrentForeground: Color? = .black,
+        bodyFontSpec: ADFFontSpec = ADFFontSpec(textStyle: .body),
+        codeFontSpec: ADFFontSpec = ADFFontSpec(textStyle: .body, monospaced: true)
     ) {
         self.body = body
         self.code = code
@@ -55,6 +63,8 @@ public struct ADFTheme: Sendable, Hashable {
         self.searchHighlight = searchHighlight
         self.searchCurrentHighlight = searchCurrentHighlight
         self.searchCurrentForeground = searchCurrentForeground
+        self.bodyFontSpec = bodyFontSpec
+        self.codeFontSpec = codeFontSpec
     }
 
     public static let `default` = ADFTheme()
@@ -71,6 +81,21 @@ public struct ADFTheme: Sendable, Hashable {
         }
     }
 
+    /// Semantic spec of `headingFont(_:)` for the same level: the text
+    /// style SwiftUI's `.title`/`.title2`/… resolve to, plus the bold trait
+    /// where the SwiftUI font adds one (`.headline` is semibold by itself,
+    /// so H4 carries no extra bold — matching `headingFont`).
+    public func headingFontSpec(_ level: Int) -> ADFFontSpec {
+        switch min(max(level, 1), 6) {
+        case 1: return ADFFontSpec(textStyle: .title, bold: true)
+        case 2: return ADFFontSpec(textStyle: .title2, bold: true)
+        case 3: return ADFFontSpec(textStyle: .title3, bold: true)
+        case 4: return ADFFontSpec(textStyle: .headline)
+        case 5: return ADFFontSpec(textStyle: .subheadline, bold: true)
+        default: return ADFFontSpec(textStyle: .footnote, bold: true)
+        }
+    }
+
     /// Font for `fontSize: "small"` runs. A semantic text style (not a fixed
     /// point size) so the run scales with Dynamic Type alongside body text —
     /// `.subheadline` is ~0.88× body, matching the intended "slightly smaller".
@@ -78,11 +103,21 @@ public struct ADFTheme: Sendable, Hashable {
         .subheadline
     }
 
+    /// Semantic spec of `smallFont`.
+    var smallFontSpec: ADFFontSpec {
+        ADFFontSpec(textStyle: .subheadline)
+    }
+
     /// Font for sub/superscript runs. `.footnote` (~0.76× body) as a semantic
     /// style so it tracks Dynamic Type; a fixed `.system(size:)` would freeze
     /// while the surrounding body text grew.
     func subsupFont(monospaced: Bool) -> Font {
         .system(.footnote, design: monospaced ? .monospaced : .default)
+    }
+
+    /// Semantic spec of `subsupFont(monospaced:)`.
+    func subsupFontSpec(monospaced: Bool) -> ADFFontSpec {
+        ADFFontSpec(textStyle: .footnote, monospaced: monospaced)
     }
 
     /// Baseline shift for sub/superscript runs at the default text size

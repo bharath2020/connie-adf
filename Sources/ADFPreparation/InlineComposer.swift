@@ -40,12 +40,21 @@ public struct InlineComposer: Sendable {
     /// chunks here — at preparation time — so the view layer's wrapping
     /// layout never scans or slices attributed strings inside `body` (§5.3).
     public func compose(_ inline: [ADFNode]) -> [InlineSegment] {
-        compose(inline, baseFont: theme.body)
+        compose(inline, baseFont: theme.body, baseFontSpec: theme.bodyFontSpec)
     }
 
     /// Composes inline nodes on top of an explicit base font (headings pass
-    /// their level font so unmarked runs inherit it).
+    /// their level font so unmarked runs inherit it). The baked font spec
+    /// stays the theme's body spec; prefer `compose(_:baseFont:baseFontSpec:)`
+    /// so a non-SwiftUI engine sees the same base font as SwiftUI.
     public func compose(_ inline: [ADFNode], baseFont: Font) -> [InlineSegment] {
+        compose(inline, baseFont: baseFont, baseFontSpec: theme.bodyFontSpec)
+    }
+
+    /// Composes inline nodes on top of an explicit base font and its
+    /// semantic spec (headings pass their level font and spec so unmarked
+    /// runs inherit both).
+    public func compose(_ inline: [ADFNode], baseFont: Font, baseFontSpec: ADFFontSpec) -> [InlineSegment] {
         var segments: [InlineSegment] = []
         var pending = AttributedString()
 
@@ -63,15 +72,15 @@ public struct InlineComposer: Sendable {
         for node in inline {
             switch node.kind {
             case .text(let string, let marks):
-                pending.append(attributedRun(string, marks: marks, baseFont: baseFont))
+                pending.append(attributedRun(string, marks: marks, baseFont: baseFont, baseFontSpec: baseFontSpec))
             case .hardBreak:
-                pending.append(attributedRun("\n", marks: [], baseFont: baseFont))
+                pending.append(attributedRun("\n", marks: [], baseFont: baseFont, baseFontSpec: baseFontSpec))
             case .mention(_, let text, _):
                 appendAtom(.mention(text: text), id: node.id)
             case .emoji(let shortName, let text):
                 if let text, !text.isEmpty {
                     // Unicode representation exists — keep it in the text run.
-                    pending.append(attributedRun(text, marks: [], baseFont: baseFont))
+                    pending.append(attributedRun(text, marks: [], baseFont: baseFont, baseFontSpec: baseFontSpec))
                 } else {
                     appendAtom(.emoji(shortName: shortName), id: node.id)
                 }
@@ -86,11 +95,11 @@ public struct InlineComposer: Sendable {
             case .inlineExtension(let attrs, _):
                 appendAtom(.inlineExtension(name: Self.extensionName(attrs)), id: node.id)
             case .placeholder(let text):
-                pending.append(placeholderRun(text, baseFont: baseFont))
+                pending.append(placeholderRun(text, baseFont: baseFont, baseFontSpec: baseFontSpec))
             default:
                 // A non-inline node in inline position: surface its type
                 // subtly rather than dropping content silently.
-                pending.append(placeholderRun("[\(node.type)]", baseFont: baseFont))
+                pending.append(placeholderRun("[\(node.type)]", baseFont: baseFont, baseFontSpec: baseFontSpec))
             }
         }
         flush()
@@ -161,7 +170,9 @@ public struct InlineComposer: Sendable {
             case .text(let text):
                 result.append(text)
             case .atom(let atom, _):
-                result.append(attributedRun(Self.fallbackText(atom), marks: [], baseFont: theme.body))
+                result.append(attributedRun(
+                    Self.fallbackText(atom), marks: [], baseFont: theme.body, baseFontSpec: theme.bodyFontSpec
+                ))
             }
         }
         return result
@@ -171,7 +182,12 @@ public struct InlineComposer: Sendable {
 
     private typealias SwiftUIAttrs = AttributeScopes.SwiftUIAttributes
 
-    private func attributedRun(_ string: String, marks: [ADFMark], baseFont: Font) -> AttributedString {
+    private func attributedRun(
+        _ string: String,
+        marks: [ADFMark],
+        baseFont: Font,
+        baseFontSpec: ADFFontSpec
+    ) -> AttributedString {
         var run = AttributedString(string)
 
         var bold = false
@@ -218,19 +234,32 @@ public struct InlineComposer: Sendable {
             }
         }
 
+        // The SwiftUI `Font` and its semantic spec are chosen by the same
+        // decision so the two engines can never disagree on the base font.
         var font: Font
+        var spec: ADFFontSpec
         if let isSup {
             font = theme.subsupFont(monospaced: code)
+            spec = theme.subsupFontSpec(monospaced: code)
             run[SwiftUIAttrs.BaselineOffsetAttribute.self] = theme.subsupBaselineOffset(isSup: isSup)
         } else if code {
             font = theme.code
+            spec = theme.codeFontSpec
         } else if small {
             font = theme.smallFont
+            spec = theme.smallFontSpec
         } else {
             font = baseFont
+            spec = baseFontSpec
         }
-        if bold { font = font.bold() }
-        if italic { font = font.italic() }
+        if bold {
+            font = font.bold()
+            spec.bold = true
+        }
+        if italic {
+            font = font.italic()
+            spec.italic = true
+        }
         if code, background == nil { background = theme.codeBackground }
         // Author highlight fills are fixed colors (typically light pastels);
         // without a textColor mark the scheme default (white in dark mode)
@@ -241,6 +270,7 @@ public struct InlineComposer: Sendable {
         }
 
         run[SwiftUIAttrs.FontAttribute.self] = font
+        run.adfFontSpec = spec
         if let foreground {
             run[SwiftUIAttrs.ForegroundColorAttribute.self] = foreground
         }
@@ -260,9 +290,12 @@ public struct InlineComposer: Sendable {
     }
 
     /// Grey italic run for `placeholder` nodes and non-inline strays.
-    private func placeholderRun(_ text: String, baseFont: Font) -> AttributedString {
+    private func placeholderRun(_ text: String, baseFont: Font, baseFontSpec: ADFFontSpec) -> AttributedString {
         var run = AttributedString(text)
+        var spec = baseFontSpec
+        spec.italic = true
         run[SwiftUIAttrs.FontAttribute.self] = baseFont.italic()
+        run.adfFontSpec = spec
         run[SwiftUIAttrs.ForegroundColorAttribute.self] = Color.secondary
         return run
     }
