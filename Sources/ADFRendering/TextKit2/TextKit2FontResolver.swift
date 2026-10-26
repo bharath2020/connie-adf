@@ -45,9 +45,7 @@ enum TextKit2FontResolver {
         // `symbolicTraits` from the preferred descriptor before the font is
         // created (it resolves and caches the regular face) — hence only the
         // spec's own traits are applied, never a read-modify-write.
-        let traits = UITraitCollection(preferredContentSizeCategory: key.category).modifyingTraits { traits in
-            if key.legibilityWeight == .bold { traits.legibilityWeight = .bold }
-        }
+        let traits = traitCollection(category: key.category, legibilityWeight: key.legibilityWeight)
         let spec = key.spec
         var descriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: uiTextStyle(spec.textStyle), compatibleWith: traits)
         if spec.monospaced, let mono = descriptor.withDesign(.monospaced) {
@@ -56,11 +54,27 @@ enum TextKit2FontResolver {
         var symbolic: UIFontDescriptor.SymbolicTraits = []
         if spec.bold { symbolic.insert(.traitBold) }
         if spec.italic { symbolic.insert(.traitItalic) }
-        if !symbolic.isEmpty, let traited = descriptor.withSymbolicTraits(symbolic) {
-            descriptor = traited
+        if !symbolic.isEmpty {
+            let traited = descriptor.withSymbolicTraits(symbolic)
+            assert(traited != nil, "no \(symbolic) face for \(spec); TextKit 2 would draw the untraited face")
+            descriptor = traited ?? descriptor
         }
         // Size 0 keeps the descriptor's (text-style) point size.
         return UIFont(descriptor: descriptor, size: 0)
+    }
+
+    /// The traits the preferred descriptor resolves against. The
+    /// environment's legibility weight is set either way: left unspecified,
+    /// the descriptor follows the system Bold Text setting, while `Text`
+    /// follows the environment (a host's `.regular` override draws regular).
+    static func traitCollection(category: UIContentSizeCategory, legibilityWeight: LegibilityWeight?) -> UITraitCollection {
+        UITraitCollection(preferredContentSizeCategory: category).modifyingTraits { traits in
+            switch legibilityWeight {
+            case .bold: traits.legibilityWeight = .bold
+            case .regular: traits.legibilityWeight = .regular
+            default: break
+            }
+        }
     }
 
     static func uiTextStyle(_ style: ADFFontSpec.TextStyle) -> UIFont.TextStyle {

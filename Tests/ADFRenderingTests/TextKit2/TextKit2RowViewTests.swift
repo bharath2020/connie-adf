@@ -289,6 +289,18 @@ struct TextKit2RowViewTests {
         #expect(boldText.pointSize == regular.pointSize)
     }
 
+    @Test("the environment's legibility weight is passed on, regular included")
+    func resolverExplicitRegular() {
+        // Left unspecified, the descriptor would follow the system Bold
+        // Text setting; `Text` follows the environment.
+        #expect(TextKit2FontResolver.traitCollection(category: .large, legibilityWeight: .regular).legibilityWeight == .regular)
+        #expect(TextKit2FontResolver.traitCollection(category: .large, legibilityWeight: .bold).legibilityWeight == .bold)
+        #expect(TextKit2FontResolver.traitCollection(category: .large, legibilityWeight: nil).legibilityWeight == .unspecified)
+        let regular = TextKit2FontResolver.font(for: ADFFontSpec(textStyle: .body), category: .large, legibilityWeight: .regular)
+        let bold = TextKit2FontResolver.font(for: ADFFontSpec(textStyle: .body), category: .large, legibilityWeight: .bold)
+        #expect(regular.fontDescriptor != bold.fontDescriptor || regular.fontName != bold.fontName)
+    }
+
     @Test("monospaced runs keep the text style's line metrics", arguments: categories)
     func monoKeepsMetrics(category: UIContentSizeCategory) {
         let body = TextKit2FontResolver.font(for: ADFFontSpec(textStyle: .body), category: category)
