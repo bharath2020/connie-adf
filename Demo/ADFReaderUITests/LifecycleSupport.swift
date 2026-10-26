@@ -91,6 +91,7 @@ struct ReaderDriver {
         static let buildDone = "build-info-done"
         static let liveTextKit2Rows = "tk2-live-rows"
         static let loadSwitchBlocks = "load-switch-blocks"
+        static let loadReadyBlocks = "load-ready-blocks"
         static let textKit2RowPrefix = "tk2-row:"
         static let searchField = "search-field"
         static let searchCounter = "search-counter"
@@ -240,7 +241,11 @@ struct ReaderDriver {
         var duplicates: Set<String> = []
         func walk(_ node: XCUIElementSnapshot) {
             let frame = node.frame
-            if !node.label.isEmpty, frame.height > 0, frame.minY >= viewport.minY, frame.maxY <= viewport.maxY {
+            // Scroll indicators carry a page-count label that tracks the
+            // estimated content height, not a row.
+            let isIndicator = node.label.hasPrefix("Vertical scroll bar") || node.label.hasPrefix("Horizontal scroll bar")
+            if !node.label.isEmpty, !isIndicator, frame.height > 0,
+               frame.minY >= viewport.minY, frame.maxY <= viewport.maxY {
                 if tops[node.label] != nil, tops[node.label] != frame.minY {
                     duplicates.insert(node.label)
                 } else {
