@@ -315,18 +315,15 @@ struct ReaderView: View {
     /// animation — the lifecycle gate's deterministic "scroll back".
     private func rejump() {
         guard let fraction = options.scrollToFraction, let target = fractionTarget(fraction) else { return }
-        // The reader scrolls on a *change* of `scrollTarget`: clear it and
-        // set it again on a later update, or re-setting the same id is a no-op.
+        // The reader scrolls on a *change* of `scrollTarget`. The library
+        // clears it after every jump, so it is normally nil already; clearing
+        // it here keeps the re-jump independent of that detail.
         model.scrollTarget = nil
         Task {
             try? await Task.sleep(for: .milliseconds(50))
-            let animation = model.scrollTargetAnimation
-            model.scrollTargetAnimation = .linear(duration: 0)
-            model.scrollTarget = target
             print("REJUMP fraction=\(fraction)")
             fflush(stdout)
-            try? await Task.sleep(for: .milliseconds(100))
-            model.scrollTargetAnimation = animation
+            await ScrollAutomation.jumpWithoutAnimation(model: model, to: target)
         }
     }
 
@@ -346,11 +343,7 @@ struct ReaderView: View {
         // (stress-5k at 0.5, step 3). Re-jumping without animation once it
         // has ended lands on the target row exactly, so screenshots compare.
         try? await Task.sleep(for: .milliseconds(1200))
-        let animation = model.scrollTargetAnimation
-        model.scrollTargetAnimation = .linear(duration: 0)
-        model.scrollTarget = blocks[index].id
-        try? await Task.sleep(for: .milliseconds(100))
-        model.scrollTargetAnimation = animation
+        await ScrollAutomation.jumpWithoutAnimation(model: model, to: blocks[index].id)
     }
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
