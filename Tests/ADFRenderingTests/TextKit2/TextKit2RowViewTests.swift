@@ -311,34 +311,27 @@ struct TextKit2RowViewTests {
         #expect(TextKit2RowView.pixelCeil(42.287, scale: 3) == 127 * (1 / CGFloat(3)))
     }
 
-    @Test("foreground precedence: prepared colour, inherited colour, link tint, label")
+    @Test("foreground precedence: prepared colour, inherited colour, label")
     func foregroundPrecedence() {
         var authored = text("red ")
         authored.foregroundColor = .red
-        authored.link = URL(string: "https://example.com/red")
-        var link = text("link ")
-        link.link = URL(string: "https://example.com/plain")
         let plain = text("plain")
-        let tint = UIColor.systemPink
         func colour(_ inputs: TextKit2RenderInputs, at offset: Int) -> UIColor? {
-            TextKit2TextBuilder.attributedString(for: inputs, linkColor: tint).attribute(.foregroundColor, at: offset, effectiveRange: nil) as? UIColor
+            TextKit2TextBuilder.attributedString(for: inputs).attribute(.foregroundColor, at: offset, effectiveRange: nil) as? UIColor
         }
         func same(_ a: UIColor?, _ b: UIColor) -> Bool {
             let light = UITraitCollection(userInterfaceStyle: .light)
             guard let a else { return false }
             return a.resolvedColor(with: light).cgColor.components == b.resolvedColor(with: light).cgColor.components
         }
-        let combined = authored + link + plain
-        let base = TextKit2RenderInputs(text: combined)
-        #expect(same(colour(base, at: 0), UIColor(Color.red)), "an authored colour beats the link tint")
-        #expect(same(colour(base, at: 4), tint), "an uncoloured link takes the tint")
-        #expect(same(colour(base, at: 10), UIColor.label))
+        let base = TextKit2RenderInputs(text: authored + plain)
+        #expect(same(colour(base, at: 0), UIColor(Color.red)))
+        #expect(same(colour(base, at: 4), UIColor.label))
 
         var inherited = base
         inherited.inheritedForeground = .green
         #expect(same(colour(inherited, at: 0), UIColor(Color.red)), "prepared colour beats inherited")
-        #expect(same(colour(inherited, at: 4), UIColor(Color.green)), "inherited colour beats the link tint")
-        #expect(same(colour(inherited, at: 10), UIColor(Color.green)))
+        #expect(same(colour(inherited, at: 4), UIColor(Color.green)))
     }
 
     @Test("alignment resolves against the SwiftUI layout direction")

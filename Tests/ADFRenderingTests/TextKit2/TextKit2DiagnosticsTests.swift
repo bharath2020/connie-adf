@@ -8,9 +8,10 @@ import ADFPreparation
 
 /// The renderer proof of plan §2.6, through the real document view: under
 /// `.textKit2` an eligible top-level paragraph and heading are drawn by live
-/// TextKit 2 rows (identified `tk2-row:<block id>`), while an atom-bearing
-/// paragraph, a paragraph inside a container, a list item and a media
-/// caption are not; switching back to `.swiftUI` releases every row.
+/// TextKit 2 rows (identified `tk2-row:<block id>`) that TextKit 2 itself
+/// draws, while an atom-bearing paragraph, a linked paragraph, a paragraph
+/// inside a container, a list item and a media caption are not; switching
+/// back to `.swiftUI` releases every row.
 @Suite("TextKit 2 diagnostics", .serialized)
 @MainActor
 struct TextKit2DiagnosticsTests {
@@ -25,6 +26,7 @@ struct TextKit2DiagnosticsTests {
       {"type":"paragraph","content":[{"type":"text","text":"An eligible paragraph."}]},
       {"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Heading two"}]},
       {"type":"paragraph","content":[{"type":"text","text":"Ping "},{"type":"mention","attrs":{"id":"1","text":"@sam"}}]},
+      {"type":"paragraph","content":[{"type":"text","text":"Read "},{"type":"text","text":"the notes","marks":[{"type":"link","attrs":{"href":"https://example.com"}}]}]},
       {"type":"panel","attrs":{"panelType":"info"},"content":[{"type":"paragraph","content":[{"type":"text","text":"Inside a panel."}]}]},
       {"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"A list item."}]}]}]},
       {"type":"mediaSingle","content":[{"type":"media","attrs":{"type":"external","url":"https://example.com/a.png","width":100,"height":50}},{"type":"caption","content":[{"type":"text","text":"A caption."}]}]}
@@ -56,6 +58,15 @@ struct TextKit2DiagnosticsTests {
         return found
     }
 
+    /// Renders the window's layers, so every row view draws now.
+    static func render(_ window: UIWindow) {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        _ = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
+            window.layer.render(in: context.cgContext)
+        }
+    }
+
     @Test("eligible roots get TextKit 2 rows; fallbacks do not; switching back releases them")
     func rowsFollowTheSwitch() async throws {
         let diagnostics = TextKit2Diagnostics.shared
@@ -66,9 +77,12 @@ struct TextKit2DiagnosticsTests {
         let heading = try #require(blocks.first { if case .richText(_, let style) = $0.kind { return style.isHeading } else { return false } })
         let others = blocks.filter { $0.id != paragraph.id && $0.id != heading.id }
 
-        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(eligibleRoots: 2, fallbackRoots: blocks.count - 2))
+        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
+            eligibleRoots: 2, fallbackRoots: blocks.count - 2, textFallbackRoots: 2, linkFallbackRoots: 1
+        ))
 
         let layoutsBefore = diagnostics.layoutCount
+        let nativeDrawsBefore = diagnostics.nativeDrawCount
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
         let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .textKit2))
         window.rootViewController = host
@@ -85,6 +99,9 @@ struct TextKit2DiagnosticsTests {
         let ids = Self.identifiers(in: host.view)
         #expect(ids == ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)"])
         #expect(ADFTextRenderer.textKit2Stats.liveRowCount == diagnostics.liveRowCount)
+        Self.render(window)
+        #expect(diagnostics.nativeDrawCount - nativeDrawsBefore >= 2, "native draws: \(diagnostics.nativeDrawCount - nativeDrawsBefore)")
+        #expect(ADFTextRenderer.textKit2Stats.nativeDrawCount == diagnostics.nativeDrawCount)
 
         host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI)
         try await Self.settle(window)
@@ -108,7 +125,7 @@ struct TextKit2DiagnosticsTests {
             return
         }
         #expect(TextKit2Eligibility.describableText(segments) == nil)
-        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 1))
+        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 1, textFallbackRoots: 1))
         // The default (spec-first) theme stays eligible.
         let defaultBlocks = DocumentPreparer(theme: .default).prepare(doc)
         #expect(ADFTextRenderer.textKit2Coverage(of: defaultBlocks) == ADFTextKit2Coverage(eligibleRoots: 1, fallbackRoots: 0))

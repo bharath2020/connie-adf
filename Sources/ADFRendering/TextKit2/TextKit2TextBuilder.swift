@@ -9,13 +9,11 @@ import ADFPreparation
 /// re-applies only when something actually changed, and so a measurement is
 /// a pure function of (inputs, width) — the cache key of §2.8.
 ///
-/// The `inherited…` fields stand for styling a container applies to its
-/// text through view modifiers (a table header's semibold, a dark-mode
-/// contrast foreground). Top-level rows have none; the fields exist so the
-/// later container adapters feed them here instead of inventing their own
-/// channel. `inheritedForeground` is honoured by the builder;
-/// `inheritedFontWeight` is carried (cache key, redraw decision) and is
-/// applied by the first adapter that sets it.
+/// `inheritedForeground` is the colour `Text` would inherit for runs the
+/// preparer did not colour (a container's contrast foreground in later
+/// PRs). Tint needs no input: `Text` uses it only for links, and linked
+/// text stays on SwiftUI. Inherited font weight (table headers) joins with
+/// tables (PR 5).
 struct TextKit2RenderInputs: Hashable {
     var text: AttributedString
     var alignment: ADFAlignment?
@@ -26,8 +24,6 @@ struct TextKit2RenderInputs: Hashable {
     var legibilityWeight: LegibilityWeight?
     var colorScheme: ColorScheme
     var inheritedForeground: Color?
-    var inheritedFontWeight: Font.Weight?
-    var inheritedTint: Color?
 
     init(
         text: AttributedString,
@@ -38,9 +34,7 @@ struct TextKit2RenderInputs: Hashable {
         displayScale: CGFloat = 3,
         legibilityWeight: LegibilityWeight? = nil,
         colorScheme: ColorScheme = .light,
-        inheritedForeground: Color? = nil,
-        inheritedFontWeight: Font.Weight? = nil,
-        inheritedTint: Color? = nil
+        inheritedForeground: Color? = nil
     ) {
         self.text = text
         self.alignment = alignment
@@ -51,21 +45,14 @@ struct TextKit2RenderInputs: Hashable {
         self.legibilityWeight = legibilityWeight
         self.colorScheme = colorScheme
         self.inheritedForeground = inheritedForeground
-        self.inheritedFontWeight = inheritedFontWeight
-        self.inheritedTint = inheritedTint
     }
 }
 
 extension NSAttributedString.Key {
-    /// Run background fill of text without a link, drawn by the row itself
-    /// (see `TextKit2RowView`) so its extent matches SwiftUI's; kept out of
+    /// Run background fill, drawn by the row itself (see
+    /// `TextKit2RowView`) so its extent matches SwiftUI's; kept out of
     /// `.backgroundColor` so TextKit does not draw a second, shorter one.
-    /// (Text with a link is drawn by TextKit 1, which fills
-    /// `.backgroundColor` as SwiftUI does.)
     static let adfRunBackground = NSAttributedString.Key("adf.runBackground")
-    /// A link's destination. Kept out of `.link`, which makes TextKit
-    /// restyle the run with its own link colour and underline.
-    static let adfLink = NSAttributedString.Key("adf.link")
 }
 
 /// Converts a prepared SwiftUI `AttributedString` into the
@@ -83,16 +70,13 @@ enum TextKit2TextBuilder {
     /// Builds the TextKit string. Foreground precedence per run: the
     /// prepared foreground (an author `textColor`, or the contrast colour
     /// the composer derived from a `backgroundColor` mark) first; then the
-    /// inherited foreground; then the link tint, only for link runs nothing
-    /// else coloured; else `.label`. `linkColor` is the row's tint
-    /// (`inheritedTint` wins when set).
-    static func attributedString(for inputs: TextKit2RenderInputs, linkColor: UIColor) -> NSAttributedString {
+    /// inherited foreground; else `.label`. Rows never carry a link
+    /// (`TextKit2Eligibility`).
+    static func attributedString(for inputs: TextKit2RenderInputs) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let scale = baselineScale(for: inputs.sizeCategory)
         let fallbackSpec = ADFFontSpec(textStyle: .body)
         let inheritedForeground = inputs.inheritedForeground.map(UIColor.init)
-        let tint = inputs.inheritedTint.map(UIColor.init) ?? linkColor
-        let hasLink = inputs.text.runs.contains { $0.link != nil }
 
         for run in inputs.text.runs {
             let string = String(inputs.text[run.range].characters)
@@ -108,22 +92,17 @@ enum TextKit2TextBuilder {
                 attributes[.foregroundColor] = UIColor(foreground)
             } else if let inheritedForeground {
                 attributes[.foregroundColor] = inheritedForeground
-            } else if run.link != nil {
-                attributes[.foregroundColor] = tint
             } else {
                 attributes[.foregroundColor] = UIColor.label
             }
             if let background = run.backgroundColor {
-                attributes[hasLink ? .backgroundColor : .adfRunBackground] = UIColor(background)
+                attributes[.adfRunBackground] = UIColor(background)
             }
             if run.underlineStyle != nil {
                 attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             if run.strikethroughStyle != nil {
                 attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
-            }
-            if let link = run.link {
-                attributes[.adfLink] = link
             }
             if let offset = run.baselineOffset {
                 attributes[.baselineOffset] = offset * scale

@@ -72,8 +72,6 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
     private func update(_ view: TextKit2RowView, context: Context) {
         handle.view = view
         view.apply(Self.inputs(text: text, style: style, environment: context.environment), ownerID: ownerID)
-        let action = context.environment.openURL
-        view.openURL = { url in action(url) }
     }
 
     static func inputs(text: AttributedString, style: TextBlockStyle, environment: EnvironmentValues) -> TextKit2RenderInputs {

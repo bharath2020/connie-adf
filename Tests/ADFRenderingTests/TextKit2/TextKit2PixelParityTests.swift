@@ -18,6 +18,7 @@ struct TextKit2PixelParityTests {
     nonisolated static let sizes: [DynamicTypeSize] = [.large, .xxxLarge, .accessibility3]
     nonisolated static let maxDifferingFraction = 0.002
 
+    /// Every mark a TextKit 2 row draws (a link would send it to SwiftUI).
     static func everyMark() async throws -> TK2Parity.Fixture {
         func t(_ string: String, _ marks: String = "") -> String { TK2Parity.adfText(string, marks: marks) }
         let content = [
@@ -27,7 +28,6 @@ struct TextKit2PixelParityTests {
             t("code ", "{\"type\":\"code\"}"),
             t("strike ", "{\"type\":\"strike\"}"),
             t("underline ", "{\"type\":\"underline\"}"),
-            t("link ", "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}}"),
             t("red ", "{\"type\":\"textColor\",\"attrs\":{\"color\":\"#ff5630\"}}"),
             t("highlight ", "{\"type\":\"backgroundColor\",\"attrs\":{\"color\":\"#fedec8\"}}"),
             t("small ", "{\"type\":\"fontSize\",\"attrs\":{\"size\":\"small\"}}"),
@@ -41,9 +41,11 @@ struct TextKit2PixelParityTests {
         return try await TK2Parity.fixture("every-mark", content: content)
     }
 
-    /// The demo's kitchen-sink paragraph, verbatim: its link sits on a line
-    /// after one holding a subscript, whose baseline is fractional.
-    static func kitchenSinkParagraph() async throws -> TK2Parity.Fixture {
+    /// The demo's kitchen-sink paragraph, verbatim (it stays on SwiftUI:
+    /// it has a link — `TextKit2FallbackTests`), and the same without its
+    /// link: underline, strike and annotation on lines after one holding a
+    /// subscript, whose baseline is fractional.
+    static func kitchenSinkParagraph(linked: Bool = true) async throws -> TK2Parity.Fixture {
         func t(_ string: String, _ marks: String = "") -> String { TK2Parity.adfText(string, marks: marks) }
         let content = [
             t("bold", "{\"type\":\"strong\"}"), t(" italic", "{\"type\":\"em\"}"),
@@ -54,31 +56,32 @@ struct TextKit2PixelParityTests {
             t(" colored", "{\"type\":\"textColor\",\"attrs\":{\"color\":\"#ff5630\"}}"),
             t(" highlighted", "{\"type\":\"backgroundColor\",\"attrs\":{\"color\":\"#fedec8\"}}"),
             t(" small", "{\"type\":\"fontSize\",\"attrs\":{\"size\":\"small\"}}"),
-            t(" a link", "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\",\"title\":\"Example\"}}"),
+            linked
+                ? t(" a link", "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\",\"title\":\"Example\"}}")
+                : t(" no link"),
             t(" annotated", "{\"type\":\"annotation\",\"attrs\":{\"id\":\"anno-1\",\"annotationType\":\"inlineComment\"}}"),
             TK2Parity.hardBreak, t("after the break"),
         ].joined(separator: ",")
-        return try await TK2Parity.fixture("kitchen-sink-paragraph", content: content)
+        return try await TK2Parity.fixture(linked ? "kitchen-sink-paragraph" : "kitchen-sink-paragraph-unlinked", content: content)
     }
 
-    /// A linked, struck paragraph wrapping below a subscript line: every
-    /// later line has a fractional baseline.
-    static func linkAfterSubscript() async throws -> TK2Parity.Fixture {
+    /// A struck paragraph wrapping below a subscript line: every later line
+    /// has a fractional baseline.
+    static func strikeAfterSubscript() async throws -> TK2Parity.Fixture {
         let medium = "Ten tired otters cheer while a careful heron stares at the outer rim of the sunlit marsh in late autumn"
-        return try await TK2Parity.fixture("link-after-subscript", content: [
+        return try await TK2Parity.fixture("strike-after-subscript", content: [
             TK2Parity.adfText("H"),
             TK2Parity.adfText("2", marks: "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sub\"}}"),
-            TK2Parity.adfText("O " + medium + " " + medium, marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}},{\"type\":\"strike\"}"),
+            TK2Parity.adfText("O " + medium + " " + medium, marks: "{\"type\":\"strike\"}"),
         ].joined(separator: ","))
     }
 
-    /// A centred, highlighted paragraph opening with a link: TextKit 1
-    /// fills whole line fragments, extends line-ending whitespace to the
-    /// frame's edge, and sizes the frame by its lines' used rects.
-    static func centredHighlightAfterLink() async throws -> TK2Parity.Fixture {
+    /// A centred paragraph highlighted from its second word: the row draws
+    /// the band itself, line by line, to the line's last caret.
+    static func centredHighlight() async throws -> TK2Parity.Fixture {
         let medium = "The quick brown fox jumps over the lazy dog while seventeen purple elephants rehearse"
-        return try await TK2Parity.fixture("centred-highlight-after-link", blockMarks: "{\"type\":\"alignment\",\"attrs\":{\"align\":\"center\"}}", content: [
-            TK2Parity.adfText("go", marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}}"),
+        return try await TK2Parity.fixture("centred-highlight", blockMarks: "{\"type\":\"alignment\",\"attrs\":{\"align\":\"center\"}}", content: [
+            TK2Parity.adfText("go"),
             TK2Parity.adfText(" " + medium + " " + medium, marks: "{\"type\":\"backgroundColor\",\"attrs\":{\"color\":\"#fedec8\"}}"),
         ].joined(separator: ","))
     }
@@ -112,16 +115,16 @@ struct TextKit2PixelParityTests {
         try compare(try await Self.h1(), env: TK2Parity.Environment(size: size, dark: dark))
     }
 
-    @Test("link decorations on lines with fractional baselines", arguments: sizes, [false, true])
-    func fractionalBaselineLinkPixels(size: DynamicTypeSize, dark: Bool) async throws {
+    @Test("decorations on lines with fractional baselines", arguments: sizes, [false, true])
+    func fractionalBaselineDecorationPixels(size: DynamicTypeSize, dark: Bool) async throws {
         let env = TK2Parity.Environment(size: size, dark: dark)
-        try compare(try await Self.kitchenSinkParagraph(), env: env)
-        try compare(try await Self.linkAfterSubscript(), env: env)
+        try compare(try await Self.kitchenSinkParagraph(linked: false), env: env)
+        try compare(try await Self.strikeAfterSubscript(), env: env)
     }
 
-    @Test("text with a link: backgrounds and frame as TextKit 1 draws them", arguments: sizes, [false, true])
-    func linkTextBackgroundPixels(size: DynamicTypeSize, dark: Bool) async throws {
-        try compare(try await Self.centredHighlightAfterLink(), env: TK2Parity.Environment(size: size, dark: dark))
+    @Test("a centred highlight renders identically", arguments: sizes, [false, true])
+    func centredHighlightPixels(size: DynamicTypeSize, dark: Bool) async throws {
+        try compare(try await Self.centredHighlight(), env: TK2Parity.Environment(size: size, dark: dark))
     }
 
     @Test("lines set wholly in a sub/superscript run sit where Text puts them", arguments: sizes, [false, true])

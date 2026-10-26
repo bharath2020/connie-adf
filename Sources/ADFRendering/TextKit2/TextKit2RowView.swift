@@ -85,10 +85,10 @@ struct TextKit2LayoutResult: Equatable {
 /// measured from its bitmaps (`TextKit2PixelParityTests`). Drawn at the
 /// unshifted layout position, TextKit's glyphs, underlines and strikes
 /// land one pixel lower wherever the first baseline's pixel fraction is
-/// small (e.g. H1 at xxxLarge, 97.12 px). Text containing a link is laid
-/// out and drawn through TextKit 1, as SwiftUI lays it out and draws it
-/// (`textKit1Result`, `drawTextKit1`).
-final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
+/// small (e.g. H1 at xxxLarge, 97.12 px). Text containing a link never
+/// reaches this view (`TextKit2Eligibility`): `Text` lays such text out
+/// with TextKit 1.
+final class TextKit2RowView: UIView {
     private let contentStorage = NSTextContentStorage()
     private let layoutManager = NSTextLayoutManager()
     private let textContainer = NSTextContainer(size: CGSize(width: 1, height: CGFloat.greatestFiniteMagnitude))
@@ -96,9 +96,6 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     private(set) var inputs: TextKit2RenderInputs?
     private var attributed = NSAttributedString()
-    private var links: [(range: NSRange, url: URL)] = []
-    /// Draws text containing a link (`drawTextKit1`); nil otherwise.
-    private var textKit1: TextKit1Stack?
     /// Width the layout manager is currently laid out at (`-1`: none).
     private var containerWidth: CGFloat = -1
     /// The layout being drawn and hit-tested (set by `syncToBounds`), and
@@ -118,16 +115,6 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// (`tk2-row:<ownerID>`) and its key in `TextKit2Diagnostics`.
     private(set) var ownerID: String?
 
-    /// Delivered by the representable from the SwiftUI `openURL` action.
-    var openURL: ((URL) -> Void)?
-
-    private lazy var tapRecognizer: UITapGestureRecognizer = {
-        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        recognizer.cancelsTouchesInView = false
-        recognizer.delegate = self
-        return recognizer
-    }()
-
     override init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = false
@@ -139,7 +126,6 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         canvas.row = self
         addSubview(canvas)
         isAccessibilityElement = true
-        addGestureRecognizer(tapRecognizer)
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TextKit2RowView, _) in
             // Dynamic colours (`UIColor.label`, mark colours) resolve at
             // draw time, so a scheme change only needs a redraw — never a
@@ -188,7 +174,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     private func rebuildText() {
         guard let inputs else { return }
-        attributed = TextKit2TextBuilder.attributedString(for: inputs, linkColor: Self.linkColor)
+        attributed = TextKit2TextBuilder.attributedString(for: inputs)
         contentStorage.attributedString = attributed
         canvas.contentScaleFactor = inputs.displayScale
         containerWidth = -1
@@ -199,17 +185,9 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         case .right: alignmentFactor = 1
         default: alignmentFactor = 0
         }
-        rebuildLinks()
-        textKit1 = links.isEmpty ? nil : TextKit1Stack(attributed)
         syncToBounds()
         canvas.setNeedsDisplay()
     }
-
-    /// SwiftUI colours `Text` links with the accent colour (measured: the
-    /// iOS 26 system blue, 0/136/255 light — not `UIColor.link`, and not a
-    /// UIKit `tintColor`, which is unset outside a shown window). A dynamic
-    /// colour, resolved at draw time for the row's appearance.
-    private static let linkColor = UIColor(Color.accentColor)
 
     // MARK: Measurement
 
@@ -282,9 +260,6 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             }
             return true
         }
-        if let textKit1, !lines.isEmpty {
-            return textKit1Result(textKit1, width: width, ink: ink, scale: scale)
-        }
         if belows.contains(where: \.raised) { settleSuperscriptLines(&lines, belows: belows) }
         if let moved = lines.last?.offset, moved > 0, !ink.isNull { ink.size.height += moved }
         settleTrailingEmptyLine(&lines, belows: belows)
@@ -339,64 +314,6 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    /// Text with a link, laid out as `Text` lays it out (and draws it,
-    /// `drawTextKit1`): by the row's TextKit 1 stack. TextKit 1 breaks
-    /// lines differently next to emoji (an emoji TextKit 2 lets end a line
-    /// wraps), spaces a superscript line by its full leading, and sizes
-    /// the frame by its used rect (measured: every height of `Text`,
-    /// xSmall…AX5, and the `text-dense` blocks TextKit 2 sized a line
-    /// short). The used rect stops at the container's edges — narrower
-    /// than the widest line when lines are centred or end-aligned (their
-    /// trailing whitespace hangs past the edge; measured 350.667 for the
-    /// 353.333 the line-width rule gives). TextKit 2's layout still bounds
-    /// the ink (`ink`).
-    private func textKit1Result(_ stack: TextKit1Stack, width: CGFloat, ink: CGRect, scale: CGFloat) -> TextKit2LayoutResult {
-        stack.setWidth(width)
-        let manager = stack.manager
-        var lines: [TextKit2LayoutResult.Line] = []
-        var glyph = 0
-        while glyph < manager.numberOfGlyphs {
-            var glyphs = NSRange()
-            let rect = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &glyphs)
-            let used = manager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
-            let range = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-            let metrics = glyphMetrics(onLine: range)
-            // A glyph's location sits its run's baseline offset off the line's.
-            let raise = (attributed.attribute(.baselineOffset, at: range.location, effectiveRange: nil) as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0
-            lines.append(.init(
-                frame: CGRect(x: used.minX, y: rect.minY, width: used.width, height: rect.height),
-                baseline: rect.minY + manager.location(forGlyphAt: glyph).y + raise,
-                ascent: metrics.ascent, descent: metrics.descent,
-                bandAscent: metrics.bandAscent, sharedOffset: metrics.sharedOffset,
-                range: range
-            ))
-            glyph = max(NSMaxRange(glyphs), glyph + 1)
-        }
-        let extra = manager.extraLineFragmentRect
-        if !extra.isEmpty {
-            let metrics = glyphMetrics(onLine: NSRange(location: attributed.length, length: 0))
-            lines.append(.init(
-                frame: CGRect(x: extra.minX, y: extra.minY, width: 0, height: extra.height),
-                baseline: extra.minY + metrics.ascent, ascent: metrics.ascent, descent: metrics.descent,
-                range: NSRange(location: attributed.length, length: 0)
-            ))
-        }
-        let usedRect = manager.usedRect(for: stack.container)
-        let hugging = Self.pixelCeil(min(usedRect.maxX, width) - max(usedRect.minX, 0), scale: scale)
-        let reportedWidth = width == Self.unboundedWidth ? hugging : min(hugging, Self.pixelCeil(width, scale: scale))
-        let first = lines.first?.baseline ?? 0
-        let last = lines.last?.baseline ?? 0
-        let bounds = CGRect(x: 0, y: 0, width: usedRect.maxX, height: usedRect.maxY)
-        return TextKit2LayoutResult(
-            width: width,
-            size: CGSize(width: reportedWidth, height: Self.pixelCeil(usedRect.maxY, scale: scale)),
-            firstBaseline: Self.pixelRound(first, scale: scale),
-            lastBaseline: Self.pixelRound(last, scale: scale),
-            lines: lines,
-            inkBounds: ink.isNull ? bounds : ink.union(bounds)
-        )
-    }
-
     /// Places the empty line a trailing hard break opens the way `Text`
     /// does: its baseline sits the previous line's descent plus its own
     /// ascent plus the leading below the previous baseline — the previous
@@ -407,9 +324,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// two trailing breaks: every height exact. TextKit's own extra line
     /// fragment differs: it ignores negative leading after a first line,
     /// and after two breaks it takes the default font (13.8 pt tall).
-    /// Residual (iOS 18.5 only): with two or more trailing breaks at AX3+,
-    /// `Text` also drops the negative leading of the middle empty line —
-    /// 0.333–1.333 pt shorter than this layout.
+    /// Before iOS 26, with two or more trailing breaks at AX3+, `Text` also
+    /// drops the negative leading of the middle empty line (0.333–1.333 pt
+    /// shorter than this layout, no exact rule found), so such text stays
+    /// on SwiftUI there (`TextKit2Eligibility`).
     private func settleTrailingEmptyLine(_ lines: inout [TextKit2LayoutResult.Line], belows: [(extent: CGFloat, raised: Bool)]) {
         guard lines.count >= 2, let last = lines.last, last.range.length == 0,
               attributed.length > 0, last.range.location >= attributed.length else { return }
@@ -556,72 +474,41 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// origin sits at `origin` in row coordinates).
     fileprivate func drawText(in context: CGContext, canvasOrigin origin: CGPoint) {
         guard syncToBounds() != nil else { return }
-        TextKit2Diagnostics.shared.didDraw()
         context.saveGState()
         context.translateBy(x: -origin.x, y: -origin.y)
         let scale = inputs?.displayScale ?? 1
-        if let textKit1 {
-            drawTextKit1(textKit1, in: context, scale: scale)
-        } else {
-            context.translateBy(x: drawnShift, y: 0)
-            if let first = drawn?.lines.first {
-                context.translateBy(x: 0, y: Self.pixelRound(first.baseline, scale: scale) - first.baseline)
-            }
-            drawRunBackgrounds(in: context, scale: scale)
-            let offsets = drawn?.lines.map(\.offset) ?? []
-            var index = 0
-            layoutManager.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { fragment in
-                let origin = fragment.layoutFragmentFrame.origin
-                let lines = fragment.textLineFragments
-                let moved = offsets[min(index, offsets.count)..<min(index + lines.count, offsets.count)].contains { $0 != 0 }
-                if moved {
-                    // Lines below a superscript line sit lower than TextKit
-                    // placed them (`settleSuperscriptLines`).
-                    for (line, offset) in zip(lines, offsets[index...]) {
-                        let at = line.typographicBounds.origin
-                        line.draw(at: CGPoint(x: origin.x + at.x, y: origin.y + at.y + offset), in: context)
-                    }
-                } else {
-                    fragment.draw(at: origin, in: context)
+        context.translateBy(x: drawnShift, y: 0)
+        if let first = drawn?.lines.first {
+            context.translateBy(x: 0, y: Self.pixelRound(first.baseline, scale: scale) - first.baseline)
+        }
+        drawRunBackgrounds(in: context, scale: scale)
+        let offsets = drawn?.lines.map(\.offset) ?? []
+        var index = 0
+        var fragments = 0
+        layoutManager.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { fragment in
+            let origin = fragment.layoutFragmentFrame.origin
+            let lines = fragment.textLineFragments
+            let moved = offsets[min(index, offsets.count)..<min(index + lines.count, offsets.count)].contains { $0 != 0 }
+            if moved {
+                // Lines below a superscript line sit lower than TextKit
+                // placed them (`settleSuperscriptLines`).
+                for (line, offset) in zip(lines, offsets[index...]) {
+                    let at = line.typographicBounds.origin
+                    line.draw(at: CGPoint(x: origin.x + at.x, y: origin.y + at.y + offset), in: context)
                 }
-                index += lines.count
-                return true
+            } else {
+                fragment.draw(at: origin, in: context)
             }
+            index += lines.count
+            fragments += 1
+            return true
         }
         context.restoreGState()
+        TextKit2Diagnostics.shared.didDraw(native: fragments > 0)
     }
 
-    /// Text containing a link, drawn as SwiftUI draws it: SwiftUI renders
-    /// such text (interactive) through TextKit 1 string drawing, whose
-    /// underlines, strikethroughs (descender-skipping, placed per line) and
-    /// background fills (whole line fragments, leading included) TextKit 2
-    /// does not reproduce. Measured: SwiftUI draws with an
-    /// `NSLayoutManager` (font leading off, no line fragment padding) in a
-    /// container as wide as the `Text`'s frame, its first baseline on a
-    /// device pixel — this does the same, identical to the pixel
-    /// (`TextKit2PixelParityTests`). The same stack lays the text out
-    /// (`textKit1Result`) and hit-tests its links.
-    private func drawTextKit1(_ stack: TextKit1Stack, in context: CGContext, scale: CGFloat) {
-        stack.setWidth(bounds.width)
-        let glyphs = stack.manager.glyphRange(for: stack.container)
-        guard glyphs.length > 0 else { return }
-        let baseline = stack.manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY
-            + stack.manager.location(forGlyphAt: 0).y
-        let origin = CGPoint(x: 0, y: Self.pixelRound(baseline, scale: scale) - baseline)
-        UIGraphicsPushContext(context)
-        // SwiftUI clips the fills (not the glyphs) to the frame: the last
-        // line's fragment can reach a pixel row below it.
-        context.saveGState()
-        context.clip(to: bounds)
-        stack.manager.drawBackground(forGlyphRange: glyphs, at: origin)
-        context.restoreGState()
-        stack.manager.drawGlyphs(forGlyphRange: glyphs, at: origin)
-        UIGraphicsPopContext()
-    }
-
-    /// Run background fills as SwiftUI draws them for text without a link
-    /// (text with one is drawn by TextKit 1, `drawTextKit1`) — measured
-    /// from its bitmaps (xSmall … AX5, with and without sub/superscripts on
+    /// Run background fills as SwiftUI draws them — measured from its
+    /// bitmaps (xSmall … AX5, with and without sub/superscripts on
     /// the line): per line the run touches, a band from the baseline up by
     /// the line's `bandAscent` and down by its descent — moved by the run's
     /// baseline offset beyond the one the whole line shares (a superscript
@@ -666,95 +553,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    // MARK: Links
-
-    private func rebuildLinks() {
-        var found: [(range: NSRange, url: URL)] = []
-        attributed.enumerateAttribute(.adfLink, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
-            if let url = value as? URL { found.append((range, url)) }
-        }
-        links = found
-        accessibilityCustomActions = found.isEmpty ? nil : found.map { link in
-            UIAccessibilityCustomAction(name: Self.linkActionName(link.url)) { [weak self] _ in
-                guard let self, let openURL = self.openURL else { return false }
-                openURL(link.url)
-                return true
-            }
-        }
-    }
-
-    /// VoiceOver custom action name for a link.
-    static func linkActionName(_ url: URL) -> String {
-        "Open link \(url.host ?? url.absoluteString)"
-    }
-
-    /// Only a touch that starts on a link's glyphs begins the tap, so taps
-    /// elsewhere — and every scroll — pass straight through.
-    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer === tapRecognizer else {
-            return super.gestureRecognizerShouldBegin(gestureRecognizer)
-        }
-        return link(at: gestureRecognizer.location(in: self)) != nil
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
-    }
-
-    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
-        guard recognizer.state == .ended else { return }
-        openLink(at: recognizer.location(in: self))
-    }
-
-    /// Opens the link under `point` through `openURL`; `false` when no
-    /// link's glyphs are there (or no handler is installed).
-    @discardableResult
-    func openLink(at point: CGPoint) -> Bool {
-        guard let openURL, let url = link(at: point) else { return false }
-        openURL(url)
-        return true
-    }
-
-    /// The link whose glyphs lie under `point` (row coordinates), if any:
-    /// the point must fall inside one of the link range's text-segment
-    /// rects (its glyph runs, one per line it spans) — never "the nearest
-    /// character", so whitespace past a line's end or below the text
-    /// resolves to nothing.
-    func link(at point: CGPoint) -> URL? {
-        guard !links.isEmpty, bounds.contains(point), syncToBounds() != nil else { return nil }
-        for link in links where segmentRects(for: link.range).contains(where: { $0.contains(point) }) {
-            return link.url
-        }
-        return nil
-    }
+    // MARK: Geometry
 
     /// Text-segment rects (row coordinates) covering a UTF-16 range in the
-    /// layout being drawn.
+    /// layout being drawn — the geometry search highlights (PR 7) and
+    /// selection (PR 8) build on.
     func segmentRects(for range: NSRange) -> [CGRect] {
         guard syncToBounds() != nil else { return [] }
-        if let textKit1 { return textKit1SegmentRects(textKit1, for: range) }
         return containerSegmentRects(for: range).map { $0.offsetBy(dx: drawnShift, dy: 0) }
-    }
-
-    /// Text-segment rects (row coordinates) of text with a link, which
-    /// TextKit 1 lays out and draws (`drawTextKit1`): per line, the glyphs'
-    /// bounding rect across the line fragment's height.
-    private func textKit1SegmentRects(_ stack: TextKit1Stack, for range: NSRange) -> [CGRect] {
-        stack.setWidth(bounds.width)
-        let manager = stack.manager
-        let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-        guard glyphs.length > 0 else { return [] }
-        let scale = inputs?.displayScale ?? 1
-        let baseline = manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY + manager.location(forGlyphAt: 0).y
-        let snap = Self.pixelRound(baseline, scale: scale) - baseline
-        var rects: [CGRect] = []
-        manager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, lineGlyphs, _ in
-            let part = NSIntersectionRange(lineGlyphs, glyphs)
-            guard part.length > 0 else { return }
-            let box = manager.boundingRect(forGlyphRange: part, in: stack.container)
-            if box.width > 0 { rects.append(CGRect(x: box.minX, y: rect.minY + snap, width: box.width, height: rect.height)) }
-        }
-        return rects
     }
 
     /// Text-segment rects in the layout container's coordinates.
@@ -817,26 +623,6 @@ private final class TextKit2CanvasView: UIView {
 }
 
 /// Bounded width → layout memo (least recently used evicted first).
-/// A TextKit 1 stack configured as SwiftUI's string drawing configures it.
-private struct TextKit1Stack {
-    let storage: NSTextStorage
-    let manager = NSLayoutManager()
-    let container = NSTextContainer(size: .zero)
-
-    init(_ string: NSAttributedString) {
-        storage = NSTextStorage(attributedString: string)
-        manager.usesFontLeading = false
-        container.lineFragmentPadding = 0
-        manager.addTextContainer(container)
-        storage.addLayoutManager(manager)
-    }
-
-    func setWidth(_ width: CGFloat) {
-        guard container.size.width != width else { return }
-        container.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-    }
-}
-
 private struct LayoutCache {
     static let capacity = 4
     private var entries: [(width: CGFloat, result: TextKit2LayoutResult)] = []

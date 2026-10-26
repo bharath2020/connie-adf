@@ -6,11 +6,11 @@ import ADFPreparation
 /// styling (alignment / indentation / breakout marks, heading semantics).
 ///
 /// Two text engines share this leaf. The SwiftUI arm is the shipping path.
-/// When the environment selects `.textKit2` AND the content is plain text
-/// (no inline atoms) whose every run carries a font spec, a UIKit-hosted
-/// TextKit 2 row draws it instead — a plain `if`/`else` at the leaf (never
-/// `AnyView`, never `#available`: §18's per-row erasure lesson). Without
-/// UIKit the SwiftUI arm always runs.
+/// When the environment selects `.textKit2` AND the content is eligible
+/// (`TextKit2Eligibility`: no inline atom, no link, every run with a font
+/// spec), a UIKit-hosted TextKit 2 row draws it instead — a plain
+/// `if`/`else` at the leaf (never `AnyView`, never `#available`: §18's
+/// per-row erasure lesson). Without UIKit the SwiftUI arm always runs.
 struct RichTextBlockView: View {
     let segments: [InlineSegment]
     let style: TextBlockStyle

@@ -77,13 +77,20 @@ struct TextKit2CorpusParityTests {
         var checked = 0
         for item in try await Self.corpus() {
             let fixture = item.fixture
-            #expect(fixture.describableText != nil, "\(fixture.name) is not TextKit 2 eligible")
+            if case .fallback(.trailingBreaks) = TextKit2Eligibility.verdict(fixture.segments) {
+                // Before iOS 26 (`TextKit2FallbackTests`); both arms are SwiftUI.
+                #expect(!TextKit2Eligibility.trailingBreaksMatchText, "\(fixture.name)")
+            } else {
+                #expect(fixture.describableText != nil, "\(fixture.name) is not TextKit 2 eligible")
+            }
             for direction in item.directions {
                 for size in Self.sizes {
                     let env = TK2Parity.Environment(size: size, direction: direction)
                     for width in Self.widths {
                         let h = TK2Parity.heights(fixture, env: env, width: width)
                         #expect(abs(h.swiftUI - h.textKit2) <= Self.tolerance, "\(fixture.name) \(env) w=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
+                        checked += 1
+                        guard fixture.describableText != nil else { continue }
                         let mismatches = try TK2Parity.lineBreakMismatches(fixture, env: env, width: width)
                         let label = "\(fixture.name) \(env) w=\(width)"
                         if Self.knownOffsetCases.contains(label) {
@@ -93,7 +100,6 @@ struct TextKit2CorpusParityTests {
                         } else {
                             #expect(mismatches.isEmpty, "\(label):\n\(mismatches.joined(separator: "\n"))")
                         }
-                        checked += 1
                     }
                 }
             }
