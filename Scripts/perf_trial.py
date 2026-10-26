@@ -33,15 +33,26 @@ SUBCOMMANDS
         arm, label, app_sha256, installed_sha256, argv, shell_status,
         requires_completion, …). Prints a one-line digest to stdout.
 
+    host [--top-samples 2]
+        Prints one JSON line describing host load: {"load1", "load5",
+        "load15", "top": [{"pid", "command", "cpu", "simulator"}, ...]}
+        (three busiest processes, `top` itself excluded). With
+        --top-samples 2 the CPU figures come from the second of two `top`
+        samples (instantaneous, about 1 s); with 0, from `ps` (decayed
+        average, cheap: used per trial). `simulator` marks processes of the
+        iOS Simulator runtime, which the start check ignores.
+
 LOG LINES CONSUMED (contract with Demo/ADFReader)
     READY fixture=<name> blocks=<n> firstChunkMs=<ms>
     SCROLL_METRICS fixture=<name> frames=<n> dropped=<n> hitchRatioMsPerS=<x>
         [startRow=<i> endRow=<i> scrollMs=<ms> completed=<1|0|true|false>]
     RENDERER_STATS renderer=<swiftui|textkit2> tk2Live=<n> tk2Layouts=<n>
-        tk2Draws=<n> eligibleRoots=<n> fallbackRoots=<n> [other k=v...]
+        tk2Draws=<n> tk2NativeDraws=<n> tk1BackedRows=<n> tk1BackedDraws=<n>
+        eligibleRoots=<n> fallbackRoots=<n> textFallbackRoots=<n>
+        linkRoots=<n> [other k=v...]
         (printed at READY and again with SCROLL_METRICS; the last one wins
         for the counters, the first one is kept as renderer_ready and
-        tk2_live_ready)
+        tk2_live_ready; Demo/ADFReader/RendererStats.swift)
 """
 
 from __future__ import annotations
@@ -62,19 +73,30 @@ CSV_COLUMNS = [
     # driver-supplied
     "run", "fixture", "arm", "label", "order_index", "app_sha256", "installed_sha256",
     "argv", "requires_completion", "trial_timeout_s", "shell_status",
+    "started_utc", "host_load1", "host_top3",
     # derived
     "status", "launch_exit", "launch_to_ready_ms", "ready_fixture", "first_chunk_ms", "blocks",
     "frames", "dropped_frames", "dropped_rate_pct", "hitch_ms_per_s",
     "start_row", "end_row", "scroll_ms", "completed",
     "renderer", "renderer_ready", "tk2_live_ready", "tk2_live", "tk2_layouts", "tk2_draws",
-    "eligible_roots", "fallback_roots", "renderer_stats_extra",
+    "tk2_native_draws", "tk1_backed_rows", "tk1_backed_draws",
+    "eligible_roots", "fallback_roots", "text_fallback_roots", "link_roots", "renderer_stats_extra",
     "rss_ready_kb", "rss_peak_kb", "footprint_ready_kb", "footprint_peak_kb",
     "memory_samples", "footprint_samples",
     "rss_interval_ms_median", "rss_interval_ms_max",
     "footprint_interval_ms_median", "footprint_interval_ms_max",
     "trial_wall_ms", "log", "samples",
 ]
-DRIVER_COLUMNS = set(CSV_COLUMNS[:11]) | {"log", "samples"}
+# RENDERER_STATS keys added with the TextKit 1-backed link rows (ebbdb01):
+# CSV column -> log key. The summarizer's renderer proof reads these.
+STATS_FIELDS = {
+    "tk2_native_draws": "tk2NativeDraws",
+    "tk1_backed_rows": "tk1BackedRows",
+    "tk1_backed_draws": "tk1BackedDraws",
+    "text_fallback_roots": "textFallbackRoots",
+    "link_roots": "linkRoots",
+}
+DRIVER_COLUMNS = set(CSV_COLUMNS[:14]) | {"log", "samples"}
 
 # ------------------------------------------------------------------ launch
 
@@ -115,7 +137,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
 
 
 def find_pid(udid: str, exe: str) -> int | None:
-    pattern = f"Devices/{udid}/.*/{re.escape(exe)}\\.app/{re.escape(exe)}( |$)"
+    pattern = f"Devices/{udid.upper()}/.*/{re.escape(exe)}\\.app/{re.escape(exe)}( |$)"
     try:
         out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True).stdout
     except OSError:
@@ -210,6 +232,61 @@ def cmd_sample(args: argparse.Namespace) -> int:
     return 0
 
 
+# -------------------------------------------------------------------- host
+
+SIMULATOR_MARKERS = ("CoreSimulator", "launchd_sim", "Simulator.app", "SimulatorTrampoline", "simctl")
+
+
+def host_load(top_samples: int) -> dict:
+    loads = subprocess.run(["sysctl", "-n", "vm.loadavg"], capture_output=True, text=True).stdout
+    values = [float(x) for x in re.findall(r"[0-9]+\.[0-9]+", loads)[:3]]
+    top_names: dict[int, str] = {}
+    top_busiest: list[tuple[float, int]] = []
+    if top_samples > 0:
+        out = subprocess.run(["top", "-l", str(top_samples), "-n", "6", "-o", "cpu", "-stats", "pid,command,cpu"],
+                             capture_output=True, text=True).stdout
+        table = out.split("PID    COMMAND")[-1] if "PID    COMMAND" in out else ""
+        for line in table.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 3 and parts[0].isdigit():
+                try:
+                    top_busiest.append((float(parts[-1]), int(parts[0])))
+                    top_names[int(parts[0])] = " ".join(parts[1:-1])
+                except ValueError:
+                    pass
+    # ps after top, so a process top saw still has a path
+    ps = subprocess.run(["ps", "-Ao", "pid=,pcpu=,comm="], capture_output=True, text=True).stdout
+    paths: dict[int, str] = {}
+    decayed: list[tuple[float, int]] = []
+    for line in ps.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit():
+            paths[int(parts[0])] = parts[2]
+            try:
+                decayed.append((float(parts[1]), int(parts[0])))
+            except ValueError:
+                pass
+    busiest = top_busiest if top_samples > 0 else sorted(decayed, reverse=True)
+    top = []
+    for cpu, pid in busiest:
+        command = paths.get(pid) or top_names.get(pid, "?")
+        if os.path.basename(command) == "top" or pid == os.getpid():
+            continue
+        top.append({"pid": pid, "command": command, "cpu": cpu,
+                    "simulator": any(m in command for m in SIMULATOR_MARKERS)})
+        if len(top) == 3:
+            break
+    return {"load1": values[0] if values else None, "load5": values[1] if len(values) > 1 else None,
+            "load15": values[2] if len(values) > 2 else None, "top": top,
+            "cpu_source": f"top -l {top_samples} (last sample)" if top_samples > 0 else "ps pcpu (decayed)"}
+
+
+def cmd_host(args: argparse.Namespace) -> int:
+    import json
+    print(json.dumps(host_load(args.top_samples), sort_keys=True))
+    return 0
+
+
 # ------------------------------------------------------------------- parse
 
 KV_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(\S*)")
@@ -282,7 +359,8 @@ def intervals(stamps: list[int]) -> tuple[str, str]:
 
 
 def num(value: str | None) -> str:
-    """A finite non-negative number as text, else ''."""
+    """A finite number as text, else ''. Negatives pass through; the
+    summarizer rejects them (a row is never silently repaired)."""
     if value is None:
         return ""
     try:
@@ -340,6 +418,9 @@ def derive(log_path: str, samples_path: str, meta: dict[str, str]) -> dict[str, 
         row["eligible_roots"] = num(last.get("eligibleRoots"))
         row["fallback_roots"] = num(last.get("fallbackRoots"))
         known = {"renderer", "tk2Live", "tk2Layouts", "tk2Draws", "eligibleRoots", "fallbackRoots"}
+        for column, key in STATS_FIELDS.items():
+            row[column] = num(last.get(key))
+            known.add(key)
         row["renderer_stats_extra"] = ";".join(f"{k}={v}" for k, v in last.items() if k not in known)
 
     rss, fp = samples["rss"], samples["fp"]
@@ -423,6 +504,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pid-timeout", type=float, default=90)
     p.add_argument("--no-footprint", action="store_true")
     p.set_defaults(func=cmd_sample)
+
+    p = sub.add_parser("host", help="print host load and the busiest processes as JSON")
+    p.add_argument("--top-samples", type=int, default=2)
+    p.set_defaults(func=cmd_host)
 
     p = sub.add_parser("parse", help="derive a trial row and append it to the CSV")
     p.add_argument("--log", required=True)
