@@ -15,6 +15,9 @@ REQUESTS ({"kind": ..., params})
                                   `xcrun simctl spawn <udid> notifyutil -p`
     rejump                     -> posts com.connie.adfreader.rejump (re-land on
                                   the -scrollToFraction block, no animation)
+    relief                     -> posts com.connie.adfreader.relief (the app,
+                                  launched with -memoryReliefHook, calls
+                                  malloc_zone_pressure_relief(nil, 0))
     cpu_settle  threshold_pct=2.0 timeout_s=15
                                -> {settle_s, settled, samples:[[t_s, cpu_pct]]}
                                   CPU from `top -l 2 -s 1 -pid <pid>` (second
@@ -22,8 +25,10 @@ REQUESTS ({"kind": ..., params})
                                   request until the end of the first 1 s
                                   window at or below threshold_pct
     footprint_settled  threshold_pct=2.0 settle_timeout_s=15 samples=3
+                       relieve=false
                                -> {footprint_kb (median), samples_kb, rss_kb,
-                                   cpu_settle}
+                                   cpu_settle}; with relieve, posts `relief`
+                                  first and waits 1.5 s before settling
     soak  seconds=60 threshold_pct=2.0
                                -> {start_kb, end_kb, growth_kb, cpu_mean,
                                    cpu_max, cpu_samples, footprint_series}
@@ -149,7 +154,7 @@ def handle(req: dict, args: argparse.Namespace) -> dict:
         with open(args.results, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, sort_keys=True) + "\n")
         return {}
-    if kind in ("rotate", "rejump"):
+    if kind in ("rotate", "rejump", "relief"):
         res = subprocess.run(["xcrun", "simctl", "spawn", args.udid, "notifyutil", "-p",
                               f"com.connie.adfreader.{kind}"], capture_output=True, text=True)
         if res.returncode != 0:
@@ -164,6 +169,9 @@ def handle(req: dict, args: argparse.Namespace) -> dict:
     if kind == "cpu_settle":
         return cpu_settle(pid, threshold, float(req.get("timeout_s", 15)))
     if kind == "footprint_settled":
+        if req.get("relieve"):
+            handle({"kind": "relief"}, args)
+            time.sleep(1.5)
         return footprint_settled(pid, threshold, float(req.get("settle_timeout_s", 15)), int(req.get("samples", 3)))
     if kind == "soak":
         return soak(pid, float(req.get("seconds", 60)), threshold)
