@@ -229,14 +229,28 @@ Collapsed rows replay exact heights (`CollapsedRowHeight`), and the live switch 
 
 ### 6.4 Line pitch and wrapping (measured)
 
-<!-- TODO(pr1-numbers) -->
-
 Background, measured against fresh main before the fix (W = 370 pt, 3x, 70 probe cases):
 
 - SwiftUI `Text` height = (N − 1) · (ascent + descent + leading) + ceil_px(ascent + descent); raw TK2 usage height = N · (ascent + descent + leading). At body / `.large` this made raw TK2 rows 1.667 pt taller per row, accumulating down the document.
 - SwiftUI breaks one word earlier on nearly full lines (it avoids a single-word last line); line *counts* agree across strategies, so only per-line extents reveal the difference.
 
-To be filled from the parity measurements: the chosen height rule, the chosen `lineBreakStrategy`, and the residuals with their exact numbers.
+**Rules shipped in PR 1** (all measured against SwiftUI bitmaps and guides on iOS 26.3 at 3x and 2x, and on iOS 18.5; evidence under `<data>/parity/`):
+
+- **Height** = ceil_px(last baseline + last-line descent), where a line's ascent/descent are the tallest/deepest glyph run on it (baseline offsets and fallback fonts included). 930/930 heights exact (worst Δ 0) at 3x and 2x, plus 310 RTL / Bold Text cases and 156 corpus checks.
+- **First baseline** is rounded to the nearest device pixel and the whole text is drawn shifted onto it (later lines keep their fractional offsets). Drawn unshifted, glyphs, underlines and strikes land 1 px low wherever the first baseline's pixel fraction is small (H1 at xxxLarge: 97.12 px). The row reports first/last baselines pixel-rounded too (16.187 → 16.333 at 3x), as `Text` does.
+- **Line breaks:** `lineBreakStrategy = .standard`. 2,052 near-full Latin strings at large/xxxLarge × 370/640/353.333 pt matched per-line ink extents with `.standard` and `.pushOut` and missed 66 times with no strategy (one word later); 1,278 Korean, Japanese, Arabic and accented-Latin strings matched only with `.standard` (`.pushOut` alone missed 257 Korean strings — `.standard` adds Hangul word priority). In total 6,349 lines across 8 width/size sets, 0 mismatches.
+- **Width hugging and alignment:** the reported width is the widest line, trailing whitespace included (left-to-right lines whose whitespace hangs past the container are measured with Core Text), pixel-ceiled, at most ceil_px(proposal) — `Text` reports 300.667 for a 300.5 proposal its whitespace overflows. Drawing reuses the measured layout shifted by the alignment within the hugging bounds; the canvas is clipped to the bounds horizontally because `Text` clips side overhang (an indented line-initial "j" loses its tail at 72 px). Centred/end text: bitmap sum of differences 0 at 30 of 32 width/size/direction checks (the other 2 are residual 2).
+- **Trailing hard break:** the empty line's baseline = previous baseline + previous descent + its own ascent + the font's leading; before iOS 26 positive leading is dropped (negative leading applies on both). TextKit's own extra line fragment differs (it ignores negative leading after a first line, and after two breaks uses the 13.8 pt default font). 35/35 heights exact on 26.3; see residual 4 for iOS 18.5.
+- **Text containing a link draws through TextKit 1**, exactly as SwiftUI does. Swizzling `NSLayoutManager` under the SwiftUI arm showed that SwiftUI renders interactive (linked) text with `NSAttributedString` string drawing: an `NSLayoutManager` (`usesFontLeading = false`, `lineFragmentPadding = 0`) in a container as wide as the `Text`'s frame, first baseline on a device pixel, `NSUnderline` on link/underline/annotation runs, `NSBackgroundColor` fills. TextKit 1's decorations differ from TextKit 2's and from any formula we fitted: underlines are placed per line from the line fragment (8 px lower than the fitted model on lines after a line holding both a sub- and a superscript, kitchen-sink at AX3), skip descenders, and backgrounds fill whole line fragments (leading included) and run line-ending whitespace to the frame's edge. The row therefore draws such text with its own TextKit 1 stack at the same pixel phase (fills clipped to the frame, as SwiftUI's are) and sizes it by the union of its lines' used rects clamped to the container (centred: 350.667, where the line-width rule gives 353.333; iOS 18's TextKit 2 does not clamp a hanging line's frame, iOS 26's does). A replica of that drawing matched SwiftUI's bitmaps with 0 differing pixels; after the change the kitchen-sink paragraph, a link after a subscript line and a centred highlight after a link are 0 differing pixels at large/xxxLarge/AX3, light and dark, on iOS 26.3 and 18.5. TextKit 2 still lays the text out for sizing, baselines and link hit-testing; TextKit 1 and 2 place these lines identically (same breaks and baselines). Evidence: `<data>/parity/link-textkit1/` (README, probe logs, crops).
+  - **Consequence for PR 8 (selection):** a link-bearing row does not draw through TextKit 2, so selection must not depend on TextKit 2 drawing (e.g. TextKit 2's own selection rendering or rendering attributes). Selection rects come from the shared TextKit 2 layout geometry (§5.4) — the same frames the TextKit 1 drawing lands on — and the row draws the highlight itself, beneath the TextKit 1 glyph pass. Any selection test must include a link-bearing row, centred and wrapped.
+
+**Residuals** (each recorded with `withKnownIssue` or a measured tolerance, so a fix shows up as a test failure; counts from the final runs at e6934f0):
+
+1. **Last-baseline guide +1 px.** SwiftUI's `lastTextBaseline` guide sits exactly 1 px below its drawn baseline in 6/56 cases at 3x (H1 at AX3, sub/superscript lines; 12 known-issue records) and 2/56 at 2x; never −1 px. No formula found (best candidate 113/132). Evidence: `parity/last-baseline/` (probe36.txt).
+2. **Centred text at a fractional width.** At large, w = 300.5, both directions, 3x and 2x, SwiftUI's glyphs sit 0.5 px left of ours: its drawing layer is 849 px around an 844 px frame, and the bitmaps are identical after a −0.5 px shift. The rule behind that layer outset is unknown (2 known-issue records). Evidence: `parity/align-center-offset/` (probe40/41/44).
+3. **SF Mono rasterization.** No pixel differs by more than 24/255, but a faint edge row can flip the ink threshold: 3 line bands at 3x and 1 at 2x when it was measured; 0 in the e6934f0 runs. Recorded only when the band has no visibly differing pixel. Evidence: `parity/mono-raster/`.
+4. **iOS 18.5 only, two or more trailing hard breaks at AX3+:** `Text` also drops the middle empty line's negative leading — 0.333–1.333 pt shorter than our layout. Evidence: `parity/ios18-trailing-break/probe49-ios18.log`.
+5. **Plain-text (link-free) underline and strike ends:** SwiftUI's end 0–2 px shorter (antialiasing level; the pixel suites still show 0 differing pixels). Evidence: `parity/link-decorations/`.
 
 ### 6.5 Inherited styling and themes
 
@@ -257,7 +271,50 @@ To be filled from the parity measurements: the chosen height rule, the chosen `l
 
 Every PR runs all of these against main. Proof artefacts (screenshots, perf CSVs, videos) live outside the worktree and are never committed.
 
-<!-- TODO(pr1-cli) -->
+**Command lines** (exact flags; each script's `--help` is the full reference). `<data>` is the task's data directory; every script takes an explicit `--udid`, refuses to run while another simulator is booted, and shuts down only a device it booted.
+
+```sh
+# Visual parity (§8.2). Defaults: fixtures kitchen-sink@0,0.5 stress-5k@0,0.5,
+# appearances "light dark", size steps "0 3", arms "A A2 B C", --top-band 330
+# --bottom-band 102, noise/exact-only --exact-mask 0,330,1206,460 (1206x2622).
+Scripts/visual-parity.sh --udid <UDID> --ref-app <main ADFReader.app> \
+    --app <branch ADFReader.app> --out <data>/visual/<run>
+#   [--fixture <name>[@<f1>,<f2>...]]... [--appearances "light dark"] [--size-steps "0 3"]
+#   [--arms "A A2 B C"] [--content-size large] [--settle 3] [--scroll-wait 2] [--ready-timeout 90]
+#   [--mask x0,y0,x1,y1]... [--top-band 330] [--bottom-band 102]
+#   [--exact-mask x0,y0,x1,y1]... [--no-exact-mask] [--threshold 24]
+#   [--max-noise-pct 0] [--max-exact-pct 0] [--max-raw-pct 0.5] [--max-crop-pct 0.5] [--max-offset-px 0]
+#   [--no-renderer-stats] [--keep-booted] [--skip-capture] [--dry-run]
+python3 -I Scripts/visual_diff.py --out <dir> --pair <noise|exact|tolerant> <name> <ref.png> <cand.png> ...
+#   [--mask ...] [--exact-mask ...] [--top-band N] [--bottom-band N] [--threshold 24] [--exact-threshold 0] [--search 100]
+
+# Performance (§8.3): calibrate once (main as both arms), then gate.
+Scripts/perf-gate.sh --calibrate --udid <UDID> --app-a <main ADFReader.app> \
+    --out <data>/perf/calibration [--fixtures "..."] [--runs 10]
+Scripts/perf-gate.sh --udid <UDID> --app-a <main .app> --app-b <branch .app> --app-c <branch .app> \
+    --calibration <data>/perf/calibration/calibration.json --out <data>/perf/gate [--fixtures "..."] [--runs 10]
+#   [--pilot] [--arm-c-args "-textkit2"] [--candidate-args "-rendererStats"] [--no-candidate-markers]
+#   [--extra-args "<flags>"] [--expected-blocks "f=n ..."] [--trial-timeout 120] [--trial-timeout-for "f=s ..."]
+#   [--ready-timeout 60] [--rss-ms 200] [--footprint-ms 1000] [--no-sampler] [--prior-summary <json>]
+#   [--coverage "<text>"] [--appearance light|dark] [--bundle-id <id>] [--keep-booted] [--dry-run]
+python3 -I Scripts/perf_summarize.py <cal>/trials.csv --calibrate --write-calibration <cal>/calibration.json [--attempt 1]
+python3 -I Scripts/perf_summarize.py <out>/trials.csv --calibration <cal>/calibration.json \
+    [--json summary.json] [--out summary.md] [--prior-summary <earlier summary.json>]
+python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot [--calibration ...] [--suggest-timeouts]
+
+# End-to-end video (§8.4); a negative control (wrong digest) must fail.
+Scripts/e2e-video.sh --udid <UDID> --out <data>/videos/<name>.mp4
+#   [--derived-data <dir>] [--skip-build] [--keep-booted] [--expected-sha256 <hex> | --negative]
+#   [--test-timeout <s>] [--recorder-ready-timeout 20] [--xcodebuild-grace <s>] [--dry-run]
+#   (--create-device <name> instead of --udid: explicit opt-in, never deleted)
+
+# Lifecycle checks (plan §3 checks 2–6) with the host agent Scripts/lifecycle_agent.py.
+Scripts/lifecycle-gate.sh --udid <UDID> --out <data>/lifecycle/<run>
+#   [--derived-data <dir>] [--skip-build] [--only <testName>]... [--suite-timeout 3600]
+#   [--xcodebuild-grace 120] [--keep-booted] [--dry-run]
+```
+
+**Reference builds.** The reference is a Release, arm64-simulator, unsigned build of main from a clean `git archive` export (never the working tree), with `sha256.txt` beside the `.app`. `-scrollToFraction` lands exactly only since 9178cad (an animated jump into the lazy stack alone varied by up to 26 px between launches of one build: stress-5k at 0.5, step 3); a reference built from an older main needs that automation-only hunk applied, or arm A lands nondeterministically. PR 1's reference: `<data>/builds/main-a9e6aa2+scrolljump/` = a9e6aa2 + `scrolljump.patch` (the `ReaderView.scrollToFraction` hunk of 9178cad; sha256 recorded beside it). The unpatched `main-a9e6aa2` build is kept for the perf gate, which does not scroll to a fraction.
 
 ### 8.1 Parity suites
 
@@ -267,7 +324,7 @@ Location: `Tests/ADFRenderingTests/TextKit2/` (Swift Testing, `#if canImport(UIK
 |---|---|
 | `TextKit2HeightParityTests` | Height \|Δ\| ≤ 0.01 pt; first baseline, baseline pitch, last baseline and ink bounds separately; body, H1–H6, mixed mono/sub/sup; categories xSmall…AX5; 1/2/3+ lines; integer, fractional and narrow widths |
 | `TextKit2WrapParityTests` | Per-line horizontal ink extents from both arms' bitmaps match exactly, on a corpus of nearly-full lines; TK2 line-fragment ranges logged for diagnosis |
-| `TextKit2PixelParityTests` | 3x and 2x, light and dark, an H1 and the every-mark paragraph: vertical ink profile exact; differing pixels ≤ 0.2 % (any residual stated with its number) |
+| `TextKit2PixelParityTests` | 3x and 2x, light and dark, an H1, the every-mark paragraph, the kitchen-sink paragraph, a link after a subscript line and a centred highlight after a link: vertical ink profile exact; differing pixels ≤ 0.2 % (all currently 0) |
 | `TextKit2RowViewTests` | Row contract: cache and proposal cases (§6.2), resolver traits and metrics, diagnostics counters, link hit-testing |
 
 ```sh
@@ -293,8 +350,9 @@ Run the suites on a 3x device, a 2x device and the oldest installed runtime. `xc
 Captures the reference build and the branch build on one simulator and scores them with `python3 -I Scripts/visual_diff.py` (Pillow + numpy; no image registration — alignment must come from layout).
 
 - **Arms:** A = main (Release), B = branch without `-textkit2`, C = branch with `-textkit2`; plus an A–A' pair of two main captures to measure capture noise.
-- **Captures:** identical device, appearance, size category, locale and status bar; `kitchen-sink` at two scroll positions and `stress-5k` at fractions 0 and 0.5 (`-scrollToFraction`); light and dark; `-fontSizeStep 0` and `3`; 3 s settle after `READY`.
-- **Scoring:** chrome (status bar, navigation/toolbar band, home band) is masked so only the content viewport is compared; whole-viewport % plus a separate score per text-block crop.
+- **Captures:** identical device, appearance, size category, locale and status bar; `kitchen-sink` at two scroll positions and `stress-5k` at fractions 0 and 0.5 (`-scrollToFraction`); light and dark; `-fontSizeStep 0` and `3`; 2 s scroll wait + 3 s settle after `READY` (frames are identical from 2 s to 20 s after `READY`).
+- **Scoring:** chrome (status bar, navigation/toolbar band, home band) is masked so only the content viewport is compared; whole-viewport % plus a separate score per text-block crop. Noise/exact pairs also mask the full-width band below the toolbar (0,330,1206,460): the glass capsules' shadows and the scroll-edge effect change with the renderer label (A–B |Δ| ≤ 14 over rows 330–450 while A–A' is 0); tolerant pairs still score it. Every pair reports its differing-pixel count and bbox, so a nonzero diff never prints as 0 %.
+- **PR 1 result** (`<data>/visual/gate-4ded1a4/`, branch 4ded1a4 vs a9e6aa2 + scrolljump): 48/48 pairs PASS — A–A', A–B and A–C all 0 px in 16 configurations, every crop 0 % with a 0 px offset; `RENDERER_STATS` confirmed swiftui on every B and textkit2 on every C. `gate-8518d01/` keeps the pre-fix run (nondeterministic stress-5k p0.5 s3 landing) as root-cause evidence.
 - **Pass:** A–A' noise recorded (expected 0.00 %); A–B 0.00 %; A–C ≤ 0.5 % whole-viewport **and** every text-block crop ≤ 0.5 % with a vertical offset of 0 px.
 
 ### 8.3 Performance — `Scripts/perf-gate.sh` + `Scripts/perf_summarize.py`
