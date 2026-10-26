@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// A platform-neutral description of a run's font: a semantic text style
 /// plus the symbolic traits the marks added.
@@ -36,6 +37,56 @@ public struct ADFFontSpec: Sendable, Hashable, Codable {
         self.bold = bold
         self.italic = italic
         self.monospaced = monospaced
+    }
+}
+
+extension Font {
+    /// The SwiftUI font a spec describes: the text style's own font (the
+    /// `.body` / `.title` / … statics, or `.system(_:design: .monospaced)`)
+    /// with `.bold()` / `.italic()` layered on — the same expressions the
+    /// theme used before specs existed, so derived fonts compare equal to
+    /// them and render identically.
+    public init(adfFontSpec spec: ADFFontSpec) {
+        var font: Font
+        if spec.monospaced {
+            font = .system(spec.textStyle.swiftUITextStyle, design: .monospaced)
+        } else {
+            switch spec.textStyle {
+            case .largeTitle: font = .largeTitle
+            case .title: font = .title
+            case .title2: font = .title2
+            case .title3: font = .title3
+            case .headline: font = .headline
+            case .subheadline: font = .subheadline
+            case .body: font = .body
+            case .callout: font = .callout
+            case .footnote: font = .footnote
+            case .caption: font = .caption
+            case .caption2: font = .caption2
+            }
+        }
+        if spec.bold { font = font.bold() }
+        if spec.italic { font = font.italic() }
+        self = font
+    }
+}
+
+extension ADFFontSpec.TextStyle {
+    /// The SwiftUI text style of the same name.
+    public var swiftUITextStyle: Font.TextStyle {
+        switch self {
+        case .largeTitle: return .largeTitle
+        case .title: return .title
+        case .title2: return .title2
+        case .title3: return .title3
+        case .headline: return .headline
+        case .subheadline: return .subheadline
+        case .body: return .body
+        case .callout: return .callout
+        case .footnote: return .footnote
+        case .caption: return .caption
+        case .caption2: return .caption2
+        }
     }
 }
 

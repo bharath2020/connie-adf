@@ -58,6 +58,58 @@ struct FontSpecTests {
         #expect(theme.headingFontSpec(9) == theme.headingFontSpec(6))
     }
 
+    @Test("a spec-first theme derives its SwiftUI fonts from the specs")
+    func specFirstTheme() {
+        let theme = ADFTheme(bodyFontSpec: ADFFontSpec(textStyle: .callout), codeFontSpec: ADFFontSpec(textStyle: .footnote, monospaced: true))
+        #expect(theme.bodyFontSpec == ADFFontSpec(textStyle: .callout))
+        #expect(theme.body == Font(adfFontSpec: ADFFontSpec(textStyle: .callout)))
+        #expect(theme.codeFontSpec == ADFFontSpec(textStyle: .footnote, monospaced: true))
+        #expect(theme.code == Font(adfFontSpec: ADFFontSpec(textStyle: .footnote, monospaced: true)))
+        // The default theme is spec-first too, and its fonts are the
+        // semantic ones the SwiftUI arm always used.
+        #expect(ADFTheme.default.body == .body)
+        #expect(ADFTheme.default.code == .system(.body, design: .monospaced))
+    }
+
+    @Test("a raw SwiftUI font marks the spec undescribable; setting a spec re-derives the font")
+    func rawFontClearsSpec() {
+        let custom = ADFTheme(body: .custom("Georgia", size: 17))
+        #expect(custom.bodyFontSpec == nil)
+        #expect(custom.codeFontSpec == ADFFontSpec(textStyle: .body, monospaced: true))
+
+        var theme = ADFTheme.default
+        theme.code = .system(size: 13, design: .monospaced)
+        #expect(theme.codeFontSpec == nil)
+        #expect(theme.code == .system(size: 13, design: .monospaced))
+        theme.bodyFontSpec = ADFFontSpec(textStyle: .title3, italic: true)
+        #expect(theme.body == Font(adfFontSpec: ADFFontSpec(textStyle: .title3, italic: true)))
+        theme.body = .largeTitle
+        #expect(theme.bodyFontSpec == nil)
+    }
+
+    @Test("runs composed over an undescribable base font carry no spec")
+    func undescribableRunsHaveNoSpec() async throws {
+        let doc = try await parseDoc("""
+        {"version":1,"type":"doc","content":[{"type":"paragraph","content":[
+          {"type":"text","text":"plain "},
+          {"type":"text","text":"bold","marks":[{"type":"strong"}]}
+        ]}]}
+        """)
+        let content = try paragraphContent(of: doc)
+        let custom = InlineComposer(theme: ADFTheme(body: .custom("Georgia", size: 17)))
+        for run in try mergedText(custom.compose(content)).runs {
+            #expect(run.adfFontSpec == nil)
+        }
+        // A raw base font is undescribable whatever the theme.
+        for run in try mergedText(composer.compose(content, baseFont: .title)).runs {
+            #expect(run.adfFontSpec == nil)
+        }
+        // A described base font carries its spec, with the marks' traits.
+        let described = try mergedText(composer.compose(content, baseFont: .title, baseFontSpec: ADFFontSpec(textStyle: .title)))
+        #expect(try spec(of: "plain", in: described) == ADFFontSpec(textStyle: .title))
+        #expect(try spec(of: "bold", in: described) == ADFFontSpec(textStyle: .title, bold: true))
+    }
+
     @Test("spec round-trips through Codable and is a plain value")
     func specCodable() throws {
         let spec = ADFFontSpec(textStyle: .footnote, bold: true, italic: true, monospaced: true)

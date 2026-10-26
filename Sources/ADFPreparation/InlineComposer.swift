@@ -43,18 +43,18 @@ public struct InlineComposer: Sendable {
         compose(inline, baseFont: theme.body, baseFontSpec: theme.bodyFontSpec)
     }
 
-    /// Composes inline nodes on top of an explicit base font (headings pass
-    /// their level font so unmarked runs inherit it). The baked font spec
-    /// stays the theme's body spec; prefer `compose(_:baseFont:baseFontSpec:)`
-    /// so a non-SwiftUI engine sees the same base font as SwiftUI.
+    /// Composes inline nodes on top of an explicit base font. A raw `Font`
+    /// cannot be described to another text engine, so unmarked runs carry
+    /// no font spec and render through SwiftUI; prefer
+    /// `compose(_:baseFont:baseFontSpec:)`.
     public func compose(_ inline: [ADFNode], baseFont: Font) -> [InlineSegment] {
-        compose(inline, baseFont: baseFont, baseFontSpec: theme.bodyFontSpec)
+        compose(inline, baseFont: baseFont, baseFontSpec: nil)
     }
 
     /// Composes inline nodes on top of an explicit base font and its
     /// semantic spec (headings pass their level font and spec so unmarked
-    /// runs inherit both).
-    public func compose(_ inline: [ADFNode], baseFont: Font, baseFontSpec: ADFFontSpec) -> [InlineSegment] {
+    /// runs inherit both). A `nil` spec marks those runs undescribable.
+    public func compose(_ inline: [ADFNode], baseFont: Font, baseFontSpec: ADFFontSpec?) -> [InlineSegment] {
         var segments: [InlineSegment] = []
         var pending = AttributedString()
 
@@ -186,7 +186,7 @@ public struct InlineComposer: Sendable {
         _ string: String,
         marks: [ADFMark],
         baseFont: Font,
-        baseFontSpec: ADFFontSpec
+        baseFontSpec: ADFFontSpec?
     ) -> AttributedString {
         var run = AttributedString(string)
 
@@ -236,8 +236,10 @@ public struct InlineComposer: Sendable {
 
         // The SwiftUI `Font` and its semantic spec are chosen by the same
         // decision so the two engines can never disagree on the base font.
+        // A `nil` spec (a theme font given as a raw `Font`) stays `nil`
+        // through the traits: the run is undescribable.
         var font: Font
-        var spec: ADFFontSpec
+        var spec: ADFFontSpec?
         if let isSup {
             font = theme.subsupFont(monospaced: code)
             spec = theme.subsupFontSpec(monospaced: code)
@@ -254,11 +256,11 @@ public struct InlineComposer: Sendable {
         }
         if bold {
             font = font.bold()
-            spec.bold = true
+            spec?.bold = true
         }
         if italic {
             font = font.italic()
-            spec.italic = true
+            spec?.italic = true
         }
         if code, background == nil { background = theme.codeBackground }
         // Author highlight fills are fixed colors (typically light pastels);
@@ -290,10 +292,10 @@ public struct InlineComposer: Sendable {
     }
 
     /// Grey italic run for `placeholder` nodes and non-inline strays.
-    private func placeholderRun(_ text: String, baseFont: Font, baseFontSpec: ADFFontSpec) -> AttributedString {
+    private func placeholderRun(_ text: String, baseFont: Font, baseFontSpec: ADFFontSpec?) -> AttributedString {
         var run = AttributedString(text)
         var spec = baseFontSpec
-        spec.italic = true
+        spec?.italic = true
         run[SwiftUIAttrs.FontAttribute.self] = baseFont.italic()
         run.adfFontSpec = spec
         run[SwiftUIAttrs.ForegroundColorAttribute.self] = Color.secondary
