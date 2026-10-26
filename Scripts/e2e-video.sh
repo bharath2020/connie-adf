@@ -613,7 +613,11 @@ fi
     fi
     echo "configuration:       Release (CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES)"
     echo "derived_data:        $DERIVED_DATA"
-    echo "build_log:           $BUILD_LOG"
+    if [[ $SKIP_BUILD -eq 1 ]]; then
+        echo "build_log:           (none: this run did not build; see the build that produced $DERIVED_DATA)"
+    else
+        echo "build_log:           $BUILD_LOG"
+    fi
     echo "app:                 $APP"
     echo "xctestrun:           $XCTESTRUN"
     echo "build_sha256:        $BUILD_SHA  ADFReader"
