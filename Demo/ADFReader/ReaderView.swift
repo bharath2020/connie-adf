@@ -300,6 +300,17 @@ struct ReaderView: View {
         withAnimation(.snappy) {
             model.scrollTarget = blocks[index].id
         }
+        // The animated jump lands imprecisely in the lazy stack: rows that
+        // materialize mid-animation replace their estimated heights, so the
+        // final offset varied by up to 26 px between launches of one build
+        // (stress-5k at 0.5, step 3). Re-jumping without animation once it
+        // has ended lands on the target row exactly, so screenshots compare.
+        try? await Task.sleep(for: .milliseconds(1200))
+        let animation = model.scrollTargetAnimation
+        model.scrollTargetAnimation = .linear(duration: 0)
+        model.scrollTarget = blocks[index].id
+        try? await Task.sleep(for: .milliseconds(100))
+        model.scrollTargetAnimation = animation
     }
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {

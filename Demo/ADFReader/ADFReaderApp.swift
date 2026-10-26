@@ -5,7 +5,8 @@ import UIKit
 /// - `-fixture <name>` opens that fixture's reader directly on launch
 ///   (name without the `.json` extension).
 /// - `-scrollToFraction <f>` scrolls, once the document is ready, to the
-///   block at fraction `f` of `model.blocks`.
+///   block at fraction `f` of `model.blocks` (animated, then re-jumped
+///   without animation ~1.5 s after ready so the landing is exact).
 /// - `-autoscroll` waits 1s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
 ///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
