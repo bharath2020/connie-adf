@@ -42,7 +42,9 @@ MASKS
 
 METRICS (per pair)
     viewport_pct     differing pixels / unmasked pixels × 100, at the kind's
-                     pixel rule
+                     pixel rule; viewport_px the count itself and diff_bbox
+                     their bounding box (x0,y0,x1,y1, exclusive), so a diff
+                     too small for the printed % is never shown as 0
     viewport_pct_aa  the same at --threshold (for information on every kind)
     crops            text blocks: rows holding ink (pixels far from the
                      dominant background grey) in the reference OR the
@@ -116,6 +118,9 @@ class Score:
     masked_pct: float
     viewport_pct: float
     viewport_pct_aa: float
+    viewport_px: int
+    viewport_px_aa: int
+    diff_bbox: str
     crops: int
     failing_crops: int
     max_crop_pct: float
@@ -267,8 +272,13 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
     pixel_threshold = args.threshold if kind == "tolerant" else args.exact_threshold
     diff = diff_mask(ref, cand, pixel_threshold) & valid
     diff_aa = diff_mask(ref, cand, args.threshold) & valid
-    viewport_pct = float(diff.sum()) / valid_count * 100.0
-    viewport_pct_aa = float(diff_aa.sum()) / valid_count * 100.0
+    viewport_px, viewport_px_aa = int(diff.sum()), int(diff_aa.sum())
+    viewport_pct = viewport_px / valid_count * 100.0
+    viewport_pct_aa = viewport_px_aa / valid_count * 100.0
+    # Where the differing pixels are (x0,y0,x1,y1 exclusive): a count too
+    # small for the 4-decimal % still has to be findable.
+    ys, xs = np.nonzero(diff)
+    diff_bbox = f"{xs.min()},{ys.min()},{xs.max() + 1},{ys.max() + 1}" if viewport_px else ""
     vp_limit, crop_limit = pct_limit(kind, args)
 
     ref_gray, cand_gray = to_gray(ref), to_gray(cand)
@@ -324,7 +334,7 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
         verdict = "FAIL"
     if viewport_pct > vp_limit:
         verdict = "FAIL"
-        notes.append(f"viewport {viewport_pct:.4f}% > {vp_limit}%")
+        notes.append(f"viewport {viewport_px} px ({viewport_pct:.6f}%) > {vp_limit}%, bbox {diff_bbox}")
     if failing:
         verdict = "FAIL"
         notes.append(f"{len(failing)} crop(s) fail")
@@ -343,12 +353,14 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
              out_dir / f"{name}.sbs.png")
 
     return Score(kind, name, ref_path, cand_path, size_match, width, height,
-                 round(float(masked.mean()) * 100.0, 2), round(viewport_pct, 4), round(viewport_pct_aa, 4),
+                 round(float(masked.mean()) * 100.0, 2), round(viewport_pct, 6), round(viewport_pct_aa, 6),
+                 viewport_px, viewport_px_aa, diff_bbox,
                  len(crops), len(failing), max_crop_pct, max_abs_offset, last_offset, max_residual,
                  verdict, "; ".join(notes), crops)
 
 
-CSV_FIELDS = ["kind", "name", "verdict", "viewport_pct", "viewport_pct_aa", "crops", "failing_crops",
+CSV_FIELDS = ["kind", "name", "verdict", "viewport_pct", "viewport_pct_aa", "viewport_px", "viewport_px_aa",
+              "diff_bbox", "crops", "failing_crops",
               "max_crop_pct", "max_abs_offset", "last_offset", "max_residual", "masked_pct", "size_match",
               "width", "height", "ref", "cand", "notes"]
 
@@ -381,12 +393,13 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         f"Masks: {settings['masks'] or 'none'}; noise/exact-only masks: {settings['exact_masks'] or 'none'}; top band {args.top_band}px, bottom band {args.bottom_band}px. "
         f"No registration; shift search ±{args.search}px is diagnostic only.",
         "",
-        "| kind | pair | verdict | viewport % | viewport % (aa) | crops (fail) | max crop % | "
+        "| kind | pair | verdict | viewport % (px) | viewport % (aa) | crops (fail) | max crop % | "
         "max \\|offset\\| px | last px | notes |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in scores:
-        lines.append(f"| {s.kind} | {s.name} | **{s.verdict}** | {s.viewport_pct:.4f} | {s.viewport_pct_aa:.4f} | "
+        lines.append(f"| {s.kind} | {s.name} | **{s.verdict}** | {s.viewport_pct:.4f} ({s.viewport_px}) | "
+                     f"{s.viewport_pct_aa:.4f} ({s.viewport_px_aa}) | "
                      f"{s.crops} ({s.failing_crops}) | {s.max_crop_pct:.3f} | {s.max_abs_offset} | "
                      f"{s.last_offset:+d} | {s.notes} |")
     bad_crops = [(s, c) for s in scores for c in s.crop_details if c.verdict != "PASS"]
@@ -443,7 +456,8 @@ def main(argv: list[str]) -> int:
 
     write_outputs(scores, out_dir, rects, exact_rects, args)
     for s in scores:
-        print(f"{s.verdict}  {s.kind:8s} {s.name}: viewport {s.viewport_pct:.4f}% (aa {s.viewport_pct_aa:.4f}%)  "
+        print(f"{s.verdict}  {s.kind:8s} {s.name}: viewport {s.viewport_pct:.4f}% / {s.viewport_px} px "
+              f"(aa {s.viewport_pct_aa:.4f}% / {s.viewport_px_aa} px)  "
               f"crops {s.crops} fail {s.failing_crops}  max crop {s.max_crop_pct:.3f}%  "
               f"max|offset| {s.max_abs_offset}px  {s.notes}")
     print(f"wrote {out_dir / 'scores.csv'}, {out_dir / 'scores.json'} and {out_dir / 'summary.md'}")

@@ -53,11 +53,13 @@
 #              in pixels of an iPhone 17 Pro screenshot (1206x2622, 3x). When
 #              no band/mask flag is given and a screenshot has another size,
 #              the run stops: pass masks for that device explicitly.
-#              Noise/exact pairs also mask --exact-mask 300,330,640,460: the
-#              soft shadow the toolbar's glass capsule casts below the band
-#              (measured: |Δ| <= 7 down to row 436, cols 329–588, when the
-#              capsule's width changes with the renderer label — main has
-#              none). Tolerant pairs (threshold 24) still score it.
+#              Noise/exact pairs also mask --exact-mask 0,330,1206,460: the
+#              soft shadows the toolbar's glass capsules cast below the band,
+#              plus the scroll-edge effect over scrolled content. They follow
+#              the capsules' widths, which follow the renderer label (main
+#              has none): measured A–B |Δ| <= 7 over rows 330–436 at p0 and
+#              <= 14 over rows 330–450, cols 314–1198 at p0.5 (A–A' 0).
+#              Tolerant pairs (threshold 24) still score these rows.
 #              --exact-mask replaces that default; --no-exact-mask drops it.
 #   --out      $TMPDIR/adfreader-parity/<timestamp>
 #
@@ -104,7 +106,7 @@ MASKS=()
 TOP_BAND=330
 BOTTOM_BAND=102
 MASKS_EXPLICIT=0
-EXACT_MASKS=("300,330,640,460")
+EXACT_MASKS=("0,330,1206,460")
 EXACT_MASKS_DEFAULT=1
 THRESHOLD=24
 MAX_NOISE_PCT=0
