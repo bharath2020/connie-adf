@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake `sysctl -n vm.loadavg` for Scripts/tests/perf-gate-scenarios.sh:
+# reports $FAKE_LOAD (default 1.50) as the 1-min load; anything else goes to
+# the real sysctl.
+if [ "$1" = "-n" ] && [ "$2" = "vm.loadavg" ]; then
+    echo "{ ${FAKE_LOAD:-1.50} 1.40 1.30 }"
+    exit 0
+fi
+exec /usr/sbin/sysctl "$@"

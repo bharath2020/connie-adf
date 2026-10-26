@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake `top -l N -n K -o cpu -stats pid,command,cpu` for
+# Scripts/tests/perf-gate-scenarios.sh: launchd (pid 1) at $FAKE_TOP_CPU
+# (default 2.0) % CPU.
+cat <<EOF
+Processes: 2 total
+PID    COMMAND          %CPU
+1      launchd          ${FAKE_TOP_CPU:-2.0}
+0      kernel_task      1.0
+EOF
