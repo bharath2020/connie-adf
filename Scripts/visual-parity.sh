@@ -42,8 +42,13 @@
 #   `simctl launch --console-pty` logged to captures/<cfg>-<arm>.log, wait
 #   for `READY fixture=<f> `, then wait --scroll-wait (default 2 s: the app
 #   starts the -scrollToFraction jump 300 ms after READY with a .snappy
-#   animation; applied at position 0 too so every capture has the same
-#   timeline) plus --settle (default 3 s), `simctl io screenshot`, terminate.
+#   animation and re-jumps without animation ~1.5 s after READY, which makes
+#   the landing exact — the animated one alone varied by up to 26 px between
+#   launches of one build; applied at position 0 too so every capture has
+#   the same timeline) plus --settle (default 3 s), `simctl io screenshot`,
+#   terminate. A reference built from a commit that predates the re-jump
+#   needs it patched into Demo/ADFReader/ReaderView.swift, or arm A lands
+#   nondeterministically.
 #
 # DEFAULTS
 #   fixtures   kitchen-sink@0,0.5 (H1, every-mark paragraph, centered and
