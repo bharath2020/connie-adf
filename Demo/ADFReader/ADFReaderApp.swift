@@ -14,6 +14,13 @@ import UIKit
 /// - `-fontSizeStep <n>` opens the reader with the text-size control at
 ///   step `n` (ladder steps relative to the system size), bypassing the
 ///   persisted per-document value — so perf gates can run at large sizes.
+/// - `-textkit2` sets the persisted renderer choice (`adf.textkit2.enabled`)
+///   to TextKit 2 before the first view reads it. The toolbar switch still
+///   works afterwards. TextKit 2 is off unless this flag or the toolbar says
+///   otherwise.
+/// - `-rendererReset` removes that key first, so a UI test always starts on
+///   SwiftUI regardless of what a previous run left behind. With both flags
+///   the reset applies first, then `-textkit2`.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -25,6 +32,8 @@ struct LaunchOptions: Sendable {
     var searchQuery: String?
     var searchUpdates = 0
     var fontSizeStep: Int?
+    var textKit2 = false
+    var rendererReset = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -49,6 +58,10 @@ struct LaunchOptions: Sendable {
             case "-fontSizeStep" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 fontSizeStep = Int(arguments[index])
+            case "-textkit2":
+                textKit2 = true
+            case "-rendererReset":
+                rendererReset = true
             default:
                 break
             }
@@ -62,6 +75,9 @@ struct ADFReaderApp: App {
     private let options = LaunchOptions()
 
     init() {
+        // Before the scene builds: `ReaderView` reads the renderer key through
+        // `@AppStorage`, which must see the launch-argument override.
+        RendererPreference.apply(options)
         RotationHook.install()
     }
 
