@@ -30,7 +30,7 @@ ADFDocumentView(model:mediaProvider:interactionHandler:taskStates:mentionContent
 - `ADFTextRenderer` lives in `Sources/ADFRendering/TextKit2/ADFTextRenderer.swift`; `displayName` gives "SwiftUI" / "TextKit 2" for a host's picker.
 - `ADFDocumentView` passes the choice to each `DocumentRow`, which sets the internal `EnvironmentValues.adfTextRenderer` to the host's choice **only for top-level `.richText` rows** and to `.swiftUI` for every other kind, so the value never leaks into a container's children.
 - `RichTextBlockView` picks the engine with a plain `if`/`else` at the leaf (never `AnyView`, never `#available` at a lazy per-item position — ADR §18).
-- `textForeground` colours text the document does not colour itself, on both arms (§6.5). A `foregroundStyle` a host applies *around* the document reaches SwiftUI text only — SwiftUI gives UIKit-hosted views no way to read it — so hosts that colour document text pass it here.
+- `textForeground` colours text the document does not colour itself. It is **renderer-independent**: every row gets it as `.foregroundStyle` (what SwiftUI text, including every fallback, inherits) and TK2 rows draw the same colour from their render inputs, so switching `textRenderer` never changes text colour (pixel-tested on both arms, light and dark, `TextKit2PixelParityTests`; §6.5). A `foregroundStyle` a host applies *around* the document reaches SwiftUI text only — SwiftUI gives UIKit-hosted views no way to read it — so hosts that colour document text pass it here.
 - On platforms without UIKit (`swift test` on macOS), `.textKit2` behaves as `.swiftUI`.
 
 ### Demo app

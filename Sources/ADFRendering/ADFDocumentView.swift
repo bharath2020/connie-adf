@@ -38,6 +38,16 @@ public struct ADFDocumentView: View {
     /// re-pin below never fires for it.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    /// - Parameters:
+    ///   - textRenderer: The engine for top-level paragraphs and headings;
+    ///     `.textKit2` is opt-in and falls back to SwiftUI per block for
+    ///     content it does not cover.
+    ///   - textForeground: Colour for text the document does not colour
+    ///     itself (author text colours and highlight contrast still win).
+    ///     Renderer-independent: both engines draw it identically, so
+    ///     switching `textRenderer` never changes text colour. `nil` keeps
+    ///     the default. Pass it instead of applying `.foregroundStyle`
+    ///     around the document, which TextKit 2 rows cannot read.
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,

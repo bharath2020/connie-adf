@@ -129,9 +129,19 @@ struct TextKit2PixelParityTests {
 
     @Test("a host text colour renders identically on both arms", arguments: [false, true])
     func hostForegroundPixels(dark: Bool) async throws {
+        let fixture = try await Self.kitchenSinkParagraph(linked: false)
         var env = TK2Parity.Environment(size: .large, dark: dark)
         env.foreground = .purple
-        try compare(try await Self.kitchenSinkParagraph(linked: false), env: env)
+        try compare(fixture, env: env)
+        // Matching arms alone would also pass if neither applied the colour:
+        // the coloured SwiftUI render must differ from the uncoloured one.
+        let height = max(TK2Parity.height(fixture, arm: .swiftUI, env: env, width: Self.width) + 40, 200)
+        let coloured = try TK2Parity.render(fixture, arm: .swiftUI, env: env, width: Self.width, height: height)
+        let plain = try TK2Parity.render(fixture, arm: .swiftUI, env: TK2Parity.Environment(size: .large, dark: dark), width: Self.width, height: height)
+        let profile = TK2Parity.inkProfile(plain, dark: dark)
+        let rows = (profile.firstInkRow ?? 0)...(profile.lastInkRow ?? 0)
+        let diff = TK2Parity.differingFraction(coloured, plain, rows: rows)
+        #expect(diff.fraction > 0.01, "host colour did not reach the text: \(diff.count)/\(diff.total) pixels differ from the uncoloured render")
     }
 
     @Test("lines set wholly in a sub/superscript run sit where Text puts them", arguments: sizes, [false, true])
