@@ -38,9 +38,16 @@ struct BuildInfoView: View {
                 }
                 if let blocks = LoadSwitchProbe.blocksAtSwitch {
                     Section("Switched During Load (Blocks Loaded)") {
-                        Text("\(blocks)")
+                        Text(verbatim: String(blocks))
                             .monospacedDigit()
                             .accessibilityIdentifier("load-switch-blocks")
+                    }
+                }
+                if let blocks = LoadSwitchProbe.blocksAtReady {
+                    Section("Ready After the Switch (Blocks Loaded)") {
+                        Text(verbatim: String(blocks))
+                            .monospacedDigit()
+                            .accessibilityIdentifier("load-ready-blocks")
                     }
                 }
                 Section {

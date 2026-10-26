@@ -34,7 +34,9 @@ import UIKit
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
-/// portrait/landscape without the Simulator UI.
+/// portrait/landscape without the Simulator UI, and
+/// `com.connie.adfreader.rejump` (see `RejumpHook`) re-lands on the
+/// `-scrollToFraction` block without animation.
 struct LaunchOptions: Sendable {
     var fixtureName: String?
     var scrollToFraction: Double?
@@ -95,6 +97,7 @@ struct ADFReaderApp: App {
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)
         RotationHook.install()
+        RejumpHook.install()
     }
 
     var body: some Scene {
@@ -150,5 +153,27 @@ enum RotationHook {
             print("ROTATION failed: \(error)")
         }
         print("ROTATION requested=\(target == .portrait ? "portrait" : "landscapeRight")")
+    }
+}
+
+/// Re-lands the open reader on its `-scrollToFraction` block, without
+/// animation: `xcrun simctl spawn <udid> notifyutil -p com.connie.adfreader.rejump`.
+/// The lifecycle gate's deterministic way back to a parked position — a
+/// drag round trip does not return exactly in a lazy stack, whose estimated
+/// row heights change as rows materialize.
+enum RejumpHook {
+    static let notification = Notification.Name("ADFReaderRejump")
+
+    static func install() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                Task { @MainActor in NotificationCenter.default.post(name: RejumpHook.notification, object: nil) }
+            },
+            "com.connie.adfreader.rejump" as CFString,
+            nil,
+            .deliverImmediately
+        )
     }
 }

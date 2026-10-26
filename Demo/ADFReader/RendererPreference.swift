@@ -4,10 +4,12 @@ import Foundation
 /// toggle and the launch-argument overrides. TextKit 2 is opt-in: a missing
 /// key means SwiftUI.
 /// Automation-only record of `-switchDuringLoad`: how many top-level blocks
-/// had streamed in when the renderer flipped to TextKit 2 (`nil` until then).
+/// had streamed in when the renderer flipped to TextKit 2, and how many the
+/// document held when it became ready afterwards (`nil` until then).
 @MainActor
 enum LoadSwitchProbe {
     static var blocksAtSwitch: Int?
+    static var blocksAtReady: Int?
 }
 
 enum RendererPreference {

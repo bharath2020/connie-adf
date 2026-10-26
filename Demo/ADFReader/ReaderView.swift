@@ -105,6 +105,9 @@ struct ReaderView: View {
                 guard phase == .ready else { return }
                 documentDidBecomeReady()
             }
+            .onReceive(NotificationCenter.default.publisher(for: RejumpHook.notification)) { _ in
+                rejump()
+            }
             .onDisappear { metrics.stop() }
     }
 
@@ -259,6 +262,9 @@ struct ReaderView: View {
     private func documentDidBecomeReady() {
         guard !automationStarted else { return }
         automationStarted = true
+        if LoadSwitchProbe.blocksAtSwitch != nil {
+            LoadSwitchProbe.blocksAtReady = model.blocks.count
+        }
         let totalMilliseconds = loadStart.map(Self.milliseconds(since:)) ?? 0
         let firstChunk = firstChunkMilliseconds ?? totalMilliseconds
         print(
@@ -294,6 +300,33 @@ struct ReaderView: View {
                     exit(0)
                 }
             }
+        }
+    }
+
+    /// The block `-scrollToFraction <fraction>` lands on.
+    private func fractionTarget(_ fraction: Double) -> String? {
+        let blocks = model.blocks
+        guard !blocks.isEmpty else { return nil }
+        let clamped = min(max(fraction, 0), 1)
+        return blocks[min(blocks.count - 1, Int(clamped * Double(blocks.count)))].id
+    }
+
+    /// `RejumpHook`: lands on the `-scrollToFraction` block again, without
+    /// animation — the lifecycle gate's deterministic "scroll back".
+    private func rejump() {
+        guard let fraction = options.scrollToFraction, let target = fractionTarget(fraction) else { return }
+        // The reader scrolls on a *change* of `scrollTarget`: clear it and
+        // set it again on a later update, or re-setting the same id is a no-op.
+        model.scrollTarget = nil
+        Task {
+            try? await Task.sleep(for: .milliseconds(50))
+            let animation = model.scrollTargetAnimation
+            model.scrollTargetAnimation = .linear(duration: 0)
+            model.scrollTarget = target
+            print("REJUMP fraction=\(fraction)")
+            fflush(stdout)
+            try? await Task.sleep(for: .milliseconds(100))
+            model.scrollTargetAnimation = animation
         }
     }
 
