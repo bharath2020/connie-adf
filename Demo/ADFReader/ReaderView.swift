@@ -93,6 +93,13 @@ struct ReaderView: View {
                 if firstChunkMilliseconds == nil, count > 0, let loadStart {
                     firstChunkMilliseconds = Self.milliseconds(since: loadStart)
                 }
+                if options.switchDuringLoad, LoadSwitchProbe.blocksAtSwitch == nil,
+                   count > 0, model.phase != .ready {
+                    LoadSwitchProbe.blocksAtSwitch = count
+                    textKit2Enabled = true
+                    print("SWITCH_DURING_LOAD blocks=\(count)")
+                    fflush(stdout)
+                }
             }
             .onChange(of: model.phase) { _, phase in
                 guard phase == .ready else { return }

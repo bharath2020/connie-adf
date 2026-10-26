@@ -27,6 +27,10 @@ import UIKit
 ///   live/cumulative TextKit 2 row counters, eligible/fallback roots) right
 ///   after READY and again right after `SCROLL_METRICS` — the perf gate's
 ///   proof of which engine drew (see `RendererStats`).
+/// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
+///   streamed chunk arrives (the document is still loading), prints
+///   `SWITCH_DURING_LOAD blocks=<n>` and shows `<n>` in About This Build —
+///   the lifecycle gate's "switch during a streaming load" check.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -41,6 +45,7 @@ struct LaunchOptions: Sendable {
     var textKit2 = false
     var rendererReset = false
     var rendererStats = false
+    var switchDuringLoad = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -71,6 +76,8 @@ struct LaunchOptions: Sendable {
                 rendererReset = true
             case "-rendererStats":
                 rendererStats = true
+            case "-switchDuringLoad":
+                switchDuringLoad = true
             default:
                 break
             }

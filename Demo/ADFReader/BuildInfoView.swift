@@ -36,6 +36,13 @@ struct BuildInfoView: View {
                         .monospacedDigit()
                         .accessibilityIdentifier("tk2-live-rows")
                 }
+                if let blocks = LoadSwitchProbe.blocksAtSwitch {
+                    Section("Switched During Load (Blocks Loaded)") {
+                        Text("\(blocks)")
+                            .monospacedDigit()
+                            .accessibilityIdentifier("load-switch-blocks")
+                    }
+                }
                 Section {
                     checksumRow
                 } header: {

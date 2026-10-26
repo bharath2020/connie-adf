@@ -18,6 +18,7 @@ struct SearchBar: View {
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 TextField("Find in page", text: $text)
+                    .accessibilityIdentifier("search-field")
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -40,6 +41,7 @@ struct SearchBar: View {
                     Text(counterText)
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("search-counter")
                 }
             }
             .padding(.horizontal, 10)

@@ -3,6 +3,13 @@ import Foundation
 /// The persisted text-renderer choice shared by `ReaderView`'s `@AppStorage`
 /// toggle and the launch-argument overrides. TextKit 2 is opt-in: a missing
 /// key means SwiftUI.
+/// Automation-only record of `-switchDuringLoad`: how many top-level blocks
+/// had streamed in when the renderer flipped to TextKit 2 (`nil` until then).
+@MainActor
+enum LoadSwitchProbe {
+    static var blocksAtSwitch: Int?
+}
+
 enum RendererPreference {
     static let key = "adf.textkit2.enabled"
 
