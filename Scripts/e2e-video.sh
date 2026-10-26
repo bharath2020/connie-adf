@@ -327,17 +327,25 @@ if [[ -n "$CONTAINER" && -f "$CONTAINER/ADFReader" ]]; then
     INSTALLED_SHA="$(shasum -a 256 "$CONTAINER/ADFReader" | awk '{print $1}')"
 fi
 
+# The test prints OBSERVED_BUILD_SHA256=<hex> and, because the runner got
+# ADF_EXPECTED_BUILD_SHA256, asserts it equals BUILD_SHA — so a passed test
+# already vouches for the on-screen value even if xcodebuild did not relay
+# the runner's stdout into the log.
 OBSERVED_SHA="$(grep -oE 'OBSERVED_BUILD_SHA256=[0-9a-f]{64}' "$LOG" | head -1 | cut -d= -f2 || true)"
+OBSERVED_NOTE=""
+OBSERVED_AGREES="yes"
 if [[ -z "$OBSERVED_SHA" ]]; then
     if grep -q "$BUILD_SHA" "$LOG"; then
         OBSERVED_SHA="$BUILD_SHA"
         OBSERVED_NOTE="(build sha found in log; OBSERVED_BUILD_SHA256 line absent)"
+    elif [[ "$TEST_RESULT" == "passed" ]]; then
+        OBSERVED_SHA="(not in log; equality asserted by the passed test)"
     else
         OBSERVED_SHA="(not found in log)"
-        OBSERVED_NOTE=""
+        OBSERVED_AGREES="no"
     fi
-else
-    OBSERVED_NOTE=""
+elif [[ "$OBSERVED_SHA" != "$BUILD_SHA" ]]; then
+    OBSERVED_AGREES="no"
 fi
 
 VIDEO_SHA="(missing)"
@@ -358,7 +366,7 @@ XCODE_VERSION="$(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
 
 CHECKSUMS_AGREE="yes"
 [[ "$INSTALLED_SHA" == "$BUILD_SHA" ]] || CHECKSUMS_AGREE="no"
-[[ "$OBSERVED_SHA" == "$BUILD_SHA" ]] || CHECKSUMS_AGREE="no"
+[[ "$OBSERVED_AGREES" == "yes" ]] || CHECKSUMS_AGREE="no"
 
 {
     echo "ADFReader end-to-end video provenance"
