@@ -18,8 +18,10 @@
 #       --calibration <data>/perf/calibration/calibration.json --out <data>/perf/full-<sha>
 #
 # A non-pilot run refuses to start with less than its design declares (arm B,
-# a fixture, pairs, the warm-up, the sampler, the candidate markers) and on a
-# busy host; the summarizer independently marks any reduced plan INCOMPLETE.
+# a fixture, an arm of a fixture, pairs, the warm-up, the sampler, the
+# candidate markers); the summarizer independently marks any reduced plan
+# INCOMPLETE. A design names its fixtures and the arms each runs
+# (perf_summarize.py DESIGNS); the plan records them as fixture_arms.
 #
 # OPTIONS
 #   --udid <UDID>            required; the device must exist (never created).
@@ -37,6 +39,9 @@
 #   --pilot                  pilot: any shape allowed, verdict never PASS;
 #                            recorded in plan.json (the summarizer reads it)
 #   --fixtures "<names>"     pilot only (a gate runs its design's fixtures)
+#   --fixture-arms "f=A,B,C …"  pilot only: the arms per fixture (default:
+#                            the design's for its fixtures, A,B,C otherwise;
+#                            B dropped when there is no --app-b)
 #   --runs <n>               counted pairs per (fixture, arm); a gate needs at
 #                            least its design's count
 #   --warmup <n>             discarded warm-ups per (fixture, arm); >= 1 unless
@@ -62,6 +67,10 @@
 #   --rss-ms <ms> / --footprint-ms <ms>  sampler periods; default 200 / 1000
 #   --no-sampler             pilot only: no memory sampling (sampler overhead)
 #   --ledger <jsonl>         rerun ledger; default <out>/../perf-ledger.jsonl
+#   --host-wait <s>          longest wait for a quiet host before running
+#                            anyway as HOST-BUSY; default 1200 (20 min)
+#   --host-poll <s>          seconds between host samples while waiting;
+#                            default 30
 #   --coverage "<text>"      coverage line for the summary table
 #   --appearance <light|dark>  default light
 #   --bundle-id <id>         default com.connie.adfreader
@@ -69,12 +78,16 @@
 #   --dry-run                write plan.json and print the ordered trial list;
 #                            no simulator or app is touched
 #
-# HOST CHECK  after the settle, `perf_trial.py host --top-samples 2` records
-#   the load averages and the three busiest processes in plan.json
-#   (host_start). A non-pilot run refuses to start when the 1-min load is
-#   above 4.0 or a non-simulator process is above 100 % CPU; nothing is
-#   killed. Every trial row records its start time, 1-min load and busiest
-#   processes; the summarizer makes a run with any trial above 6.0 INVALID.
+# HOST  after the settle, `perf_trial.py host --top-samples 2` samples the
+#   load averages and the three busiest processes every --host-poll seconds
+#   until the host is quiet (1-min load <= 4.0, no non-simulator process
+#   above 100 % CPU) or --host-wait has passed; then the run starts either
+#   way. plan.json records the last sample (host_start) and the wait
+#   (host_wait); every trial row records its start time, 1-min load and
+#   busiest processes (`name=cpu`, `*` = simulator process). A run that was
+#   not quiet at start or in any counted trial is HOST-BUSY: its PASS
+#   counts; its FAIL is reported as FAIL-HOST-BUSY (exit 6) and is re-run
+#   once at the next quiet window. Nothing is ever killed or reniced.
 #
 # ARMS
 #   A   reference (--app-a), launched without the candidate flags
@@ -84,7 +97,8 @@
 #       plumbing)
 #   A2  (calibration) the reference again, identical argv
 #   Balanced order per run: odd runs A,C,B / even runs B,C,A (every A–C and
-#   A–B pair alternates); calibration alternates A,A2 / A2,A.
+#   A–B pair alternates), filtered to the fixture's arms; calibration
+#   alternates A,A2 / A2,A.
 #
 # PROCEDURE (per trial)
 #   terminate + uninstall + install the arm's .app (fresh install: no
@@ -108,8 +122,9 @@
 #   summary.md/.json (gate) or calibration.json/.md (calibration)
 #
 # EXIT  the summarizer's status: 0 PASS/CALIBRATED, 1 FAIL, 2 INVALID or
-#       REFUSED, 3 INCONCLUSIVE, 4 PILOT, 5 INCOMPLETE; 2 also for usage
-#       errors, driver failures and a busy host.
+#       REFUSED, 3 INCONCLUSIVE, 4 PILOT, 5 INCOMPLETE, 6 FAIL-HOST-BUSY
+#       (re-run once when the host is quiet); 2 also for usage errors and
+#       driver failures.
 #
 # bash 3.2 compatible (macOS /bin/bash); needs python3 (-I), xcrun.
 
@@ -147,7 +162,11 @@ RSS_MS=200
 FOOTPRINT_MS=1000
 SAMPLER=1
 LEDGER=""
+FIXTURE_ARMS=""
+HOST_WAIT=""
+HOST_POLL=""
 HOST_START_JSON=""
+HOST_WAIT_JSON=""
 COVERAGE=""
 APPEARANCE="light"
 BUNDLE_ID="com.connie.adfreader"
@@ -240,21 +259,39 @@ arm_requires_completion() {
     case "$1" in B|C) [ "$CANDIDATE_MARKERS" -eq 1 ] && echo 1 || echo 0 ;; *) echo 0 ;; esac
 }
 
-# Arm order for run <n>: balanced pairs.
+# fixture_arms_of <fixture> -> its arms ("A B C"), from FIXTURE_ARMS
+fixture_arms_of() {
+    lookup "$1" "$FIXTURE_ARMS" | tr ',' ' '
+}
+
+# Arm order for run <n> on <fixture>: balanced pairs over the fixture's arms.
 arm_order() {
-    local run="$1"
+    local run="$1" fixture="$2" order arm out=""
     if [ "$MODE" = "calibrate" ]; then
         if [ $(( run % 2 )) -eq 1 ]; then echo "A A2"; else echo "A2 A"; fi
-    else
-        local odd="A C" even="C A"
-        if [ -n "$APP_B" ]; then odd="A C B"; even="B C A"; fi
-        if [ $(( run % 2 )) -eq 1 ]; then echo "$odd"; else echo "$even"; fi
+        return 0
     fi
+    if [ $(( run % 2 )) -eq 1 ]; then order="A C B"; else order="B C A"; fi
+    for arm in $order; do
+        case " $(fixture_arms_of "$fixture") " in *" $arm "*) out="$out $arm" ;; esac
+    done
+    echo "${out# }"
+}
+
+# all_arms -> the arms any fixture runs, in plan order
+all_arms() {
+    local arm f out=""
+    for arm in A A2 C B; do
+        for f in $FIXTURES; do
+            case " $(fixture_arms_of "$f") " in *" $arm "*) out="$out $arm"; break ;; esac
+        done
+    done
+    echo "${out# }"
 }
 
 write_plan() {
-    local arms="A A2"
-    [ "$MODE" = "calibrate" ] || { arms="A C"; [ -z "$APP_B" ] || arms="A C B"; }
+    local arms
+    arms=$(all_arms)
     local arm_specs="" arm
     for arm in $arms; do
         arm_specs="$arm_specs$arm|$(arm_label "$arm")|$(arm_app "$arm")|$(arm_sha "$arm")|$(arm_flags "$arm")|$(arm_requires_completion "$arm")
@@ -269,7 +306,8 @@ write_plan() {
     P_RUNS="$RUNS" P_WARMUP="$WARMUP" P_EXTRA="$EXTRA_ARGS" P_APPEARANCE="$APPEARANCE" P_SAMPLER="$SAMPLER" \
     P_RSS_MS="$RSS_MS" P_FP_MS="$FOOTPRINT_MS" P_READY="$READY_TIMEOUT" P_TIMEOUTS="$timeouts" \
     P_CAL="$CALIBRATION" P_CAL_SHA="$cal_sha" P_UDID="$UDID" P_BUNDLE="$BUNDLE_ID" \
-    P_DESIGN="$DESIGN" P_HOST="$HOST_START_JSON" P_SETTLE="$SETTLE" \
+    P_DESIGN="$DESIGN" P_HOST="$HOST_START_JSON" P_SETTLE="$SETTLE" P_FIXTURE_ARMS="$FIXTURE_ARMS" \
+    P_HOST_WAIT="$HOST_WAIT_JSON" P_BOUNDS_SHA="$BOUNDS_SHA" P_BOUND_GATED="$BOUND_GATED" \
     python3 -I - "$OUT/plan.json" <<'PY'
 import json, os, sys
 env = os.environ
@@ -312,7 +350,13 @@ plan = {
     "trial_kind": "fresh-install, warmed-system",
     "settle_s": int(env["P_SETTLE"] or 0),
     "host_start": json.loads(env["P_HOST"]) if env["P_HOST"] else None,
+    "host_wait": json.loads(env["P_HOST_WAIT"]) if env["P_HOST_WAIT"] else None,
+    "fixture_arms": {p.split("=")[0]: [a for a in p.split("=")[1].split(",") if a in arms]
+                     for p in env["P_FIXTURE_ARMS"].split()},
 }
+if mode != "calibrate":
+    plan["bounds_sha256"] = env["P_BOUNDS_SHA"] or None
+    plan["bound_gated"] = json.loads(env["P_BOUND_GATED"]) if env["P_BOUND_GATED"] else None
 with open(sys.argv[1], "w") as fh:
     json.dump(plan, fh, indent=2, sort_keys=True)
     fh.write("\n")
@@ -351,9 +395,10 @@ run_trial() {
     local started load1 top3
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     load1=$(sysctl -n vm.loadavg | awk '{print $2}')
-    top3=$(python3 -I "$TRIAL_PY" host --top-samples 0 | python3 -I -c '
+    top3=$(python3 -I "$TRIAL_PY" host --top-samples 2 | python3 -I -c '
 import json, os, sys
-print(";".join("%s=%g" % (os.path.basename(p["command"]), p["cpu"]) for p in json.load(sys.stdin)["top"]))')
+print(";".join("%s=%g%s" % (os.path.basename(p["command"]), p["cpu"], "*" if p.get("simulator") else "")
+               for p in json.load(sys.stdin)["top"]))')
 
     local installed
     installed=$(install_arm "$app")
@@ -404,17 +449,9 @@ print(";".join("%s=%g" % (os.path.basename(p["command"]), p["cpu"]) for p in jso
     log "$stem: $digest"
 }
 
-# host_check: record the host's load and busiest processes (HOST_START_JSON);
-# a non-pilot run refuses to start on a busy host. Nothing is killed.
-host_check() {
-    local verdict
-    HOST_START_JSON=$(python3 -I "$TRIAL_PY" host --top-samples 2)
-    printf '%s\n' "$HOST_START_JSON" > "$OUT/host-start.json"
-    local shape load_max cpu_max
-    shape=$(python3 -I "$SUMMARIZE_PY" --print-design "$DESIGN")
-    load_max=$(printf '%s\n' "$shape" | sed -n 's/^host_start_load_max=//p')
-    cpu_max=$(printf '%s\n' "$shape" | sed -n 's/^host_process_cpu_max=//p')
-    verdict=$(printf '%s' "$HOST_START_JSON" | python3 -I -c '
+# host_busy_reasons <host json> -> why the sample is not quiet ("" = quiet)
+host_busy_reasons() {
+    printf '%s' "$1" | python3 -I -c '
 import json, os, sys
 h = json.load(sys.stdin)
 load_max, cpu_max = float(sys.argv[1]), float(sys.argv[2])
@@ -425,15 +462,36 @@ if load is None or load > load_max:
 for p in h.get("top", []):
     if p["cpu"] > cpu_max and not p.get("simulator"):
         why.append("%s at %g %% CPU" % (os.path.basename(p["command"]), p["cpu"]))
-print("; ".join(why))' "$load_max" "$cpu_max")
-    if [ -n "$verdict" ]; then
-        if [ "$PILOT" -eq 1 ]; then
-            log "WARNING: busy host ($verdict); pilot continues"
-        else
-            die "host busy, refusing to start: $verdict (details: $OUT/host-start.json; quiesce the host, nothing was killed)"
-        fi
+print("; ".join(why))' "$HOST_LOAD_MAX" "$HOST_CPU_MAX"
+}
+
+# host_wait: sample the host until it is quiet or --host-wait has passed,
+# then go ahead either way (HOST). Records HOST_START_JSON (last sample) and
+# HOST_WAIT_JSON. Nothing is killed or reniced.
+host_wait() {
+    local start=$SECONDS polls=0 why="" waited remaining nap
+    while :; do
+        HOST_START_JSON=$(python3 -I "$TRIAL_PY" host --top-samples 2)
+        polls=$(( polls + 1 ))
+        why=$(host_busy_reasons "$HOST_START_JSON")
+        waited=$(( SECONDS - start ))
+        [ -n "$why" ] || break
+        remaining=$(( HOST_WAIT - waited ))
+        [ "$remaining" -gt 0 ] || break
+        nap=$HOST_POLL; [ "$nap" -le "$remaining" ] || nap=$remaining
+        log "host not quiet ($why); waiting ${waited}s of ${HOST_WAIT}s, next sample in ${nap}s"
+        sleep "$nap"
+    done
+    printf '%s\n' "$HOST_START_JSON" > "$OUT/host-start.json"
+    HOST_WAIT_JSON=$(python3 -I -c '
+import json, sys
+limit, poll, waited, polls, why = sys.argv[1:6]
+print(json.dumps({"limit_s": int(limit), "poll_s": int(poll), "waited_s": int(waited), "polls": int(polls),
+                  "quiet": not why, "reasons": why}))' "$HOST_WAIT" "$HOST_POLL" "$waited" "$polls" "$why")
+    if [ -n "$why" ]; then
+        log "HOST-BUSY: not quiet after ${waited}s ($why); running anyway. A PASS counts; a FAIL is reported as FAIL-HOST-BUSY and re-run once when the host is quiet (details: $OUT/host-start.json)"
     else
-        log "host check ok: $(printf '%s' "$HOST_START_JSON" | cut -c1-160)"
+        log "host quiet after ${waited}s (${polls} sample(s)): $(printf '%s' "$HOST_START_JSON" | cut -c1-160)"
     fi
 }
 
@@ -471,6 +529,7 @@ main() {
             --calibration) CALIBRATION="$2"; shift 2 ;;
             --pilot) PILOT=1; shift ;;
             --fixtures) FIXTURES="$2"; shift 2 ;;
+            --fixture-arms) FIXTURE_ARMS="$2"; shift 2 ;;
             --runs) RUNS="$2"; shift 2 ;;
             --warmup) WARMUP="$2"; shift 2 ;;
             --out) OUT="$2"; shift 2 ;;
@@ -487,6 +546,8 @@ main() {
             --no-sampler) SAMPLER=0; shift ;;
             --settle) SETTLE="$2"; shift 2 ;;
             --ledger) LEDGER="$2"; shift 2 ;;
+            --host-wait) HOST_WAIT="$2"; shift 2 ;;
+            --host-poll) HOST_POLL="$2"; shift 2 ;;
             --coverage) COVERAGE="$2"; shift 2 ;;
             --appearance) APPEARANCE="$2"; shift 2 ;;
             --bundle-id) BUNDLE_ID="$2"; shift 2 ;;
@@ -508,11 +569,21 @@ main() {
         DESIGN="full"
     fi
     [ -n "$DESIGN" ] || DESIGN="pr45"
-    local shape d_fixtures d_runs d_warmup
+    local shape d_fixtures d_fixture_arms d_runs d_warmup
     shape=$(python3 -I "$SUMMARIZE_PY" --print-design "$DESIGN") || die "unknown --design $DESIGN"
     d_fixtures=$(printf '%s\n' "$shape" | sed -n 's/^fixtures=//p')
+    d_fixture_arms=$(printf '%s\n' "$shape" | sed -n 's/^fixture_arms=//p')
     d_runs=$(printf '%s\n' "$shape" | sed -n 's/^runs=//p')
     d_warmup=$(printf '%s\n' "$shape" | sed -n 's/^warmup=//p')
+    BOUNDS_SHA=$(printf '%s\n' "$shape" | sed -n 's/^bounds_sha256=//p')
+    BOUND_GATED=$(printf '%s\n' "$shape" | sed -n 's/^bound_gated=//p')
+    HOST_LOAD_MAX=$(printf '%s\n' "$shape" | sed -n 's/^host_quiet_load_max=//p')
+    HOST_CPU_MAX=$(printf '%s\n' "$shape" | sed -n 's/^host_process_cpu_max=//p')
+    [ -n "$HOST_WAIT" ] || HOST_WAIT=$(printf '%s\n' "$shape" | sed -n 's/^host_wait_s=//p')
+    [ -n "$HOST_POLL" ] || HOST_POLL=$(printf '%s\n' "$shape" | sed -n 's/^host_poll_s=//p')
+    case "$HOST_WAIT" in ''|*[!0-9]*) die "--host-wait must be seconds" ;; esac
+    case "$HOST_POLL" in ''|*[!0-9]*) die "--host-poll must be seconds" ;; esac
+    [ "$HOST_POLL" -ge 1 ] || die "--host-poll must be >= 1"
     [ -n "$FIXTURES" ] || FIXTURES="$d_fixtures"
     [ -n "$RUNS" ] || RUNS="$d_runs"
     [ -n "$WARMUP" ] || WARMUP="$d_warmup"
@@ -521,6 +592,8 @@ main() {
     [ "$RUNS" -ge 1 ] || die "--runs must be >= 1"
     if [ "$PILOT" -eq 0 ]; then
         [ "$FIXTURES" = "$d_fixtures" ] || die "--fixtures: design $DESIGN runs exactly \"$d_fixtures\" (other sets: --pilot)"
+        [ -z "$FIXTURE_ARMS" ] || [ "$FIXTURE_ARMS" = "$d_fixture_arms" ] || \
+            die "--fixture-arms: design $DESIGN runs exactly \"$d_fixture_arms\" (other shapes: --pilot)"
         [ "$RUNS" -ge "$d_runs" ] || die "--runs $RUNS: design $DESIGN needs >= $d_runs pairs (fewer: --pilot)"
         [ "$WARMUP" -ge 1 ] || die "--warmup $WARMUP: one discarded warm-up per fixture and arm is required (0: --pilot)"
         [ "$SAMPLER" -eq 1 ] || die "--no-sampler is pilot-only (a gate measures memory)"
@@ -562,6 +635,21 @@ main() {
         case "$SETTLE" in *[!0-9]*) die "--settle must be seconds" ;; esac
     fi
 
+    # The arms each fixture runs (fixture_arms in the plan).
+    local f fa pairs=""
+    for f in $FIXTURES; do
+        if [ "$MODE" = "calibrate" ]; then
+            fa="A,A2"
+        else
+            fa=$(lookup "$f" "${FIXTURE_ARMS:-$d_fixture_arms}")
+            [ -n "$fa" ] || fa="A,B,C"
+            [ -n "$APP_B" ] || fa=$(printf '%s' "$fa" | tr ',' '\n' | grep -vx B | paste -sd, -)
+            case ",$fa," in *,A,*) ;; *) die "--fixture-arms: $f must run the reference arm A" ;; esac
+        fi
+        pairs="$pairs $f=$fa"
+    done
+    FIXTURE_ARMS="${pairs# }"
+
     if [ -z "$OUT" ]; then
         OUT="${TMPDIR:-/tmp}"
         OUT="${OUT%/}/adfreader-perf/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -583,8 +671,9 @@ main() {
 
     if [ "$DRY_RUN" -eq 1 ]; then
         HOST_START_JSON=$(python3 -I "$TRIAL_PY" host --top-samples 2)
+        HOST_WAIT_JSON='{"dry_run": true}'
         write_plan
-        log "dry run: plan $OUT/plan.json (host check recorded, not enforced)"
+        log "dry run: plan $OUT/plan.json (host sampled once, no wait)"
         cat "$OUT/plan.json"
     else
         log "output: $OUT"
@@ -598,7 +687,7 @@ main() {
             log "settling ${SETTLE}s after boot before the host check and the first trial"
             sleep "$SETTLE"
         fi
-        host_check
+        host_wait
         write_plan
         {
             echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -606,6 +695,8 @@ main() {
             echo "xcodebuild=$(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
             echo "udid=$UDID device=$(sim_device_field "$UDID" name) runtime=$(sim_device_field "$UDID" runtime)"
             echo "mode=$MODE design=$DESIGN pilot=$PILOT fixtures=$FIXTURES runs=$RUNS warmup=$WARMUP settle=$SETTLE"
+            echo "fixture_arms=$FIXTURE_ARMS bounds_sha256=$BOUNDS_SHA bound_gated=$BOUND_GATED"
+            echo "host_wait=$HOST_WAIT_JSON"
             echo "sampler=$SAMPLER rss_ms=$RSS_MS footprint_ms=$FOOTPRINT_MS"
             echo "host_start=$HOST_START_JSON"
             echo "A app=$APP_A sha256=$SHA_A"
@@ -621,7 +712,7 @@ main() {
         for fixture in $FIXTURES; do
             [ "$DRY_RUN" -eq 1 ] || log "warm-up $w/$WARMUP fixture=$fixture"
             i=0
-            for arm in $(arm_order "$w"); do
+            for arm in $(arm_order "$w" "$fixture"); do
                 i=$(( i + 1 )); run_trial 0 "$fixture" "$arm" "$warm" "$i"
             done
         done
@@ -630,9 +721,9 @@ main() {
     run=1
     while [ "$run" -le "$RUNS" ]; do
         for fixture in $FIXTURES; do
-            [ "$DRY_RUN" -eq 1 ] || log "run $run/$RUNS fixture=$fixture order: $(arm_order "$run")"
+            [ "$DRY_RUN" -eq 1 ] || log "run $run/$RUNS fixture=$fixture order: $(arm_order "$run" "$fixture")"
             i=0
-            for arm in $(arm_order "$run"); do
+            for arm in $(arm_order "$run" "$fixture"); do
                 i=$(( i + 1 )); run_trial "$run" "$fixture" "$arm" "$trials" "$i"
             done
         done
@@ -653,7 +744,7 @@ main() {
     fi
     local status=0
     python3 -I "$SUMMARIZE_PY" "${summary_args[@]}" || status=$?
-    log "summary exit status $status (0 PASS/CALIBRATED, 1 FAIL, 2 INVALID/REFUSED, 3 INCONCLUSIVE, 4 PILOT, 5 INCOMPLETE)"
+    log "summary exit status $status (0 PASS/CALIBRATED, 1 FAIL, 2 INVALID/REFUSED, 3 INCONCLUSIVE, 4 PILOT, 5 INCOMPLETE, 6 FAIL-HOST-BUSY)"
     SUMMARY_DONE=1
     exit "$status"
 }

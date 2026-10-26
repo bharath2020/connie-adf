@@ -7,7 +7,7 @@
 #   Scripts/tests/perf-gate-scenarios.sh <workdir> [scenario...]
 #
 # <workdir> (outside the repository) receives one directory per scenario
-# (plan.json, trials.csv, logs, summary) plus <scenario>.out. About 6 min
+# (plan.json, trials.csv, logs, summary) plus <scenario>.out. About 7 min
 # for all scenarios (the design-shaped run alone is 36 fake trials). Prints one
 # line per scenario and "<passed>/<total> passed"; exits 1 on any mismatch.
 
@@ -65,9 +65,7 @@ expect refuse-fixtures 2 "runs exactly" -- -- "${GATE_ARGS[@]}" --fixtures "kitc
 expect refuse-runs 2 "needs >= 3" -- -- "${GATE_ARGS[@]}" --runs 2
 expect refuse-cal-pr45 2 "takes no --calibration" -- -- "${GATE_ARGS[@]}" --calibration "$A/ADFReader"
 expect refuse-full-nocal 2 "required for design full" -- -- "${GATE_ARGS[@]}" --design full
-# Host check (refuses after boot; nothing is killed).
-expect refuse-load 2 "host busy" -- FAKE_LOAD=6.50 -- "${GATE_ARGS[@]}"
-expect refuse-daemon 2 "launchd at 177" -- FAKE_TOP_CPU=177.0 -- "${GATE_ARGS[@]}"
+expect refuse-fixture-arms 2 "runs exactly" -- -- "${GATE_ARGS[@]}" --fixture-arms "kitchen-sink=A,C"
 # One whole design-shaped run (pr45: 36 fake trials, about 3 min).
 expect pass 0 "gate PASS" -- -- "${GATE_ARGS[@]}"
 # Pilot-shaped runs (kitchen-sink only): a FAIL still FAILs, a pilot never PASSes.
@@ -79,7 +77,17 @@ expect a-timeout 2 "gate INVALID" -- FAKE_SCENARIO=a_timeout -- "${PILOT_ARGS[@]
     --trial-timeout-for "kitchen-sink=4"
 expect pilot-reduced 4 "gate PILOT" -- -- --udid FAKE-UDID-0001 --app-a "$A" --app-c "$BR" --settle 0 --pilot \
     --fixtures kitchen-sink --runs 2 --warmup 0 --no-sampler
-expect pilot-busy-host 4 "WARNING: busy host" -- FAKE_LOAD=6.50 -- "${PILOT_ARGS[@]}" --warmup 0
+# Host policy: wait for a quiet host, then run anyway as HOST-BUSY (nothing killed).
+printf '6.50\n6.50\n1.50\n' > "$WORK/load-seq"
+expect host-quiets 4 "host quiet after" -- FAKE_LOAD_SEQ="$WORK/load-seq" -- "${PILOT_ARGS[@]}" --warmup 0 \
+    --host-wait 30 --host-poll 1
+expect host-busy-pilot 4 "HOST-BUSY: not quiet after" -- FAKE_TOP_CPU=177.0 -- "${PILOT_ARGS[@]}" --warmup 0 \
+    --host-wait 2 --host-poll 1
+expect host-busy-fail 6 "gate FAIL-HOST-BUSY" -- FAKE_SCENARIO=c_slow FAKE_LOAD=6.50 -- "${PILOT_ARGS[@]}" \
+    --warmup 0 --host-wait 0
+# Per-fixture arms (pilot): B only on kitchen-sink.
+expect pilot-fixture-arms 4 "gate PILOT" -- -- "${GATE_ARGS[@]}" --pilot --fixtures "kitchen-sink giant-table" \
+    --fixture-arms "kitchen-sink=A,B,C giant-table=A,C" --runs 2 --warmup 0
 
 printf '\n%s/%s passed\n' "$PASSED" "$TOTAL"
 [ "$PASSED" -eq "$TOTAL" ]

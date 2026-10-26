@@ -14,6 +14,9 @@ USAGE
     python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot [--suggest-timeouts]
     # what a design declares (perf-gate.sh reads its defaults from here):
     python3 -I Scripts/perf_summarize.py --print-design pr45
+    # resolution bounds from an A–A′ run of untouched main (BOUNDS below):
+    python3 -I Scripts/perf_summarize.py <cal>/trials.csv --measure-bounds \
+        --write-bounds Scripts/perf-bounds.json
 
     The run's plan.json (written by perf-gate.sh next to trials.csv; or
     --plan) declares the design, fixtures, runs, warm-ups, host state at
@@ -23,14 +26,17 @@ USAGE
     flag, says whether a run is a pilot (--pilot must agree with it).
 
 DESIGNS (DESIGNS below; a run that declares less is INCOMPLETE, never PASS)
-    pr45  kitchen-sink, stress-1k, giant-table × arms A, B, C × 3 pairs,
-          >= 1 discarded warm-up per (fixture, arm), sampler and footprint
-          on, B/C completion and renderer markers on. Rule "median-
-          relative". About 40 min including boot and a 5-min settle.
+    Each design names its fixtures and, per fixture, the arms it runs; the
+    plan records the same as fixture_arms, so a design's shape is
+    configuration (perf-gate.sh reads it with --print-design).
+    pr45  kitchen-sink, stress-1k, giant-table, each × arms A, B, C × 3
+          pairs, >= 1 discarded warm-up per (fixture, arm), sampler and
+          footprint on, B/C completion and renderer markers on. Rule
+          "median-relative". About 40 min including boot and a 5-min settle.
     full  kitchen-sink, stress-5k, giant-table × A, B, C × >= 10 pairs,
           frozen A–A′ calibration. Rule "calibrated-ucb". About 8 h.
-    Reduced (INCOMPLETE, exit 5): an arm, a declared fixture or pairs
-    missing, sampler or footprint off, B/C markers off.
+    Reduced (INCOMPLETE, exit 5): a declared fixture, an arm of a fixture or
+    pairs missing, sampler or footprint off, B/C markers off.
 
 VALIDITY (fail closed) — every declared (fixture, arm) has exactly one row
     per run 1..runs; each row: status ok, launch_exit 0, installed and app
@@ -38,14 +44,14 @@ VALIDITY (fail closed) — every declared (fixture, arm) has exactly one row
     of its forbidden ones, READY names the fixture, blocks > 0 and equal
     across every arm/run of the fixture (and to expected_blocks if
     declared), frames > 0, dropped <= frames, every required metric present,
-    finite and >= 0, memory samples > 0, the host's 1-min load recorded and
-    <= 6.0 at the trial's start (non-pilot). Candidate (B/C) rows also need
+    finite and >= 0, memory samples > 0, and (non-pilot) the host's 1-min
+    load recorded for the trial. Candidate (B/C) rows also need
     SCROLL_METRICS completed=1 with endRow = blocks − 1 and frames within
     ±15 % of A's median (traversal), and the RENDERER_STATS proof on the
     final line: C renderer=textkit2 on both lines, tk2Layouts > 0 and
     tk2NativeDraws > 0; B renderer=swiftui, tk2Layouts = tk2Live =
-    tk2NativeDraws = tk1BackedDraws = 0. The plan must record a host check
-    at start (1-min load <= 4.0, no non-simulator process > 100 % CPU).
+    tk2NativeDraws = tk1BackedDraws = 0. A non-pilot plan must record the
+    host check at start.
 
 CEILINGS (both designs, every counted trial) — hitch > 10 ms/s; dropped
     rate > 1 % on a trial with >= 2,000 frames; > 3 dropped frames on a
@@ -55,18 +61,26 @@ CEILINGS (both designs, every counted trial) — hitch > 10 ms/s; dropped
 RULE pr45 ("median-relative") — per fixture, candidate arm (B and C) and
     metric, paired deltas d_i = X_i − A_i over the 3 runs; r = median(d_i) /
     median(A). FAIL if r > 15 % for memory (RSS and footprint at READY and
-    peak), first chunk (and median d > 20 ms) and launch→READY on
-    kitchen-sink; launch→READY on the other fixtures is ADVISORY (reported,
-    never gating): three pairs cannot resolve 15 % there. Dropped frames:
-    FAIL if median d > 2 frames. Resolution evidence (95th percentile of
-    |median of 3 A–A′ deltas| over 120 triples, untouched main, 2026-10-26
-    noise run): READY kitchen-sink 11 %, stress-5k 22 %, giant-table 42 %;
-    first chunk 11–20 % (8–11 ms); memory 0.5–10 %. So the gate catches a
-    >= 15 % memory, first-chunk or kitchen-sink READY regression and any
-    stall or sustained drop over the ceilings; it misses smaller shifts,
-    about half of true 15 % shifts on the noisiest memory metric, rare
-    stalls that land in none of 3 trials, and READY regressions under
-    about 25 % (stress) or 45 % (giant-table).
+    peak) and first chunk (unless median d <= 20 ms). launch→READY is gated
+    only on a fixture whose measured resolution bound is within the limit
+    (BOUNDS below); elsewhere it is ADVISORY (reported, never gating).
+    Dropped frames: FAIL if median d > 2 frames.
+
+BOUNDS (Scripts/perf-bounds.json, written by --measure-bounds from an A–A′
+    run of untouched main) — per fixture and metric, the 95th percentile of
+    |median of 3 A–A′ deltas| over every triple of pairs: the smallest shift
+    three pairs tell apart from noise. 2026-10-26 noise run (10 pairs, 120
+    triples): READY kitchen-sink 11 %, stress-5k 22 %, giant-table 42 %;
+    first chunk 11–20 % (8–11 ms); memory 0.5–10 %. A metric in
+    BOUND_GATED_METRICS (launch→READY) gates a fixture only when its bound
+    is <= 15 % (or <= the metric's absolute floor); a fixture with no
+    measured bound (stress-1k) is advisory. The plan records the bounds
+    sha256 and the gated fixtures when the run starts; a later change makes
+    the run INVALID. So the gate catches a >= 15 % memory, first-chunk or
+    kitchen-sink READY regression and any stall or sustained drop over the
+    ceilings; it misses smaller shifts, about half of true 15 % shifts on
+    the noisiest memory metric, rare stalls that land in none of 3 trials,
+    and READY regressions under about 25 % (stress) or 45 % (giant-table).
 
 RULE full ("calibrated-ucb") — calibration (--calibrate), per fixture and
     metric: d_i = A2_i − A_i; allowance = max(max|d_i|, floor). Floors:
@@ -78,23 +92,34 @@ RULE full ("calibrated-ucb") — calibration (--calibrate), per fixture and
     PASS iff UCB95 <= allowance. The calibration must be frozen (sha256 in
     the plan) and created before the first counted trial started.
 
+HOST (firstmate policy, 2026-10-26) — quiet = 1-min load <= 4.0 and no
+    non-simulator process above 100 % CPU. perf-gate.sh waits up to 20 min
+    for a quiet host, then runs anyway; the plan records the start sample
+    and the wait, every row its load and busiest processes. A run whose
+    start or any counted trial was not quiet is HOST-BUSY: its PASS counts;
+    its FAIL is reported as FAIL-HOST-BUSY (exit 6) and is re-run once at
+    the next quiet window before it counts. Nothing is ever killed.
+
 PRECEDENCE
       1. a candidate crash on a provenance-clean row        -> FAIL
-      2. any baseline failure, validity problem, A ceiling
-         breach or host-load violation                       -> INVALID
+      2. any baseline failure, validity problem or A
+         ceiling breach                                      -> INVALID
       3. a candidate timeout / no READY / incomplete scroll  -> FAIL
       4. (full) calibration INCONCLUSIVE                      -> INCONCLUSIVE
       5. a rule or ceiling FAIL                               -> FAIL
       6. plan.pilot                                           -> PILOT
       7. a reduced design                                     -> INCOMPLETE
       8. otherwise                                            -> PASS
+    then a FAIL on a HOST-BUSY run                            -> FAIL-HOST-BUSY
 
 RERUN LEDGER — every verdict is appended to perf-ledger.jsonl in the run
     directory's parent (or --ledger). A candidate whose sha256s already
     FAILed under the same design is REFUSED (a FAIL is never rerun to green
-    without a code change); after one INCONCLUSIVE or INVALID, one rerun is
-    allowed, a second is REFUSED. Re-summarising the same run directory is
-    not a rerun. Pilot, INCOMPLETE and PASS entries do not count.
+    without a code change). A FAIL-HOST-BUSY allows one rerun: a second
+    FAIL-HOST-BUSY for the same binaries counts as FAIL. After one
+    INCONCLUSIVE or INVALID, one rerun is allowed, a second is REFUSED.
+    Re-summarising the same run directory is not a rerun. Pilot,
+    INCOMPLETE and PASS entries do not count.
 
 LABELS — launch_to_ready_ms is "preparation readiness" (READY: model
     prepared), not first visible content; rss_peak_kb is a sampled peak;
@@ -105,7 +130,8 @@ LABELS — launch_to_ready_ms is "preparation readiness" (READY: model
     eligible roots; TextKit 1 draws of all TK2-row draws).
 
 EXIT  0 PASS / CALIBRATED, 1 FAIL, 2 INVALID (or REFUSED, or bad input),
-      3 INCONCLUSIVE, 4 PILOT, 5 INCOMPLETE (reduced design; never a PASS).
+      3 INCONCLUSIVE, 4 PILOT, 5 INCOMPLETE (reduced design; never a PASS),
+      6 FAIL-HOST-BUSY (re-run once when the host is quiet).
 
 Standard library only; run with `python3 -I`.
 """
@@ -115,6 +141,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -122,8 +149,8 @@ import statistics
 import sys
 from datetime import datetime, timezone
 
-EXIT = {"PASS": 0, "CALIBRATED": 0, "FAIL": 1, "INVALID": 2, "REFUSED": 2, "INCONCLUSIVE": 3, "PILOT": 4,
-        "INCOMPLETE": 5}
+EXIT = {"PASS": 0, "CALIBRATED": 0, "MEASURED": 0, "FAIL": 1, "INVALID": 2, "REFUSED": 2, "INCONCLUSIVE": 3,
+        "PILOT": 4, "INCOMPLETE": 5, "FAIL-HOST-BUSY": 6}
 
 LATENCY = ["launch_to_ready_ms", "first_chunk_ms"]
 FRAMES = ["dropped_frames", "dropped_rate_pct", "hitch_ms_per_s"]
@@ -157,21 +184,30 @@ CEILING_DROPPED = 10.0
 MIN_PAIRS = 10
 PILOT_PAIRS = 2
 
-# The declared designs. perf-gate.sh takes its defaults from here
-# (--print-design); a plan that declares less than its design is INCOMPLETE.
+# The declared designs: fixture -> the arms it runs. perf-gate.sh takes its
+# defaults from here (--print-design); a plan that declares less than its
+# design is INCOMPLETE.
+ALL_ARMS = ["A", "B", "C"]
 DESIGNS = {
-    "pr45": {"title": "per-PR gate (~45 min)", "fixtures": ["kitchen-sink", "stress-1k", "giant-table"],
-             "arms": ["A", "B", "C"], "runs": 3, "warmup": 1, "rule": "median-relative"},
+    "pr45": {"title": "per-PR gate (~45 min)",
+             "fixtures": {"kitchen-sink": ALL_ARMS, "stress-1k": ALL_ARMS, "giant-table": ALL_ARMS},
+             "runs": 3, "warmup": 1, "rule": "median-relative"},
     "full": {"title": "full gate (~8 h, before the final parity PR)",
-             "fixtures": ["kitchen-sink", "stress-5k", "giant-table"],
-             "arms": ["A", "B", "C"], "runs": MIN_PAIRS, "warmup": 1, "rule": "calibrated-ucb"},
+             "fixtures": {"kitchen-sink": ALL_ARMS, "stress-5k": ALL_ARMS, "giant-table": ALL_ARMS},
+             "runs": MIN_PAIRS, "warmup": 1, "rule": "calibrated-ucb"},
 }
 
 # Rule pr45 ("median-relative").
 REL_LIMIT_PCT = 15.0
 REL_ABS_FLOORS = {"first_chunk_ms": 20.0}
-READY_GATED_FIXTURES = {"kitchen-sink"}
 DROPPED_DELTA_MAX = 2.0
+
+# Resolution bounds (BOUNDS): metrics gated per fixture only where measured
+# noise lets three pairs resolve the limit.
+BOUNDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perf-bounds.json")
+BOUND_GATED_METRICS = ["launch_to_ready_ms"]
+BOUND_PAIRS = 3
+BOUND_PERCENTILE = 95.0
 
 # Absolute per-trial ceilings (Fable M1), both designs.
 CEILING_HITCH_MS_PER_S = 10.0
@@ -182,10 +218,11 @@ SMALL_TRIAL_FRAMES = 2000.0
 # Traversal (Fable S5): candidate frames within ±15 % of A's median.
 TRAVERSAL_FRAMES_PCT = 15.0
 
-# Host load (non-pilot): start check recorded by perf-gate.sh; per trial.
-HOST_START_LOAD_MAX = 4.0
+# Host (HOST): quiet thresholds and perf-gate.sh's wait for a quiet host.
+HOST_QUIET_LOAD_MAX = 4.0
 HOST_PROCESS_CPU_MAX = 100.0
-HOST_TRIAL_LOAD_MAX = 6.0
+HOST_WAIT_S = 1200
+HOST_POLL_S = 30
 
 # Renderer proof columns (Scripts/perf_trial.py STATS_FIELDS).
 NATIVE_DRAWS = "tk2_native_draws"
@@ -285,19 +322,75 @@ def flags_in(argv: str) -> list[str]:
     return argv.split()
 
 
-def check_host_start(plan: dict, problems: Problems) -> None:
-    """The start-of-run host check perf-gate.sh records (non-pilot only)."""
+def host_sample_busy(load1: float | None, top: list[tuple[str, float, bool]]) -> list[str]:
+    """Why one host sample is not quiet (empty when it is)."""
+    why = []
+    if load1 is not None and load1 > HOST_QUIET_LOAD_MAX:
+        why.append(f"1-min load {load1:g} > {HOST_QUIET_LOAD_MAX:g}")
+    for name, cpu, simulator in top:
+        if cpu > HOST_PROCESS_CPU_MAX and not simulator:
+            why.append(f"{name} at {cpu:g} % CPU > {HOST_PROCESS_CPU_MAX:g}")
+    return why
+
+
+def parse_top3(text: str | None) -> list[tuple[str, float, bool]]:
+    """A row's host_top3, `name=cpu;…`, a trailing `*` marking a simulator process."""
+    out = []
+    for item in (text or "").split(";"):
+        name, _, value = item.partition("=")
+        simulator = value.endswith("*")
+        cpu = finite(value.rstrip("*"))
+        if name and cpu is not None:
+            out.append((name, cpu, simulator))
+    return out
+
+
+def host_state(plan: dict, rows: list[dict], problems: Problems, pilot: bool) -> list[str]:
+    """HOST: the reasons a run is HOST-BUSY (start sample after the wait, then
+    every counted trial). A non-pilot plan without the start record is
+    INVALID; a trial without its load is caught in check_rows."""
+    reasons = []
     host = plan.get("host_start")
     if not isinstance(host, dict) or finite(host.get("load1")) is None:
-        problems.add("invalid", "plan records no host check at start (load average, busiest processes)")
-        return
-    if float(host["load1"]) > HOST_START_LOAD_MAX:
-        problems.add("invalid", f"host 1-min load {host['load1']} > {HOST_START_LOAD_MAX:g} at start")
-    for proc in host.get("top", []):
-        cpu = finite(proc.get("cpu"))
-        if cpu is not None and cpu > HOST_PROCESS_CPU_MAX and not proc.get("simulator"):
-            problems.add("invalid", f"host process {proc.get('command')} at {cpu:g} % CPU at start "
-                                    f"(> {HOST_PROCESS_CPU_MAX:g} %)")
+        if not pilot:
+            problems.add("invalid", "plan records no host check at start (load average, busiest processes)")
+    else:
+        top = [(os.path.basename(str(p.get("command", "?"))), finite(p.get("cpu")) or 0.0, bool(p.get("simulator")))
+               for p in host.get("top", [])]
+        why = host_sample_busy(float(host["load1"]), top)
+        if why:
+            wait = plan.get("host_wait") or {}
+            waited = f" after waiting {wait.get('waited_s')} s" if wait.get("waited_s") is not None else ""
+            reasons.append(f"at start{waited}: " + "; ".join(why))
+    for row in rows:
+        run = finite(row.get("run"))
+        if run is None or run < 1:
+            continue
+        why = host_sample_busy(finite(row.get("host_load1")), parse_top3(row.get("host_top3")))
+        if why:
+            reasons.append(f"{row.get('fixture')} {row.get('arm')} run {int(run)}: " + "; ".join(why))
+    return reasons
+
+
+def fixture_arms(plan: dict) -> dict:
+    """fixture -> the arms the plan runs on it (all plan arms if not declared)."""
+    declared = plan.get("fixture_arms")
+    if isinstance(declared, dict):
+        return {f: [a for a in declared.get(f, [])] for f in plan["fixtures"]}
+    return {f: list(plan["arms"]) for f in plan["fixtures"]}
+
+
+def check_fixture_arms(plan: dict, problems: Problems) -> None:
+    declared = plan.get("fixture_arms")
+    if isinstance(declared, dict) and sorted(declared) != sorted(plan["fixtures"]):
+        problems.add("invalid", f"fixture_arms {sorted(declared)} != fixtures {sorted(plan['fixtures'])}")
+    ref = plan.get("reference", "A")
+    for fixture, arms in fixture_arms(plan).items():
+        unknown = [a for a in arms if a not in plan["arms"]]
+        if unknown:
+            problems.add("invalid", f"fixture_arms names undeclared arms {unknown}", fixture)
+        if ref not in arms:
+            problems.add("invalid", f"reference arm {ref} does not run on this fixture", fixture)
 
 
 def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks: dict, pilot: bool) -> dict:
@@ -305,9 +398,10 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
     the rows that passed every check (so statistics only see clean data)."""
     fixtures = plan["fixtures"]
     arms = plan["arms"]
+    declared = fixture_arms(plan)
     runs = int(plan["runs"])
     metrics = gated_metrics(plan)
-    clean: dict = {(f, a): {} for f in fixtures for a in arms}
+    clean: dict = {(f, a): {} for f in fixtures for a in declared[f] if a in arms}
     seen: dict = {}
 
     for row in rows:
@@ -317,7 +411,7 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
         run = int(run_v)
         fixture, arm = row.get("fixture", ""), row.get("arm", "")
         where = {"fixture": fixture, "arm": arm, "run": str(run)}
-        if fixture not in fixtures or arm not in arms:
+        if fixture not in fixtures or arm not in arms or arm not in declared[fixture]:
             problems.add("invalid", "row for an undeclared fixture/arm", **where)
             continue
         if run > runs:
@@ -347,13 +441,8 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
             problems.add("invalid", f"argv wrong for arm (missing {missing}, forbidden {forbidden}): {row.get('argv')}",
                          **where)
             provenance_ok = False
-        if not pilot:
-            load = finite(row.get("host_load1"))
-            if load is None:
-                problems.add("invalid", "host 1-min load not recorded for the trial", **where)
-            elif load > HOST_TRIAL_LOAD_MAX:
-                problems.add("invalid", f"host 1-min load {load:g} > {HOST_TRIAL_LOAD_MAX:g} at the trial's start",
-                             **where)
+        if not pilot and finite(row.get("host_load1")) is None:
+            problems.add("invalid", "host 1-min load not recorded for the trial", **where)
 
         status = row.get("status", "")
         exit_v = finite(row.get("launch_exit"))
@@ -420,7 +509,7 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
     ref = plan.get("reference", "A")
     for fixture in fixtures:
         counts = set()
-        for arm in arms:
+        for arm in [a for a in declared[fixture] if a in arms]:
             for run in range(1, runs + 1):
                 if (fixture, arm, run) not in seen:
                     problems.add("invalid", "missing trial", fixture, arm, str(run))
@@ -437,7 +526,7 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
             continue
         a_frames = statistics.median(ref_frames)
         for arm, spec in arms.items():
-            if not spec.get("requires_completion"):
+            if not spec.get("requires_completion") or (fixture, arm) not in clean:
                 continue
             for run, row in list(clean[(fixture, arm)].items()):
                 frames = finite(row.get("frames")) or 0.0
@@ -510,15 +599,17 @@ def design_conformance(plan: dict, problems: Problems, pilot: bool) -> tuple[dic
         problems.add("invalid", f"plan design {name!r} is not one of {sorted(DESIGNS)}")
         return None, []
     reduced = []
-    missing_fixtures = [f for f in design["fixtures"] if f not in plan["fixtures"]]
-    extra_fixtures = [f for f in plan["fixtures"] if f not in design["fixtures"]]
+    declared = fixture_arms(plan)
+    missing_fixtures = [f for f in design["fixtures"] if f not in declared]
+    extra_fixtures = [f for f in declared if f not in design["fixtures"]]
     if missing_fixtures:
         reduced.append(f"fixtures {missing_fixtures} declared by design {name} are missing")
     if extra_fixtures and not pilot:
         problems.add("invalid", f"fixtures {extra_fixtures} are not part of design {name}")
-    missing_arms = [a for a in design["arms"] if a not in plan["arms"]]
-    if missing_arms:
-        reduced.append(f"arms {missing_arms} missing")
+    for fixture, want in design["fixtures"].items():
+        missing_arms = [a for a in want if fixture in declared and a not in declared[fixture]]
+        if missing_arms:
+            reduced.append(f"{fixture}: arms {missing_arms} missing")
     if int(plan["runs"]) < design["runs"]:
         reduced.append(f"{plan['runs']} pairs declared, design {name} needs {design['runs']}")
     if not plan.get("sampler", False):
@@ -554,8 +645,8 @@ def describe(values: list[float]) -> dict | None:
 def pairs(clean: dict, fixture: str, ref: str, arm: str, runs: int, metric: str) -> list[float]:
     out = []
     for run in range(1, runs + 1):
-        a = clean[(fixture, ref)].get(run)
-        x = clean[(fixture, arm)].get(run)
+        a = clean.get((fixture, ref), {}).get(run)
+        x = clean.get((fixture, arm), {}).get(run)
         if a is None or x is None:
             continue
         va, vx = metric_value(a, metric), metric_value(x, metric)
@@ -577,6 +668,90 @@ def tk1_share(rows: list[dict]) -> dict:
     out["tk1_draw_share_pct"] = (out[TK1_BACKED_DRAWS] / out["tk2_draws"] * 100.0
                                  if out[TK1_BACKED_DRAWS] is not None and out["tk2_draws"] else None)
     return out
+
+
+# ------------------------------------------------------------------ bounds
+
+
+def load_bounds(path: str) -> tuple[dict | None, str | None]:
+    if not path or not os.path.exists(path):
+        return None, None
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle), sha256_file(path)
+
+
+def bound_gate(bounds: dict | None, fixture: str, metric: str) -> tuple[bool, str]:
+    """BOUNDS: (gated?, why) for a BOUND_GATED_METRICS metric on a fixture."""
+    entry = ((bounds or {}).get("fixtures") or {}).get(fixture, {}).get(metric)
+    if not entry or entry.get("p95_pct") is None:
+        return False, "no measured bound"
+    pct, absolute = float(entry["p95_pct"]), float(entry.get("p95_abs") or 0.0)
+    floor = REL_ABS_FLOORS.get(metric)
+    if pct <= REL_LIMIT_PCT or (floor is not None and absolute <= floor):
+        return True, f"bound {pct:.1f} % <= {REL_LIMIT_PCT:g} %"
+    return False, f"bound {pct:.1f} % > {REL_LIMIT_PCT:g} %"
+
+
+def bound_gated_fixtures(bounds: dict | None, fixtures: list[str]) -> dict:
+    """metric -> the fixtures it gates (the rest are advisory)."""
+    return {m: [f for f in fixtures if bound_gate(bounds, f, m)[0]] for m in BOUND_GATED_METRICS}
+
+
+def percentile_nearest_rank(values: list[float], pct: float) -> float:
+    ordered = sorted(values)
+    return ordered[max(int(math.ceil(pct / 100.0 * len(ordered))) - 1, 0)]
+
+
+def measure_bounds(rows: list[dict], plan: dict, csv_path: str) -> dict:
+    """BOUNDS from an A–A′ run (perf-gate.sh --calibrate on untouched main)."""
+    problems = Problems()
+    if plan.get("mode") != "calibrate":
+        problems.add("invalid", f"plan mode is {plan.get('mode')!r}; bounds come from an A–A′ (calibrate) run")
+    ref, cands = plan.get("reference", "A"), plan.get("candidates", [])
+    rep_arm = cands[0] if cands else "A2"
+    clean = check_rows(rows, plan, problems, plan.get("expected_blocks", {}), True)
+    runs = int(plan["runs"])
+    out = {"version": 1, "kind": "perf-resolution-bounds", "created_utc": now_utc(),
+           "source_csv": os.path.abspath(csv_path), "source_csv_sha256": sha256_file(csv_path),
+           "app_sha256": plan["arms"].get(ref, {}).get("sha256"), "pairs_per_gate": BOUND_PAIRS,
+           "percentile": BOUND_PERCENTILE,
+           "method": f"{BOUND_PERCENTILE:g}th percentile (nearest rank) of |median of {BOUND_PAIRS} A–A′ deltas| "
+                     f"over every {BOUND_PAIRS}-subset of the clean pairs; p95_pct relative to A's median",
+           "fixtures": {}, "problems": []}
+    for fixture in plan["fixtures"]:
+        out["fixtures"][fixture] = {}
+        for metric in LATENCY + MEMORY:
+            deltas = pairs(clean, fixture, ref, rep_arm, runs, metric)
+            a_vals = [v for v in (metric_value(r, metric) for r in clean.get((fixture, ref), {}).values()) if v is not None]
+            if len(deltas) < BOUND_PAIRS or not a_vals:
+                problems.add("invalid", f"{metric}: {len(deltas)} clean pairs < {BOUND_PAIRS}", fixture)
+                continue
+            medians = [abs(statistics.median(t)) for t in itertools.combinations(deltas, BOUND_PAIRS)]
+            p95 = percentile_nearest_rank(medians, BOUND_PERCENTILE)
+            a_median = statistics.median(a_vals)
+            out["fixtures"][fixture][metric] = {"n_pairs": len(deltas), "n_subsets": len(medians),
+                                                "a_median": a_median, "p95_abs": p95,
+                                                "p95_pct": p95 / a_median * 100.0 if a_median else None}
+    out["problems"] = problems.items
+    out["verdict"] = "INVALID" if problems.items else "MEASURED"
+    return out
+
+
+def render_bounds(b: dict) -> str:
+    lines = [f"# perf resolution bounds — **{b['verdict']}**", "",
+             f"Source: `{b['source_csv']}` (sha256 `{b['source_csv_sha256'][:12]}`); reference "
+             f"`{(b.get('app_sha256') or '')[:12]}`. Method: {b['method']}.", ""]
+    for p in b.get("problems", []):
+        lines.append(f"- [{p['kind']}] {p['fixture']}: {p['message']}")
+    lines += ["", "| fixture | metric | A median | bound | bound / A | gates at 15 %? |", "|---|---|---:|---:|---:|---|"]
+    for fixture, metrics in b["fixtures"].items():
+        for metric, m in metrics.items():
+            gated = bound_gate(b, fixture, metric)[1] if metric in BOUND_GATED_METRICS else "always gated"
+            pct = m.get("p95_pct")
+            lines.append(f"| {fixture} | {LABELS.get(metric, metric)} | {fmt(m['a_median'], metric)} | "
+                         f"{fmt(m['p95_abs'], metric)} | {'–' if pct is None else f'{pct:.1f} %'} | {gated} |")
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------- calibration
@@ -601,8 +776,9 @@ def calibrate(rows: list[dict], plan: dict, args: argparse.Namespace, csv_path: 
         problems.add("invalid", "calibration needs exactly one reference and one repeat arm")
     elif arms[ref].get("sha256") != arms[cands[0]].get("sha256"):
         problems.add("invalid", "calibration arms must be the same .app (same sha256)")
+    host_busy = host_state(plan, rows, problems, pilot)
+    check_fixture_arms(plan, problems)
     if not pilot:
-        check_host_start(plan, problems)
         if int(plan.get("warmup", 0)) < 1:
             problems.add("invalid", "warmup 0: one discarded warm-up per fixture and arm is required")
     clean = check_rows(rows, plan, problems, plan.get("expected_blocks", {}), pilot)
@@ -618,13 +794,13 @@ def calibrate(rows: list[dict], plan: dict, args: argparse.Namespace, csv_path: 
               "floors": FLOORS, "ceilings": {"latency_and_memory_pct_of_median": CEILING_PCT,
                                              "dropped_frames": CEILING_DROPPED,
                                              "applies_only_above_floor": True},
-              "fixtures": {}, "problems": []}
+              "fixtures": {}, "problems": [], "host_busy": host_busy}
     noisy = False
     for fixture in plan["fixtures"]:
         entry = {"n_pairs": 0, "metrics": {}, "verdict": "CALIBRATED"}
         for metric in metrics:
             deltas = pairs(clean, fixture, ref, rep, runs, metric)
-            a_vals = [v for v in (metric_value(r, metric) for r in clean[(fixture, ref)].values()) if v is not None]
+            a_vals = [v for v in (metric_value(r, metric) for r in clean.get((fixture, ref), {}).values()) if v is not None]
             a_median = statistics.median(a_vals) if a_vals else None
             max_abs = max((abs(d) for d in deltas), default=None)
             floor = FLOORS[metric]
@@ -665,8 +841,9 @@ def calibrate(rows: list[dict], plan: dict, args: argparse.Namespace, csv_path: 
 # -------------------------------------------------------------------- gate
 
 
-def compare_median_relative(fixture: str, metric: str, deltas: list[float], a_median: float | None) -> dict:
-    """Rule pr45 for one (fixture, arm, metric)."""
+def compare_median_relative(metric: str, deltas: list[float], a_median: float | None, gated: bool = True) -> dict:
+    """Rule pr45 for one (fixture, arm, metric); `gated` False makes a
+    latency/memory verdict advisory (BOUNDS)."""
     entry = {"n": len(deltas), "deltas": [round(d, 4) for d in deltas], "median_delta": None, "a_median": a_median,
              "median_rel_pct": None, "limit": None, "verdict": "n/a"}
     if not deltas:
@@ -689,8 +866,8 @@ def compare_median_relative(fixture: str, metric: str, deltas: list[float], a_me
             over = False
         if entry["median_rel_pct"] is None:
             entry["verdict"] = "n/a"
-        elif metric == "launch_to_ready_ms" and fixture not in READY_GATED_FIXTURES:
-            entry["verdict"] = "ADVISORY >15 %" if over else "advisory"
+        elif not gated:
+            entry["verdict"] = f"ADVISORY >{REL_LIMIT_PCT:g} %" if over else "advisory"
         else:
             entry["verdict"] = "FAIL" if over else "PASS"
     return entry
@@ -711,9 +888,11 @@ def compare_ucb(deltas: list[float], allowance: float | None, min_pairs: int) ->
 
 
 def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: dict | None,
-         calibration_path: str | None) -> dict:
+         calibration_path: str | None, bounds: dict | None = None, bounds_sha: str | None = None) -> dict:
     problems = Problems()
     pilot = resolve_pilot(plan, args, problems)
+    check_fixture_arms(plan, problems)
+    declared = fixture_arms(plan)
     if plan.get("mode") != "gate":
         problems.add("invalid", f"plan mode is {plan.get('mode')!r}, not 'gate'")
     design, reduced = design_conformance(plan, problems, pilot)
@@ -729,8 +908,18 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
     else:
         # A reduced plan is INCOMPLETE (below), not INVALID for its own count.
         min_pairs = min(design["runs"], runs) if design else MIN_PAIRS
-        check_host_start(plan, problems)
+    host_busy = host_state(plan, rows, problems, pilot)
     metrics = gated_metrics(plan)
+
+    # BOUNDS: which fixtures a bound-gated metric gates, frozen in the plan.
+    gated_by_bound = bound_gated_fixtures(bounds, plan["fixtures"])
+    if rule == "median-relative":
+        if plan.get("bounds_sha256") is not None and plan.get("bounds_sha256") != bounds_sha:
+            problems.add("invalid", f"bounds file sha256 {bounds_sha} != {plan.get('bounds_sha256')} recorded when "
+                                    "the run started (bounds changed after the run was declared)")
+        if plan.get("bound_gated") is not None and plan.get("bound_gated") != gated_by_bound:
+            problems.add("invalid", f"bound-gated fixtures {gated_by_bound} != {plan.get('bound_gated')} recorded "
+                                    "when the run started")
 
     # Calibration (rule calibrated-ucb only): frozen, same reference build,
     # created before the first counted trial.
@@ -789,7 +978,7 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
     for fixture in plan["fixtures"]:
         fx: dict = {"arms": {}, "comparisons": {}, "renderer": {}, "sampler": {}, "tk1_share": None,
                     "ceiling_breaches": [b for b in cand_ceiling if b["fixture"] == fixture]}
-        for arm in arms:
+        for arm in [a for a in declared[fixture] if a in arms]:
             arm_rows = list(clean[(fixture, arm)].values())
             fx["arms"][arm] = {m: describe([v for v in (metric_value(r, m) for r in arm_rows) if v is not None])
                                for m in metrics + ["frames", "blocks", "scroll_ms", "trial_wall_ms", "host_load1"]}
@@ -803,7 +992,7 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
                                             "memory_samples", "footprint_samples"]}
             if arms[arm].get("expected_renderer") == "textkit2":
                 fx["tk1_share"] = tk1_share(arm_rows)
-        for arm in cands:
+        for arm in [a for a in cands if a in declared[fixture]]:
             comp = {}
             for metric in metrics:
                 deltas = pairs(clean, fixture, ref, arm, runs, metric)
@@ -811,8 +1000,11 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
                     problems.add("insufficient", f"{arm} {metric}: {len(deltas)} clean pairs < {min_pairs}",
                                  fixture, arm)
                 if rule == "median-relative":
-                    a_desc = fx["arms"][ref].get(metric)
-                    entry = compare_median_relative(fixture, metric, deltas, a_desc["median"] if a_desc else None)
+                    a_desc = fx["arms"].get(ref, {}).get(metric)
+                    gated = metric not in BOUND_GATED_METRICS or fixture in gated_by_bound[metric]
+                    entry = compare_median_relative(metric, deltas, a_desc["median"] if a_desc else None, gated)
+                    if not gated:
+                        entry["limit"] = f"advisory ({bound_gate(bounds, fixture, metric)[1]})"
                 else:
                     entry = compare_ucb(deltas, allowances.get(fixture, {}).get(metric), min_pairs)
                 stat_fail |= entry["verdict"] == "FAIL"
@@ -841,8 +1033,14 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
         verdict = "INCOMPLETE"
     else:
         verdict = "PASS"
+    if verdict == "FAIL" and host_busy:
+        verdict = "FAIL-HOST-BUSY"
 
     return {"version": 3, "kind": "perf-gate-summary", "created_utc": now_utc(), "verdict": verdict,
+            "host_busy": bool(host_busy), "host_busy_reasons": host_busy, "fixture_arms": declared,
+            "bounds": {"path": getattr(args, "bounds", None), "sha256": bounds_sha, "gated": gated_by_bound,
+                       "why": {m: {f: bound_gate(bounds, f, m)[1] for f in plan["fixtures"]}
+                               for m in BOUND_GATED_METRICS}},
             "design": plan.get("design"), "rule": rule, "reduced": reduced, "plan": plan, "reference": ref,
             "candidates": cands, "metrics": metrics, "pilot": pilot, "min_pairs": min_pairs,
             "calibration": calibration_path, "calibration_verdict": cal_verdict, "problems": problems.items,
@@ -874,6 +1072,10 @@ def apply_ledger(result: dict, ledger_path: str, run_dir: str) -> None:
     if not result.get("pilot"):
         if "FAIL" in by_dir.values():
             result["refused"] = "a FAIL is never rerun to green without a code change (candidate sha256 unchanged)"
+        elif result["verdict"] == "FAIL-HOST-BUSY" and "FAIL-HOST-BUSY" in by_dir.values():
+            # The one quiet-window rerun is spent: this FAIL counts.
+            result["host_busy_rerun_spent"] = True
+            result["verdict"] = "FAIL"
         else:
             reruns = sum(1 for v in by_dir.values() if v in ("INCONCLUSIVE", "INVALID"))
             result["rerun_count"] = reruns
@@ -939,8 +1141,18 @@ def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
         lines += [f"REFUSED: {summary['refused']} (verdict before refusal: {summary['verdict_before_refusal']})", ""]
     if summary.get("reduced"):
         lines += ["INCOMPLETE design: " + "; ".join(summary["reduced"]), ""]
+    if summary.get("host_busy"):
+        reasons = summary.get("host_busy_reasons") or []
+        lines += [f"HOST-BUSY ({len(reasons)} samples not quiet; a PASS counts, a FAIL is re-run once when the host is "
+                  "quiet): " + " | ".join(reasons[:8]) + (f" | … {len(reasons) - 8} more" if len(reasons) > 8 else ""),
+                  ""]
+    if summary.get("host_busy_rerun_spent"):
+        lines += ["The quiet-window rerun after a FAIL-HOST-BUSY is spent: this FAIL counts.", ""]
     lines.append(f"Source: `{csv_path}`" + (f"; calibration: `{summary['calibration']}` ({summary['calibration_verdict']})"
                                             if summary.get("rule") == "calibrated-ucb" else "") + "  ")
+    if any(len(v) != len(arms) for v in (summary.get("fixture_arms") or {}).values()):
+        lines.append("Arms per fixture: " + "; ".join(f"{f} {' '.join(v)}" for f, v in summary["fixture_arms"].items())
+                     + "  ")
     lines.append("Arms: " + ", ".join(f"{a} = {arms[a].get('label', a)} (`{arms[a].get('sha256', '')[:12]}`"
                                       f"{' ' + ' '.join(arms[a].get('required_flags', [])) if arms[a].get('required_flags') else ''})"
                                       for a in arms) + "  ")
@@ -950,9 +1162,12 @@ def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
                      + ", ".join(f"{os.path.basename(p.get('command', '?'))} {p.get('cpu')} %" for p in host.get("top", []))
                      + "  ")
     if summary.get("rule") == "median-relative":
+        bounds = summary.get("bounds") or {}
+        ready = ", ".join(f"{f} ({why})" for f, why in (bounds.get("why") or {}).get("launch_to_ready_ms", {}).items())
         lines.append(f"Rule: per fixture × metric, median over {summary['min_pairs']} balanced-order pairs of X−{ref}, "
                      f"relative to {ref}'s median; FAIL > {REL_LIMIT_PCT:g} % (memory, first chunk with a 20 ms floor, "
-                     "launch→READY on kitchen-sink; launch→READY elsewhere advisory), dropped frames median Δ > "
+                     f"launch→READY where its resolution bound allows: {ready or '–'}; bounds "
+                     f"`{(bounds.get('sha256') or 'none')[:12]}`), dropped frames median Δ > "
                      f"{DROPPED_DELTA_MAX:g}; per-trial ceilings hitch > {CEILING_HITCH_MS_PER_S:g} ms/s, dropped rate > "
                      f"{CEILING_DROPPED_RATE_PCT:g} % (≥ {SMALL_TRIAL_FRAMES:,.0f} frames) or > {CEILING_DROPPED_SMALL:g} "
                      "dropped. B and C are both gated.  ")
@@ -982,7 +1197,7 @@ def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
             lines.append(f"- **ceiling FAIL** {b['arm']} run {b['run']}: {b['message']}")
         if fx.get("ceiling_breaches"):
             lines.append("")
-        for arm in summary["candidates"]:
+        for arm in [a for a in summary["candidates"] if a in fx["comparisons"]]:
             comp = fx["comparisons"].get(arm, {})
             lines.append(f"**{arm} ({arms[arm].get('label', arm)}) vs {ref}**")
             lines.append("")
@@ -996,7 +1211,7 @@ def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
                 c = comp.get(metric, {})
                 verdict = c.get("verdict", "n/a")
                 head = (f"| {LABELS.get(metric, metric)} ({UNITS.get(metric, 'KB')}) | "
-                        f"{fmt_desc(fx['arms'][ref].get(metric), metric)} | "
+                        f"{fmt_desc(fx['arms'].get(ref, {}).get(metric), metric)} | "
                         f"{fmt_desc(fx['arms'][arm].get(metric), metric)} | {c.get('n', 0)} | ")
                 if summary.get("rule") == "median-relative":
                     tail = (f"{fmt(c.get('median_delta'), metric)} | {fmt_pct(c.get('median_rel_pct'))} | "
@@ -1006,7 +1221,7 @@ def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
                             f"{fmt(c.get('allowance'), metric)} | ")
                 lines.append(head + tail + f"{'**FAIL**' if verdict == 'FAIL' else verdict} |")
             lines.append("")
-        rend = [a for a in arms if any(fx["renderer"][a].get(k) for k in ("tk2_layouts", "tk2_draws"))]
+        rend = [a for a in fx["renderer"] if any(fx["renderer"][a].get(k) for k in ("tk2_layouts", "tk2_draws"))]
         if rend:
             lines.append("Renderer stats (median per trial, final RENDERER_STATS): "
                          + "; ".join(f"{a}: layouts {fmt_desc(fx['renderer'][a]['tk2_layouts'], 'frames')}, "
@@ -1028,7 +1243,7 @@ def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
                          f"{fmt_desc(samp.get('footprint_interval_ms_median'), '')} ms, max "
                          f"{fmt_desc(samp.get('footprint_interval_ms_max'), '')} ms.")
             lines.append("")
-        loads = fx["arms"].get(ref, {}).get("host_load1")
+        loads = (fx["arms"].get(ref) or {}).get("host_load1")
         if loads:
             lines.append(f"Host 1-min load at trial start ({ref}): {fmt_desc(loads, '')}.")
             lines.append("")
@@ -1120,6 +1335,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--suggest-timeouts", action="store_true",
                         help="print per-fixture --trial-timeout-for values from this (pilot) CSV and exit")
     parser.add_argument("--print-design", metavar="NAME", help="print a design's declared shape (k=v lines) and exit")
+    parser.add_argument("--bounds", default=BOUNDS_PATH, help="resolution bounds JSON (default: Scripts/perf-bounds.json)")
+    parser.add_argument("--measure-bounds", action="store_true",
+                        help="write resolution bounds from this A–A′ (calibrate-mode) run and exit")
+    parser.add_argument("--write-bounds", help="bounds JSON to write (with --measure-bounds)")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1128,9 +1347,15 @@ def main(argv: list[str] | None = None) -> int:
         if not design:
             print(f"error: unknown design {args.print_design!r} (known: {' '.join(sorted(DESIGNS))})", file=sys.stderr)
             return 2
-        print(f"fixtures={' '.join(design['fixtures'])}\narms={' '.join(design['arms'])}\nruns={design['runs']}\n"
-              f"warmup={design['warmup']}\nrule={design['rule']}\nhost_start_load_max={HOST_START_LOAD_MAX:g}\n"
-              f"host_process_cpu_max={HOST_PROCESS_CPU_MAX:g}\nhost_trial_load_max={HOST_TRIAL_LOAD_MAX:g}")
+        bounds, bounds_sha = load_bounds(args.bounds)
+        arms = [a for a in ALL_ARMS if any(a in v for v in design["fixtures"].values())]
+        gated = bound_gated_fixtures(bounds, list(design["fixtures"]))
+        print(f"fixtures={' '.join(design['fixtures'])}\n"
+              f"fixture_arms={' '.join(f + '=' + ','.join(v) for f, v in design['fixtures'].items())}\n"
+              f"arms={' '.join(arms)}\nruns={design['runs']}\nwarmup={design['warmup']}\nrule={design['rule']}\n"
+              f"bounds_sha256={bounds_sha or ''}\nbound_gated={json.dumps(gated, sort_keys=True)}\n"
+              f"host_quiet_load_max={HOST_QUIET_LOAD_MAX:g}\nhost_process_cpu_max={HOST_PROCESS_CPU_MAX:g}\n"
+              f"host_wait_s={HOST_WAIT_S}\nhost_poll_s={HOST_POLL_S}")
         return 0
     if not args.csv:
         parser.error("trials.csv is required")
@@ -1152,6 +1377,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     here = os.path.dirname(os.path.abspath(args.csv))
+
+    if args.measure_bounds:
+        measured = measure_bounds(rows, plan, args.csv)
+        out_json = args.write_bounds or os.path.join(here, "bounds.json")
+        with open(out_json, "w", encoding="utf-8") as handle:
+            json.dump(measured, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        text = render_bounds(measured)
+        with open(args.out or os.path.join(here, "bounds.md"), "w", encoding="utf-8") as handle:
+            handle.write(text)
+        if not args.quiet:
+            print(text)
+        print(f"bounds {measured['verdict']}: wrote {out_json}", file=sys.stderr)
+        return EXIT[measured["verdict"]]
 
     if args.calibrate:
         if args.attempt not in (1, 2):
@@ -1183,7 +1422,8 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as error:
             print(f"error: cannot read calibration: {error}", file=sys.stderr)
             return 2
-    summary = gate(rows, plan, args, calibration, args.calibration)
+    bounds, bounds_sha = load_bounds(args.bounds)
+    summary = gate(rows, plan, args, calibration, args.calibration, bounds, bounds_sha)
     apply_ledger(summary, args.ledger or os.path.join(os.path.dirname(here), "perf-ledger.jsonl"), here)
     text = render_gate(summary, args.csv, args.coverage)
     out_path = args.out or os.path.join(here, "summary.md")

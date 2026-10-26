@@ -268,27 +268,88 @@ check("B frames 30 % below A (traversal) -> FAIL",
       summarize(write("pr45-frames", P, grid(3, ARMS, PR45, mutate=mut(arm="B", run="3", fixture="giant-table",
                                                                        set={"frames": "1700"})))), 1, "FAIL")
 
-# Host load.
+# Host (firstmate policy): a busy host never invalidates; it marks the run
+# HOST-BUSY, where a PASS counts and a FAIL becomes FAIL-HOST-BUSY (exit 6).
+fp30 = mut(arm="C", fixture="stress-1k", set={"footprint_ready_kb": scale("footprint_ready_kb", 1.3)})
 Ph = copy.deepcopy(P)
 Ph["host_start"]["load1"] = 6.5
-check("host load 6.5 at start -> INVALID", summarize(write("pr45-hoststart", Ph, grid(3, ARMS, PR45))), 2, "INVALID")
+check("host load 6.5 at start -> PASS, HOST-BUSY", summarize(write("pr45-hoststart", Ph, grid(3, ARMS, PR45))), 0,
+      "PASS", contains='"host_busy": true')
+check("host load 6.5 at start + C memory +30 % -> FAIL-HOST-BUSY",
+      summarize(write("pr45-hoststart-fail", Ph, grid(3, ARMS, PR45, mutate=fp30))), 6, "FAIL-HOST-BUSY")
 Pp = copy.deepcopy(P)
 Pp["host_start"]["top"] = [{"pid": 9, "command": "/usr/libexec/PerfPowerServices", "cpu": 177.0, "simulator": False}]
-check("daemon at 177 % CPU at start -> INVALID", summarize(write("pr45-hostproc", Pp, grid(3, ARMS, PR45))), 2,
-      "INVALID")
+check("daemon at 177 % CPU at start + C crash -> FAIL-HOST-BUSY",
+      summarize(write("pr45-hostproc", Pp, grid(3, ARMS, PR45, mutate=mut(arm="C", run="1", fixture="kitchen-sink",
+                                                                          set={"status": "crashed", "launch_exit": "1",
+                                                                               "frames": ""})))), 6, "FAIL-HOST-BUSY")
 Ps = copy.deepcopy(P)
 Ps["host_start"]["top"] = [{"pid": 9, "command": "/Library/CoreSimulator/launchd_sim", "cpu": 150.0,
                             "simulator": True}]
-check("simulator process at 150 % at start -> PASS", summarize(write("pr45-hostsim", Ps, grid(3, ARMS, PR45))), 0,
-      "PASS")
+check("simulator process at 150 % at start -> PASS, not busy", summarize(write("pr45-hostsim", Ps, grid(3, ARMS, PR45))),
+      0, "PASS", contains='"host_busy": false')
 check("no host check in the plan -> INVALID",
       summarize(write("pr45-nohost", plan("pr45", 3, ARMS, host_start=None), grid(3, ARMS, PR45))), 2, "INVALID")
-check("one trial at load 6.4 -> INVALID",
+check("one trial at load 6.4 -> PASS, HOST-BUSY",
       summarize(write("pr45-trialload", P, grid(3, ARMS, PR45, mutate=mut(arm="B", run="2", fixture="stress-1k",
-                                                                          set={"host_load1": "6.4"})))), 2, "INVALID")
+                                                                          set={"host_load1": "6.4"})))), 0, "PASS",
+      contains="stress-1k B run 2: 1-min load 6.4")
+check("one trial with a daemon at 150 % + C memory +30 % -> FAIL-HOST-BUSY",
+      summarize(write("pr45-trialdaemon", P, grid(3, ARMS, PR45, mutate=lambda r: (fp30(r), r.update(
+          host_top3="PerfPowerServices=150;launchd=3") if r["run"] == "1" and r["arm"] == "A" else None)))),
+      6, "FAIL-HOST-BUSY")
+check("one trial with a simulator process at 150 % -> PASS, not busy",
+      summarize(write("pr45-trialsim", P, grid(3, ARMS, PR45, mutate=mut(arm="A", run="1", fixture="giant-table",
+                                                                         set={"host_top3": "launchd_sim=150*"})))),
+      0, "PASS", contains='"host_busy": false')
 check("trial load not recorded -> INVALID",
       summarize(write("pr45-noload", P, grid(3, ARMS, PR45, mutate=mut(arm="A", run="1", fixture="kitchen-sink",
                                                                        set={"host_load1": ""})))), 2, "INVALID")
+
+# BOUNDS: launch→READY gates only where the measured bound allows (default
+# Scripts/perf-bounds.json: kitchen-sink yes, giant-table no, stress-1k unmeasured).
+ready30 = lambda f: mut(arm="C", fixture=f, set={"launch_to_ready_ms": scale("launch_to_ready_ms", 1.3)})  # noqa: E731
+check("C launch→READY +30 % on stress-1k (no measured bound) -> PASS (advisory)",
+      summarize(write("pr45-ready-1k", P, grid(3, ARMS, PR45, mutate=ready30("stress-1k")))), 0, "PASS",
+      contains="no measured bound")
+bounds_file = os.path.join(work, "bounds-1k.json")
+with open(bounds_file, "w") as fh:
+    json.dump({"fixtures": {"stress-1k": {"launch_to_ready_ms": {"p95_pct": 10.0, "p95_abs": 60.0}},
+                            "kitchen-sink": {"launch_to_ready_ms": {"p95_pct": 11.0, "p95_abs": 63.0}}}}, fh)
+check("bounds file with a 10 % stress-1k bound: READY +30 % -> FAIL",
+      summarize(write("pr45-ready-1k-gated", P, grid(3, ARMS, PR45, mutate=ready30("stress-1k"))), "--bounds",
+                bounds_file), 1, "FAIL")
+check("no bounds file: kitchen-sink READY +30 % -> PASS (advisory everywhere)",
+      summarize(write("pr45-nobounds", P, grid(3, ARMS, PR45, mutate=ready30("kitchen-sink"))), "--bounds",
+                os.path.join(work, "no-such-bounds.json")), 0, "PASS")
+check("bounds changed after the run was declared -> INVALID",
+      summarize(write("pr45-boundsha", plan("pr45", 3, ARMS, bounds_sha256="0" * 64), grid(3, ARMS, PR45))), 2,
+      "INVALID", contains="bounds changed")
+check("plan's gated fixtures differ from the bounds -> INVALID",
+      summarize(write("pr45-boundgated", plan("pr45", 3, ARMS, bound_gated={"launch_to_ready_ms": ["giant-table"]}),
+                      grid(3, ARMS, PR45))), 2, "INVALID")
+
+# fixture_arms: the per-fixture arm set is plan data.
+check("giant-table without B (fixture_arms) -> INCOMPLETE",
+      summarize(write("pr45-gtnoB", plan("pr45", 3, ARMS, fixture_arms={"kitchen-sink": ARMS, "stress-1k": ARMS,
+                                                                       "giant-table": ["A", "C"]}),
+                      [r for r in grid(3, ARMS, PR45) if not (r["fixture"] == "giant-table" and r["arm"] == "B")])),
+      5, "INCOMPLETE", contains="giant-table: arms ['B'] missing")
+check("pilot with B on kitchen-sink only -> PILOT",
+      summarize(write("pr45-pilot-fa", plan("pr45", 2, ARMS, pilot=True, warmup=0,
+                                            fixture_arms={"kitchen-sink": ARMS, "stress-1k": ["A", "C"],
+                                                          "giant-table": ["A", "C"]}),
+                      [r for r in grid(2, ARMS, PR45) if r["arm"] != "B" or r["fixture"] == "kitchen-sink"]),
+                "--pilot"), 4, "PILOT")
+check("row for an arm the fixture does not run -> INVALID",
+      summarize(write("pr45-undeclared", plan("pr45", 3, ARMS, fixture_arms={"kitchen-sink": ARMS, "stress-1k": ARMS,
+                                                                           "giant-table": ["A", "C"]}),
+                      grid(3, ARMS, PR45))), 2, "INVALID", contains="undeclared")
+check("fixture without the reference arm -> INVALID",
+      summarize(write("pr45-noref", plan("pr45", 3, ARMS, fixture_arms={"kitchen-sink": ARMS, "stress-1k": ARMS,
+                                                                       "giant-table": ["B", "C"]}),
+                      [r for r in grid(3, ARMS, PR45) if not (r["fixture"] == "giant-table" and r["arm"] == "A")])),
+      2, "INVALID")
 
 # Classic validity cases (§6.1).
 check("candidate crash -> FAIL",
@@ -342,6 +403,43 @@ check("ledger: INVALID run", summarize(write("led-inv-1", P, inv_rows), ledger=l
 check("ledger: one rerun allowed", summarize(write("led-inv-2", P, inv_rows), ledger=ledger2), 2, "INVALID")
 check("ledger: second rerun -> REFUSED", summarize(write("led-inv-3", P, grid(3, ARMS, PR45)), ledger=ledger2), 2,
       "REFUSED")
+
+ledger3 = os.path.join(work, "ledger-busy.jsonl")
+if os.path.exists(ledger3):
+    os.remove(ledger3)
+check("ledger: FAIL on a busy host -> FAIL-HOST-BUSY",
+      summarize(write("led-busy-1", Ph, grid(3, ARMS, PR45, mutate=fp30)), ledger=ledger3), 6, "FAIL-HOST-BUSY")
+check("ledger: the busy rerun FAILs again -> FAIL (counts)",
+      summarize(write("led-busy-2", Ph, grid(3, ARMS, PR45, mutate=fp30)), ledger=ledger3), 1, "FAIL",
+      contains="host_busy_rerun_spent")
+check("ledger: after that FAIL -> REFUSED", summarize(write("led-busy-3", P, grid(3, ARMS, PR45)), ledger=ledger3), 2,
+      "REFUSED")
+ledger4 = os.path.join(work, "ledger-busy-pass.jsonl")
+if os.path.exists(ledger4):
+    os.remove(ledger4)
+check("ledger: FAIL-HOST-BUSY, then", summarize(write("led-busyp-1", Ph, grid(3, ARMS, PR45, mutate=fp30)),
+                                                ledger=ledger4), 6, "FAIL-HOST-BUSY")
+check("ledger: ... a quiet rerun PASSes -> PASS",
+      summarize(write("led-busyp-2", P, grid(3, ARMS, PR45)), ledger=ledger4), 0, "PASS")
+
+# ------------------------------------------------------------- bounds
+bcsv = write("bounds-measure", plan("full", 10, ["A", "A2"], fixtures=PR45, mode="calibrate"),
+             grid(10, ["A", "A2"], PR45))
+bout = os.path.join(work, "bounds-measure", "bounds.json")
+res = subprocess.run([sys.executable, "-I", SUMMARIZE, bcsv, "--measure-bounds", "--quiet", "--write-bounds", bout],
+                     capture_output=True, text=True)
+bd = json.load(open(bout)) if os.path.exists(bout) else {}
+entry = bd.get("fixtures", {}).get("kitchen-sink", {}).get("launch_to_ready_ms", {})
+ok = res.returncode == 0 and bd.get("verdict") == "MEASURED" and entry.get("n_subsets") == 120 and entry.get("p95_pct")
+results.append(bool(ok))
+print(f"{'ok  ' if ok else 'FAIL'} measure bounds from 10 A–A′ pairs: exit {res.returncode} {bd.get('verdict')} "
+      f"subsets {entry.get('n_subsets')} kitchen-sink READY {entry.get('p95_pct')}")
+res = subprocess.run([sys.executable, "-I", SUMMARIZE, write("bounds-gate", P, grid(3, ARMS, PR45)), "--measure-bounds",
+                      "--quiet", "--write-bounds", os.path.join(work, "bounds-gate", "b.json")],
+                     capture_output=True, text=True)
+ok = res.returncode == 2
+results.append(ok)
+print(f"{'ok  ' if ok else 'FAIL'} measure bounds from a gate run -> INVALID: exit {res.returncode}")
 
 # ------------------------------------------------------------- design full
 cal_csv = write("cal", plan("full", 10, ["A", "A2"], mode="calibrate"), grid(10, ["A", "A2"], FULL))
