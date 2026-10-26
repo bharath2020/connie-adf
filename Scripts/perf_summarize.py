@@ -697,11 +697,15 @@ def render_calibration(cal: dict) -> str:
     return "\n".join(lines)
 
 
+AUTOSCROLL_FIXED_MS = 5500.0
+
+
 def suggest_timeouts(rows: list[dict]) -> dict:
     """Per-fixture trial deadline = 1.5 × the longest observed scroll + 30 s,
     rounded up to 5 s. The scroll duration is scroll_ms when the app reports
-    it, else the trial wall time minus READY, the autoscroller's 3 s settle
-    and its 2 s exit delay."""
+    it, else (main prints no scrollMs) the trial wall time minus READY and
+    the autoscroller's fixed sleeps: 3 s before the scroll, 0.5 s after it
+    and 2 s before exit (Demo/ADFReader/AutoScroller.swift, same on main)."""
     out: dict = {}
     for row in rows:
         fixture = row.get("fixture", "")
@@ -710,7 +714,7 @@ def suggest_timeouts(rows: list[dict]) -> dict:
             wall, ready = finite(row.get("trial_wall_ms")), finite(row.get("launch_to_ready_ms"))
             if wall is None or ready is None or row.get("status") != "ok":
                 continue
-            scroll = max(wall - ready - 5000.0, 0.0)
+            scroll = max(wall - ready - AUTOSCROLL_FIXED_MS, 0.0)
         out[fixture] = max(out.get(fixture, 0.0), scroll)
     return {f: int(math.ceil((1.5 * s / 1000.0 + 30.0) / 5.0) * 5) for f, s in out.items()}
 
