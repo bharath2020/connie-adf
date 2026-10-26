@@ -105,7 +105,7 @@ struct SegmentedTextView: View {
     /// segment is an atom. The preparer emits one merged run per gap, so the
     /// common case returns the existing value without building or copying an
     /// `AttributedString` inside `body` (§5.3).
-    static func mergedText(_ segments: [InlineSegment]) -> AttributedString? {
+    nonisolated static func mergedText(_ segments: [InlineSegment]) -> AttributedString? {
         if segments.count == 1, case .text(let only) = segments[0] {
             return only
         }

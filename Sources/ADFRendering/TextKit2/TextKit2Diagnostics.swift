@@ -126,17 +126,12 @@ enum TextKit2Eligibility {
     }
 
     static func verdict(_ segments: [InlineSegment]) -> Verdict {
-        let text: AttributedString
-        if segments.count == 1, case .text(let only) = segments[0] {
-            text = only
-        } else {
-            var merged = AttributedString()
-            for segment in segments {
-                guard case .text(let run) = segment else { return .fallback(.atom) }
-                merged.append(run)
-            }
-            text = merged
+        // Atoms first, so an atom paragraph (word-chunked, many segments)
+        // builds no throwaway merged string.
+        for segment in segments {
+            guard case .text = segment else { return .fallback(.atom) }
         }
+        guard let text = SegmentedTextView.mergedText(segments) else { return .fallback(.atom) }
         guard !text.characters.isEmpty else { return .fallback(.empty) }
         var hasLink = false
         for run in text.runs {
