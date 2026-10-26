@@ -191,6 +191,17 @@ struct TextKit2LinkTests {
         // Release: `TextKit2DiagnosticsTests` (switching back to SwiftUI).
     }
 
+    @Test("only a row with a link carries a tap recognizer")
+    func recognizerOnlyWithLinks() async throws {
+        let plain = try Row(try await TK2Parity.plain("plain", "No link here."), width: 370)
+        #expect(plain.view.gestureRecognizers?.isEmpty ?? true)
+        let linked = try Row(try await TK2Parity.fixture("one-link", content: Self.link("a link", "https://example.com")), width: 370)
+        #expect(linked.view.gestureRecognizers?.count == 1)
+        // New text without a link drops it again.
+        linked.view.apply(try TK2Parity.inputs(try await TK2Parity.plain("plain-again", "No link now."), env: .init()))
+        #expect(linked.view.gestureRecognizers?.isEmpty ?? true)
+    }
+
     @MainActor
     final class URLBox {
         var urls: [URL] = []

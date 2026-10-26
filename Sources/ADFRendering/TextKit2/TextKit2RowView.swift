@@ -132,12 +132,8 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// Delivered by the representable from the SwiftUI `openURL` action.
     var openURL: ((URL) -> Void)?
 
-    private lazy var tapRecognizer: UITapGestureRecognizer = {
-        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        recognizer.cancelsTouchesInView = false
-        recognizer.delegate = self
-        return recognizer
-    }()
+    /// Present only while the text has a link (`rebuildLinks`).
+    private var tapRecognizer: UITapGestureRecognizer?
     /// The link under the touch that began the tap: a finger drifting
     /// within tap slop off the glyphs still opens it.
     private var tapLink: URL?
@@ -153,13 +149,12 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         canvas.row = self
         addSubview(canvas)
         isAccessibilityElement = true
-        addGestureRecognizer(tapRecognizer)
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TextKit2RowView, _) in
-            // Dynamic colours (`UIColor.label`, mark colours) resolve at
-            // draw time, so a scheme change only needs a redraw — never a
-            // relayout (metrics are scheme-independent).
-            view.canvas.setNeedsDisplay()
-        }
+        // No trait-change registration: the colour scheme arrives as an
+        // input (`apply` sets the override and redraws), and the override
+        // shields the row from its ancestors' scheme. No tap recognizer
+        // either until the text has a link (`rebuildLinks`): rows are
+        // created and released by the screenful on every switch, so each
+        // per-row object counts.
         TextKit2Diagnostics.shared.rowCreated()
     }
 
@@ -712,6 +707,16 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             if let url = value as? URL { found.append((range, url)) }
         }
         links = found
+        if found.isEmpty, let recognizer = tapRecognizer {
+            removeGestureRecognizer(recognizer)
+            tapRecognizer = nil
+        } else if !found.isEmpty, tapRecognizer == nil {
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            addGestureRecognizer(recognizer)
+            tapRecognizer = recognizer
+        }
         accessibilityCustomActions = found.isEmpty ? nil : found.map { link in
             UIAccessibilityCustomAction(name: Self.linkActionName(link.url)) { [weak self] _ in
                 guard let self, let openURL = self.openURL else { return false }
@@ -729,7 +734,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// Only a touch that starts on a link's glyphs begins the tap, so taps
     /// elsewhere — and every scroll — pass straight through.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer === tapRecognizer else {
+        guard let tapRecognizer, gestureRecognizer === tapRecognizer else {
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
         tapLink = link(at: gestureRecognizer.location(in: self))
