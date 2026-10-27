@@ -896,11 +896,11 @@ private final class TextKit1Stack: NSObject, NSLayoutManagerDelegate {
     }
 
     /// Takes out of each line what its fallback fonts add over the fonts
-    /// the text was built with: the same max-of-runs metric over the
-    /// storage's fonts (after substitution) and over the built ones, the
-    /// difference removed from the fragment and its used rect (the ascent
-    /// part also from the baseline). Lines without a substituted font are
-    /// left exactly as TextKit 1 set them.
+    /// the text was built with: TextKit 1's own line metric (`extent`) over
+    /// the storage's fonts (after substitution) and over the built ones,
+    /// the difference removed from the fragment and its used rect (the
+    /// ascent part also from the baseline). Lines without a substituted
+    /// font are left exactly as TextKit 1 set them.
     func layoutManager(
         _ layoutManager: NSLayoutManager,
         shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<CGRect>,
@@ -912,8 +912,9 @@ private final class TextKit1Stack: NSObject, NSLayoutManagerDelegate {
         let characters = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
         let range = NSIntersectionRange(characters, NSRange(location: 0, length: min(intended.length, storage.length)))
         guard range.length > 0 else { return false }
-        let substituted = Self.extent(of: storage, in: range)
-        let built = Self.extent(of: intended, in: range)
+        let firstLine = (storage.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0)).location == range.location
+        let substituted = Self.extent(of: storage, in: range, firstLine: firstLine)
+        let built = Self.extent(of: intended, in: range, firstLine: firstLine)
         let ascent = max(substituted.ascent - built.ascent, 0)
         let descent = max(substituted.descent - built.descent, 0)
         guard ascent > 0 || descent > 0 else { return false }
@@ -923,16 +924,21 @@ private final class TextKit1Stack: NSObject, NSLayoutManagerDelegate {
         return true
     }
 
-    /// The tallest ascent and deepest descent of the fonts set over
-    /// `range`, a baseline offset only ever growing them.
-    private static func extent(of string: NSAttributedString, in range: NSRange) -> (ascent: CGFloat, descent: CGFloat) {
+    /// How TextKit 1 (font leading off) sizes a line from the fonts set
+    /// over `range`, measured from its line fragments: above the baseline
+    /// the tallest ascent plus a negative leading (not on a paragraph's
+    /// first line), below it the deepest descent plus a positive leading;
+    /// a baseline offset only ever grows them. So an emoji's Apple Color
+    /// Emoji (leading 0) takes back the system font's −1.25 pt leading
+    /// above a line at AX5 and adds its 0.014 pt taller ascent at AX3.
+    private static func extent(of string: NSAttributedString, in range: NSRange, firstLine: Bool) -> (ascent: CGFloat, descent: CGFloat) {
         var ascent: CGFloat = 0
         var descent: CGFloat = 0
         string.enumerateAttributes(in: range) { attributes, _, _ in
             guard let font = attributes[.font] as? UIFont else { return }
             let offset = (attributes[.baselineOffset] as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0
-            ascent = max(ascent, font.ascender + max(offset, 0))
-            descent = max(descent, -font.descender + max(-offset, 0))
+            ascent = max(ascent, font.ascender + (firstLine ? 0 : min(font.leading, 0)) + max(offset, 0))
+            descent = max(descent, -font.descender + max(font.leading, 0) + max(-offset, 0))
         }
         return (ascent, descent)
     }
