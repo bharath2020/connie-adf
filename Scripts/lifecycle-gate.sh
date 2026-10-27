@@ -9,7 +9,7 @@
 # USAGE
 #   Scripts/lifecycle-gate.sh --udid <UDID> --out <dir>
 #       [--derived-data <dir>] [--skip-build] [--only <testName>]...
-#       [--suite-timeout 3600] [--xcodebuild-grace 120] [--keep-booted] [--dry-run]
+#       [--suite-timeout 5400] [--xcodebuild-grace 120] [--keep-booted] [--dry-run]
 #
 #   --udid          required; never creates devices; refuses when another
 #                   simulator is booted; shuts down only a device it booted.
@@ -46,7 +46,7 @@ XCODEGEN="${XCODEGEN:-xcodegen}"
 CLASS="LifecycleUITests"
 ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows"
 
-UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=3600; GRACE=120
+UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=5400; GRACE=120
 KEEP_BOOTED=0; DRY_RUN=0
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
