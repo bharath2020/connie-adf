@@ -1,12 +1,13 @@
 import CryptoKit
 import SwiftUI
-import ADFRendering
+@_spi(ADFDiagnostics) import ADFRendering
 
 /// "About This Build": version/build, the SHA-256 of the running executable,
 /// the active text renderer and how many TextKit 2 rows are alive (the
 /// renderer proof: > 0 while TextKit 2 draws rows on screen, 0 after a
 /// switch back to SwiftUI), of which how many are TextKit 1-backed (linked
-/// text, laid out and drawn by a TextKit 1 stack inside the row). The checksum lets a screen recording be
+/// text, laid out and drawn by a TextKit 1 stack inside the row), and under
+/// `-rebuildControlPicks` the memory control's live rows. The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -21,6 +22,7 @@ struct BuildInfoView: View {
     /// the placeholder for a count.
     @State private var liveTextKit2Rows: Int?
     @State private var liveTextKit1BackedRows: Int?
+    @State private var rebuildControlRows: Int?
 
     var body: some View {
         NavigationStack {
@@ -42,6 +44,13 @@ struct BuildInfoView: View {
                     Text(liveTextKit1BackedRows.map(String.init) ?? "…")
                         .monospacedDigit()
                         .accessibilityIdentifier("tk1-backed-rows")
+                }
+                if RebuildControl.configured {
+                    Section("Rebuild-Control Rows (SwiftUI)") {
+                        Text(rebuildControlRows.map(String.init) ?? "…")
+                            .monospacedDigit()
+                            .accessibilityIdentifier("rebuild-control-rows")
+                    }
                 }
                 if let blocks = LoadSwitchProbe.blocksAtSwitch {
                     Section("Switched During Load (Blocks Loaded)") {
@@ -85,6 +94,7 @@ struct BuildInfoView: View {
                     let stats = ADFTextRenderer.textKit2Stats
                     liveTextKit2Rows = stats.liveRowCount
                     liveTextKit1BackedRows = stats.textKit1BackedRowCount
+                    rebuildControlRows = ADFTextRenderer.rebuildControlRows.live
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }

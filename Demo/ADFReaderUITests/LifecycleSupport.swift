@@ -94,6 +94,7 @@ struct ReaderDriver {
         static let buildRenderer = "build-renderer"
         static let buildDone = "build-info-done"
         static let liveTextKit2Rows = "tk2-live-rows"
+        static let rebuildControlRows = "rebuild-control-rows"
         static let loadSwitchBlocks = "load-switch-blocks"
         static let loadReadyBlocks = "load-ready-blocks"
         static let textKit2RowPrefix = "tk2-row:"
@@ -182,8 +183,33 @@ struct ReaderDriver {
     /// its first read and refreshes every 250 ms); waits up to `timeout` for
     /// a value satisfying `condition` and returns the last number read.
     func readLiveTextKit2Rows(until condition: (Int) -> Bool, settled: Bool = false, timeout: TimeInterval = 5) -> Int? {
-        let field = app.staticTexts[Identifier.liveTextKit2Rows]
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "tk2-live-rows missing from About This Build")
+        readCount(Identifier.liveTextKit2Rows, until: condition, settled: settled, timeout: timeout)
+    }
+
+    /// Opens About and reads both live row counts under `-rebuildControlPicks`
+    /// — TextKit 2 rows and the memory control's SwiftUI rows — waiting on
+    /// `condition` for the one `control` selects and reading the other once,
+    /// so the control and the TextKit 2 switches make the same queries.
+    func liveRows(control: Bool, until condition: (Int) -> Bool, settled: Bool = false, timeout: TimeInterval = 5)
+        -> (textKit2: Int?, control: Int?)
+    {
+        openAbout()
+        let (waited, other) = control
+            ? (Identifier.rebuildControlRows, Identifier.liveTextKit2Rows)
+            : (Identifier.liveTextKit2Rows, Identifier.rebuildControlRows)
+        let value = readCount(waited, until: condition, settled: settled, timeout: timeout)
+        let rest = readCount(other, until: { _ in true })
+        closeAbout()
+        return control ? (rest, value) : (value, rest)
+    }
+
+    /// The open About sheet's count in the field `identifier` (see
+    /// `readLiveTextKit2Rows`).
+    func readCount(_ identifier: String, until condition: (Int) -> Bool, settled: Bool = false,
+                   timeout: TimeInterval = 5) -> Int?
+    {
+        let field = app.staticTexts[identifier]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "\(identifier) missing from About This Build")
         let deadline = Date().addingTimeInterval(timeout)
         var value: Int?
         var previous: Int?

@@ -174,6 +174,7 @@ struct ReaderView: View {
             Section("Text Renderer") {
                 ForEach(ADFTextRenderer.allCases) { renderer in
                     Button {
+                        RebuildControl.willPick(renderer)
                         textKit2Enabled = renderer == .textKit2
                     } label: {
                         if renderer == activeRenderer {

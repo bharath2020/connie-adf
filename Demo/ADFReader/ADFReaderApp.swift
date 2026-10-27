@@ -35,6 +35,10 @@ import UIKit
 ///   `SWITCH_DURING_LOAD blocks=<n>` and shows `<n>` in About This Build —
 ///   the lifecycle gate's "switch during a streaming load" check.
 /// - `-memoryReliefHook` installs `MemoryReliefHook` (lifecycle gate only).
+/// - `-rebuildControlPicks <n>`: the first `n` menu picks of TextKit 2
+///   rebuild the rows TextKit 2 would swap as plain SwiftUI — the twenty-flip
+///   memory control (see `RebuildControl`; lifecycle gate only). With any
+///   `n`, 0 included, About This Build shows the control's row count.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -53,6 +57,7 @@ struct LaunchOptions: Sendable {
     var rendererStats = false
     var switchDuringLoad = false
     var memoryReliefHook = false
+    var rebuildControlPicks: Int?
 
     static let none = LaunchOptions(arguments: [])
 
@@ -87,6 +92,9 @@ struct LaunchOptions: Sendable {
                 switchDuringLoad = true
             case "-memoryReliefHook":
                 memoryReliefHook = true
+            case "-rebuildControlPicks" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                rebuildControlPicks = max(Int(arguments[index]) ?? 0, 0)
             default:
                 break
             }
@@ -103,6 +111,8 @@ struct ADFReaderApp: App {
         // Before the scene builds: `ReaderView` reads the renderer key through
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)
+        RebuildControl.picksLeft = options.rebuildControlPicks ?? 0
+        RebuildControl.configured = options.rebuildControlPicks != nil
         RotationHook.install()
         RejumpHook.install()
         if options.memoryReliefHook {

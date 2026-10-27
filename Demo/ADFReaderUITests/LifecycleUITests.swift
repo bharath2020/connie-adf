@@ -371,68 +371,117 @@ final class LifecycleUITests: XCTestCase {
     /// Twenty switches at a parked stress-5k position: OFF → 0 live TextKit 2
     /// rows, ON → the same render-region count every time.
     ///
-    /// Memory (captain's rule, 2026-10-26, after the plan's raw 5 MB figure
-    /// failed): the raw settled phys_footprint growth over the twenty flips
-    /// must be within 5 MB of a SwiftUI-only control's growth over twenty of
-    /// the same probe cycles (renderer menu pick + About sheet) in the same
-    /// launch, measured identically — Δ_TK2 − Δ_control ≤ 5,120 KB. No
-    /// pressure relief anywhere in this test: raw footprint also counts the
-    /// allocator's free-but-dirty high-water pages, which is what the control
-    /// subtracts. Both series stay in the record.
+    /// Memory (captain's rule B, decision A, 2026-10-26): the raw settled
+    /// phys_footprint growth over twenty TextKit 2 switches must be within
+    /// 5,120 KB of a control's growth over twenty switches that rebuild the
+    /// same rows as plain SwiftUI — median of two runs per arm, no pressure
+    /// relief anywhere. The control (`-rebuildControlPicks 20`): its TextKit 2
+    /// picks swap exactly the leaves a TextKit 2 pick swaps, at the same
+    /// branch point, to their SwiftUI `Text` (`ADFTextRenderer.rebuildControl`),
+    /// through the same menu and About sheet queries; it must show the same
+    /// nonzero rebuilt-row count after every ON pick and none after every
+    /// OFF pick, or it measured nothing. Each series runs in its own launch
+    /// (the first series of a launch takes the allocator's high-water growth,
+    /// which flattered whichever arm ran second), the arms' order alternating
+    /// between the two runs. (The control was formerly twenty same-renderer
+    /// picks that rebuilt no rows; the per-switch rebuild alone, without
+    /// TextKit, exceeded 5,120 KB over it: `memory-phase4/`.)
     func test7TwentyFlipsReleaseRows() throws {
         let agent = try HostAgent.fromEnvironment()
-        let reader = ReaderDriver(launching: ["-fixture", "stress-5k", "-rendererReset", "-rendererStats"])
+        var control: [TwentyFlipSeries] = [], flips: [TwentyFlipSeries] = []
+        for run in 1 ... 2 {
+            for arm in run == 1 ? [true, false] : [false, true] {
+                let series = twentyFlips(agent, control: arm)
+                if arm { control.append(series) } else { flips.append(series) }
+            }
+        }
+        func median(_ values: [Int]) -> Int {
+            let sorted = values.sorted()
+            return sorted.count % 2 == 1 ? sorted[sorted.count / 2]
+                : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+        }
+        let controlMedian = median(control.map(\.growth))
+        let flipMedian = median(flips.map(\.growth))
+        let excess = flipMedian - controlMedian
+        let rowsOK = (control + flips).allSatisfy(\.rowsOK)
+        let pass = rowsOK && excess <= Self.maxGrowthKB
+        try agent.record("3.6 twenty flips (stress-5k)", pass: pass, [
+            "gated_metric": "median over 2 runs of raw settled phys_footprint growth over twenty switches, "
+                + "TextKit 2 minus a control that rebuilds the same rows as SwiftUI (<= 5,120 KB; no pressure relief)",
+            "control_growth_median_kb": controlMedian, "flips_growth_median_kb": flipMedian,
+            "flips_minus_control_kb": excess,
+            "control_runs": control.map(\.figures), "flip_runs": flips.map(\.figures),
+        ])
+        for (index, series) in (control + flips).enumerated() {
+            XCTAssertTrue(series.rowsOK, "series \(index + 1) (\(series.control ? "control" : "TextKit 2")): "
+                + "ON \(series.on) / other kind \(series.onOther), OFF \(series.off)")
+        }
+        XCTAssertLessThanOrEqual(excess, Self.maxGrowthKB,
+                                 "flips grew \(flipMedian) KB vs the control's \(controlMedian) KB (medians; excess \(excess) KB)")
+    }
+
+    private struct TwentyFlipSeries {
+        let control: Bool
+        var growth = 0
+        /// Per ON pick the count waited for (rebuilt rows for the control,
+        /// live TextKit 2 rows otherwise) and the other kind's (none may
+        /// exist); per OFF pick both kinds'.
+        var on: [Int] = [], onOther: [Int] = [], off: [Int] = []
+        var figures: [String: Any] = [:]
+
+        /// Every ON pick showed the same nonzero count of its kind and none
+        /// of the other; every OFF pick, none of either.
+        var rowsOK: Bool {
+            !on.isEmpty && on.allSatisfy { $0 > 0 && $0 == on[0] }
+                && onOther.allSatisfy { $0 == 0 } && off.allSatisfy { $0 == 0 }
+        }
+    }
+
+    /// One launch, one series: twenty switches alternating ON/OFF through
+    /// the renderer menu — rebuilding as SwiftUI (`control`) or as TextKit 2
+    /// — About read after every pick, a settled footprint before the first
+    /// and after every OFF (ten, the last closing the series).
+    private func twentyFlips(_ agent: HostAgent, control: Bool) -> TwentyFlipSeries {
+        let reader = ReaderDriver(launching: [
+            "-fixture", "stress-5k", "-rendererReset", "-rendererStats", "-rebuildControlPicks", control ? "20" : "0",
+        ])
         reader.waitForRenderer("SwiftUI")
         XCTAssertTrue(reader.element(labelPrefix: "Section 0:").waitForExistence(timeout: 30), "stress-5k missing")
         for _ in 0 ..< 3 {
             reader.drag(by: 300)
         }
-
-        // Control: twenty probe cycles on SwiftUI; a settled reading after
-        // every second cycle (ten), the last one closing the control.
-        let controlStart = try agent.settledFootprintKB()
-        var controlSeries: [Int] = []
-        for cycle in 1 ... 20 {
-            reader.chooseRenderer(textKit2: false)
-            XCTAssertEqual(reader.liveTextKit2Rows(until: { $0 == 0 }), 0, "TextKit 2 rows alive before any flip")
-            if cycle % 2 == 0 { controlSeries.append(try agent.settledFootprintKB()) }
+        var series = TwentyFlipSeries(control: control)
+        do {
+            let start = try agent.settledFootprintKB()
+            var settled: [Int] = []
+            for flip in 1 ... 20 {
+                let isOn = flip % 2 == 1
+                reader.chooseRenderer(textKit2: isOn)
+                let first = series.on.first
+                let rows = reader.liveRows(control: control, until: { count in
+                    isOn ? count > 0 && (first == nil || count == first) : count == 0
+                }, settled: isOn)
+                let waited = (control ? rows.control : rows.textKit2) ?? -1
+                let other = (control ? rows.textKit2 : rows.control) ?? -1
+                if isOn {
+                    series.on.append(waited)
+                    series.onOther.append(other)
+                } else {
+                    series.off.append(contentsOf: [waited, other])
+                    settled.append(try agent.settledFootprintKB())
+                }
+            }
+            series.growth = (settled.last ?? start) - start
+            series.figures = [
+                "arm": control ? "control (SwiftUI rebuild)" : "TextKit 2",
+                "on_rows": series.on, "on_other_kind_rows": series.onOther, "off_rows_both_kinds": series.off,
+                "start_kb": start, "after_each_off_kb": settled, "growth_kb": series.growth,
+            ]
+        } catch {
+            XCTFail("twenty-flip series failed: \(error)")
         }
-        let controlEnd = controlSeries.last ?? controlStart
-
-        // Flips: the same twenty cycles alternating ON/OFF, a settled reading
-        // after every OFF (ten), the last one closing the flips.
-        var onCounts: [Int] = [], offCounts: [Int] = [], flipSeries: [Int] = []
-        for flip in 1 ... 20 {
-            let on = flip % 2 == 1
-            reader.chooseRenderer(textKit2: on)
-            let firstOn = onCounts.first
-            let live = reader.liveTextKit2Rows(until: { count in
-                on ? count > 0 && (firstOn == nil || count == firstOn) : count == 0
-            }, settled: on) ?? -1
-            if on { onCounts.append(live) } else { offCounts.append(live) }
-            if !on { flipSeries.append(try agent.settledFootprintKB()) }
-        }
-        let flipEnd = flipSeries.last ?? controlEnd
-        let controlGrowth = controlEnd - controlStart
-        let flipGrowth = flipEnd - controlEnd
-        let excess = flipGrowth - controlGrowth
-        let onStable = !onCounts.isEmpty && onCounts.allSatisfy { $0 > 0 && $0 == onCounts[0] }
-        let offZero = offCounts.allSatisfy { $0 == 0 }
-        let pass = onStable && offZero && excess <= Self.maxGrowthKB
-        try agent.record("3.6 twenty flips (stress-5k)", pass: pass, [
-            "on_live_rows": onCounts, "off_live_rows": offCounts,
-            "gated_metric": "raw settled phys_footprint growth, TextKit 2 flips minus SwiftUI-only control "
-                + "(<= 5,120 KB; no pressure relief)",
-            "control_start_kb": controlStart, "control_end_kb": controlEnd, "control_growth_kb": controlGrowth,
-            "control_after_each_pair_kb": controlSeries,
-            "flips_start_kb": controlEnd, "flips_end_kb": flipEnd, "flips_growth_kb": flipGrowth,
-            "flips_after_each_off_kb": flipSeries,
-            "flips_minus_control_kb": excess,
-        ])
-        XCTAssertTrue(onStable, "live TextKit 2 rows when ON vary or are 0: \(onCounts)")
-        XCTAssertTrue(offZero, "TextKit 2 rows stay alive when OFF: \(offCounts)")
-        XCTAssertLessThanOrEqual(excess, Self.maxGrowthKB,
-                                 "flips grew \(flipGrowth) KB vs the control's \(controlGrowth) KB (excess \(excess) KB)")
+        reader.app.terminate()
+        return series
     }
 
     // MARK: - Helpers
