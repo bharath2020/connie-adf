@@ -24,13 +24,16 @@
 #                   test3SwitchDuringStreamingLoad (§3.4),
 #                   test4SwitchKeepsSearchExpandAndTasks (§3.4),
 #                   test5FlingThrashSoakSwiftUI, test6FlingThrashSoakTextKit2
-#                   (§3.5), test7TwentyFlipsReleaseRows (§3.6)
+#                   (§3.5), test7TwentyFlipsReleaseRows (§3.6: rule B,
+#                   four launches — control and TextKit 2 twice, arm order
+#                   alternating — medians of 2, ~30 min)
 #   --dry-run       print the plan; touch no simulator, run no xcodebuild.
 #
 # PASS (exit 0) only when every selected test case printed `passed` and every
 # recorded check passed. Exit 1 on any failure/skip/missing result, 2 on
-# usage errors. Estimated duration: ~25 min for all seven tests (the two
-# soak tests are ~3 min each) plus ~4 min for a fresh build.
+# usage errors. Estimated duration: ~42 min for all seven tests (test7 ~30,
+# the two soak tests ~3 each) plus ~4 min for a fresh build; the default
+# --suite-timeout (5400 s) leaves room for a loaded host.
 #
 # bash 3.2 compatible; needs Xcode, xcodegen, python3.
 set -euo pipefail
