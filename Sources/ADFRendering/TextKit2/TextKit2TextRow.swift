@@ -65,12 +65,11 @@ struct TextKit2TextRow: View {
     let style: TextBlockStyle
     var ownerID: String? = nil
 
-    /// The alignment guides query the live row view's layout cache through
-    /// it. State only so its identity is stable across evaluations (the
-    /// representable's fields then compare equal); never written.
-    @State private var handle = TextKit2RowHandle()
-
     var body: some View {
+        // A handle per evaluation, not view state (the TK2 sources hold
+        // none, `TextKit2RowViewTests`): the alignment guides query the
+        // live row view's layout cache through it.
+        let handle = TextKit2RowHandle()
         TextKit2RowRepresentable(text: text, style: style, ownerID: ownerID, handle: handle)
             .alignmentGuide(.firstTextBaseline) { dimensions in
                 let size = CGSize(width: dimensions.width, height: dimensions.height)
