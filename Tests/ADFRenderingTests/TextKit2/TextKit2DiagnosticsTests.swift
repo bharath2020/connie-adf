@@ -92,6 +92,7 @@ struct TextKit2DiagnosticsTests {
         let nativeDrawsBefore = diagnostics.nativeDrawCount
         let backedBaseline = diagnostics.textKit1BackedRowCount
         let backedDrawsBefore = diagnostics.textKit1BackedDrawCount
+        let drawsBefore = diagnostics.drawCount
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
         let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .textKit2))
         window.rootViewController = host
@@ -111,7 +112,6 @@ struct TextKit2DiagnosticsTests {
         #expect(ids == ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)", "tk2-row:\(linked.id)"])
         #expect(ADFTextRenderer.textKit2Stats.liveRowCount == diagnostics.liveRowCount)
         #expect(ADFTextRenderer.textKit2Stats.textKit1BackedRowCount == diagnostics.textKit1BackedRowCount)
-        let drawsBefore = diagnostics.drawCount
         Self.render(window)
         let native = diagnostics.nativeDrawCount - nativeDrawsBefore
         let backed = diagnostics.textKit1BackedDrawCount - backedDrawsBefore

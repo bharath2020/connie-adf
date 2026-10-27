@@ -175,9 +175,11 @@ struct TextKit2LinkTests {
     @Test("a linked row counts as TextKit 1-backed; its draws never count as native TextKit 2")
     func textKit1BackedCounters() async throws {
         let diagnostics = TextKit2Diagnostics.shared
-        let rowsBefore = diagnostics.textKit1BackedRowCount
         let fixture = try await TK2Parity.fixture("counted", content:
             TK2Parity.adfText("Read ") + "," + Self.link("the notes", "https://example.com/notes"))
+        // Read after the last suspension: rows of earlier tests can be
+        // released across one.
+        let rowsBefore = diagnostics.textKit1BackedRowCount
         let row = try Row(fixture, width: 370)
         let view = row.view
         #expect(view.isTextKit1Backed)
