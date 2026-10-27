@@ -7,6 +7,8 @@ import ADFPreparation
 /// row, unless the environment carries text styling the row does not
 /// reproduce — then `fallback` (the SwiftUI `Text` path). Only constructed
 /// when the switch is ON, so the SwiftUI arm reads none of these values.
+/// Under `ADFTextRenderer.rebuildControl` (diagnostics) the row's place
+/// holds `fallback` instead, counted.
 struct TextKit2Leaf<Fallback: View>: View {
     let text: AttributedString
     let style: TextBlockStyle
@@ -31,7 +33,13 @@ struct TextKit2Leaf<Fallback: View>: View {
             lineSpacing: lineSpacing, textCase: textCase, lineLimit: lineLimit,
             minimumScaleFactor: minimumScaleFactor, redactionReasons: redactionReasons
         ) {
-            TextKit2TextRow(text: text, style: style, ownerID: ownerID)
+            if TextKit2Diagnostics.shared.rebuildControl {
+                fallback
+                    .onAppear { TextKit2Diagnostics.shared.rebuildControlRow(appeared: true) }
+                    .onDisappear { TextKit2Diagnostics.shared.rebuildControlRow(appeared: false) }
+            } else {
+                TextKit2TextRow(text: text, style: style, ownerID: ownerID)
+            }
         } else {
             fallback
         }

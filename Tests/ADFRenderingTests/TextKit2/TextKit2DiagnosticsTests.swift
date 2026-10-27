@@ -4,7 +4,7 @@ import UIKit
 import Testing
 import ADFModel
 import ADFPreparation
-@testable import ADFRendering
+@_spi(ADFDiagnostics) @testable import ADFRendering
 
 /// The renderer proof of plan §2.6, through the real document view: under
 /// `.textKit2` an eligible top-level paragraph and heading are drawn by live
@@ -131,6 +131,48 @@ struct TextKit2DiagnosticsTests {
 
         window.isHidden = true
         window.rootViewController = nil
+    }
+
+    @Test("the rebuild control swaps the same leaves to SwiftUI Text and counts them")
+    func rebuildControl() async throws {
+        let diagnostics = TextKit2Diagnostics.shared
+        let baseline = diagnostics.liveRowCount
+        let controlBaseline = ADFTextRenderer.rebuildControlRows
+        let model = try await Self.loadedModel()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
+        let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI))
+        window.rootViewController = host
+        window.isHidden = false
+        try await Self.settle(window)
+        defer {
+            ADFTextRenderer.rebuildControl = false
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        // Each switch to `.textKit2` under the control rebuilds the three
+        // eligible leaves (paragraph, heading, linked paragraph) as `Text`.
+        ADFTextRenderer.rebuildControl = true
+        for round in 1...2 {
+            host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .textKit2)
+            try await Self.settle(window)
+            #expect(ADFTextRenderer.rebuildControlRows.live - controlBaseline.live == 3, "round \(round)")
+            #expect(ADFTextRenderer.rebuildControlRows.appeared - controlBaseline.appeared == 3 * round, "round \(round)")
+            #expect(diagnostics.liveRowCount == baseline, "no TextKit 2 row under the control")
+            #expect(Self.identifiers(in: host.view).isEmpty)
+            host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI)
+            try await Self.settle(window)
+            #expect(ADFTextRenderer.rebuildControlRows.live == controlBaseline.live, "round \(round)")
+        }
+
+        // Off again: the same switch builds TextKit 2 rows.
+        ADFTextRenderer.rebuildControl = false
+        host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .textKit2)
+        try await Self.settle(window)
+        #expect(diagnostics.liveRowCount - baseline == 3)
+        #expect(ADFTextRenderer.rebuildControlRows.live == controlBaseline.live)
+        host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI)
+        try await Self.settle(window)
     }
 
     @Test("a theme whose body font is a raw SwiftUI Font stays on SwiftUI")
