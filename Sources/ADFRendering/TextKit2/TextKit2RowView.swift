@@ -659,11 +659,13 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// the line's `bandAscent` and down by its descent — moved by the run's
     /// baseline offset beyond the one the whole line shares (a superscript
     /// highlighted among plain text rises by its raise; a line set wholly
-    /// in it does not move) — edges
-    /// unsnapped (antialiased: the partial pixel rows and columns carry the
-    /// fill's coverage), the leading between lines unpainted; horizontally
-    /// from the run's first caret to its last, trailing whitespace
-    /// included; clipped to the row's bounds. Coordinates here already
+    /// in it does not move) — top and bottom edges unsnapped
+    /// (antialiased: the partial pixel rows carry the fill's coverage), the
+    /// leading between lines unpainted; horizontally from the run's first
+    /// caret to its last, trailing whitespace included, the side edges
+    /// on the row's pixel grid, both moved down (`pixelColumns`; measured
+    /// at 3x and 2x on code and highlight bands);
+    /// clipped to the row's bounds. Coordinates here already
     /// carry the first-baseline snap.
     private func drawRunBackgrounds(in context: CGContext, scale: CGFloat) {
         var fills: [(range: NSRange, color: UIColor, offset: CGFloat)] = []
@@ -693,10 +695,24 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
                     let right = min(rect.maxX, clipRight)
                     guard right > rect.minX else { continue }
                     context.setFillColor(fill.color.cgColor)
-                    context.fill(CGRect(x: rect.minX, y: top, width: right - rect.minX, height: bottom - top))
+                    context.fill(pixelColumns(CGRect(x: rect.minX, y: top, width: right - rect.minX, height: bottom - top), scale: scale))
                 }
             }
         }
+    }
+
+    /// `rect` (container coordinates) with its left and right edges moved
+    /// down onto the row's pixel grid — whole pixels from the row's own
+    /// origin, as `Text` places its run backgrounds' side edges in its
+    /// frame (measured: a span from 391.3 to 601.5 px fills columns
+    /// 391…600 hard-edged; in a centred frame at a fractional pixel the
+    /// same edges come out antialiased by that fraction). Top and bottom
+    /// stay where they are.
+    private func pixelColumns(_ rect: CGRect, scale: CGFloat) -> CGRect {
+        let left = ((rect.minX + drawnShift) * scale).rounded(.down) / scale - drawnShift
+        let right = ((rect.maxX + drawnShift) * scale).rounded(.down) / scale - drawnShift
+        guard right > left else { return .null }
+        return CGRect(x: left, y: rect.minY, width: right - left, height: rect.height)
     }
 
     // MARK: Links
