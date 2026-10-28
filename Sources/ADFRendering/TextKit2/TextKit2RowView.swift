@@ -662,9 +662,11 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// in it does not move) — top and bottom edges unsnapped
     /// (antialiased: the partial pixel rows carry the fill's coverage), the
     /// leading between lines unpainted; horizontally from the run's first
-    /// caret to its last, trailing whitespace included, the side edges
-    /// on the row's pixel grid, both moved down (`pixelColumns`; measured
-    /// at 3x and 2x on code and highlight bands);
+    /// caret to its last, trailing whitespace included — a band over part
+    /// of a line with its side edges on the row's pixel grid, both moved
+    /// down (`pixelColumns`), a band over a whole line with the line's own
+    /// fractional edges (antialiased; measured at 3x and 2x on code,
+    /// highlight, sub/superscript and centred bands);
     /// clipped to the row's bounds. Coordinates here already
     /// carry the first-baseline snap.
     private func drawRunBackgrounds(in context: CGContext, scale: CGFloat) {
@@ -690,12 +692,16 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
                 let top = max(line.baseline - line.bandAscent - raise, clipTop)
                 let bottom = min(line.baseline + line.descent - raise, clipBottom)
                 guard bottom > top else { continue }
+                // A band over the whole line keeps its edges where the line's
+                // are; one over part of it gets hard side edges.
+                let wholeLine = overlap.location == line.range.location && NSMaxRange(overlap) == NSMaxRange(line.range)
                 // The overlap lies on this line, so its segments do too.
                 for rect in containerSegmentRects(for: overlap) {
                     let right = min(rect.maxX, clipRight)
                     guard right > rect.minX else { continue }
+                    let band = CGRect(x: rect.minX, y: top, width: right - rect.minX, height: bottom - top)
                     context.setFillColor(fill.color.cgColor)
-                    context.fill(pixelColumns(CGRect(x: rect.minX, y: top, width: right - rect.minX, height: bottom - top), scale: scale))
+                    context.fill(wholeLine ? band : pixelColumns(band, scale: scale))
                 }
             }
         }
@@ -709,8 +715,12 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// same edges come out antialiased by that fraction). Top and bottom
     /// stay where they are.
     private func pixelColumns(_ rect: CGRect, scale: CGFloat) -> CGRect {
-        let left = ((rect.minX + drawnShift) * scale).rounded(.down) / scale - drawnShift
-        let right = ((rect.maxX + drawnShift) * scale).rounded(.down) / scale - drawnShift
+        // A geometric snap threshold of 0.001 px, not a test tolerance: an
+        // edge that is on a pixel boundary can come out a hair below it in
+        // floating point (a centred row's right edge, 1101.9999 px), and
+        // flooring would move it a whole pixel left.
+        let left = ((rect.minX + drawnShift) * scale + 0.001).rounded(.down) / scale - drawnShift
+        let right = ((rect.maxX + drawnShift) * scale + 0.001).rounded(.down) / scale - drawnShift
         guard right > left else { return .null }
         return CGRect(x: left, y: rect.minY, width: right - left, height: rect.height)
     }
