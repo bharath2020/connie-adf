@@ -126,7 +126,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     private(set) var relayoutCount = 0
 
     /// The block this row draws; also its accessibility identifier
-    /// (`tk2-row:<ownerID>`) and its key in `TextKit2Diagnostics`.
+    /// (`tk2-row:<ownerID>`).
     private(set) var ownerID: String?
 
     /// Delivered by the representable from the SwiftUI `openURL` action.
@@ -162,14 +162,13 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     deinit {
-        let owner = ownerID
         let backed = isTextKit1Backed
         // UIKit releases views on the main thread; hop there if a caller
         // ever drops the last reference elsewhere.
         if Thread.isMainThread {
-            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(ownerID: owner, textKit1Backed: backed) }
+            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed) }
         } else {
-            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(ownerID: owner, textKit1Backed: backed) }
+            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed) }
         }
     }
 
@@ -180,7 +179,6 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// `Hashable` compare.
     func apply(_ newInputs: TextKit2RenderInputs, ownerID newOwnerID: String? = nil) {
         if newOwnerID != ownerID {
-            TextKit2Diagnostics.shared.row(changedOwnerFrom: ownerID, to: newOwnerID)
             ownerID = newOwnerID
             accessibilityIdentifier = newOwnerID.map { "tk2-row:\($0)" }
         }

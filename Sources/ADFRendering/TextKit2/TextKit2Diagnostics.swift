@@ -173,9 +173,12 @@ enum TextKit2Eligibility {
 }
 
 /// The TextKit 2 rows' counters (§2.6 of the stack plan). Rows report
-/// creation, destruction, owner changes, layouts and draws; tests and the
-/// public snapshot read them. Plain integers: cheap enough to stay on in
-/// Release, where the demo's renderer proof needs them.
+/// creation, destruction, layouts and draws; tests and the public snapshot
+/// read them. Process-wide: a test compares them only across a span with
+/// no suspension, since other suites' rows come and go across one (block
+/// ids are document paths, so they don't tell documents apart either).
+/// Plain integers: cheap enough to stay on in Release, where the demo's
+/// renderer proof needs them.
 @MainActor
 final class TextKit2Diagnostics {
     static let shared = TextKit2Diagnostics()
@@ -186,8 +189,6 @@ final class TextKit2Diagnostics {
     private(set) var nativeDrawCount = 0
     private(set) var textKit1BackedRowCount = 0
     private(set) var textKit1BackedDrawCount = 0
-    /// Live rows per owner (block) id.
-    private var owners: [String: Int] = [:]
     /// The rebuild control's leaves (`View.adfRebuildControl`).
     private(set) var rebuildControlLiveRows = 0
     private(set) var rebuildControlAppearances = 0
@@ -200,31 +201,19 @@ final class TextKit2Diagnostics {
         )
     }
 
-    /// Live rows drawing the block `ownerID`.
-    func liveRows(ownerID: String) -> Int {
-        owners[ownerID] ?? 0
-    }
-
     func rowCreated() {
         liveRowCount += 1
     }
 
-    func rowDestroyed(ownerID: String?, textKit1Backed: Bool = false) {
+    func rowDestroyed(textKit1Backed: Bool = false) {
         liveRowCount -= 1
         if textKit1Backed { textKit1BackedRowCount -= 1 }
-        release(ownerID)
     }
 
     /// A live row started (`true`) or stopped being laid out and drawn by
     /// its TextKit 1 stack.
     func row(textKit1Backed: Bool) {
         textKit1BackedRowCount += textKit1Backed ? 1 : -1
-    }
-
-    func row(changedOwnerFrom old: String?, to new: String?) {
-        guard old != new else { return }
-        release(old)
-        if let new { owners[new, default: 0] += 1 }
     }
 
     func didLayout() {
@@ -243,10 +232,5 @@ final class TextKit2Diagnostics {
     func rebuildControlRow(appeared: Bool) {
         rebuildControlLiveRows += appeared ? 1 : -1
         if appeared { rebuildControlAppearances += 1 }
-    }
-
-    private func release(_ ownerID: String?) {
-        guard let ownerID, let count = owners[ownerID] else { return }
-        owners[ownerID] = count > 1 ? count - 1 : nil
     }
 }

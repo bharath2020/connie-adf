@@ -70,8 +70,11 @@ struct TextKit2DiagnosticsTests {
 
     @Test("eligible roots get TextKit 2 rows; fallbacks do not; switching back releases them")
     func rowsFollowTheSwitch() async throws {
+        // The counters are process-wide and other suites render rows in
+        // parallel (some from this same document, so block ids collide too):
+        // rows are checked as this window's own instances, and a counter is
+        // only compared across a span with no suspension in it.
         let diagnostics = TextKit2Diagnostics.shared
-        let baseline = diagnostics.liveRowCount
         let model = try await Self.loadedModel()
         let blocks = model.blocks
         let paragraph = try #require(blocks.first { if case .richText(_, let style) = $0.kind { return !style.isHeading } else { return false } })
@@ -82,52 +85,56 @@ struct TextKit2DiagnosticsTests {
             }
             return false
         })
-        let others = blocks.filter { ![paragraph.id, heading.id, linked.id].contains($0.id) }
 
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
             eligibleRoots: 3, fallbackRoots: blocks.count - 3, textFallbackRoots: 1, linkRoots: 1
         ))
 
-        let layoutsBefore = diagnostics.layoutCount
-        let nativeDrawsBefore = diagnostics.nativeDrawCount
-        let backedBaseline = diagnostics.textKit1BackedRowCount
-        let backedDrawsBefore = diagnostics.textKit1BackedDrawCount
-        let drawsBefore = diagnostics.drawCount
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
         let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .textKit2))
         window.rootViewController = host
         window.isHidden = false
         try await Self.settle(window)
 
-        #expect(diagnostics.liveRows(ownerID: paragraph.id) >= 1)
-        #expect(diagnostics.liveRows(ownerID: heading.id) >= 1)
-        #expect(diagnostics.liveRows(ownerID: linked.id) >= 1)
-        for block in others {
-            #expect(diagnostics.liveRows(ownerID: block.id) == 0, "\(block.id) (\(block.kind)) must stay on SwiftUI")
+        // Every other block (atom paragraph, panel, list, caption) stays on SwiftUI.
+        #expect(Self.identifiers(in: host.view) == ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)", "tk2-row:\(linked.id)"])
+        var rows = TextKit2FallbackTests.rows(in: host.view)
+        #expect(rows.count == 3)
+        #expect(rows.filter(\.isTextKit1Backed).map(\.ownerID) == [linked.id])
+        for row in rows {
+            #expect(row.relayoutCount >= 1, "\(row.ownerID ?? "?") never laid out")
         }
-        #expect(diagnostics.liveRowCount - baseline == 3, "live rows: \(diagnostics.liveRowCount - baseline)")
-        #expect(diagnostics.textKit1BackedRowCount - backedBaseline == 1, "TextKit 1-backed rows: \(diagnostics.textKit1BackedRowCount - backedBaseline)")
-        #expect(diagnostics.layoutCount > layoutsBefore)
-        let ids = Self.identifiers(in: host.view)
-        #expect(ids == ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)", "tk2-row:\(linked.id)"])
-        #expect(ADFTextRenderer.textKit2Stats.liveRowCount == diagnostics.liveRowCount)
-        #expect(ADFTextRenderer.textKit2Stats.textKit1BackedRowCount == diagnostics.textKit1BackedRowCount)
-        Self.render(window)
+        #expect(ADFTextRenderer.textKit2Stats == diagnostics.snapshot)
+
+        // No suspension from here to the last read: only these rows draw,
+        // each once, now.
+        let nativeDrawsBefore = diagnostics.nativeDrawCount
+        let backedDrawsBefore = diagnostics.textKit1BackedDrawCount
+        let drawsBefore = diagnostics.drawCount
+        for canvas in rows.flatMap(\.subviews) {
+            canvas.setNeedsDisplay()
+            canvas.layer.displayIfNeeded()
+        }
         let native = diagnostics.nativeDrawCount - nativeDrawsBefore
         let backed = diagnostics.textKit1BackedDrawCount - backedDrawsBefore
-        #expect(native >= 2, "native draws: \(native)")
-        #expect(backed >= 1, "TextKit 1 draws: \(backed)")
+        #expect(native == 2, "native draws: \(native)")
+        #expect(backed == 1, "TextKit 1 draws: \(backed)")
         // Every draw is one or the other, never both.
         #expect(diagnostics.drawCount - drawsBefore == native + backed)
-        #expect(ADFTextRenderer.textKit2Stats.nativeDrawCount == diagnostics.nativeDrawCount)
-        #expect(ADFTextRenderer.textKit2Stats.textKit1BackedDrawCount == diagnostics.textKit1BackedDrawCount)
 
         host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI)
         try await Self.settle(window)
         #expect(Self.identifiers(in: host.view).isEmpty)
-        #expect(diagnostics.liveRowCount == baseline, "live rows after switching off: \(diagnostics.liveRowCount - baseline)")
-        #expect(diagnostics.textKit1BackedRowCount == backedBaseline)
-        #expect(diagnostics.liveRows(ownerID: paragraph.id) == 0)
+        for row in rows {
+            #expect(row.window == nil, "\(row.ownerID ?? "?") still on screen")
+        }
+        // SwiftUI let go of them: dropping this test's references releases
+        // all three rows now, and the live counters drop with them.
+        let live = diagnostics.liveRowCount
+        let backedRows = diagnostics.textKit1BackedRowCount
+        rows.removeAll()
+        #expect(live - diagnostics.liveRowCount == 3, "rows released: \(live - diagnostics.liveRowCount)")
+        #expect(backedRows - diagnostics.textKit1BackedRowCount == 1)
 
         window.isHidden = true
         window.rootViewController = nil

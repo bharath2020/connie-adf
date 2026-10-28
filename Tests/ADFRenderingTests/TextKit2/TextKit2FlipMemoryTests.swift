@@ -95,7 +95,7 @@ struct TextKit2FlipMemoryTests {
                     }
                     MallocCounter.sampling.pointee = false
                     if renderer == .textKit2 {
-                        liveOn = TextKit2Diagnostics.shared.liveRowCount
+                        liveOn = TextKit2FallbackTests.rows(in: host.view).count
                         for i in 0..<3 { on.bytes[i] += traffic.bytes[i]; on.count[i] += traffic.count[i] }
                     } else {
                         for i in 0..<3 { off.bytes[i] += traffic.bytes[i]; off.count[i] += traffic.count[i] }
