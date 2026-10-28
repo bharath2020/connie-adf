@@ -190,13 +190,16 @@ struct TextKit2PixelParityTests {
         try compare(try await Self.centredHighlight(), env: TK2Parity.Environment(size: size, dark: dark), knownDifference: known)
     }
 
-    /// The cases residual 6 (docs §6.4) measurably fails, per scale; every
-    /// other one must pass.
+    /// The cases residual 6 (docs §6.4) measurably fails, per scale and OS
+    /// (iOS 26.3 at 3x and 2x; iOS 18.5 at 3x, where only xxxLarge
+    /// differs); every other one must pass.
     nonisolated static func centredHighlightDiffers(scale: CGFloat, size: DynamicTypeSize, dark: Bool) -> Bool {
-        switch (scale, size) {
-        case (3, .large): dark
+        let iOS26: Bool
+        if #available(iOS 26.0, *) { iOS26 = true } else { iOS26 = false }
+        return switch (scale, size) {
         case (3, .xxxLarge), (2, .large), (2, .xxxLarge): true
-        case (3, .accessibility3): !dark
+        case (3, .large): iOS26 && dark
+        case (3, .accessibility3): iOS26 && !dark
         default: false
         }
     }
