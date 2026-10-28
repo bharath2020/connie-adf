@@ -1,7 +1,7 @@
 import SwiftUI
 import ADFModel
 import ADFPreparation
-import ADFRendering
+@_spi(ADFDiagnostics) import ADFRendering
 import ADFYouTube
 
 /// Reads one fixture: owns the `ADFDocumentModel`, renders it with
@@ -32,6 +32,9 @@ struct ReaderView: View {
     /// Persisted renderer choice; `-textkit2` / `-rendererReset` seed it at
     /// launch (see `RendererPreference`). Off means the shipping SwiftUI path.
     @AppStorage(RendererPreference.key) private var textKit2Enabled = false
+    /// Whether the last TextKit 2 pick was a memory-control pick
+    /// (`-rebuildControlPicks`, `RebuildControl`).
+    @State private var rebuildControl = false
     /// The un-overridden size — the override is applied deeper, on
     /// `ADFDocumentView` only, so this reads the system/app baseline.
     @Environment(\.dynamicTypeSize) private var systemTypeSize
@@ -61,6 +64,7 @@ struct ReaderView: View {
                         taskStates: taskStates,
                         mentionContent: { AnyView(ProfileCard(name: $0)) },
                         textRenderer: activeRenderer)
+            .adfRebuildControl(rebuildControl)
             .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
             .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -174,7 +178,7 @@ struct ReaderView: View {
             Section("Text Renderer") {
                 ForEach(ADFTextRenderer.allCases) { renderer in
                     Button {
-                        RebuildControl.willPick(renderer)
+                        if renderer == .textKit2 { rebuildControl = RebuildControl.takePick() }
                         textKit2Enabled = renderer == .textKit2
                     } label: {
                         if renderer == activeRenderer {

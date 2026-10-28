@@ -135,43 +135,42 @@ struct TextKit2DiagnosticsTests {
 
     @Test("the rebuild control swaps the same leaves to SwiftUI Text and counts them")
     func rebuildControl() async throws {
-        let diagnostics = TextKit2Diagnostics.shared
-        let baseline = diagnostics.liveRowCount
-        let controlBaseline = ADFTextRenderer.rebuildControlRows
+        let before = ADFTextRenderer.rebuildControlRows
         let model = try await Self.loadedModel()
+        func document(_ renderer: ADFTextRenderer, control: Bool) -> some View {
+            ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: renderer).adfRebuildControl(control)
+        }
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
-        let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI))
+        let host = UIHostingController(rootView: document(.swiftUI, control: true))
         window.rootViewController = host
         window.isHidden = false
         try await Self.settle(window)
         defer {
-            ADFTextRenderer.rebuildControl = false
             window.isHidden = true
             window.rootViewController = nil
         }
 
         // Each switch to `.textKit2` under the control rebuilds the three
         // eligible leaves (paragraph, heading, linked paragraph) as `Text`.
-        ADFTextRenderer.rebuildControl = true
+        // (Other suites' rows can come and go across a suspension: only
+        // this window's rows and the control's own counters are checked.)
         for round in 1...2 {
-            host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .textKit2)
+            host.rootView = document(.textKit2, control: true)
             try await Self.settle(window)
-            #expect(ADFTextRenderer.rebuildControlRows.live - controlBaseline.live == 3, "round \(round)")
-            #expect(ADFTextRenderer.rebuildControlRows.appeared - controlBaseline.appeared == 3 * round, "round \(round)")
-            #expect(diagnostics.liveRowCount == baseline, "no TextKit 2 row under the control")
-            #expect(Self.identifiers(in: host.view).isEmpty)
-            host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI)
+            #expect(ADFTextRenderer.rebuildControlRows.live - before.live == 3, "round \(round)")
+            #expect(ADFTextRenderer.rebuildControlRows.appeared - before.appeared == 3 * round, "round \(round)")
+            #expect(Self.identifiers(in: host.view).isEmpty, "no TextKit 2 row under the control")
+            host.rootView = document(.swiftUI, control: true)
             try await Self.settle(window)
-            #expect(ADFTextRenderer.rebuildControlRows.live == controlBaseline.live, "round \(round)")
+            #expect(ADFTextRenderer.rebuildControlRows.live == before.live, "round \(round)")
         }
 
-        // Off again: the same switch builds TextKit 2 rows.
-        ADFTextRenderer.rebuildControl = false
-        host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .textKit2)
+        // Without the control the same switch builds TextKit 2 rows.
+        host.rootView = document(.textKit2, control: false)
         try await Self.settle(window)
-        #expect(diagnostics.liveRowCount - baseline == 3)
-        #expect(ADFTextRenderer.rebuildControlRows.live == controlBaseline.live)
-        host.rootView = ADFDocumentView(model: model, mediaProvider: NoMedia(), textRenderer: .swiftUI)
+        #expect(Self.identifiers(in: host.view).count == 3)
+        #expect(ADFTextRenderer.rebuildControlRows.live == before.live)
+        host.rootView = document(.swiftUI, control: false)
         try await Self.settle(window)
     }
 

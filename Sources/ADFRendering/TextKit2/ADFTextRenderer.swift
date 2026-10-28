@@ -26,6 +26,10 @@ private struct ADFTextRendererKey: EnvironmentKey {
     static let defaultValue: ADFTextRenderer = .swiftUI
 }
 
+private struct ADFRebuildControlKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 private struct ADFTextForegroundKey: EnvironmentKey {
     static let defaultValue: Color? = nil
 }
@@ -39,6 +43,12 @@ extension EnvironmentValues {
         set { self[ADFTextRendererKey.self] = newValue }
     }
 
+    /// `View.adfRebuildControl` (diagnostics).
+    var adfRebuildControl: Bool {
+        get { self[ADFRebuildControlKey.self] }
+        set { self[ADFRebuildControlKey.self] = newValue }
+    }
+
     /// The host's document text colour (`ADFDocumentView(textForeground:)`),
     /// set alongside the SwiftUI `foregroundStyle` it applies. SwiftUI does
     /// not expose an inherited foreground style to UIKit-hosted views, so
@@ -46,5 +56,19 @@ extension EnvironmentValues {
     var adfTextForeground: Color? {
         get { self[ADFTextForegroundKey.self] }
         set { self[ADFTextForegroundKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Diagnostics only (the lifecycle gate's memory control, never a
+    /// renderer): while `on`, every eligible leaf that `.textKit2` would
+    /// hand to a TextKit 2 row renders its SwiftUI `Text` in that row's
+    /// place instead — the same leaves, swapped at the same `if`/`else`
+    /// branch point, so a renderer switch rebuilds exactly the rows a
+    /// TextKit 2 switch does, as plain SwiftUI. Counted in
+    /// `ADFTextRenderer.rebuildControlRows`.
+    @_spi(ADFDiagnostics)
+    public func adfRebuildControl(_ on: Bool) -> some View {
+        environment(\.adfRebuildControl, on)
     }
 }

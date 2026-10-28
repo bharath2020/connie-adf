@@ -1,5 +1,4 @@
 import Foundation
-@_spi(ADFDiagnostics) import ADFRendering
 
 /// Automation-only record of `-switchDuringLoad`: how many top-level blocks
 /// had streamed in when the renderer flipped to TextKit 2, and how many the
@@ -43,7 +42,7 @@ enum RendererPreference {
 /// `-rebuildControlPicks <n>` (the lifecycle gate's memory control): the
 /// first `n` picks of TextKit 2 in the renderer menu rebuild the rows a
 /// TextKit 2 switch would swap as plain SwiftUI instead
-/// (`ADFTextRenderer.rebuildControl`); later picks are real TextKit 2. The
+/// (`View.adfRebuildControl`); later picks are real TextKit 2. The
 /// control so goes through the same menu, About sheet and accessibility
 /// traffic as the switches it is compared with. With the flag (any `n`)
 /// About This Build and `RENDERER_STATS` show the control's row counts.
@@ -52,10 +51,10 @@ enum RebuildControl {
     static var configured = false
     static var picksLeft = 0
 
-    /// Called as the menu picks a renderer, before the switch is written.
-    static func willPick(_ renderer: ADFTextRenderer) {
-        guard renderer == .textKit2 else { return }
-        ADFTextRenderer.rebuildControl = picksLeft > 0
-        picksLeft = max(picksLeft - 1, 0)
+    /// Called as the menu picks TextKit 2: whether this pick is a control
+    /// pick.
+    static func takePick() -> Bool {
+        defer { picksLeft = max(picksLeft - 1, 0) }
+        return picksLeft > 0
     }
 }

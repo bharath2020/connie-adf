@@ -77,23 +77,10 @@ extension ADFTextRenderer {
         TextKit2Diagnostics.shared.snapshot
     }
 
-    /// Diagnostics only (the lifecycle gate's memory control, never a
-    /// renderer): while set, an eligible leaf that `.textKit2` would hand to
-    /// a TextKit 2 row renders its SwiftUI `Text` in that row's place
-    /// instead — the same leaves, swapped at the same `if`/`else` branch
-    /// point, so a switch rebuilds exactly the rows a TextKit 2 switch does,
-    /// as plain SwiftUI. Read when a leaf builds: change it only while the
-    /// renderer is `.swiftUI`.
-    @_spi(ADFDiagnostics)
-    @MainActor
-    public static var rebuildControl: Bool {
-        get { TextKit2Diagnostics.shared.rebuildControl }
-        set { TextKit2Diagnostics.shared.rebuildControl = newValue }
-    }
-
-    /// Leaves currently rendered by `rebuildControl` (on screen or held by
-    /// the lazy stack), and how many have appeared since launch — the proof
-    /// that a control switch rebuilt rows rather than doing nothing.
+    /// Leaves currently rendered by the rebuild control
+    /// (`View.adfRebuildControl`; on screen or held by the lazy stack), and
+    /// how many have appeared since launch — the proof that a control switch
+    /// rebuilt rows rather than doing nothing.
     @_spi(ADFDiagnostics)
     @MainActor
     public static var rebuildControlRows: (live: Int, appeared: Int) {
@@ -201,8 +188,7 @@ final class TextKit2Diagnostics {
     private(set) var textKit1BackedDrawCount = 0
     /// Live rows per owner (block) id.
     private var owners: [String: Int] = [:]
-    /// `ADFTextRenderer.rebuildControl` and its leaves' counters.
-    var rebuildControl = false
+    /// The rebuild control's leaves (`View.adfRebuildControl`).
     private(set) var rebuildControlLiveRows = 0
     private(set) var rebuildControlAppearances = 0
 
@@ -253,7 +239,7 @@ final class TextKit2Diagnostics {
         if textKit1 { textKit1BackedDrawCount += 1 }
     }
 
-    /// A `rebuildControl` leaf appeared (`true`) or disappeared.
+    /// A rebuild-control leaf appeared (`true`) or disappeared.
     func rebuildControlRow(appeared: Bool) {
         rebuildControlLiveRows += appeared ? 1 : -1
         if appeared { rebuildControlAppearances += 1 }

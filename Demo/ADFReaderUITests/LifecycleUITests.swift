@@ -377,7 +377,7 @@ final class LifecycleUITests: XCTestCase {
     /// same rows as plain SwiftUI — median of two runs per arm, no pressure
     /// relief anywhere. The control (`-rebuildControlPicks 20`): its TextKit 2
     /// picks swap exactly the leaves a TextKit 2 pick swaps, at the same
-    /// branch point, to their SwiftUI `Text` (`ADFTextRenderer.rebuildControl`),
+    /// branch point, to their SwiftUI `Text` (`View.adfRebuildControl`),
     /// through the same menu and About sheet queries; it must show the same
     /// nonzero rebuilt-row count after every ON pick and none after every
     /// OFF pick, or it measured nothing. Each series runs in its own launch
