@@ -26,12 +26,15 @@
 #                   test5FlingThrashSoakSwiftUI, test6FlingThrashSoakTextKit2
 #                   (§3.5), test7TwentyFlipsReleaseRows (§3.6: rule B,
 #                   four launches — control and TextKit 2 twice, arm order
-#                   alternating — medians of 2, ~30 min)
+#                   alternating — medians of 2, ~30 min),
+#                   test8RendererLaunchFlagsAndPersistence (Fable S16:
+#                   -textkit2 over a persisted SwiftUI choice, plain
+#                   relaunch, toolbar pick persists; ~1 min)
 #   --dry-run       print the plan; touch no simulator, run no xcodebuild.
 #
 # PASS (exit 0) only when every selected test case printed `passed` and every
 # recorded check passed. Exit 1 on any failure/skip/missing result, 2 on
-# usage errors. Estimated duration: ~42 min for all seven tests (test7 ~30,
+# usage errors. Estimated duration: ~43 min for all eight tests (test7 ~30,
 # the two soak tests ~3 each) plus ~4 min for a fresh build; the default
 # --suite-timeout (5400 s) leaves room for a loaded host.
 #
@@ -47,7 +50,7 @@ AGENT_PY="$SCRIPT_DIR/lifecycle_agent.py"
 BUNDLE_ID="com.connie.adfreader"
 XCODEGEN="${XCODEGEN:-xcodegen}"
 CLASS="LifecycleUITests"
-ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows"
+ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence"
 
 UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=5400; GRACE=120
 KEEP_BOOTED=0; DRY_RUN=0

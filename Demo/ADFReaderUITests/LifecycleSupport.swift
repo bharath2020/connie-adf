@@ -117,12 +117,17 @@ struct ReaderDriver {
     // MARK: Renderer
 
     func waitForRenderer(_ name: String, timeout: TimeInterval = 15) {
+        XCTAssertTrue(isRenderer(name, timeout: timeout), "active renderer never became \(name)")
+    }
+
+    /// Whether the toolbar names `name` as the active renderer within
+    /// `timeout` (no assertion).
+    func isRenderer(_ name: String, timeout: TimeInterval = 15) -> Bool {
         let predicate = NSPredicate(
             format: "(identifier == %@ OR identifier == %@) AND label CONTAINS %@",
             Identifier.rendererMenu, Identifier.rendererActive, name
         )
-        let match = app.descendants(matching: .any).matching(predicate).firstMatch
-        XCTAssertTrue(match.waitForExistence(timeout: timeout), "active renderer never became \(name)")
+        return app.descendants(matching: .any).matching(predicate).firstMatch.waitForExistence(timeout: timeout)
     }
 
     func openRendererMenu() {

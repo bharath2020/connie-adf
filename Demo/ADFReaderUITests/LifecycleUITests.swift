@@ -484,6 +484,48 @@ final class LifecycleUITests: XCTestCase {
         return series
     }
 
+    // MARK: - Renderer launch flags (Fable S16 regression)
+
+    /// `-textkit2` starts the launch on TextKit 2 even over a persisted
+    /// SwiftUI choice (a toolbar pick of SwiftUI, the way earlier UI tests
+    /// leave the device), the next launch without the flag is back on
+    /// SwiftUI, and a toolbar pick of TextKit 2 persists across a plain
+    /// relaunch. Each launch's renderer is read from the toolbar label and
+    /// the About sheet's live TextKit 2 row count.
+    func test8RendererLaunchFlagsAndPersistence() throws {
+        let agent = try HostAgent.fromEnvironment()
+        let fixture = ["-fixture", "kitchen-sink"]
+        var steps: [[String: Any]] = []
+        func observe(_ reader: ReaderDriver, _ step: String, textKit2: Bool) -> Bool {
+            let label = textKit2 ? "TextKit 2" : "SwiftUI"
+            let labelOK = reader.isRenderer(label)
+            let rows = reader.liveTextKit2Rows(until: { textKit2 ? $0 > 0 : $0 == 0 }, settled: true, timeout: 10)
+            let ok = labelOK && rows.map { textKit2 ? $0 > 0 : $0 == 0 } == true
+            steps.append(["step": step, "want": label, "label_ok": labelOK, "live_tk2_rows": rows ?? -1, "pass": ok])
+            return ok
+        }
+
+        // A persisted SwiftUI choice, made in the toolbar.
+        let setup = ReaderDriver(launching: fixture + ["-rendererReset"])
+        setup.waitForRenderer("SwiftUI")
+        setup.chooseRenderer(textKit2: true)
+        setup.chooseRenderer(textKit2: false)
+
+        var pass = observe(ReaderDriver(launching: fixture + ["-textkit2"]), "-textkit2 over a persisted SwiftUI",
+                           textKit2: true)
+        pass = observe(ReaderDriver(launching: fixture), "plain relaunch after -textkit2", textKit2: false) && pass
+        let picker = ReaderDriver(launching: fixture)
+        picker.chooseRenderer(textKit2: true)
+        pass = observe(ReaderDriver(launching: fixture), "plain relaunch after a toolbar pick of TextKit 2",
+                       textKit2: true) && pass
+        ReaderDriver(launching: fixture + ["-rendererReset"]).waitForRenderer("SwiftUI")
+
+        try agent.record("S16 renderer launch flags (kitchen-sink)", pass: pass, ["steps": steps])
+        for step in steps {
+            XCTAssertEqual(step["pass"] as? Bool, true, "\(step)")
+        }
+    }
+
     // MARK: - Helpers
 
     /// Scrolls kitchen-sink until `element` is fully in view: back to the top
