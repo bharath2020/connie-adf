@@ -100,6 +100,7 @@ struct ReaderView: View {
                 if options.switchDuringLoad, LoadSwitchProbe.blocksAtSwitch == nil,
                    count > 0, model.phase != .ready {
                     LoadSwitchProbe.blocksAtSwitch = count
+                    RendererPreference.markSetByAutomation()
                     textKit2Enabled = true
                     print("SWITCH_DURING_LOAD blocks=\(count)")
                     fflush(stdout)
@@ -179,6 +180,7 @@ struct ReaderView: View {
                 ForEach(ADFTextRenderer.allCases) { renderer in
                     Button {
                         if renderer == .textKit2 { rebuildControl = RebuildControl.takePick() }
+                        RendererPreference.userChose()
                         textKit2Enabled = renderer == .textKit2
                     } label: {
                         if renderer == activeRenderer {

@@ -16,11 +16,12 @@ import UIKit
 /// - `-fontSizeStep <n>` opens the reader with the text-size control at
 ///   step `n` (ladder steps relative to the system size), bypassing the
 ///   persisted per-document value — so perf gates can run at large sizes.
-/// - `-textkit2` starts this launch on TextKit 2: it clears the persisted
-///   renderer choice (`adf.textkit2.enabled`) and registers TextKit 2 for
-///   this process only, before the first view reads it. The toolbar switch
-///   still works afterwards (and persists, as it always does); a later
-///   launch without the flag starts on SwiftUI.
+/// - `-textkit2` starts this launch on TextKit 2, whatever a previous run
+///   persisted: it writes the renderer choice (`adf.textkit2.enabled`)
+///   before the first view reads it, marked as automation's, and the next
+///   launch without the flag removes it again, so that launch starts on
+///   SwiftUI. The toolbar switch still works (and persists, as it always
+///   does).
 /// - `-rendererReset` removes that key first, so a UI test always starts on
 ///   SwiftUI regardless of what a previous run left behind. With both flags
 ///   the reset applies first, then `-textkit2`.
@@ -30,8 +31,8 @@ import UIKit
 ///   proof of which engine drew (see `RendererStats`).
 /// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
 ///   streamed chunk arrives (the document is still loading) the way the
-///   toolbar does, so the choice persists — pair it with `-rendererReset`;
-///   prints
+///   toolbar does, marked as automation's like `-textkit2` (the next launch
+///   without a flag starts on SwiftUI); prints
 ///   `SWITCH_DURING_LOAD blocks=<n>` and shows `<n>` in About This Build —
 ///   the lifecycle gate's "switch during a streaming load" check.
 /// - `-memoryReliefHook` installs `MemoryReliefHook` (lifecycle gate only).

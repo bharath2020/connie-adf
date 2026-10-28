@@ -14,28 +14,45 @@ enum LoadSwitchProbe {
 /// key means SwiftUI.
 enum RendererPreference {
     static let key = "adf.textkit2.enabled"
+    /// Set while `key` holds a value automation wrote (`-textkit2`,
+    /// `-switchDuringLoad`) rather than a toolbar pick.
+    static let automationKey = "adf.textkit2.setByAutomation"
 
     /// Applies `-rendererReset` and then `-textkit2` to the standard defaults.
     /// Runs from `ADFReaderApp.init`, before any view reads the key.
     ///
-    /// `-textkit2` clears any persisted choice and registers `true` in the
-    /// registration domain, which lives only as long as the process: the
-    /// toolbar switch still flips it (its write lands in the persistent
-    /// domain, which wins), and a later launch without the flag starts on
-    /// SwiftUI again instead of inheriting the automation's choice.
+    /// `-textkit2` writes `true` to the persistent domain, so it wins over
+    /// any value a previous run left there (a registered default would not:
+    /// a persisted `false` from an earlier SwiftUI pick outranks it). The
+    /// write is marked as automation's, and the next launch without the
+    /// flag removes it, so a manual launch after a `-textkit2` run starts on
+    /// SwiftUI instead of inheriting the automation's choice. A toolbar pick
+    /// clears the mark (`userChose()`) and persists as it always did.
     ///
     /// The flags are deliberately *not* spelled like the defaults key: iOS
     /// mirrors every `-key value` launch argument into `NSArgumentDomain`,
     /// which shadows the persistent domain for the life of the process — a
     /// key seeded that way could never be flipped from inside the app.
     static func apply(_ options: LaunchOptions, to defaults: UserDefaults = .standard) {
-        if options.rendererReset {
+        if options.rendererReset || (!options.textKit2 && defaults.bool(forKey: automationKey)) {
             defaults.removeObject(forKey: key)
+            defaults.removeObject(forKey: automationKey)
         }
         if options.textKit2 {
-            defaults.removeObject(forKey: key)
-            defaults.register(defaults: [key: true])
+            defaults.set(true, forKey: key)
+            defaults.set(true, forKey: automationKey)
         }
+    }
+
+    /// Marks the current value as automation's (`-switchDuringLoad`), so the
+    /// next launch without a renderer flag starts on SwiftUI.
+    static func markSetByAutomation(_ defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: automationKey)
+    }
+
+    /// A toolbar pick: the choice is the user's and persists.
+    static func userChose(_ defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: automationKey)
     }
 }
 

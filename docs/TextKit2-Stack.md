@@ -42,7 +42,7 @@ ADFDocumentView(model:mediaProvider:interactionHandler:taskStates:mentionContent
 
   | Arg | Effect |
   |---|---|
-  | `-textkit2` | Seeds `adf.textkit2.enabled` ON. |
+  | `-textkit2` | Starts this launch ON whatever was persisted (writes `adf.textkit2.enabled`, marked as automation's; the next launch without the flag removes it). |
   | `-rendererReset` | Removes the key (applied first, so `-rendererReset -textkit2` starts ON from a clean slate). |
   | `-rendererStats` | Prints `RENDERER_STATS renderer=<swiftui\|textkit2> tk2Live=<n> tk2Layouts=<n> tk2Draws=<n> eligibleRoots=<n> fallbackRoots=<n>` at `READY` and alongside `SCROLL_METRICS`. tk2-gates adds `tk2NativeDraws=` (`nativeDrawCount`), `tk1BackedRows=` (`textKit1BackedRowCount`), `tk1BackedDraws=` (`textKit1BackedDrawCount`), `linkRoots=` and `textFallbackRoots=` (coverage). <!-- TODO(final-gates): confirm the demo's line --> |
   | `-rebuildControlPicks <n>` | Lifecycle gate only: the first `n` menu picks of TextKit 2 rebuild the rows TextKit 2 would swap as plain SwiftUI (the twenty-flip memory control, §8.3); About This Build shows `rebuild-control-rows`, `RENDERER_STATS` appends `rebuildControlRows=<n> rebuildControlAppeared=<n>`. |
