@@ -261,12 +261,13 @@ final class LifecycleUITests: XCTestCase {
     private func flingThrashSoak(textKit2: Bool) throws {
         let agent = try HostAgent.fromEnvironment()
         let arm = textKit2 ? "textkit2" : "swiftui"
-        var arguments = ["-fixture", "stress-5k", "-rendererReset", "-rendererStats"]
+        var arguments = ["-fixture", "stress-5k", "-rendererReset", "-rendererStats", "-scenePhaseProbe"]
         if textKit2 { arguments.append("-textkit2") }
         let reader = ReaderDriver(launching: arguments)
         let app = reader.app
         reader.waitForRenderer(textKit2 ? "TextKit 2" : "SwiftUI")
         XCTAssertTrue(reader.element(labelPrefix: "Section 0:").waitForExistence(timeout: 30), "stress-5k missing")
+        XCTAssertNotNil(Self.scenePhases(app), "scene-phase-probe missing (-scenePhaseProbe)")
 
         let scroll = app.scrollViews.firstMatch
         for _ in 0 ..< 3 {
@@ -274,10 +275,12 @@ final class LifecycleUITests: XCTestCase {
         }
         let fling = try agent.cpuSettleSeconds()
 
-        var thrashStates: [String: String] = [:]
+        var firstCycle: [String: String] = [:]
+        var unconfirmed: [String] = []
         for cycle in 0 ..< 5 {
-            let states = thrash(app, evidence: cycle == 0 ? arm : nil)
-            if cycle == 0 { thrashStates = states }
+            let stops = thrash(app, evidence: cycle == 0 ? arm : nil)
+            if cycle == 0 { firstCycle = stops.evidence }
+            unconfirmed += Self.stops.filter { stops.confirmed[$0] != true }.map { "\(cycle):\($0)" }
         }
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "app not in the foreground after thrash")
         let thrashSettle = try agent.cpuSettleSeconds()
@@ -291,10 +294,10 @@ final class LifecycleUITests: XCTestCase {
         let thrashOK = (thrashSettle.seconds ?? .infinity) <= Self.maxSettleSeconds
         // Each stop must actually have left the foreground, or the "thrash"
         // could be five Home presses (the lock is a private selector and the
-        // switcher a coordinate gesture).
-        let leftForeground = ["home", "locked", "switcher"].allSatisfy {
-            thrashStates[$0] != nil && thrashStates[$0] != "foreground"
-        }
+        // switcher a coordinate gesture) — proven by the app's own scene
+        // phases (`-scenePhaseProbe`), not `XCUIApplication.state`, which
+        // reads runningForeground at every stop on the simulator.
+        let leftForeground = unconfirmed.isEmpty
         let pass = flingOK && thrashOK && leftForeground && growth <= Self.maxGrowthKB && cpuMean <= 2.0
             && rendererKept
         try agent.record("3.5 fling + thrash + 60 s soak (stress-5k, \(arm))", pass: pass, [
@@ -302,37 +305,67 @@ final class LifecycleUITests: XCTestCase {
             "soak_growth_kb": growth, "soak_cpu_mean_pct": cpuMean, "soak_cpu_max_pct": soak["cpu_max"] ?? -1,
             "soak_start_kb": soak["start_kb"] ?? -1, "soak_end_kb": soak["end_kb"] ?? -1,
             "renderer_rows_as_expected_after_thrash": rendererKept, "thrash_cycles": 5,
-            "first_cycle_app_states": thrashStates, "thrash_left_foreground": leftForeground,
+            "first_cycle_stops": firstCycle, "thrash_left_foreground": leftForeground,
+            "unconfirmed_stops": unconfirmed,
         ])
         XCTAssertTrue(flingOK, "CPU did not settle within 5 s after the fling: \(fling.samples)")
         XCTAssertTrue(thrashOK, "CPU did not settle within 5 s after the thrash: \(thrashSettle.samples)")
-        XCTAssertTrue(leftForeground, "a thrash stop did not background the app: \(thrashStates)")
+        XCTAssertTrue(leftForeground, "thrash stops the app's scene phases did not confirm: \(unconfirmed); "
+            + "first cycle: \(firstCycle)")
         XCTAssertTrue(rendererKept, "renderer rows changed across the thrash")
         XCTAssertLessThanOrEqual(growth, Self.maxGrowthKB, "settled memory grew \(growth) KB over the soak")
         XCTAssertLessThanOrEqual(cpuMean, 2.0, "idle CPU averaged \(cpuMean) % over the soak")
     }
 
+    /// The thrash stops, in cycle order.
+    private static let stops = ["home", "locked", "switcher", "back"]
+
     /// One cycle: Home and back, lock and unlock, app switcher and back.
-    /// With `evidence`, captures the screen and the app's state at each stop
-    /// (the lock is XCUIDevice's private `pressLockButton`).
-    @discardableResult
-    private func thrash(_ app: XCUIApplication, evidence arm: String?) -> [String: String] {
-        var states: [String: String] = [:]
+    /// Each stop is confirmed by the app's own scene phases once it is back
+    /// (`-scenePhaseProbe`; polled up to 5 s): Home and lock each add a
+    /// `background`; the switcher adds a `background` or an `inactive` (a
+    /// scene shown as a card in the switcher is deactivated, and need not be
+    /// backgrounded); `back` ends `active`. With `evidence`, also records at
+    /// each stop — while the app is away — `XCUIApplication.state` and
+    /// SpringBoard's state as a cross-check, plus a screenshot (the lock is
+    /// XCUIDevice's private `pressLockButton`).
+    private func thrash(_ app: XCUIApplication, evidence arm: String?)
+        -> (confirmed: [String: Bool], evidence: [String: String])
+    {
+        var confirmed: [String: Bool] = [:]
+        var evidence: [String: String] = [:]
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         func observe(_ stop: String) {
             guard let arm else { return }
-            states[stop] = Self.describe(app.state)
+            evidence[stop] = "app=\(Self.describe(app.state)) springboard=\(Self.describe(springboard.state))"
             let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
             attachment.name = "thrash-\(arm)-\(stop)"
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func confirm(_ stop: String, _ left: (ScenePhases) -> Bool) {
+            let phases = Self.waitForScenePhases(app, until: left)
+            confirmed[stop] = phases.map(left) ?? false
+            if arm != nil {
+                evidence[stop, default: ""] += " phases=\(phases?.label ?? "missing")"
+            }
+        }
+
+        // Each baseline is read once the app is active again, so a
+        // transition still arriving from the previous return cannot count
+        // for the next stop.
+        func settledBaseline() -> ScenePhases? {
+            Self.waitForScenePhases(app) { $0.last == "active" }
+        }
+        var before = settledBaseline()
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval: 1)
         observe("home")
         app.activate()
         _ = app.wait(for: .runningForeground, timeout: 10)
+        confirm("home") { [before] now in before.map { now.background > $0.background } ?? false }
 
+        before = settledBaseline()
         XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
         Thread.sleep(forTimeInterval: 1.5)
         observe("locked")
@@ -343,7 +376,9 @@ final class LifecycleUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         app.activate()
         _ = app.wait(for: .runningForeground, timeout: 10)
+        confirm("locked") { [before] now in before.map { now.background > $0.background } ?? false }
 
+        before = settledBaseline()
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.995))
         start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)),
                     withVelocity: .slow, thenHoldForDuration: 1.0)
@@ -351,9 +386,63 @@ final class LifecycleUITests: XCTestCase {
         observe("switcher")
         app.activate()
         _ = app.wait(for: .runningForeground, timeout: 10)
+        confirm("switcher") { [before] now in
+            before.map { now.background > $0.background || now.inactive > $0.inactive } ?? false
+        }
         Thread.sleep(forTimeInterval: 0.5)
         observe("back")
-        return states
+        confirm("back") { $0.last == "active" }
+        return (confirmed, evidence)
+    }
+
+    /// The `-scenePhaseProbe` overlay's counts
+    /// (`background=<n> inactive=<n> active=<n> last=<phase>`).
+    private struct ScenePhases {
+        var background: Int
+        var inactive: Int
+        var active: Int
+        var last: String
+        var label: String
+
+        init?(_ label: String) {
+            var fields: [String: String] = [:]
+            for pair in label.split(separator: " ") {
+                let parts = pair.split(separator: "=", maxSplits: 1)
+                if parts.count == 2 { fields[String(parts[0])] = String(parts[1]) }
+            }
+            guard let background = fields["background"].flatMap({ Int($0) }),
+                  let inactive = fields["inactive"].flatMap({ Int($0) }),
+                  let active = fields["active"].flatMap({ Int($0) }),
+                  let last = fields["last"] else { return nil }
+            self.background = background
+            self.inactive = inactive
+            self.active = active
+            self.last = last
+            self.label = label
+        }
+    }
+
+    /// The probe's current counts; `nil` when it is missing or unreadable
+    /// (the app is not in the foreground, or `-scenePhaseProbe` is absent).
+    private static func scenePhases(_ app: XCUIApplication) -> ScenePhases? {
+        let probe = app.staticTexts["scene-phase-probe"]
+        guard probe.exists else { return nil }
+        return ScenePhases(probe.label)
+    }
+
+    /// Polls the probe until `condition` holds or `timeout` passes; returns
+    /// the last reading.
+    private static func waitForScenePhases(_ app: XCUIApplication, timeout: TimeInterval = 5,
+                                           until condition: (ScenePhases) -> Bool) -> ScenePhases?
+    {
+        let deadline = Date().addingTimeInterval(timeout)
+        var phases: ScenePhases?
+        repeat {
+            phases = scenePhases(app)
+            if let phases, condition(phases) { break }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while Date() < deadline
+        return phases
     }
 
     private static func describe(_ state: XCUIApplication.State) -> String {

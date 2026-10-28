@@ -40,6 +40,9 @@ import UIKit
 ///   rebuild the rows TextKit 2 would swap as plain SwiftUI — the twenty-flip
 ///   memory control (see `RebuildControl`; lifecycle gate only). With any
 ///   `n`, 0 included, About This Build shows the control's row count.
+/// - `-scenePhaseProbe` shows the scene's own phase transitions in a small
+///   overlay (see `ScenePhaseProbe`; lifecycle gate only) — the thrash
+///   check's proof that Home, lock and the app switcher left the foreground.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -59,6 +62,7 @@ struct LaunchOptions: Sendable {
     var switchDuringLoad = false
     var memoryReliefHook = false
     var rebuildControlPicks: Int?
+    var scenePhaseProbe = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -96,6 +100,8 @@ struct LaunchOptions: Sendable {
             case "-rebuildControlPicks" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 rebuildControlPicks = max(Int(arguments[index]) ?? 0, 0)
+            case "-scenePhaseProbe":
+                scenePhaseProbe = true
             default:
                 break
             }
@@ -136,6 +142,11 @@ struct ADFReaderApp: App {
                     }
                 } else {
                     SpaceListView()
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if options.scenePhaseProbe {
+                    ScenePhaseProbe()
                 }
             }
         }
