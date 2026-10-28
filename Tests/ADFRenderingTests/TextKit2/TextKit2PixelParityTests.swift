@@ -126,7 +126,7 @@ struct TextKit2PixelParityTests {
     /// `knownDifference`: the per-row counts and differing pixels are a
     /// disclosed residual (recorded with `withKnownIssue`, so a fix fails
     /// the test); the first and last ink rows stay hard.
-    private func compare(_ fixture: TK2Parity.Fixture, env: TK2Parity.Environment, exactRowCounts: Bool = true, knownDifference: Comment? = nil) throws {
+    private func compare(_ fixture: TK2Parity.Fixture, env: TK2Parity.Environment, knownDifference: Comment? = nil) throws {
         let height = max(TK2Parity.height(fixture, arm: .swiftUI, env: env, width: Self.width) + 40, 200)
         let a = try TK2Parity.render(fixture, arm: .swiftUI, env: env, width: Self.width, height: height)
         let b = try TK2Parity.render(fixture, arm: .textKit2, env: env, width: Self.width, height: height)
@@ -141,9 +141,7 @@ struct TextKit2PixelParityTests {
         let diff = TK2Parity.differingFraction(a, b, rows: first...last)
         print("TK2 pixel parity \(label): ink rows \(first)...\(last), differing pixels \(diff.count)/\(diff.total) = \(String(format: "%.4f", diff.fraction * 100)) %")
         func pixels() {
-            if exactRowCounts {
-                #expect(pa.rowCounts == pb.rowCounts, "\(label): per-row ink counts differ\n\(TK2Parity.rowDifferences(pa, pb))")
-            }
+            #expect(pa.rowCounts == pb.rowCounts, "\(label): per-row ink counts differ\n\(TK2Parity.rowDifferences(pa, pb))")
             #expect(diff.fraction <= Self.maxDifferingFraction, "\(label): \(diff.count)/\(diff.total) pixels differ (\(diff.fraction * 100) %)")
         }
         if let knownDifference {
@@ -185,12 +183,12 @@ struct TextKit2PixelParityTests {
     @Test("a centred highlight renders identically", arguments: sizes, [false, true])
     func centredHighlightPixels(size: DynamicTypeSize, dark: Bool) async throws {
         let known: Comment? = Self.centredHighlightDiffers(scale: TK2Parity.nativeScale, size: size, dark: dark)
-            ? "Residual 6: SwiftUI's centred run backgrounds and glyphs sit a fraction of a pixel off the row's"
+            ? "Residual 5: SwiftUI's centred run backgrounds and glyphs sit a fraction of a pixel off the row's"
             : nil
         try compare(try await Self.centredHighlight(), env: TK2Parity.Environment(size: size, dark: dark), knownDifference: known)
     }
 
-    /// The cases residual 6 (docs §6.4) measurably fails, per scale and OS
+    /// The cases residual 5 (docs §6.4) measurably fails, per scale and OS
     /// (iOS 26.3 at 3x and 2x; iOS 18.5 at 3x, where only xxxLarge
     /// differs); every other one must pass.
     nonisolated static func centredHighlightDiffers(scale: CGFloat, size: DynamicTypeSize, dark: Bool) -> Bool {
@@ -227,10 +225,7 @@ struct TextKit2PixelParityTests {
     func subsupLinePixels(size: DynamicTypeSize, dark: Bool) async throws {
         let env = TK2Parity.Environment(size: size, dark: dark)
         for fixture in try await TextKit2HeightParityTests.subsupLineFixtures() {
-            // Residual: a highlighted sub/superscript run's band starts and
-            // ends a fraction of a pixel off `Text`'s (one antialiased
-            // column, ≤ 0.04 % of pixels); its rows are exact.
-            try compare(fixture, env: env, exactRowCounts: !fixture.name.hasSuffix("-highlight"))
+            try compare(fixture, env: env)
         }
     }
 

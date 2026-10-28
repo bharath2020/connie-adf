@@ -16,7 +16,7 @@ struct TextKit2LayoutResult: Equatable {
         /// by their fonts, as `Text` counts them (`glyphMetrics`).
         var ascent: CGFloat
         var descent: CGFloat
-        /// The run backgrounds' band (`drawRunBackgrounds`): the tallest
+        /// The run backgrounds' band (`RunBackgrounds`): the tallest
         /// ascent with baseline offsets applied as CoreText applies them (a
         /// subscript lowers it), and the baseline offset every run on the
         /// line shares (0 when they differ).
@@ -596,7 +596,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         if let first = drawn?.lines.first {
             context.translateBy(x: 0, y: Self.pixelRound(first.baseline, scale: scale) - first.baseline)
         }
-        drawRunBackgrounds(in: context, scale: scale)
+        let backgrounds = RunBackgrounds(self, scale: scale)
         let offsets = drawn?.lines.map(\.offset) ?? []
         var index = 0
         var fragments = 0
@@ -604,10 +604,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             let origin = fragment.layoutFragmentFrame.origin
             let lines = fragment.textLineFragments
             let moved = offsets[min(index, offsets.count)..<min(index + lines.count, offsets.count)].contains { $0 != 0 }
-            if moved {
+            if moved || backgrounds != nil {
                 // Lines below a superscript line sit lower than TextKit
-                // placed them (`settleSuperscriptLines`).
-                for (line, offset) in zip(lines, offsets[index...]) {
+                // placed them (`settleSuperscriptLines`); a line's run
+                // backgrounds go over the line above's glyphs, as `Text`
+                // paints them (a raised band covers a descender above it).
+                for (offsetIndex, line) in zip(index..., lines) {
+                    backgrounds?.draw(line: offsetIndex, in: context)
+                    let offset = offsetIndex < offsets.count ? offsets[offsetIndex] : 0
                     let at = line.typographicBounds.origin
                     line.draw(at: CGPoint(x: origin.x + at.x, y: origin.y + at.y + offset), in: context)
                 }
@@ -665,24 +669,47 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// down (`pixelColumns`), a band over a whole line with the line's own
     /// fractional edges (antialiased; measured at 3x and 2x on code,
     /// highlight, sub/superscript and centred bands);
-    /// clipped to the row's bounds. Coordinates here already
-    /// carry the first-baseline snap.
-    private func drawRunBackgrounds(in context: CGContext, scale: CGFloat) {
-        var fills: [(range: NSRange, color: UIColor, offset: CGFloat)] = []
-        attributed.enumerateAttribute(.adfRunBackground, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
-            guard let color = value as? UIColor else { return }
-            attributed.enumerateAttribute(.baselineOffset, in: range) { offset, run, _ in
-                fills.append((run, color, (offset as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0))
+    /// clipped to the row's bounds; each line's bands painted just before
+    /// its glyphs, so over the glyphs of the lines above. Coordinates here
+    /// already carry the first-baseline snap.
+    private struct RunBackgrounds {
+        let row: TextKit2RowView
+        let result: TextKit2LayoutResult
+        let fills: [(range: NSRange, color: UIColor, offset: CGFloat)]
+        let scale: CGFloat
+        // The context is translated by `drawnShift` and the first-baseline
+        // snap; the row's edges in these coordinates.
+        let clipRight: CGFloat
+        let clipTop: CGFloat
+        let clipBottom: CGFloat
+
+        /// Nil when the text has no run background.
+        @MainActor
+        init?(_ row: TextKit2RowView, scale: CGFloat) {
+            var fills: [(range: NSRange, color: UIColor, offset: CGFloat)] = []
+            let attributed = row.attributed
+            attributed.enumerateAttribute(.adfRunBackground, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
+                guard let color = value as? UIColor else { return }
+                attributed.enumerateAttribute(.baselineOffset, in: range) { offset, run, _ in
+                    fills.append((run, color, (offset as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0))
+                }
             }
+            guard !fills.isEmpty, let result = row.drawn, let first = result.lines.first else { return nil }
+            let shift = TextKit2RowView.pixelRound(first.baseline, scale: scale) - first.baseline
+            self.row = row
+            self.result = result
+            self.fills = fills
+            self.scale = scale
+            clipRight = row.bounds.width - row.drawnShift
+            clipTop = -shift
+            clipBottom = result.size.height - shift
         }
-        guard !fills.isEmpty, let result = drawn, let first = result.lines.first else { return }
-        let shift = Self.pixelRound(first.baseline, scale: scale) - first.baseline
-        // The context is translated by `drawnShift` and `shift`; the row's
-        // edges in these coordinates.
-        let clipRight = bounds.width - drawnShift
-        let clipTop = -shift
-        let clipBottom = result.size.height - shift
-        for line in result.lines {
+
+        /// The bands on line `index`.
+        @MainActor
+        func draw(line index: Int, in context: CGContext) {
+            guard index < result.lines.count else { return }
+            let line = result.lines[index]
             for fill in fills {
                 let overlap = NSIntersectionRange(fill.range, line.range)
                 guard overlap.length > 0 else { continue }
@@ -694,12 +721,12 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
                 // are; one over part of it gets hard side edges.
                 let wholeLine = overlap.location == line.range.location && NSMaxRange(overlap) == NSMaxRange(line.range)
                 // The overlap lies on this line, so its segments do too.
-                for rect in containerSegmentRects(for: overlap) {
+                for rect in row.containerSegmentRects(for: overlap) {
                     let right = min(rect.maxX, clipRight)
                     guard right > rect.minX else { continue }
                     let band = CGRect(x: rect.minX, y: top, width: right - rect.minX, height: bottom - top)
                     context.setFillColor(fill.color.cgColor)
-                    context.fill(wholeLine ? band : pixelColumns(band, scale: scale))
+                    context.fill(wholeLine ? band : row.pixelColumns(band, scale: scale))
                 }
             }
         }
