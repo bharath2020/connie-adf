@@ -8,8 +8,9 @@ import ADFPreparation
 /// Two text engines share this leaf. The SwiftUI arm is the shipping path.
 /// When the environment selects `.textKit2` AND the content is eligible
 /// (`TextKit2Eligibility`: no inline atom, every run with a font
-/// spec) AND no inherited styling the row cannot reproduce is set
-/// (`TextKit2Leaf`), a UIKit-hosted TextKit 2 row draws it instead — plain
+/// spec) AND no inherited styling the row cannot reproduce is set AND the
+/// active search has no highlight for it (`TextKit2Leaf`), a UIKit-hosted
+/// TextKit 2 row draws it instead — plain
 /// `if`/`else` at the leaf (never `AnyView`, never `#available`: §18's
 /// per-row erasure lesson). Without UIKit the SwiftUI arm always runs.
 struct RichTextBlockView: View {
