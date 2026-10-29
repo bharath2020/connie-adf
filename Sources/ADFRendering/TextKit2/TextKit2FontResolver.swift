@@ -1,0 +1,121 @@
+#if canImport(UIKit)
+import SwiftUI
+import UIKit
+import ADFPreparation
+
+/// Resolves a prepared `ADFFontSpec` to the `UIFont` SwiftUI would use for
+/// the same semantic `Font` at a given content size category.
+///
+/// Fonts come from the text style's *preferred* descriptor
+/// (`UIFontDescriptor.preferredFontDescriptor(withTextStyle:compatibleWith:)`), then symbolic
+/// traits (bold / italic) and the monospaced design are layered on that
+/// descriptor. That is what keeps the style's line metrics — ascent,
+/// descent, leading — identical to SwiftUI's: a font created from a point
+/// size (`UIFont.monospacedSystemFont(ofSize:…)`, `UIFontMetrics.scaledFont`)
+/// carries the face's native metrics instead and changes the line pitch.
+@MainActor
+enum TextKit2FontResolver {
+    private struct Key: Hashable {
+        let spec: ADFFontSpec
+        let category: UIContentSizeCategory
+        let legibilityWeight: LegibilityWeight?
+    }
+
+    private static var cache: [Key: UIFont] = [:]
+
+    /// The platform font for `spec` at `category` (and the Bold Text
+    /// accessibility setting, `legibilityWeight == .bold`, which makes
+    /// SwiftUI's semantic fonts heavier). Memoized: the same inputs always
+    /// return the same `UIFont` instance.
+    static func font(for spec: ADFFontSpec, category: UIContentSizeCategory, legibilityWeight: LegibilityWeight? = nil) -> UIFont {
+        let key = Key(spec: spec, category: category, legibilityWeight: legibilityWeight)
+        if let cached = cache[key] { return cached }
+        let font = resolve(key)
+        cache[key] = font
+        return font
+    }
+
+    private static func resolve(_ key: Key) -> UIFont {
+        // Measured against SwiftUI's `Text` widths: with the Bold Text
+        // setting the preferred descriptor resolves body → semibold,
+        // headline → heavy, title1 + bold → bold, monospaced → mono
+        // semibold, italic → regular italic, exactly as SwiftUI's semantic
+        // fonts do. Two traps, both measured: the descriptor of
+        // `preferredFont(…)` drops the weight, and so does reading
+        // `symbolicTraits` from the preferred descriptor before the font is
+        // created (it resolves and caches the regular face) — hence only the
+        // spec's own traits are applied, never a read-modify-write.
+        let traits = traitCollection(category: key.category, legibilityWeight: key.legibilityWeight)
+        let spec = key.spec
+        var descriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: uiTextStyle(spec.textStyle), compatibleWith: traits)
+        if spec.monospaced, let mono = descriptor.withDesign(.monospaced) {
+            descriptor = mono
+        }
+        var symbolic: UIFontDescriptor.SymbolicTraits = []
+        if spec.bold { symbolic.insert(.traitBold) }
+        if spec.italic { symbolic.insert(.traitItalic) }
+        if !symbolic.isEmpty {
+            let traited = descriptor.withSymbolicTraits(symbolic)
+            assert(traited != nil, "no \(symbolic) face for \(spec); TextKit 2 would draw the untraited face")
+            descriptor = traited ?? descriptor
+        }
+        // Size 0 keeps the descriptor's (text-style) point size.
+        return UIFont(descriptor: descriptor, size: 0)
+    }
+
+    /// The traits the preferred descriptor resolves against. The
+    /// environment's legibility weight is set either way: left unspecified,
+    /// the descriptor follows the system Bold Text setting, while `Text`
+    /// follows the environment (a host's `.regular` override draws regular).
+    static func traitCollection(category: UIContentSizeCategory, legibilityWeight: LegibilityWeight?) -> UITraitCollection {
+        UITraitCollection(preferredContentSizeCategory: category).modifyingTraits { traits in
+            switch legibilityWeight {
+            case .bold: traits.legibilityWeight = .bold
+            case .regular: traits.legibilityWeight = .regular
+            default: break
+            }
+        }
+    }
+
+    static func uiTextStyle(_ style: ADFFontSpec.TextStyle) -> UIFont.TextStyle {
+        switch style {
+        case .largeTitle: return .largeTitle
+        case .title: return .title1
+        case .title2: return .title2
+        case .title3: return .title3
+        case .headline: return .headline
+        case .subheadline: return .subheadline
+        case .body: return .body
+        case .callout: return .callout
+        case .footnote: return .footnote
+        case .caption: return .caption1
+        case .caption2: return .caption2
+        }
+    }
+}
+
+extension DynamicTypeSize {
+    /// The UIKit content size category this SwiftUI size stands for —
+    /// exhaustive, so the TextKit arm resolves fonts at exactly the size the
+    /// `dynamicTypeSize` environment gives SwiftUI's `Text`.
+    var uiContentSizeCategory: UIContentSizeCategory {
+        switch self {
+        case .xSmall: return .extraSmall
+        case .small: return .small
+        case .medium: return .medium
+        case .large: return .large
+        case .xLarge: return .extraLarge
+        case .xxLarge: return .extraExtraLarge
+        case .xxxLarge: return .extraExtraExtraLarge
+        case .accessibility1: return .accessibilityMedium
+        case .accessibility2: return .accessibilityLarge
+        case .accessibility3: return .accessibilityExtraLarge
+        case .accessibility4: return .accessibilityExtraExtraLarge
+        case .accessibility5: return .accessibilityExtraExtraExtraLarge
+        // Clamp a future rung to the ladder top (see
+        // `approximateBodyPointSize`): the nearest size that exists.
+        @unknown default: return .accessibilityExtraExtraExtraLarge
+        }
+    }
+}
+#endif

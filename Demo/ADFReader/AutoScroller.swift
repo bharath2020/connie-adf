@@ -10,6 +10,13 @@ import ADFRendering
 /// at ~1,200 pt/s while `FrameMetrics` counts frames. Prints exactly one
 /// `SCROLL_METRICS …` line, then exits 2s later.
 ///
+/// The line keeps main's fields first (`fixture= frames= dropped=
+/// hitchRatioMsPerS=`) and appends the scroll's extent so a perf run can
+/// tell a finished scroll from a cut-short one: `startRow=` and `endRow=`
+/// (block indices the scroll started at and reached), `scrollMs=` (wall
+/// time of the scroll legs) and `completed=1` when `endRow` is the last
+/// block, else `0`.
+///
 /// The library's scroll hook is block-ID anchored, so pacing needs block
 /// heights. Each block's rendered height is estimated from its prepared
 /// content (text length at the reader's column width, code line counts,
@@ -28,7 +35,12 @@ enum AutoScroller {
     /// springy per-leg animations add velocity bursts; short linear legs
     /// approximate a user's constant-velocity fling.)
 
-    static func run(model: ADFDocumentModel, metrics: FrameMetrics, fixtureName: String) async {
+    static func run(
+        model: ADFDocumentModel,
+        metrics: FrameMetrics,
+        fixtureName: String,
+        rendererStats: Bool
+    ) async {
         try? await Task.sleep(for: .seconds(3))
         metrics.recordsDrops = true
         metrics.start()
@@ -44,7 +56,9 @@ enum AutoScroller {
             total += BlockHeightEstimator.estimatedHeight(of: block)
         }
 
-        var index = 0
+        let scrollStart = ContinuousClock.now
+        let startRow = 0
+        var index = startRow
         while index < blocks.count - 1 {
             let next = index + 1
             let distance = max(offsets[next] - offsets[index], 1)
@@ -54,6 +68,12 @@ enum AutoScroller {
             try? await Task.sleep(for: .seconds(duration))
             index = next
         }
+        let scrollElapsed = scrollStart.duration(to: ContinuousClock.now)
+        let scrollMilliseconds = Int(
+            (Double(scrollElapsed.components.seconds) * 1_000
+                + Double(scrollElapsed.components.attoseconds) / 1e15).rounded()
+        )
+        let completed = !blocks.isEmpty && index == blocks.count - 1
         // Let the final leg's animation settle before sampling.
         try? await Task.sleep(for: .milliseconds(500))
 
@@ -67,9 +87,14 @@ enum AutoScroller {
         print(
             "SCROLL_METRICS fixture=\(fixtureName) frames=\(snapshot.totalFrames) "
                 + "dropped=\(snapshot.droppedFrames) "
-                + "hitchRatioMsPerS=\(String(format: "%.2f", hitchRatio))"
+                + "hitchRatioMsPerS=\(String(format: "%.2f", hitchRatio)) "
+                + "startRow=\(startRow) endRow=\(index) scrollMs=\(scrollMilliseconds) "
+                + "completed=\(completed ? 1 : 0)"
         )
         fflush(stdout)
+        if rendererStats {
+            RendererStats.print(blocks: blocks)
+        }
         try? await Task.sleep(for: .seconds(2))
         exit(0)
     }

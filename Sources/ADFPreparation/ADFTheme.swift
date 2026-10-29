@@ -6,10 +6,27 @@ import ADFModel
 /// palettes. Injected into `InlineComposer` / `DocumentPreparer` so every
 /// `AttributedString` is built once, off-main, already styled.
 public struct ADFTheme: Sendable, Hashable {
-    /// Base font for body text.
-    public var body: Font
-    /// Monospaced font for inline code and code blocks.
-    public var code: Font
+    /// Base font for body text. Assigning a raw `Font` here marks the body
+    /// as undescribable (`bodyFontSpec` becomes `nil`): a `Font` cannot be
+    /// introspected, so a non-SwiftUI text engine can no longer resolve the
+    /// same platform font and those blocks stay on SwiftUI. Prefer setting
+    /// `bodyFontSpec`, which derives this font.
+    public var body: Font {
+        get { storedBody }
+        set {
+            storedBody = newValue
+            storedBodyFontSpec = nil
+        }
+    }
+    /// Monospaced font for inline code and code blocks (see `body` for how
+    /// assigning a raw `Font` interacts with `codeFontSpec`).
+    public var code: Font {
+        get { storedCode }
+        set {
+            storedCode = newValue
+            storedCodeFontSpec = nil
+        }
+    }
     /// Base spacing unit in points.
     public var spacing: CGFloat
     /// Point size backing `body`. Used to derive metrics that need numbers
@@ -32,10 +49,39 @@ public struct ADFTheme: Sendable, Hashable {
     /// Foreground forced over `searchCurrentHighlight` so the current match
     /// stays legible in both schemes. `nil` keeps the run's own foreground.
     public var searchCurrentForeground: Color?
+    /// Semantic description of `body` — the source of truth when present.
+    /// Setting a spec derives `body` from it, so the two never disagree;
+    /// `nil` means the body font is a raw `Font` no other engine can
+    /// reproduce. Baked on every unmarked body run.
+    public var bodyFontSpec: ADFFontSpec? {
+        get { storedBodyFontSpec }
+        set {
+            storedBodyFontSpec = newValue
+            if let newValue { storedBody = Font(adfFontSpec: newValue) }
+        }
+    }
+    /// Semantic description of `code` (see `bodyFontSpec`).
+    public var codeFontSpec: ADFFontSpec? {
+        get { storedCodeFontSpec }
+        set {
+            storedCodeFontSpec = newValue
+            if let newValue { storedCode = Font(adfFontSpec: newValue) }
+        }
+    }
 
+    private var storedBody: Font
+    private var storedCode: Font
+    private var storedBodyFontSpec: ADFFontSpec?
+    private var storedCodeFontSpec: ADFFontSpec?
+
+    /// Spec-first construction: pass `bodyFontSpec` / `codeFontSpec` (or
+    /// nothing, for the system text styles) and the SwiftUI fonts are
+    /// derived from them. Passing a raw `body` / `code` font without its
+    /// spec keeps that font for SwiftUI and marks it undescribable; passing
+    /// both asserts they describe the same face.
     public init(
-        body: Font = .body,
-        code: Font = .system(.body, design: .monospaced),
+        body: Font? = nil,
+        code: Font? = nil,
         spacing: CGFloat = 8,
         bodyPointSize: CGFloat = 17,
         chipCornerRadius: CGFloat = 6,
@@ -43,10 +89,16 @@ public struct ADFTheme: Sendable, Hashable {
         cardCornerRadius: CGFloat = 10,
         searchHighlight: Color = .yellow.opacity(0.3),
         searchCurrentHighlight: Color = Color(red: 1.0, green: 0.78, blue: 0.16),
-        searchCurrentForeground: Color? = .black
+        searchCurrentForeground: Color? = .black,
+        bodyFontSpec: ADFFontSpec? = nil,
+        codeFontSpec: ADFFontSpec? = nil
     ) {
-        self.body = body
-        self.code = code
+        let resolvedBodySpec = body == nil ? (bodyFontSpec ?? ADFFontSpec(textStyle: .body)) : bodyFontSpec
+        let resolvedCodeSpec = code == nil ? (codeFontSpec ?? ADFFontSpec(textStyle: .body, monospaced: true)) : codeFontSpec
+        self.storedBody = body ?? Font(adfFontSpec: resolvedBodySpec!)
+        self.storedCode = code ?? Font(adfFontSpec: resolvedCodeSpec!)
+        self.storedBodyFontSpec = resolvedBodySpec
+        self.storedCodeFontSpec = resolvedCodeSpec
         self.spacing = spacing
         self.bodyPointSize = bodyPointSize
         self.chipCornerRadius = chipCornerRadius
@@ -59,15 +111,22 @@ public struct ADFTheme: Sendable, Hashable {
 
     public static let `default` = ADFTheme()
 
-    /// Font for a heading of the given level (clamped to `1...6`).
+    /// Font for a heading of the given level (clamped to `1...6`), derived
+    /// from `headingFontSpec(_:)` so the two can never disagree.
     public func headingFont(_ level: Int) -> Font {
+        Font(adfFontSpec: headingFontSpec(level))
+    }
+
+    /// Semantic spec of a heading level: the text style plus the bold trait
+    /// (`.headline` is semibold by itself, so H4 carries no extra bold).
+    public func headingFontSpec(_ level: Int) -> ADFFontSpec {
         switch min(max(level, 1), 6) {
-        case 1: return .title.bold()
-        case 2: return .title2.bold()
-        case 3: return .title3.bold()
-        case 4: return .headline
-        case 5: return .subheadline.bold()
-        default: return .footnote.bold()
+        case 1: return ADFFontSpec(textStyle: .title, bold: true)
+        case 2: return ADFFontSpec(textStyle: .title2, bold: true)
+        case 3: return ADFFontSpec(textStyle: .title3, bold: true)
+        case 4: return ADFFontSpec(textStyle: .headline)
+        case 5: return ADFFontSpec(textStyle: .subheadline, bold: true)
+        default: return ADFFontSpec(textStyle: .footnote, bold: true)
         }
     }
 
@@ -75,7 +134,12 @@ public struct ADFTheme: Sendable, Hashable {
     /// point size) so the run scales with Dynamic Type alongside body text —
     /// `.subheadline` is ~0.88× body, matching the intended "slightly smaller".
     var smallFont: Font {
-        .subheadline
+        Font(adfFontSpec: smallFontSpec)
+    }
+
+    /// Semantic spec of `smallFont`.
+    var smallFontSpec: ADFFontSpec {
+        ADFFontSpec(textStyle: .subheadline)
     }
 
     /// Font for sub/superscript runs. `.footnote` (~0.76× body) as a semantic
@@ -83,6 +147,11 @@ public struct ADFTheme: Sendable, Hashable {
     /// while the surrounding body text grew.
     func subsupFont(monospaced: Bool) -> Font {
         .system(.footnote, design: monospaced ? .monospaced : .default)
+    }
+
+    /// Semantic spec of `subsupFont(monospaced:)`.
+    func subsupFontSpec(monospaced: Bool) -> ADFFontSpec {
+        ADFFontSpec(textStyle: .footnote, monospaced: monospaced)
     }
 
     /// Baseline shift for sub/superscript runs at the default text size

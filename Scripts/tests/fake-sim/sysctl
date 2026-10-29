@@ -1,0 +1,17 @@
+#!/bin/sh
+# Fake `sysctl -n vm.loadavg` for Scripts/tests/perf-gate-scenarios.sh:
+# reports $FAKE_LOAD (default 1.50) as the 1-min load. With $FAKE_LOAD_SEQ
+# (a file, one load per line) each call takes the next line and the last
+# one sticks. Anything else goes to the real sysctl.
+if [ "$1" = "-n" ] && [ "$2" = "vm.loadavg" ]; then
+    load="${FAKE_LOAD:-1.50}"
+    if [ -n "${FAKE_LOAD_SEQ:-}" ] && [ -s "$FAKE_LOAD_SEQ" ]; then
+        load=$(head -n 1 "$FAKE_LOAD_SEQ")
+        if [ "$(wc -l < "$FAKE_LOAD_SEQ")" -gt 1 ]; then
+            tail -n +2 "$FAKE_LOAD_SEQ" > "$FAKE_LOAD_SEQ.next" && mv "$FAKE_LOAD_SEQ.next" "$FAKE_LOAD_SEQ"
+        fi
+    fi
+    echo "{ $load 1.40 1.30 }"
+    exit 0
+fi
+exec /usr/sbin/sysctl "$@"

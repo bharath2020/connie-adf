@@ -101,7 +101,7 @@ struct BlockPreparer: Sendable {
             return [RenderBlock(
                 id: node.id,
                 kind: .richText(
-                    segments: composer.compose(content, baseFont: font),
+                    segments: composer.compose(content, baseFont: font, baseFontSpec: theme.headingFontSpec(level)),
                     style: textStyle(font: font, isHeading: true, level: level, marks: marks)
                 ),
                 breakout: blockBreakout(of: marks)

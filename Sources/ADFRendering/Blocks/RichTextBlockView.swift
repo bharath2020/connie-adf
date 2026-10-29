@@ -4,21 +4,48 @@ import ADFPreparation
 
 /// Paragraphs and headings: pre-composed inline segments plus block-level
 /// styling (alignment / indentation / breakout marks, heading semantics).
+///
+/// Two text engines share this leaf. The SwiftUI arm is the shipping path.
+/// When the environment selects `.textKit2` AND the content is eligible
+/// (`TextKit2Eligibility`: no inline atom, every run with a font
+/// spec) AND no inherited styling the row cannot reproduce is set AND the
+/// active search has no highlight for it (`TextKit2Leaf`), a UIKit-hosted
+/// TextKit 2 row draws it instead — plain
+/// `if`/`else` at the leaf (never `AnyView`, never `#available`: §18's
+/// per-row erasure lesson). Without UIKit the SwiftUI arm always runs.
 struct RichTextBlockView: View {
     let segments: [InlineSegment]
     let style: TextBlockStyle
     var ownerID: String? = nil
 
     @Environment(\.adfTheme) private var theme
+    @Environment(\.adfTextRenderer) private var renderer
 
     var body: some View {
-        SegmentedTextView(segments: segments, ownerID: ownerID)
-            .multilineTextAlignment(textAlignment)
-            .textSelection(.enabled)
+        content
             .padding(.leading, indentationPadding)
             .frame(maxWidth: .infinity, alignment: frameAlignment)
             .accessibilityAddTraits(style.isHeading ? .isHeader : [])
             .accessibilityHeading(accessibilityHeadingLevel)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        #if canImport(UIKit)
+        if renderer == .textKit2, let text = TextKit2Eligibility.describableText(segments) {
+            TextKit2Leaf(text: text, style: style, ownerID: ownerID) { swiftUIText }
+        } else {
+            swiftUIText
+        }
+        #else
+        swiftUIText
+        #endif
+    }
+
+    private var swiftUIText: some View {
+        SegmentedTextView(segments: segments, ownerID: ownerID)
+            .multilineTextAlignment(textAlignment)
+            .textSelection(.enabled)
     }
 
     private var textAlignment: TextAlignment {

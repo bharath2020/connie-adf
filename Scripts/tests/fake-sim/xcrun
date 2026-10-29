@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Fake `xcrun simctl` for exercising Scripts/perf-gate.sh without a simulator
+(Scripts/tests/perf-gate-scenarios.sh puts this directory first on PATH).
+
+State lives in $FAKE_SIM_ROOT: one fake device, udid $FAKE_UDID. The
+installed "app" is a shell script; `launch` prints the demo app's READY /
+RENDERER_STATS / SCROLL_METRICS lines for the arm it infers from the flags
+(-textkit2 -> C, -rendererStats -> B, else A).
+
+FAKE_SCENARIO  normal | c_slow | c_crash | a_timeout | c_timeout | b_wrong_renderer
+FAKE_OTHER_BOOTED  if set, a second device is reported Booted
+"""
+import json
+import os
+import random
+import shutil
+import subprocess
+import sys
+import time
+
+root = os.environ["FAKE_SIM_ROOT"]
+udid = os.environ.get("FAKE_UDID", "FAKE-UDID-0001")
+scenario = os.environ.get("FAKE_SCENARIO", "normal")
+os.makedirs(root, exist_ok=True)
+state_file = os.path.join(root, "state")
+container = os.path.join(root, "Devices", udid, "data", "Containers", "Bundle", "Application", "X", "ADFReader.app")
+BLOCKS = {"kitchen-sink": 38, "stress-1k": 1000, "stress-5k": 5000, "giant-table": 402}
+ELIGIBLE = {"kitchen-sink": 10, "stress-1k": 480, "stress-5k": 2400, "giant-table": 1}
+
+
+def state():
+    return open(state_file).read().strip() if os.path.exists(state_file) else "Shutdown"
+
+
+args = sys.argv[1:]
+with open(os.path.join(root, "calls.log"), "a") as fh:
+    fh.write(" ".join(args) + "\n")
+if not args or args[0] != "simctl":
+    sys.exit(f"fake xcrun: unsupported {args}")
+cmd, rest = args[1], args[2:]
+
+if cmd == "list":
+    devs = [{"udid": udid, "name": "Fake iPhone", "state": state(), "isAvailable": True}]
+    if os.environ.get("FAKE_OTHER_BOOTED"):
+        devs.append({"udid": "OTHER-UDID", "name": "Other", "state": "Booted", "isAvailable": True})
+    print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-3": devs}}))
+elif cmd == "boot":
+    open(state_file, "w").write("Booted")
+elif cmd == "shutdown":
+    open(state_file, "w").write("Shutdown")
+elif cmd in ("bootstatus", "ui", "status_bar"):
+    pass
+elif cmd == "terminate":
+    subprocess.run(["pkill", "-f", f"Devices/{udid}/.*/ADFReader.app/ADFReader"], capture_output=True)
+elif cmd == "uninstall":
+    shutil.rmtree(os.path.dirname(container), ignore_errors=True)
+elif cmd == "install":
+    shutil.rmtree(os.path.dirname(container), ignore_errors=True)
+    os.makedirs(os.path.dirname(container), exist_ok=True)
+    shutil.copytree(rest[1], container)
+elif cmd == "get_app_container":
+    if not os.path.isdir(container):
+        sys.exit(2)
+    print(container)
+elif cmd == "launch":
+    assert rest[0] == "--console-pty"
+    app_args = rest[3:]
+    arm = "C" if "-textkit2" in app_args else ("B" if "-rendererStats" in app_args else "A")
+    fixture = app_args[app_args.index("-fixture") + 1]
+    counter = os.path.join(root, "counter")
+    n = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
+    open(counter, "w").write(str(n))
+    rng = random.Random(n * 7919)
+    proc = subprocess.Popen(["/bin/sh", os.path.join(container, "ADFReader"), "30"])
+    print(f"com.connie.adfreader: {proc.pid}", flush=True)
+    blocks = BLOCKS.get(fixture, 100)
+    eligible = ELIGIBLE.get(fixture, 1)
+    hang = (scenario == "a_timeout" and arm == "A") or (scenario == "c_timeout" and arm == "C")
+    time.sleep(1.0 + rng.random() * 0.02)  # long enough that host jitter stays far below 15 %
+    print(f"READY fixture={fixture} blocks={blocks} firstChunkMs={12 + rng.randint(0, 1)}", flush=True)
+
+    def stats(final: bool) -> str:
+        renderer = "textkit2" if arm == "C" else "swiftui"
+        if scenario == "b_wrong_renderer" and arm == "B" and not final:
+            renderer = "textkit2"
+        c = arm == "C"
+        return (f"RENDERER_STATS renderer={renderer} tk2Live={(3 if final else 9) if c else 0} "
+                f"tk2Layouts={eligible + 1 if c else 0} tk2Draws={eligible + 3 if c and final else 0} "
+                f"tk2NativeDraws={eligible + 2 if c and final else 0} tk1BackedRows={1 if c else 0} "
+                f"tk1BackedDraws={1 if c and final else 0} eligibleRoots={eligible} fallbackRoots={blocks - eligible} "
+                f"textFallbackRoots=2 linkRoots=1")
+
+    if arm in ("B", "C"):
+        print(stats(False), flush=True)
+    if hang:
+        time.sleep(3600)
+    time.sleep(0.6)
+    if scenario == "c_crash" and arm == "C" and n % 4 == 0:
+        proc.kill()
+        print("fake crash", flush=True)
+        sys.exit(1)
+    dropped = 0
+    if scenario == "c_slow" and arm == "C":
+        dropped += 40
+    line = f"SCROLL_METRICS fixture={fixture} frames=600 dropped={dropped} hitchRatioMsPerS={dropped * 0.5:.2f}"
+    if arm in ("B", "C"):
+        line += f" startRow=0 endRow={blocks - 1} scrollMs=500 completed=1"
+    print(line, flush=True)
+    if arm in ("B", "C"):
+        print(stats(True), flush=True)
+    time.sleep(0.4)
+    proc.kill()
+    proc.wait()
+    sys.exit(0)
+else:
+    sys.exit(f"fake simctl: unsupported {cmd}")

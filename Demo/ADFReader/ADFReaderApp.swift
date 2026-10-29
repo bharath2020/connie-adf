@@ -5,19 +5,50 @@ import UIKit
 /// - `-fixture <name>` opens that fixture's reader directly on launch
 ///   (name without the `.json` extension).
 /// - `-scrollToFraction <f>` scrolls, once the document is ready, to the
-///   block at fraction `f` of `model.blocks`.
-/// - `-autoscroll` waits 1s after ready, animates through the entire
+///   block at fraction `f` of `model.blocks` (animated, then re-jumped
+///   without animation ~1.5 s after ready so the landing is exact).
+/// - `-autoscroll` waits 3s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
-///   `SCROLL_METRICS …` line, then exits after 2s.
+///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
+///   scrollMs= completed=`), then exits after 2s.
 /// - `-searchQuery <text>` runs a settled find-in-page query after loading.
 /// - `-searchUpdates <n>` measures `n` replacements while that query is active.
 /// - `-fontSizeStep <n>` opens the reader with the text-size control at
 ///   step `n` (ladder steps relative to the system size), bypassing the
 ///   persisted per-document value — so perf gates can run at large sizes.
+/// - `-textkit2` starts this launch on TextKit 2, whatever a previous run
+///   persisted: it writes the renderer choice (`adf.textkit2.enabled`)
+///   before the first view reads it, marked as automation's, and the next
+///   launch without the flag removes it again, so that launch starts on
+///   SwiftUI. The toolbar switch still works (and persists, as it always
+///   does).
+/// - `-rendererReset` removes that key first, so a UI test always starts on
+///   SwiftUI regardless of what a previous run left behind. With both flags
+///   the reset applies first, then `-textkit2`.
+/// - `-rendererStats` prints one `RENDERER_STATS …` line (active renderer,
+///   live/cumulative TextKit 2 row counters, eligible/fallback roots) right
+///   after READY and again right after `SCROLL_METRICS` — the perf gate's
+///   proof of which engine drew (see `RendererStats`).
+/// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
+///   streamed chunk arrives (the document is still loading) the way the
+///   toolbar does, marked as automation's like `-textkit2` (the next launch
+///   without a flag starts on SwiftUI); prints
+///   `SWITCH_DURING_LOAD blocks=<n>` and shows `<n>` in About This Build —
+///   the lifecycle gate's "switch during a streaming load" check.
+/// - `-memoryReliefHook` installs `MemoryReliefHook` (lifecycle gate only).
+/// - `-rebuildControlPicks <n>`: the first `n` menu picks of TextKit 2
+///   rebuild the rows TextKit 2 would swap as plain SwiftUI — the twenty-flip
+///   memory control (see `RebuildControl`; lifecycle gate only). With any
+///   `n`, 0 included, About This Build shows the control's row count.
+/// - `-scenePhaseProbe` shows the scene's own phase transitions in a small
+///   overlay (see `ScenePhaseProbe`; lifecycle gate only) — the thrash
+///   check's proof that Home, lock and the app switcher left the foreground.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
-/// portrait/landscape without the Simulator UI.
+/// portrait/landscape without the Simulator UI, and
+/// `com.connie.adfreader.rejump` (see `RejumpHook`) re-lands on the
+/// `-scrollToFraction` block without animation.
 struct LaunchOptions: Sendable {
     var fixtureName: String?
     var scrollToFraction: Double?
@@ -25,6 +56,13 @@ struct LaunchOptions: Sendable {
     var searchQuery: String?
     var searchUpdates = 0
     var fontSizeStep: Int?
+    var textKit2 = false
+    var rendererReset = false
+    var rendererStats = false
+    var switchDuringLoad = false
+    var memoryReliefHook = false
+    var rebuildControlPicks: Int?
+    var scenePhaseProbe = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -49,6 +87,21 @@ struct LaunchOptions: Sendable {
             case "-fontSizeStep" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 fontSizeStep = Int(arguments[index])
+            case "-textkit2":
+                textKit2 = true
+            case "-rendererReset":
+                rendererReset = true
+            case "-rendererStats":
+                rendererStats = true
+            case "-switchDuringLoad":
+                switchDuringLoad = true
+            case "-memoryReliefHook":
+                memoryReliefHook = true
+            case "-rebuildControlPicks" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                rebuildControlPicks = max(Int(arguments[index]) ?? 0, 0)
+            case "-scenePhaseProbe":
+                scenePhaseProbe = true
             default:
                 break
             }
@@ -62,7 +115,16 @@ struct ADFReaderApp: App {
     private let options = LaunchOptions()
 
     init() {
+        // Before the scene builds: `ReaderView` reads the renderer key through
+        // `@AppStorage`, which must see the launch-argument override.
+        RendererPreference.apply(options)
+        RebuildControl.picksLeft = options.rebuildControlPicks ?? 0
+        RebuildControl.configured = options.rebuildControlPicks != nil
         RotationHook.install()
+        RejumpHook.install()
+        if options.memoryReliefHook {
+            MemoryReliefHook.install()
+        }
     }
 
     var body: some Scene {
@@ -80,6 +142,11 @@ struct ADFReaderApp: App {
                     }
                 } else {
                     SpaceListView()
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if options.scenePhaseProbe {
+                    ScenePhaseProbe()
                 }
             }
         }
@@ -118,5 +185,54 @@ enum RotationHook {
             print("ROTATION failed: \(error)")
         }
         print("ROTATION requested=\(target == .portrait ? "portrait" : "landscapeRight")")
+    }
+}
+
+/// Re-lands the open reader on its `-scrollToFraction` block, without
+/// animation: `xcrun simctl spawn <udid> notifyutil -p com.connie.adfreader.rejump`.
+/// The lifecycle gate's deterministic way back to a parked position — a
+/// drag round trip does not return exactly in a lazy stack, whose estimated
+/// row heights change as rows materialize.
+enum RejumpHook {
+    static let notification = Notification.Name("ADFReaderRejump")
+
+    static func install() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                Task { @MainActor in NotificationCenter.default.post(name: RejumpHook.notification, object: nil) }
+            },
+            "com.connie.adfreader.rejump" as CFString,
+            nil,
+            .deliverImmediately
+        )
+    }
+}
+
+/// Returns free malloc pages to the system on request:
+/// `xcrun simctl spawn <udid> notifyutil -p com.connie.adfreader.relief`
+/// calls `malloc_zone_pressure_relief(nil, 0)` — what the OS does under
+/// memory pressure. Installed only with `-memoryReliefHook`. The lifecycle
+/// gate's flip check measures settled phys_footprint after it, because the
+/// raw footprint also counts free-but-dirty pages the allocator keeps as a
+/// high-water mark (live malloc stayed flat over the flips; see the
+/// lifecycle gate's report).
+enum MemoryReliefHook {
+    static func install() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    let released = malloc_zone_pressure_relief(nil, 0)
+                    print("RELIEF released=\(released)")
+                    fflush(stdout)
+                }
+            },
+            "com.connie.adfreader.relief" as CFString,
+            nil,
+            .deliverImmediately
+        )
     }
 }

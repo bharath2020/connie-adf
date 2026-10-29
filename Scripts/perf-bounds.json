@@ -1,0 +1,147 @@
+{
+  "app_sha256": "11b0e042f564d0990b08c938284c36c9ed2001806eea0ecfcff41872f91b52dc",
+  "created_utc": "2026-10-26T20:09:21Z",
+  "fixtures": {
+    "giant-table": {
+      "first_chunk_ms": {
+        "a_median": 74.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 11.0,
+        "p95_pct": 14.864864864864865
+      },
+      "footprint_peak_kb": {
+        "a_median": 69443.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 1088.0,
+        "p95_pct": 1.5667525884538398
+      },
+      "footprint_ready_kb": {
+        "a_median": 55323.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 2368.0,
+        "p95_pct": 4.280317408672704
+      },
+      "launch_to_ready_ms": {
+        "a_median": 593.45,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 249.20000000000005,
+        "p95_pct": 41.991743196562474
+      },
+      "rss_peak_kb": {
+        "a_median": 269912.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 1808.0,
+        "p95_pct": 0.6698479504431074
+      },
+      "rss_ready_kb": {
+        "a_median": 255336.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 2432.0,
+        "p95_pct": 0.9524704702822948
+      }
+    },
+    "kitchen-sink": {
+      "first_chunk_ms": {
+        "a_median": 56.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 11.0,
+        "p95_pct": 19.642857142857142
+      },
+      "footprint_peak_kb": {
+        "a_median": 48459.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 1488.0,
+        "p95_pct": 3.0706370333684148
+      },
+      "footprint_ready_kb": {
+        "a_median": 40890.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 864.0,
+        "p95_pct": 2.1129860601614086
+      },
+      "launch_to_ready_ms": {
+        "a_median": 562.8,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 63.60000000000002,
+        "p95_pct": 11.300639658848619
+      },
+      "rss_peak_kb": {
+        "a_median": 263264.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 9728.0,
+        "p95_pct": 3.695150115473441
+      },
+      "rss_ready_kb": {
+        "a_median": 239944.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 1312.0,
+        "p95_pct": 0.5467942519921315
+      }
+    },
+    "stress-5k": {
+      "first_chunk_ms": {
+        "a_median": 76.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 8.0,
+        "p95_pct": 10.526315789473683
+      },
+      "footprint_peak_kb": {
+        "a_median": 136835.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 10928.0,
+        "p95_pct": 7.9862608250813025
+      },
+      "footprint_ready_kb": {
+        "a_median": 109387.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 11168.0,
+        "p95_pct": 10.209622715679194
+      },
+      "launch_to_ready_ms": {
+        "a_median": 1305.7,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 282.39999999999986,
+        "p95_pct": 21.6282453856169
+      },
+      "rss_peak_kb": {
+        "a_median": 358152.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 13456.0,
+        "p95_pct": 3.757064039849003
+      },
+      "rss_ready_kb": {
+        "a_median": 326160.0,
+        "n_pairs": 10,
+        "n_subsets": 120,
+        "p95_abs": 11920.0,
+        "p95_pct": 3.6546480255089526
+      }
+    }
+  },
+  "kind": "perf-resolution-bounds",
+  "method": "95th percentile (nearest rank) of |median of 3 A\u2013A\u2032 deltas| over every 3-subset of the clean pairs; p95_pct relative to A's median",
+  "pairs_per_gate": 3,
+  "percentile": 95.0,
+  "problems": [],
+  "source_csv": "/Users/bharath2020/Documents/firstmate/data/cadf3-tk2-stack-01/perf/calibration/trials.csv",
+  "source_csv_sha256": "9566ad80b11e553541c8199c9051bdd509e079ba75e9edd11c2b2fa021698c6c",
+  "verdict": "MEASURED",
+  "version": 1
+}
