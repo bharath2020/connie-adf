@@ -182,35 +182,34 @@ struct TextKit2FallbackTests {
         print("TK2 fallback switch \(size): heading top OFF \(off) ON \(on) OFF \(back)")
     }
 
-    @Test("a host text colour reaches TextKit 2 rows, including a change while ON")
-    func hostForegroundReachesRows() async throws {
+    @Test("a paragraph with search highlights renders on SwiftUI while the search is active")
+    func searchHighlightsStayOnSwiftUI() async throws {
         let model = try await TextKit2DiagnosticsTests.loadedModel()
+        model.search.debounceInterval = .zero
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
-        func document(_ colour: Color?) -> ADFDocumentView {
-            ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2, textForeground: colour)
-        }
-        let host = UIHostingController(rootView: document(.purple))
+        let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2))
         window.rootViewController = host
         window.isHidden = false
-        func foregrounds() async throws -> [Color?] {
+        func rowTexts() async throws -> Set<String> {
             try await TextKit2DiagnosticsTests.settle(window)
-            return Self.rows(in: host.view).map { $0.inputs?.inheritedForeground }
-        }
-        func drawn(_ row: TextKit2RowView) throws -> UIColor? {
-            TextKit2TextBuilder.attributedString(for: try #require(row.inputs), linkColor: .blue).attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
+            return Set(Self.rows(in: host.view).compactMap { $0.inputs.map { String($0.text.characters) } })
         }
 
-        let purple = try await foregrounds()
-        #expect(purple.count == 3 && purple.allSatisfy { $0 == .purple }, "\(purple)")
-        if let row = Self.rows(in: host.view).first {
-            #expect(try drawn(row)?.cgColor.components == UIColor(Color.purple).cgColor.components)
+        let before = try await rowTexts()
+        #expect(before.contains("An eligible paragraph."), "\(before)")
+        model.search.run("eligible")
+        for _ in 0..<500 where model.search.isSearching || model.search.matchCount == 0 {
+            try await Task.sleep(for: .milliseconds(10))
         }
-        host.rootView = document(.orange)
-        let orange = try await foregrounds()
-        #expect(orange.count == 3 && orange.allSatisfy { $0 == .orange }, "\(orange)")
-        host.rootView = document(nil)
-        let inherited = try await foregrounds()
-        #expect(inherited.count == 3 && inherited.allSatisfy { $0 == nil }, "\(inherited)")
+        try #require(model.search.matchCount == 1)
+        let searching = try await rowTexts()
+        #expect(searching == before.subtracting(["An eligible paragraph."]), "\(searching)")
+        model.search.next()
+        let current = try await rowTexts()
+        #expect(current == searching, "\(current)")
+        model.search.clear()
+        let cleared = try await rowTexts()
+        #expect(cleared == before, "\(cleared)")
 
         window.isHidden = true
         window.rootViewController = nil

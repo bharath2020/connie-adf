@@ -355,7 +355,7 @@ struct TextKit2RowViewTests {
         #expect(TextKit2RowView.pixelCeil(42.287, scale: 3) == 127 * (1 / CGFloat(3)))
     }
 
-    @Test("foreground precedence: prepared colour, link tint, inherited colour, label")
+    @Test("foreground precedence: prepared colour, link tint, label")
     func foregroundPrecedence() {
         var authored = text("red ")
         authored.foregroundColor = .red
@@ -376,12 +376,6 @@ struct TextKit2RowViewTests {
         #expect(same(colour(base, at: 0), UIColor(Color.red)), "an authored colour beats the link tint")
         #expect(same(colour(base, at: 4), tint), "an uncoloured link takes the tint")
         #expect(same(colour(base, at: 10), UIColor.label))
-
-        var inherited = base
-        inherited.inheritedForeground = .green
-        #expect(same(colour(inherited, at: 0), UIColor(Color.red)), "prepared colour beats inherited")
-        #expect(same(colour(inherited, at: 4), tint), "a foreground style does not recolour links")
-        #expect(same(colour(inherited, at: 10), UIColor(Color.green)))
     }
 
     @Test("alignment resolves against the SwiftUI layout direction")

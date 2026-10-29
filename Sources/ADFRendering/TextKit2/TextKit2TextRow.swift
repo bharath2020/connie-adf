@@ -5,8 +5,10 @@ import ADFPreparation
 
 /// The TextKit 2 arm of `RichTextBlockView` for eligible text: the TextKit 2
 /// row, unless the environment carries text styling the row does not
-/// reproduce — then `fallback` (the SwiftUI `Text` path). Only constructed
-/// when the switch is ON, so the SwiftUI arm reads none of these values.
+/// reproduce, or the active search has highlights for this owner (the row
+/// paints no search highlight or arrival flash) — then `fallback` (the
+/// SwiftUI `Text` path). Only constructed when the switch is ON, so the
+/// SwiftUI arm reads none of these values.
 /// Under `View.adfRebuildControl` (diagnostics) the row's place holds
 /// `fallback` instead, counted.
 struct TextKit2Leaf<Fallback: View>: View {
@@ -21,6 +23,7 @@ struct TextKit2Leaf<Fallback: View>: View {
     @Environment(\.minimumScaleFactor) private var minimumScaleFactor
     @Environment(\.redactionReasons) private var redactionReasons
     @Environment(\.adfRebuildControl) private var rebuildControl
+    @Environment(\.adfDocumentSearch) private var search
 
     init(text: AttributedString, style: TextBlockStyle, ownerID: String?, @ViewBuilder fallback: () -> Fallback) {
         self.text = text
@@ -30,7 +33,7 @@ struct TextKit2Leaf<Fallback: View>: View {
     }
 
     var body: some View {
-        if Self.supportsEnvironment(
+        if !hasSearchHighlights, Self.supportsEnvironment(
             lineSpacing: lineSpacing, textCase: textCase, lineLimit: lineLimit,
             minimumScaleFactor: minimumScaleFactor, redactionReasons: redactionReasons
         ) {
@@ -46,12 +49,20 @@ struct TextKit2Leaf<Fallback: View>: View {
         }
     }
 
+    /// The same gate as `SegmentedTextView.displayedSegments`: with no
+    /// active session it reads only `isActive`.
+    private var hasSearchHighlights: Bool {
+        guard let ownerID, let search, search.isActive else { return false }
+        let highlights = search.ownerHighlights(for: ownerID)
+        return !highlights.spans.isEmpty || !highlights.currentSpans.isEmpty
+    }
+
     /// Whether inherited `Text` styling is absent (all defaults): line
     /// spacing, text case, a line limit (with its truncation and
     /// tightening), shrink-to-fit and redaction all change how `Text`
-    /// lays out or draws, and the row reproduces none of them. Colour comes
-    /// through `adfTextForeground`. Tint, which `Text` uses for links, is
-    /// not readable from UIKit: rows draw links in the accent colour.
+    /// lays out or draws, and the row reproduces none of them. Tint, which
+    /// `Text` uses for links, is not readable from UIKit: rows draw links in
+    /// the accent colour.
     static func supportsEnvironment(
         lineSpacing: CGFloat, textCase: Text.Case?, lineLimit: Int?,
         minimumScaleFactor: CGFloat, redactionReasons: RedactionReasons
@@ -147,8 +158,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
             layoutDirection: environment.layoutDirection,
             displayScale: environment.displayScale,
             legibilityWeight: environment.legibilityWeight,
-            colorScheme: environment.colorScheme,
-            inheritedForeground: environment.adfTextForeground
+            colorScheme: environment.colorScheme
         )
     }
 }

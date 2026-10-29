@@ -30,10 +30,6 @@ private struct ADFRebuildControlKey: EnvironmentKey {
     static let defaultValue = false
 }
 
-private struct ADFTextForegroundKey: EnvironmentKey {
-    static let defaultValue: Color? = nil
-}
-
 extension EnvironmentValues {
     /// The text engine a `RichTextBlockView` should use. `ADFDocumentView`'s
     /// rows set it to the host's choice for top-level `.richText` blocks only;
@@ -47,15 +43,6 @@ extension EnvironmentValues {
     var adfRebuildControl: Bool {
         get { self[ADFRebuildControlKey.self] }
         set { self[ADFRebuildControlKey.self] = newValue }
-    }
-
-    /// The host's document text colour (`ADFDocumentView(textForeground:)`),
-    /// set alongside the SwiftUI `foregroundStyle` it applies. SwiftUI does
-    /// not expose an inherited foreground style to UIKit-hosted views, so
-    /// TextKit 2 rows read this explicit copy instead.
-    var adfTextForeground: Color? {
-        get { self[ADFTextForegroundKey.self] }
-        set { self[ADFTextForegroundKey.self] = newValue }
     }
 }
 

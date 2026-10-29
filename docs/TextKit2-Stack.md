@@ -23,16 +23,14 @@ public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
 }
 
 ADFDocumentView(model:mediaProvider:interactionHandler:taskStates:mentionContent:
-                textRenderer: ADFTextRenderer = .swiftUI,
-                textForeground: Color? = nil)
+                textRenderer: ADFTextRenderer = .swiftUI)
 ```
 
 - `ADFTextRenderer` lives in `Sources/ADFRendering/TextKit2/ADFTextRenderer.swift`; `displayName` gives "SwiftUI" / "TextKit 2" for a host's picker.
 - `ADFDocumentView` passes the choice to each `DocumentRow`, which sets the internal `EnvironmentValues.adfTextRenderer` to the host's choice **only for top-level `.richText` rows** and to `.swiftUI` for every other kind, so the value never leaks into a container's children.
 - `RichTextBlockView` picks the engine with a plain `if`/`else` at the leaf (never `AnyView`, never `#available` at a lazy per-item position — ADR §18).
-- `textForeground` colours text the document does not colour itself. It is **renderer-independent**: every row gets it as `.foregroundStyle` (what SwiftUI text, including every fallback, inherits) and TK2 rows draw the same colour from their render inputs, so switching `textRenderer` never changes text colour (pixel-tested on both arms, light and dark, `TextKit2PixelParityTests`; §6.5). A `foregroundStyle` a host applies *around* the document reaches SwiftUI text only — SwiftUI gives UIKit-hosted views no way to read it — so hosts that colour document text pass it here.
 - On platforms without UIKit (`swift test` on macOS), `.textKit2` behaves as `.swiftUI`.
-- **All public surface PR 1 adds:** `ADFTextRenderer` (+ `displayName`); the two `ADFDocumentView` parameters; the diagnostics read-outs below (`ADFTextKit2Stats`, `ADFTextKit2Coverage`, `ADFTextRenderer.textKit2Stats`, `.textKit2Coverage(of:)` — public because the demo reads them across the module boundary); in `ADFPreparation`, `ADFFontSpec` (+ `Font(adfFontSpec:)`, `TextStyle.swiftUITextStyle`), the `adf` attribute scope carrying it, `ADFTheme.bodyFontSpec` / `codeFontSpec` / `headingFontSpec(_:)`, and `InlineComposer.compose(_:baseFont:baseFontSpec:)`. The small-text and sub/superscript specs stay internal, like their `Font` twins.
+- **All public surface PR 1 adds:** `ADFTextRenderer` (+ `displayName`); the `ADFDocumentView(textRenderer:)` parameter; the diagnostics read-outs below (`ADFTextKit2Stats`, `ADFTextKit2Coverage`, `ADFTextRenderer.textKit2Stats`, `.textKit2Coverage(of:)` — public because the demo reads them across the module boundary); in `ADFPreparation`, `ADFFontSpec` (+ `Font(adfFontSpec:)`, `TextStyle.swiftUITextStyle`), the `adf` attribute scope carrying it, `ADFTheme.bodyFontSpec` / `codeFontSpec` / `headingFontSpec(_:)`, and `InlineComposer.compose(_:baseFont:baseFontSpec:)`. The small-text and sub/superscript specs stay internal, like their `Font` twins.
 
 ### Demo app
 
@@ -85,7 +83,8 @@ A top-level `.richText` block (paragraph or heading H1–H6) when **all** of the
 2. the block contains no inline atoms (`SegmentedTextView.mergedText(segments)` is non-nil);
 3. every run is *describable* — it carries an `ADFFontSpec` (§6.5), so TK2 can resolve the same font SwiftUI would;
 4. before iOS 26, the text does not end in two or more hard breaks (residual found on iOS 18.5, §6.4);
-5. no inherited `Text` styling the row does not reproduce is set — line spacing, text case, a line limit, a minimum scale factor or redaction (`TextKit2Leaf`); host colour arrives through `textForeground` (§6.5).
+5. no inherited `Text` styling the row does not reproduce is set — line spacing, text case, a line limit, a minimum scale factor or redaction (`TextKit2Leaf`);
+6. the active search has no highlight for the block (`TextKit2Leaf`): while a session has spans for it, it renders on SwiftUI, which paints the highlights and the arrival flash; clearing the search returns it to TK2 (heights are equal, so the swap moves nothing).
 
 Text-run content in such blocks moves with them: every mark (strong, em, underline, strike, code, sub/sup, textColor, backgroundColor, link, annotation, small font size), hard breaks, emoji that carry a Unicode `text`, and inline placeholders. Because the preparer flattens them to top-level `.richText`, three less obvious sources are also eligible: the content of a `syncBlock` with an inline copy, a stray `caption` outside a `mediaSingle`, and an inline node at block level.
 
@@ -95,7 +94,7 @@ Text-run content in such blocks moves with them: every mark (strong, em, underli
 - **Links are disclosed, not native, in PR 1:** a paragraph or heading with a link is a TK2 row laid out and drawn by its own TextKit 1 stack, as `Text` lays out linked text (captain decision; §6.4). Native TextKit 2 links are PR 6.
 - **Two or more trailing hard breaks before iOS 26**, and text under inherited styling the row does not reproduce (condition 5 above).
 - **Every other kind and every nested position** — lists, code blocks, tables (including the pinned header slice), panels, quotes, expands, layout columns and all of their contents, media captions, extension placeholders, custom (plugin) blocks and unknown nodes.
-- **Search highlights and arrival flash** — TK2 rows do not paint them yet (PR 7).
+- **Search highlights and arrival flash** — TK2 rows do not paint them yet (PR 7); a block with highlights renders on SwiftUI while the search is active (condition 6 above).
 - **Text selection and copy** — TK2 rows have none yet (PR 8). SwiftUI rows keep per-block `.textSelection(.enabled)`. This is an explicit, temporary limitation of the opt-in TK2 arm.
 - **Undescribable themes** — a theme built from raw SwiftUI `Font`s without specs falls back (§6.5).
 
@@ -275,12 +274,11 @@ Formerly residuals (fixed regression cases in `TextKit2FallbackTests`, which als
 ### 6.5 Inherited styling and themes
 
 - `ADFTheme` gains spec-first construction; the SwiftUI `Font` is derived from the `ADFFontSpec`. A raw-`Font` initialiser stays source-compatible but marks the spec `nil` (undescribable); such runs force the SwiftUI path. No caller has to update two fields.
-- `TextKit2RenderInputs` carries the resolved inherited inputs — foreground, layout direction, size category, legibility weight, colour scheme — and is part of the cache key and the redraw decision.
-- **Why an explicit channel:** SwiftUI exposes no public getter for an inherited `foregroundStyle`, `tint` or font weight (the `EnvironmentValues` accessors are `package`), so a `UIViewRepresentable` cannot see what `Text` would inherit. Inherited styling therefore reaches a TK2 row only through library-owned environment values set next to the SwiftUI modifier they mirror. PR 1: `ADFDocumentView(textForeground:)` → per row `.foregroundStyle(colour)` (the SwiftUI arm) plus `adfTextForeground` (the TK2 row's `inheritedForeground`); `nil` leaves rows exactly as main. Tested hosted, including a change while ON (`TextKit2FallbackTests`) and in pixels (`TextKit2PixelParityTests`).
-- **Tint:** `Text` colours links with the tint, which a foreground style does not override; the row colours them with the accent colour (`Color.accentColor`, resolved at draw time), also under `textForeground`. A host `.tint` around the document is **not readable** from UIKit (the accessor is `package`), so it recolours SwiftUI links only (§6.6).
-- **Styling the row does not reproduce falls back:** readable `Text` environment — line spacing, text case, line limit, minimum scale factor, redaction — keeps the paragraph on SwiftUI (`TextKit2Leaf`, only built when the switch is ON). A `foregroundStyle` or font weight applied around the document is not readable and is not detected: with `.textKit2`, hosts colour text through `textForeground`.
-- Later PRs extend the same channel: media captions' `.footnote` / `.secondary` with containers (**PR 4**, the first container case — the foreground/font part ships no later than it), table header weight and contrast foregrounds with tables (PR 5).
-- Foreground precedence: a prepared foreground (author `textColor`, or the contrast colour derived from a background mark) first; then the inherited foreground; else `.label`.
+- `TextKit2RenderInputs` carries the resolved inherited inputs — layout direction, size category, legibility weight, colour scheme — and is part of the cache key and the redraw decision.
+- **No inherited colour channel in PR 1:** SwiftUI exposes no public getter for an inherited `foregroundStyle`, `tint` or font weight (the `EnvironmentValues` accessors are `package`), so a `UIViewRepresentable` cannot see what `Text` would inherit. Nothing in PR 1's scope (top-level paragraphs and headings in ADFReader) colours text that way, so PR 1 adds no channel; the first PR with an in-repo caller of inherited styling — containers (**PR 4**: media captions' `.footnote` / `.secondary`), then tables (PR 5: header weight, contrast foregrounds) — adds a library-owned environment value set next to the SwiftUI modifier it mirrors.
+- **Tint:** `Text` colours links with the tint, which a foreground style does not override; the row colours them with the accent colour (`Color.accentColor`, resolved at draw time). A host `.tint` around the document is **not readable** from UIKit (the accessor is `package`), so it recolours SwiftUI links only (§6.6).
+- **Styling the row does not reproduce falls back:** readable `Text` environment — line spacing, text case, line limit, minimum scale factor, redaction — keeps the paragraph on SwiftUI (`TextKit2Leaf`, only built when the switch is ON). A `foregroundStyle` or font weight applied around the document is not readable and is not detected.
+- Foreground precedence: a prepared foreground (author `textColor`, or the contrast colour derived from a background mark) first; then, for a link, the accent colour; else `.label`.
 
 ### 6.6 Known costs and limitations (PR 1)
 
@@ -374,12 +372,12 @@ Location: `Tests/ADFRenderingTests/TextKit2/` (Swift Testing, `#if canImport(UIK
 | `TextKit2LineBreakParityTests` | Per-line horizontal ink extents from both arms' bitmaps match exactly, on a corpus of nearly-full lines; TK2 line-fragment ranges logged for diagnosis |
 | `TextKit2CorpusParityTests` | Heights and line breaks over the breadth corpus (scripts, emoji, combining marks, RTL, indentation, alignment, hard breaks) |
 | `TextKit2MetricsParityTests` | First/last baseline guides and ink bounds against SwiftUI's |
-| `TextKit2PixelParityTests` | 3x and 2x, light and dark: an H1, the every-mark paragraph, the kitchen-sink paragraph with its link (TextKit 1-backed) and without, a link after a subscript line, a centred highlight after a link and without one, linked emoji lines (large/AX3/AX5), a strike after a subscript line, the sub/sup line family, a host text colour (links keep the tint): first/last ink rows and per-row ink counts exact in every case (no exemption since 52ce693); differing pixels ≤ 0.2 %. At 96778b3: 169 comparisons per device (3x, 2x, iOS 18.5), the 163 outside `centred-highlight` all at 0 differing pixels; the 6 `centred-highlight` comparisons are residual 5 (`withKnownIssue` in the measured cases) |
+| `TextKit2PixelParityTests` | 3x and 2x, light and dark: an H1, the every-mark paragraph, the kitchen-sink paragraph with its link (TextKit 1-backed) and without, a link after a subscript line, a centred highlight after a link and without one, linked emoji lines (large/AX3/AX5), a strike after a subscript line, the sub/sup line family: first/last ink rows and per-row ink counts exact in every case (no exemption since 52ce693); differing pixels ≤ 0.2 %. At 96778b3: 169 comparisons per device (3x, 2x, iOS 18.5), the 163 outside `centred-highlight` all at 0 differing pixels; the 6 `centred-highlight` comparisons are residual 5 (`withKnownIssue` in the measured cases) |
 | `TextKit2FixtureSweepTests` | Every eligible root of kitchen-sink, stress-5k and text-dense, large + AX3, both arms: \|Δ\| ≤ 0.01 pt, no exemptions |
-| `TextKit2FallbackTests` | Fixed regression cases: linked text (link+emoji wrap, kitchen-sink paragraph, linked sub/sup) is a TextKit 1-backed row measuring exactly at large/AX3/AX5; double trailing breaks exact on iOS 26 and SwiftUI before it; unsupported inherited styling stays on SwiftUI; a heading below them moves ≤ 2 px on a switch either way; host `textForeground` reaches TK2 rows, including a change while ON |
+| `TextKit2FallbackTests` | Fixed regression cases: linked text (link+emoji wrap, kitchen-sink paragraph, linked sub/sup) is a TextKit 1-backed row measuring exactly at large/AX3/AX5; double trailing breaks exact on iOS 26 and SwiftUI before it; unsupported inherited styling stays on SwiftUI; a heading below them moves ≤ 2 px on a switch either way; a paragraph with search highlights renders on SwiftUI while the search is active and returns to TK2 when it is cleared |
 | `TextKit2LinkTests` | Link taps (wrapped, coloured, RTL, emoji-adjacent; misses rejected), "Open link" actions, SwiftUI `openURL` delivery; a linked row counts as TextKit 1-backed and its draws never as native; only linked rows carry a tap recognizer |
 | `TextKit2DiagnosticsTests` | Through `ADFDocumentView`: eligible roots get TK2 rows; plain ones are drawn natively (native draws > 0), the linked one is TextKit 1-backed (its draws counted apart, every draw one or the other); atom-bearing and non-text roots get none; switching back releases them; coverage counts |
-| `TextKit2RowViewTests` | Row contract: cache and proposal cases (§6.2), placed-layout lookup, no eager relayout, resolver traits and metrics, foreground precedence (prepared, link tint, inherited, label) |
+| `TextKit2RowViewTests` | Row contract: cache and proposal cases (§6.2), placed-layout lookup, no eager relayout, resolver traits and metrics, foreground precedence (prepared, link tint, label) |
 | `TextKit2FlipMemoryTests` | Diagnostic (`TK2_FLIP_MEMORY=1`): malloc traffic by size class per renderer switch on stress-5k vs the same switches with no eligible text and vs idle, plus raw `phys_footprint` per pair |
 
 ```sh
