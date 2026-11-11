@@ -1131,15 +1131,17 @@ final class ListRendererUITests: XCTestCase {
                 }
 
                 // A vertical fling that starts on the link (TextKit 2)
-                // scrolls. On lists-parity it flings back toward the top:
-                // momentum past LP-S5 would reach its tables, where the
-                // baseline lazy stack livelocks (issue #8 class).
+                // scrolls: toward the end only from lists-links' first
+                // section (its second ends the document), else toward the
+                // top. On lists-parity, momentum past LP-S5 would reach its
+                // tables, where the baseline lazy stack livelocks (issue #8
+                // class).
                 let probe = try XCTUnwrap(driver.readProbe())
                 let topBefore = leader.frame.minY
                 let flingFrom = linkPoint ?? candidates[0]
                 let start = driver.app.coordinate(withNormalizedOffset: .zero)
                     .withOffset(CGVector(dx: flingFrom.x, dy: flingFrom.y))
-                let flingBy: CGFloat = link.fixture == ListUIParity.fixture ? 260 : -260
+                let flingBy: CGFloat = link.section == ListUILinksFixture.s1 ? -260 : 260
                 start.press(forDuration: 0.02, thenDragTo: start.withOffset(CGVector(dx: 0, dy: flingBy)),
                             withVelocity: .fast, thenHoldForDuration: 0)
                 driver.pause(2)
@@ -1566,11 +1568,14 @@ final class ListStoryboardUITests: XCTestCase {
             reader.chooseRenderer(textKit2: true)
             pause()
             checkIntact("switched ON")
-            driver.jump(toHeading: ListUIParity.s7, settleDrag: 0)
-            XCTAssertTrue(driver.scrollDown(until: reader.element(labelled: ListUIParity.end)), "never reached LP-END")
-            listUIAttach(app, "04c-scrolled-to-the-end")
+            // Away to the top and back, not to LP-END: scrolling past
+            // LP-S5 crosses lists-parity's two tables, where the baseline
+            // lazy stack livelocks (issue #8 class; main shows it too).
+            driver.jump(toHeading: ListUIParity.s1, settleDrag: 0)
+            XCTAssertFalse(driver.isShown(leader), "\(task.owner) is still in view at the top")
+            listUIAttach(app, "04c-scrolled-to-the-top")
             pause()
-            checkIntact("back from the end")
+            checkIntact("back from the top")
             XCTAssertTrue(driver.isTextKit2(task), "\(task.text) did not come back as a TextKit 2 row")
             let end = try XCTUnwrap(driver.readProbe())
             XCTAssertEqual(end.taskDispatches, after.taskDispatches, "switching or scrolling dispatched a toggle")
