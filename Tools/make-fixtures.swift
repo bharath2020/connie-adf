@@ -58,6 +58,17 @@
 //                       tall root — the eager-inside-root bound (`-fixture
 //                       list-tall`). No root paragraph or heading: every
 //                       text owner in it is a list row or list trailing block.
+//   lists-links.json    hand-authored (no RNG) linked list text for the
+//                       interaction UI tests (exact-URL routing): a link
+//                       that wraps across lines, a coloured link, links
+//                       directly between emoji, Hebrew and Arabic
+//                       paragraphs with RTL and LTR links, a link on a later
+//                       line, two links in one leader, a linked continuation
+//                       paragraph and trailing paragraph, and linked task and
+//                       decision leaders (with plain controls). Every link
+//                       has its own https://example.com/lists-links/<slug>
+//                       URL and every leaf a unique `LL-…` sentinel. Not
+//                       part of arm A, visual parity or the perf designs.
 //
 // Fully deterministic: seeded LCG, no Date(), no system randomness.
 // Output is byte-stable across runs (JSONSerialization + .sortedKeys,
@@ -1343,6 +1354,78 @@ func makeListTall() -> [String: Any] {
     ])
 }
 
+// MARK: - Fixture 9: lists-links.json
+
+/// Hand-authored, no RNG; node paths are pinned by
+/// `Tests/ADFPreparationTests/ListFixturePreparationTests.swift`.
+///
+///   0 heading   LL-S1        1 bulletList  10 items: wrapped, coloured, emoji-adjacent,
+///                                          RTL (3), later-line, two links, linked
+///                                          continuation (item 8), linked trailing
+///                                          paragraph (item 9)
+///   2 heading   LL-S2        3 taskList    linked task, plain control
+///                            4 decisionList linked decision, plain control
+///   5 paragraph LL-END
+func makeListsLinks() -> [String: Any] {
+    func url(_ slug: String) -> String { "https://example.com/lists-links/" + slug }
+    func t(_ text: String) -> [String: Any] { textNode(text) }
+    func a(_ text: String, _ slug: String, extra: [[String: Any]] = []) -> [String: Any] {
+        textNode(text, marks: [linkMark(url(slug))] + extra)
+    }
+    func para(_ content: [String: Any]...) -> [String: Any] { paragraph(content) }
+    func li(_ content: [String: Any]...) -> [String: Any] { listItemNode(content) }
+
+    let leaders = bulletListNode([
+        // 0.1.0: the link starts on the first line and wraps across two more.
+        li(para(t("LL-WRAP-LINK leader whose link "),
+                a("is deliberately long so that it wraps from the end of the first line across the following lines at phone width",
+                  "wrap"),
+                t(" and ends here"))),
+        // 0.1.1: link text with a text colour.
+        li(para(t("LL-COLOUR-LINK see the "),
+                a("coloured link", "colour", extra: [["type": "textColor", "attrs": ["color": "#ff5630"]]]),
+                t(" in red"))),
+        // 0.1.2: emoji directly before and after the link, no spaces.
+        li(para(t("LL-EMOJI-LINK rocket 🚀"), a("launch notes", "emoji"), t("✅ shipped"))),
+        // 0.1.3: a Hebrew link inside a left-to-right paragraph.
+        li(para(t("LL-RTL-LINK-A Hebrew link "), a("קישור לתיעוד", "rtl-hebrew"), t(" inside"))),
+        // 0.1.4: a right-to-left paragraph with a Hebrew link.
+        li(para(t("שלום "), a("קישור מימין לשמאל", "rtl-paragraph"), t(" עולם LL-RTL-LINK-B"))),
+        // 0.1.5: an Arabic paragraph with a left-to-right link.
+        li(para(t("مرحبا "), a("English link", "rtl-ltr-link"), t(" بالعالم LL-RTL-LINK-C"))),
+        // 0.1.6: the link sits on the second line, after a hard break.
+        li(para(t("LL-LATER-LINK first line"), hardBreakNode(), t("second line with a "),
+                a("later-line link", "later-line"), t(" 🚀"))),
+        // 0.1.7: two links, two URLs.
+        li(para(t("LL-TWO-LINKS "), a("first", "first"), t(" and "), a("second", "second"), t(" links"))),
+        // 0.1.8: a linked continuation paragraph (0.1.8.2) after a nested list.
+        li(para(t("LL-CONT-LEADER item whose continuation is linked")),
+           bulletListNode([li(para(t("LL-CONT-NESTED nested bullet")))]),
+           para(t("LL-CONT-LINK a "), a("linked continuation", "continuation"))),
+        // 0.1.9: a linked trailing paragraph (0.1.9.1) of a multi-paragraph item.
+        li(para(t("LL-MULTI-P1 first paragraph of the item")),
+           para(t("LL-MULTI-LINK a "), a("trailing link", "trailing-paragraph"))),
+    ])
+
+    let tasks = taskListNode("ll-tasklist-1", [
+        taskItemNode("ll-task-link", done: false, [t("LL-TASK-LINK task with a "), a("linked task spec", "task")]),
+        taskItemNode("ll-task-plain", done: true, [t("LL-TASK-PLAIN plain control task")]),
+    ])
+    let decisions = decisionListNode("ll-decisionlist-1", [
+        decisionItemNode("ll-decision-link", [t("LL-DECISION-LINK see the "), a("linked decision record", "decision")]),
+        decisionItemNode("ll-decision-plain", [t("LL-DECISION-PLAIN plain control decision")]),
+    ])
+
+    return doc([
+        headingNode(level: 2, "LL-S1 Linked leaders and continuations"),
+        leaders,
+        headingNode(level: 2, "LL-S2 Linked tasks and decisions"),
+        tasks,
+        decisions,
+        paragraph([textNode("LL-END end of the lists links fixture")]),
+    ])
+}
+
 // MARK: - Emit
 
 let repoRoot = URL(fileURLWithPath: #filePath)
@@ -1364,6 +1447,7 @@ let fixtures: [(name: String, document: [String: Any])] = [
     ("lists-parity.json", makeListsParity()),
     ("list-dense.json", listDense),
     ("list-tall.json", makeListTall()),
+    ("lists-links.json", makeListsLinks()),
 ]
 
 for (name, document) in fixtures {

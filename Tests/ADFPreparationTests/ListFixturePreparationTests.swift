@@ -3,7 +3,8 @@ import Testing
 import ADFModel
 import ADFPreparation
 
-// Pins for the list fixtures (lists-parity, list-dense, list-tall) and for
+// Pins for the list fixtures (lists-parity, list-dense, list-tall,
+// lists-links) and for
 // the three ways a list item's trailing blocks can hold a `.listRows`.
 //
 // Every expected value here was derived by hand from the fixture structure
@@ -39,6 +40,23 @@ private func hasLink(_ segments: [InlineSegment]) -> Bool {
         guard case .text(let text) = segment else { return false }
         return text.runs.contains { $0.link != nil }
     }
+}
+
+/// Link URLs in reading order (a link split over adjacent runs counts once).
+private func linkURLs(_ segments: [InlineSegment]) -> [String] {
+    var urls: [String] = []
+    var previous: URL?
+    for segment in segments {
+        guard case .text(let text) = segment else {
+            previous = nil
+            continue
+        }
+        for run in text.runs {
+            if let link = run.link, link != previous { urls.append(link.absoluteString) }
+            previous = run.link
+        }
+    }
+    return urls
 }
 
 private func kindName(_ kind: RenderBlock.Kind) -> String {
@@ -483,5 +501,77 @@ struct ListPerfFixturePreparationTests {
         // 3,396 items + 302 continuation rows.
         #expect(rowCount == 3_698)
         #expect(continuationRows == 302)
+    }
+}
+
+// MARK: - lists-links
+
+/// The linked list text the interaction UI tests tap (exact-URL routing):
+/// every link owner, its URLs in order, and the row structure around them.
+@Suite("lists-links preparation")
+struct ListsLinksPreparationTests {
+    private static func url(_ slug: String) -> String { "https://example.com/lists-links/" + slug }
+
+    @Test("root blocks: 6 prepared roots, 3 of them lists")
+    func rootBlocks() async throws {
+        let (document, blocks) = try await preparedFixture("lists-links.json")
+        #expect(document.issues.isEmpty)
+        #expect(blocks.map(\.id) == ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5"])
+        #expect(blocks.map { kindName($0.kind) } == ["richText", "listRows", "richText", "listRows", "listRows", "richText"])
+    }
+
+    @Test("leaders: ten bullet items, a nested bullet, one continuation row; no atoms")
+    func leaderRows() async throws {
+        let (_, blocks) = try await preparedFixture("lists-links.json")
+        let rows = try listRows(blocks.first { $0.id == "0.1" })
+        #expect(rows.map(\.id) == (0 ... 8).map { "0.1.\($0)" } + ["0.1.8.1.0", "0.1.8#cont1", "0.1.9"])
+        #expect(rows.map(\.depth) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0])
+        #expect(rows.map(\.marker) == Array(repeating: ListMarker.bullet(depth: 0), count: 9)
+            + [.bullet(depth: 1), .continuation, .bullet(depth: 0)])
+        #expect(rows.map { $0.trailingBlocks.map(\.id) } == Array(repeating: [], count: 10) + [["0.1.8.2"], ["0.1.9.1"]])
+        #expect(!rows.contains { hasAtom($0.segments) })
+        #expect(leaderText(rows[2].segments) == "LL-EMOJI-LINK rocket 🚀launch notes✅ shipped")
+        #expect(leaderText(rows[4].segments) == "שלום קישור מימין לשמאל עולם LL-RTL-LINK-B")
+        #expect(leaderText(rows[6].segments) == "LL-LATER-LINK first line\nsecond line with a later-line link 🚀")
+    }
+
+    @Test("every link owner routes its own URLs, in order; controls have none")
+    func linkOwners() async throws {
+        let (_, blocks) = try await preparedFixture("lists-links.json")
+        var urls: [String: [String]] = [:]
+        for block in blocks {
+            guard case .listRows(let rows) = block.kind else { continue }
+            for row in rows {
+                urls[row.id] = linkURLs(row.segments)
+                for trailing in row.trailingBlocks {
+                    if case .richText(let segments, _) = trailing.kind { urls[trailing.id] = linkURLs(segments) }
+                }
+            }
+        }
+        let expected: [String: [String]] = [
+            "0.1.0": [Self.url("wrap")], "0.1.1": [Self.url("colour")], "0.1.2": [Self.url("emoji")],
+            "0.1.3": [Self.url("rtl-hebrew")], "0.1.4": [Self.url("rtl-paragraph")], "0.1.5": [Self.url("rtl-ltr-link")],
+            "0.1.6": [Self.url("later-line")], "0.1.7": [Self.url("first"), Self.url("second")],
+            "0.1.8": [], "0.1.8.1.0": [], "0.1.8#cont1": [], "0.1.8.2": [Self.url("continuation")],
+            "0.1.9": [], "0.1.9.1": [Self.url("trailing-paragraph")],
+            "0.3.0": [Self.url("task")], "0.3.1": [], "0.4.0": [Self.url("decision")], "0.4.1": [],
+        ]
+        #expect(urls == expected)
+    }
+
+    @Test("task and decision rows: one linked, one plain control each")
+    func taskAndDecisionRows() async throws {
+        let (_, blocks) = try await preparedFixture("lists-links.json")
+        let tasks = try listRows(blocks.first { $0.id == "0.3" })
+        #expect(tasks.map(\.marker) == [.task(id: "0.3.0", done: false), .task(id: "0.3.1", done: true)])
+        #expect(tasks.map { leaderText($0.segments) } == [
+            "LL-TASK-LINK task with a linked task spec", "LL-TASK-PLAIN plain control task",
+        ])
+        let decisions = try listRows(blocks.first { $0.id == "0.4" })
+        #expect(decisions.map(\.id) == ["0.4.0", "0.4.1"])
+        #expect(decisions.allSatisfy { $0.marker == .decision && $0.depth == 0 && $0.trailingBlocks.isEmpty })
+        #expect(decisions.map { leaderText($0.segments) } == [
+            "LL-DECISION-LINK see the linked decision record", "LL-DECISION-PLAIN plain control decision",
+        ])
     }
 }
