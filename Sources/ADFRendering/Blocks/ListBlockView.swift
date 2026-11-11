@@ -20,10 +20,18 @@ struct ListBlockView: View {
 }
 
 /// One list row: marker column (fixed width, trailing-aligned) + content.
+///
+/// The text engine choice reaches a list only from a top-level list row
+/// (`DocumentRow`, `TextKit2Scope`). The row passes it to its leader
+/// (`TextEngineLeaf`, owned by the row's id) and to its direct paragraphs,
+/// headings and lists. Every other trailing block gets `.swiftUI`, and so
+/// does everything inside it. The marker column, spacing, depth padding and
+/// decision background are SwiftUI chrome under either engine.
 struct ListRowView: View {
     let row: PreparedListRow
 
     @Environment(\.adfTheme) private var theme
+    @Environment(\.adfTextRenderer) private var renderer
     /// Marker column width, scaled with Dynamic Type so glyphs stay aligned
     /// with the text they annotate.
     @ScaledMetric(relativeTo: .body) private var markerWidth: CGFloat = 28
@@ -34,11 +42,14 @@ struct ListRowView: View {
                 .frame(width: markerWidth, alignment: .trailing)
             VStack(alignment: .leading, spacing: theme.spacing * 0.5) {
                 if !row.segments.isEmpty {
-                    SegmentedTextView(segments: row.segments, ownerID: row.id)
-                        .textSelection(.enabled)
+                    TextEngineLeaf(segments: row.segments, style: Self.leaderStyle(theme: theme), ownerID: row.id) {
+                        SegmentedTextView(segments: row.segments, ownerID: row.id)
+                            .textSelection(.enabled)
+                    }
                 }
                 ForEach(row.trailingBlocks) { block in
                     BlockView(block: block)
+                        .environment(\.adfTextRenderer, TextKit2Scope.inheritsRenderer(block.kind) ? renderer : .swiftUI)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -51,6 +62,14 @@ struct ListRowView: View {
                     .fill(Color.gray.opacity(0.08))
             }
         }
+    }
+
+    /// A leader is body text: the preparer composes it like a top-level
+    /// paragraph and drops its block marks, so no alignment, indentation or
+    /// heading applies. (The TextKit 2 row reads only `alignment` and
+    /// `isHeading`; the fonts come from the runs.)
+    static func leaderStyle(theme: ADFTheme) -> TextBlockStyle {
+        TextBlockStyle(font: theme.body, isHeading: false, headingLevel: nil, alignment: nil, indentation: 0, breakout: nil)
     }
 
     private var isDecision: Bool {

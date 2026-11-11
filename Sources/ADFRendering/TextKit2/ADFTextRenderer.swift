@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Which text engine draws top-level paragraphs and headings.
+/// Which text engine draws top-level paragraphs, headings and lists.
 ///
 /// `.swiftUI` is the shipping path (`Text(AttributedString)`); `.textKit2`
-/// routes plain (atom-free) paragraphs and headings through a UIKit-hosted
-/// TextKit 2 row. Everything else — containers, lists, captions, table
-/// cells, atom-bearing paragraphs — stays on SwiftUI regardless of the
-/// setting. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.
+/// routes plain (atom-free) top-level paragraphs and headings, and the
+/// leaders and direct paragraphs of top-level lists (nested lists
+/// included), through a UIKit-hosted TextKit 2 row. Everything else stays
+/// on SwiftUI regardless of the setting: containers and the lists and text
+/// inside them, captions, table cells, and atom-bearing text. On platforms
+/// without UIKit, `.textKit2` behaves as `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
     case swiftUI = "swiftui"
     case textKit2 = "textkit2"
@@ -31,9 +33,10 @@ private struct ADFRebuildControlKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    /// The text engine a `RichTextBlockView` should use. `ADFDocumentView`'s
-    /// rows set it to the host's choice for top-level `.richText` blocks only;
-    /// every other position inherits the `.swiftUI` default.
+    /// The text engine a text leaf (`TextEngineLeaf`) should use.
+    /// `ADFDocumentView`'s rows set it to the host's choice for top-level
+    /// `.richText` and `.listRows` rows, and list rows pass it on to their
+    /// own text only (`TextKit2Scope`). Every other position gets `.swiftUI`.
     var adfTextRenderer: ADFTextRenderer {
         get { self[ADFTextRendererKey.self] }
         set { self[ADFTextRendererKey.self] = newValue }

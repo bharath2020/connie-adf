@@ -273,11 +273,12 @@ private struct DocumentRow: View {
     let containerWidth: CGFloat
     let visibility: VisibleRowRegistry
     /// The host's text engine choice. Applied to this row's environment only
-    /// when the block is a top-level `.richText` (paragraph/heading): nested
-    /// text — panels, quotes, lists, captions, table cells — always renders
-    /// with SwiftUI, so the environment is reset to `.swiftUI` for every
-    /// other kind (an environment value would otherwise leak into a
-    /// container's children).
+    /// when the block is a top-level `.richText` (paragraph/heading) or
+    /// `.listRows` (whose rows pass it on to their own text only,
+    /// `ListRowView`; `TextKit2Scope`). Text inside panels, quotes,
+    /// captions and table cells always renders with SwiftUI, so the
+    /// environment is reset to `.swiftUI` for every other kind (an
+    /// environment value would otherwise leak into a container's children).
     let textRenderer: ADFTextRenderer
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -309,8 +310,7 @@ private struct DocumentRow: View {
     }
 
     private var rowTextRenderer: ADFTextRenderer {
-        if case .richText = block.kind { return textRenderer }
-        return .swiftUI
+        TextKit2Scope.inheritsRenderer(block.kind) ? textRenderer : .swiftUI
     }
 
     var body: some View {
