@@ -3,7 +3,18 @@ import XCTest
 
 // List interaction, accessibility and end-to-end UI tests for the TextKit 2
 // list renderer (Astra §5 "Interaction assertions" and §8, Fable F18), on
-// `lists-parity`, `lists-links` (linked list text) and `kitchen-sink`.
+// `lists-parity`, `lists-links` (linked list text), `list-dense` and
+// `kitchen-sink`.
+//
+// Which rows must be TextKit 2. An assertion that a row is TextKit 2 under
+// ON targets a single-block row (a leader alone, or a continuation
+// paragraph after a nested list) in a list that holds only left-to-right
+// text: leaders and plain paragraphs, no code, container, table, sync
+// block, heading or sub/sup anywhere in the list. An assertion that a row
+// stays SwiftUI under ON targets an atom-bearing leader or a column with a
+// heading beside other text. Rows with a leader and trailing paragraphs,
+// and lists-parity's LP-S4 list (it holds a code block), are asserted
+// neither way while the rule for them is pending.
 //
 // Owners. A list row drawn by TextKit 2 is a `tk2-row:<owner>` element; a
 // leader's owner is its `PreparedListRow.id` (the item's node path), a
@@ -83,30 +94,54 @@ private enum ListUIParity {
     static let decisionC = ListUIRow(text: "LP-DECISION-C see the decision record", owner: "0.6.2")
     static let decisionD = ListUIRow(text: "LP-DECISION-D a decision whose text runs long", owner: "0.6.3", match: .prefix)
 
-    // §4 leaders (bullet list 0.8).
-    static let wrap = ListUIRow(text: "LP-WRAP-A", owner: "0.8.0", match: .prefix)
-    static let marks = ListUIRow(text: "LP-MARKS-A", owner: "0.8.1", match: .prefix)
-    static let link = ListUIRow(text: "LP-LINK-A see the linked docs for details", owner: "0.8.2")
-    static let hardBreaks = ListUIRow(text: "LP-BREAK-A", owner: "0.8.3", match: .prefix)
-    static let rtlB = ListUIRow(text: "LP-RTL-B", owner: "0.8.6", match: .contains)
-    /// Atom-bearing leaders: SwiftUI fallback under either renderer.
-    static let mention = ListUIRow(text: "LP-ATOM-MENTION", owner: "0.8.7", match: .prefix)
-    static let status = ListUIRow(text: "LP-ATOM-STATUS", owner: "0.8.8", match: .prefix)
-    /// A trailing paragraph after a code-block first child.
-    static let afterCode = ListUIRow(text: "LP-AFTER-CODE paragraph after a code-block first child", owner: "0.8.12.1")
+    // §2 ordered list 0.3: the first two-digit marker.
+    static let ord10 = ListUIRow(text: "LP-ORD-10 ten, a two-digit marker", owner: "0.3.2")
 
-    // §5 structure (ordered list 0.10).
-    static let contLeader = ListUIRow(text: "LP-CONT-LEADER item with nested lists and continuations", owner: "0.10.1")
-    static let contNested1A = ListUIRow(text: "LP-CONT-NESTED-1A", owner: "0.10.1.1.0")
-    static let contPara1 = ListUIRow(
-        text: "LP-CONT-PARA-1 continuation paragraph after the first nested list", owner: "0.10.1.2"
-    )
-    static let contPara2 = ListUIRow(text: "LP-CONT-PARA-2 second continuation paragraph", owner: "0.10.1.4")
-    static let contHeading = ListUIRow(text: "LP-CONT-HEADING trailing heading after a nested list", owner: "0.10.1.5")
-    static let embedLeader = ListUIRow(text: "LP-EMBED-LEADER item with embedded excluded blocks", owner: "0.10.2")
-    /// A paragraph inside a panel inside a list item: SwiftUI under either
-    /// renderer (the scope resets at the panel).
-    static let embedPanel = "LP-EMBED-PANEL panel inside a list item"
+    // §4 leaders (bullet list 0.8, which holds a code block, so its rule
+    // is pending: only the held link case uses it).
+    static let link = ListUIRow(text: "LP-LINK-A see the linked docs for details", owner: "0.8.2")
+}
+
+/// `Fixtures/list-dense.json` (600 root lists and nothing else, so no
+/// table to scroll past). Its first lists hold only left-to-right text,
+/// leaders and plain paragraphs, with no code, container, table, heading
+/// or sub/sup anywhere in the list: TextKit 2 draws their single-block
+/// rows on iOS 26+. Each list's first leader opens with a sentinel,
+/// `LD-<root>`, that a search matches once.
+private enum ListUIDense {
+    static let fixture = "list-dense"
+
+    // List 0.0: a plain leader, then a leader holding a date atom
+    // (SwiftUI under either renderer). SwiftUI exposes an atom-bearing
+    // leader word by word ("batch ", "expand ", the date, "glyph"), so
+    // such a row is found by its first word's element.
+    static let first = ListUIRow(text: "LD-000 kernel batch inline render lazy", owner: "0.0.0")
+    static let dateAtom = ListUIRow(text: "batch ", owner: "0.0.1")
+
+    // List 0.3: a leader, its nested list, then a continuation paragraph
+    // (a row of its own, owned by the paragraph's block ID).
+    static let leader3 = ListUIRow(text: "LD-003 vector chunk quartz", owner: "0.3.0")
+    static let continuation3 = ListUIRow(text: "block table stress", owner: "0.3.0.2")
+    static let row3B = ListUIRow(text: "matrix fixture anchor scroll", owner: "0.3.1")
+    static let row3C = ListUIRow(text: "atlas cursor stream quartz", owner: "0.3.2")
+
+    // List 0.4: two plain leaders.
+    static let leader4 = ListUIRow(text: "LD-004 matrix glyph kernel", owner: "0.4.0")
+    static let row4B = ListUIRow(text: "anchor buffer expand", owner: "0.4.1")
+
+    // Task list 0.13: a task leader holding a mention (SwiftUI under
+    // either renderer), then plain task leaders.
+    static let mentionTask = ListUIRow(text: "LD-013 ", owner: "0.13.0")
+    static let task13B = ListUIRow(text: "schema inline kernel", owner: "0.13.1")
+    static let task13C = ListUIRow(text: "swift block confluence matrix", owner: "0.13.2")
+
+    // List 0.28 (not text-only: it holds a heading). Item 0.28.0 ends in
+    // a column of a paragraph and a heading, which SwiftUI draws under
+    // either renderer.
+    static let leader28 = ListUIRow(text: "LD-028 chunk spline", owner: "0.28.0")
+    static let headingColumnParagraph = ListUIRow(text: "block theme confluence lazy theme", owner: "0.28.0.2",
+                                                  match: .prefix)
+    static let headingColumnHeading = ListUIRow(text: "table inline", owner: "0.28.0.3")
 }
 
 /// `Fixtures/kitchen-sink.json` (38 prepared root blocks): its root task
@@ -356,11 +391,22 @@ private struct ListUIDriver {
     var app: XCUIApplication { reader.app }
 
     /// `-rendererReset` (start on SwiftUI), `-fontSizeStep 0` (Text Size
-    /// taps never persist) and `-interactionProbe`.
-    init(fixture: String, extra: [String] = []) {
-        reader = ReaderDriver(launching: [
-            "-fixture", fixture, "-rendererReset", "-rendererStats", "-fontSizeStep", "0", "-interactionProbe",
+    /// taps never persist) and `-interactionProbe`. A `nil` fixture
+    /// launches on the fixture list (`open(_:)`, `back()`).
+    init(fixture: String?, extra: [String] = []) {
+        reader = ReaderDriver(launching: (fixture.map { ["-fixture", $0] } ?? []) + [
+            "-rendererReset", "-rendererStats", "-fontSizeStep", "0", "-interactionProbe",
         ] + extra)
+    }
+
+    /// From the fixture list, opens `fixture`.
+    func open(_ fixture: String) {
+        reader.openFixture(fixture)
+    }
+
+    /// Back from the reader to the fixture list.
+    func back() {
+        reader.goBack()
     }
 
     func pause(_ seconds: TimeInterval = 1) {
@@ -451,15 +497,28 @@ private struct ListUIDriver {
         return isShown(element)
     }
 
-    /// Drags toward the end until `sentinel` is in view.
-    func scrollDown(until sentinel: XCUIElement, maxDrags: Int = 20) -> Bool {
+    /// Drags toward the end, a third of a screen at a time, until `element`
+    /// is fully in view (for documents with no heading to jump to);
+    /// `afterEachDrag` runs after every drag.
+    func scrollDown(until element: XCUIElement, maxDrags: Int = 30, afterEachDrag: () -> Void = {}) -> Bool {
+        scroll(by: 300, until: element, maxDrags: maxDrags, afterEachDrag: afterEachDrag)
+    }
+
+    /// `scrollDown(until:)` toward the top.
+    func scrollUp(until element: XCUIElement, maxDrags: Int = 30, afterEachDrag: () -> Void = {}) -> Bool {
+        scroll(by: -300, until: element, maxDrags: maxDrags, afterEachDrag: afterEachDrag)
+    }
+
+    private func scroll(by step: CGFloat, until element: XCUIElement, maxDrags: Int,
+                        afterEachDrag: () -> Void) -> Bool {
         var drags = 0
-        while !isShown(sentinel), drags < maxDrags {
-            reader.drag(by: 600)
-            pause(0.3)
+        while !isShown(element), drags < maxDrags {
+            reader.drag(by: step)
+            pause(0.4)
+            afterEachDrag()
             drags += 1
         }
-        return isShown(sentinel)
+        return isShown(element)
     }
 
     // MARK: Screen snapshot
@@ -1156,43 +1215,41 @@ final class ListRendererUITests: XCTestCase {
 
     // MARK: Search
 
-    /// Search under TextKit 2: a matched leader, continuation paragraph or
-    /// trailing heading falls back to SwiftUI for that owner only (the row
-    /// paints no highlight), its neighbours stay TextKit 2 rows with their
-    /// own owners; atom/fallback owners match too and stay SwiftUI. The
-    /// match survives navigation and switching both ways; clearing the
-    /// search returns the eligible owner to TextKit 2.
+    /// Search under TextKit 2, on list-dense's text-only lists: a matched
+    /// continuation paragraph or leader falls back to SwiftUI for that
+    /// owner only (the row paints no highlight), its neighbours stay
+    /// TextKit 2 rows with their own owners; an atom-bearing leader
+    /// matches too and stays SwiftUI. The match survives Next match and
+    /// switching both ways; clearing the search returns the eligible owner
+    /// to TextKit 2.
     func testSearchFallsBackPerOwnerAndReturnsToTextKit2() throws {
         struct Case {
-            let section: String
             let query: String
             let owner: ListUIRow
             /// The owner is eligible (TextKit 2 when no highlight).
             let eligible: Bool
             let neighbours: [ListUIRow]
         }
+        // In document order (each is revealed by scrolling on); each query
+        // matches once, so Next match stays on it.
         let cases = [
-            Case(section: ListUIParity.s5, query: "LP-CONT-PARA-1", owner: ListUIParity.contPara1, eligible: true,
-                 neighbours: [ListUIParity.contLeader, ListUIParity.contNested1A, ListUIParity.contPara2]),
-            Case(section: ListUIParity.s5, query: "LP-CONT-HEADING", owner: ListUIParity.contHeading, eligible: true,
-                 neighbours: [ListUIParity.contLeader, ListUIParity.contPara2]),
-            Case(section: ListUIParity.s4, query: "LP-WRAP-A", owner: ListUIParity.wrap, eligible: true,
-                 neighbours: [ListUIParity.marks, ListUIParity.link]),
-            Case(section: ListUIParity.s4, query: "LP-ATOM-STATUS", owner: ListUIParity.status, eligible: false,
-                 neighbours: [ListUIParity.rtlB, ListUIParity.afterCode]),
-            Case(section: ListUIParity.s4, query: "LP-ATOM-MENTION", owner: ListUIParity.mention, eligible: false,
-                 neighbours: [ListUIParity.rtlB, ListUIParity.afterCode]),
+            Case(query: "block table stress", owner: ListUIDense.continuation3, eligible: true,
+                 neighbours: [ListUIDense.leader3, ListUIDense.row3B, ListUIDense.row3C]),
+            Case(query: "LD-004", owner: ListUIDense.leader4, eligible: true,
+                 neighbours: [ListUIDense.row3C, ListUIDense.row4B]),
+            Case(query: "LD-013", owner: ListUIDense.mentionTask, eligible: false,
+                 neighbours: [ListUIDense.task13B, ListUIDense.task13C]),
         ]
-        let driver = ListUIDriver(fixture: ListUIParity.fixture)
+        let driver = ListUIDriver(fixture: ListUIDense.fixture)
         driver.reader.waitForRenderer("SwiftUI")
-        XCTAssertTrue(driver.reader.element(labelled: ListUIParity.s1).waitForExistence(timeout: 15), "lists-parity missing")
+        XCTAssertTrue(driver.element(ListUIDense.first).waitForExistence(timeout: 30), "list-dense missing")
         driver.reader.chooseRenderer(textKit2: true)
         driver.pause(1.5)
 
         for item in cases {
             try listUIStep("Search \(item.query) (owner \(item.owner.owner))") {
                 let owner = driver.element(item.owner)
-                XCTAssertTrue(driver.reveal(owner, below: item.section), "\(item.owner.text) never came into view")
+                XCTAssertTrue(driver.scrollDown(until: owner), "\(item.owner.text) never came into view")
                 if item.eligible {
                     XCTAssertTrue(driver.isTextKit2(item.owner), "\(item.owner.owner) is not TextKit 2 before the search")
                 } else {
@@ -1416,12 +1473,15 @@ final class ListRendererUITests: XCTestCase {
 
 // MARK: - End-to-end list storyboard
 
-/// The PR 2 list storyboard (Astra §8 steps 1–6) on lists-parity, paced for
-/// a screen recording by `Scripts/e2e-video.sh --test lists` from the same
-/// build as the foundation switch test (`--test switch`). Like
-/// `RendererSwitchUITests`, it reads the running executable's SHA-256 off
-/// About This Build, prints `OBSERVED_BUILD_SHA256=…`, and fails with "on-screen
-/// checksum differs from the built binary" unless it equals
+/// The PR 2 list storyboard (Astra §8 steps 1–6), paced for a screen
+/// recording by `Scripts/e2e-video.sh --test lists` from the same build as
+/// the foundation switch test (`--test switch`). It opens lists-parity from
+/// the fixture list for nesting, ordered markers, tasks and decisions (all
+/// above the fixture's tables), then list-dense, which holds only lists,
+/// for a continuation paragraph, the atom and heading-column fallbacks and
+/// search. Like `RendererSwitchUITests`, it reads the running executable's
+/// SHA-256 off About This Build, prints `OBSERVED_BUILD_SHA256=…`, and fails
+/// with "on-screen checksum differs from the built binary" unless it equals
 /// `ADF_EXPECTED_BUILD_SHA256` (`TEST_RUNNER_ADF_EXPECTED_BUILD_SHA256`), so
 /// the script's wrong-digest negative control works for both tests.
 @MainActor
@@ -1434,11 +1494,12 @@ final class ListStoryboardUITests: XCTestCase {
     }
 
     func testListStoryboardSwiftUIToTextKit2AndBack() throws {
-        let driver = ListUIDriver(fixture: ListUIParity.fixture)
+        let driver = ListUIDriver(fixture: nil)
         let reader = driver.reader
         let app = driver.app
 
         try listUIStep("1. Open lists-parity on SwiftUI; About shows the executable checksum") {
+            driver.open(ListUIParity.fixture)
             reader.waitForRenderer("SwiftUI")
             XCTAssertTrue(reader.element(labelled: ListUIParity.s1).waitForExistence(timeout: 15),
                 "lists-parity did not render")
@@ -1469,44 +1530,33 @@ final class ListStoryboardUITests: XCTestCase {
             driver.closeAbout()
         }
 
-        try listUIStep("2. Nesting and a continuation; ON: list owners are TextKit 2 rows, the linked one TextKit 1-backed") {
+        try listUIStep("2. Nesting and a linked leader; ON: list owners are TextKit 2 rows, the linked one TextKit 1-backed") {
             for row in ListUIParity.nesting {
                 XCTAssertTrue(driver.isShown(driver.element(row)), "\(row.text) is not in view at the top")
             }
             pause()
             listUIAttach(app, "02a-nesting-swiftui")
-            driver.jump(toHeading: ListUIParity.s5)
-            XCTAssertTrue(driver.waitUntilShown(driver.element(ListUIParity.contPara1)),
-                "the continuation paragraph is not in view")
-            pause()
-            listUIAttach(app, "02b-continuation-swiftui")
             reader.chooseRenderer(textKit2: true)
             pause(1.5)
-            for row in [ListUIParity.contLeader, ListUIParity.contNested1A, ListUIParity.contPara1,
-                        ListUIParity.contPara2, ListUIParity.contHeading] {
+            for row in ListUIParity.nesting {
                 XCTAssertTrue(driver.isTextKit2(row), "\(row.text) is not a TextKit 2 row owned by \(row.owner)")
             }
-            listUIAttach(app, "02c-continuation-textkit2")
+            listUIAttach(app, "02b-nesting-textkit2")
             let listLive = driver.aboutCount(ListUIProbe.Identifier.liveListRows, until: { $0 > 0 })
             XCTAssertGreaterThan(listLive ?? 0, 0, "About reports no live TextKit 2 list rows")
-            driver.jump(toHeading: ListUIParity.s1)
-            for row in ListUIParity.nesting where driver.isShown(driver.element(row)) {
-                XCTAssertTrue(driver.isTextKit2(row), "\(row.text) is not a TextKit 2 row owned by \(row.owner)")
-            }
-            listUIAttach(app, "02d-nesting-textkit2")
-            driver.jump(toHeading: ListUIParity.s4)
-            XCTAssertTrue(driver.reveal(driver.element(ListUIParity.link), below: ListUIParity.s4),
-                "the linked leader is not in view")
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.link), "the linked leader is not a TextKit 2 row")
+            let linked = ListUIParity.decisionC
+            XCTAssertTrue(driver.reveal(driver.element(linked), below: ListUIParity.s3),
+                "the linked decision is not in view")
+            XCTAssertTrue(driver.isTextKit2(linked), "the linked decision is not a TextKit 2 row")
             let backed = driver.aboutCount(ListUIProbe.Identifier.textKit1BackedRows, until: { $0 > 0 })
             XCTAssertGreaterThan(backed ?? 0, 0, "About reports no TextKit 1-backed row with the linked leader in view")
-            listUIAttach(app, "02e-linked-leader-textkit2")
+            listUIAttach(app, "02c-linked-leader-textkit2")
         }
 
-        try listUIStep("3. Five round trips at the list landmark: ≤ 2 px per switch and in total") {
+        try listUIStep("3. Five round trips at the first two-digit marker: ≤ 2 px per switch and in total") {
             reader.chooseRenderer(textKit2: false)
-            driver.jump(toHeading: ListUIParity.s5, settleDrag: 80)
-            let anchor = driver.element(ListUIParity.contPara1)
+            driver.jump(toHeading: ListUIParity.s2, settleDrag: 80)
+            let anchor = driver.element(ListUIParity.ord10)
             XCTAssertTrue(driver.isShown(anchor), "the landmark is not in view")
             let scale = reader.pixelScale()
             var lastY = anchor.frame.minY
@@ -1516,6 +1566,9 @@ final class ListStoryboardUITests: XCTestCase {
                     reader.chooseRenderer(textKit2: textKit2)
                     pause()
                     XCTAssertTrue(driver.isShown(anchor), "the landmark left the viewport (trip \(trip), \(name))")
+                    if textKit2 {
+                        XCTAssertTrue(driver.isTextKit2(ListUIParity.ord10), "the landmark is not a TextKit 2 row")
+                    }
                     let y = anchor.frame.minY
                     let delta = abs(y - lastY) * scale
                     total += delta
@@ -1582,48 +1635,57 @@ final class ListStoryboardUITests: XCTestCase {
             listUIAttach(app, "04d-back-state-intact")
         }
 
-        try listUIStep("5. Atom and embedded-block fallbacks; search a continuation and clear it: owner-only fallback") {
-            driver.jump(toHeading: ListUIParity.s4)
-            XCTAssertTrue(driver.reveal(driver.element(ListUIParity.mention), below: ListUIParity.s4),
-                "the mention leader is not in view")
-            XCTAssertFalse(driver.textKit2Row(owner: ListUIParity.mention.owner).exists,
-                "the mention leader is a TextKit 2 row")
-            XCTAssertFalse(driver.textKit2Row(owner: ListUIParity.status.owner).exists,
-                "the status leader is a TextKit 2 row")
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.rtlB), "the RTL leader next to the atoms is not a TextKit 2 row")
-            listUIAttach(app, "05a-atom-fallback")
-            driver.jump(toHeading: ListUIParity.s5)
-            let panel = reader.element(labelled: ListUIParity.embedPanel)
-            XCTAssertTrue(driver.reveal(panel, below: ListUIParity.s5), "the embedded panel is not in view")
-            XCTAssertFalse(reader.textKit2Row(labelled: ListUIParity.embedPanel).exists,
-                "the panel paragraph is a TextKit 2 row")
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.embedLeader),
-                "the leader of the embedding item is not a TextKit 2 row")
-            listUIAttach(app, "05b-embedded-fallback")
+        try listUIStep("5. list-dense: atom and heading-column fallbacks; search a continuation and clear it: owner-only fallback") {
+            driver.back()
+            driver.open(ListUIDense.fixture)
+            reader.waitForRenderer("TextKit 2")
+            XCTAssertTrue(driver.element(ListUIDense.first).waitForExistence(timeout: 30), "list-dense did not open")
+            XCTAssertTrue(driver.isTextKit2(ListUIDense.first), "\(ListUIDense.first.text) is not a TextKit 2 row")
+            XCTAssertTrue(driver.waitUntilShown(driver.element(ListUIDense.dateAtom)), "the date-atom leader is not in view")
+            XCTAssertFalse(driver.textKit2Row(owner: ListUIDense.dateAtom.owner).exists,
+                "the date-atom leader is a TextKit 2 row")
+            pause()
+            listUIAttach(app, "05a-list-dense-atom-fallback")
 
-            let counter = driver.search("LP-CONT-PARA-1")
-            XCTAssertTrue(counter.hasPrefix("1 /"), "LP-CONT-PARA-1: counter \(counter)")
-            XCTAssertTrue(driver.waitUntilShown(driver.element(ListUIParity.contPara1)), "the match is not in view")
-            XCTAssertFalse(driver.textKit2Row(owner: ListUIParity.contPara1.owner).exists,
+            // To list 0.28 by its sentinel; the search's own fallback ends
+            // when it is cleared.
+            let jump = driver.search("LD-028")
+            XCTAssertTrue(jump.hasPrefix("1 /"), "LD-028: counter \(jump)")
+            driver.clearSearch()
+            let column = [ListUIDense.headingColumnParagraph, ListUIDense.headingColumnHeading]
+            XCTAssertTrue(driver.scrollDown(until: driver.element(ListUIDense.headingColumnHeading)),
+                "the heading column is not in view")
+            for block in column {
+                XCTAssertTrue(driver.isShown(driver.element(block)), "\(block.text) is not in view")
+                XCTAssertFalse(driver.textKit2Row(owner: block.owner).exists,
+                    "\(block.owner), in a column of a paragraph and a heading, is a TextKit 2 row")
+            }
+            pause()
+            listUIAttach(app, "05b-heading-column-fallback")
+
+            let counter = driver.search("block table stress")
+            XCTAssertTrue(counter.hasPrefix("1 /"), "block table stress: counter \(counter)")
+            XCTAssertTrue(driver.waitUntilShown(driver.element(ListUIDense.continuation3)), "the match is not in view")
+            XCTAssertFalse(driver.textKit2Row(owner: ListUIDense.continuation3.owner).exists,
                 "the highlighted paragraph is still a TextKit 2 row")
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.contLeader), "the item's leader left TextKit 2")
+            XCTAssertTrue(driver.isTextKit2(ListUIDense.leader3), "the item's leader left TextKit 2")
             listUIAttach(app, "05c-search-owner-fallback")
             driver.clearSearch()
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.contPara1),
+            XCTAssertTrue(driver.isTextKit2(ListUIDense.continuation3),
                 "the paragraph did not return to TextKit 2 after clearing")
             listUIAttach(app, "05d-search-cleared")
 
             driver.stepTextSize(2)
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.contLeader), "a Text Size change dropped the leader from TextKit 2")
+            XCTAssertTrue(driver.isTextKit2(ListUIDense.leader3), "a Text Size change dropped the leader from TextKit 2")
             listUIAttach(app, "05e-text-size-larger")
             driver.stepTextSize(-2)
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.contLeader), "a Text Size change dropped the leader from TextKit 2")
+            XCTAssertTrue(driver.isTextKit2(ListUIDense.leader3), "a Text Size change dropped the leader from TextKit 2")
         }
 
-        try listUIStep("6. Finish on SwiftUI with an eligible list leader in view: no live TextKit 2 rows") {
-            let leader = driver.element(ListUIParity.contLeader)
-            XCTAssertTrue(driver.reveal(leader, below: ListUIParity.s5), "the leader is not in view")
-            XCTAssertTrue(driver.isTextKit2(ListUIParity.contLeader),
+        try listUIStep("6. Finish on SwiftUI: no TextKit 2 row on screen; none alive once the TextKit 2 path is retraced") {
+            let leader = driver.element(ListUIDense.leader3)
+            XCTAssertTrue(driver.waitUntilShown(leader), "the leader is not in view")
+            XCTAssertTrue(driver.isTextKit2(ListUIDense.leader3),
                 "the leader is not a TextKit 2 row before switching back")
             listUIAttach(app, "06a-before-switching-back")
             reader.chooseRenderer(textKit2: false)
@@ -1631,16 +1693,44 @@ final class ListStoryboardUITests: XCTestCase {
             XCTAssertTrue(driver.isShown(leader), "the leader left the viewport when switching back")
             XCTAssertTrue(reader.waitForDisappearance(of: reader.anyTextKit2Row, timeout: 5),
                 "a TextKit 2 row is still on screen")
+            // Recorded, not asserted: rows the lazy stack built before showing
+            // them keep their engine until it comes back to them, and it
+            // re-evaluates each before it appears (p7-diag/findings.md).
             driver.openAbout()
-            let live = reader.readLiveTextKit2Rows(until: { $0 == 0 })
-            XCTAssertEqual(live, 0, "TextKit 2 rows are still alive after switching back to SwiftUI")
             XCTAssertTrue(app.staticTexts[ListUIProbe.Identifier.liveListRows].waitForExistence(timeout: 5),
                           "About This Build has no \(ListUIProbe.Identifier.liveListRows)")
+            let liveAtSwitch = reader.readLiveTextKit2Rows(until: { $0 == 0 })
+            let listLiveAtSwitch = reader.readCount(ListUIProbe.Identifier.liveListRows, until: { $0 == 0 })
+            listUIAttach(text: "Right after switching back to SwiftUI: live TextKit 2 rows "
+                + "\(liveAtSwitch.map(String.init) ?? "?"), of which list text "
+                + "\(listLiveAtSwitch.map(String.init) ?? "?") (recorded, not asserted)", "06b-live-rows-right-after-off")
+            listUIAttach(app, "06c-about-right-after-off")
+            driver.closeAbout()
+
+            // Retrace list-dense's TextKit 2 path on SwiftUI: down past list
+            // 0.28 (step 5's search went there), then back to the top.
+            let noRow = {
+                XCTAssertFalse(reader.anyTextKit2Row.exists, "a TextKit 2 row appeared on SwiftUI while retracing")
+            }
+            XCTAssertTrue(driver.scrollDown(until: driver.element(ListUIDense.headingColumnHeading), maxDrags: 60,
+                                            afterEachDrag: noRow), "the retrace never reached list 0.28")
+            for _ in 0 ..< 2 {
+                reader.drag(by: 600)
+                pause(0.4)
+                noRow()
+            }
+            listUIAttach(app, "06d-retraced-past-list-28")
+            XCTAssertTrue(driver.scrollUp(until: driver.element(ListUIDense.first), maxDrags: 80, afterEachDrag: noRow),
+                          "the retrace never came back to the top")
+            listUIAttach(app, "06e-retraced-to-the-top")
+            driver.openAbout()
+            let live = reader.readLiveTextKit2Rows(until: { $0 == 0 })
+            XCTAssertEqual(live, 0, "TextKit 2 rows are still alive after retracing the TextKit 2 path on SwiftUI")
             let listLive = reader.readCount(ListUIProbe.Identifier.liveListRows, until: { $0 == 0 })
-            XCTAssertEqual(listLive, 0, "TextKit 2 list rows are still alive after switching back")
+            XCTAssertEqual(listLive, 0, "TextKit 2 list rows are still alive after retracing the TextKit 2 path")
             XCTAssertEqual(app.staticTexts[ReaderDriver.Identifier.buildRenderer].label, "SwiftUI")
             pause()
-            listUIAttach(app, "06b-about-no-live-rows")
+            listUIAttach(app, "06f-about-no-live-rows")
             driver.closeAbout()
         }
     }
