@@ -1388,7 +1388,17 @@ final class LifecycleUITests: XCTestCase {
     /// and keeps them off the window with the renderer they were built
     /// with, at main too (p7-retain-diag); here 56 live for 53 shown at the
     /// series viewport, 79 for 71 after 600 pt more and 61 for 53 back
-    /// (recorded, not gated), every row released at OFF. F14 — after each
+    /// (recorded, not gated), every row released at OFF. Five such 600 pt
+    /// round trips (the copy-only plateau probe,
+    /// `p6a-stableid/plateau/gate/lifecycle.md`) plateau by the third: live
+    /// back at the viewport 56, 61, 61, 58, 58, 58 and an off-screen gap of
+    /// 8 after the first trip, identical at every point to an init/deinit
+    /// count of the rebuild control's own rows, so the gap is the lazy
+    /// stack's render-region buffer, not TextKit 2 growth. After those five
+    /// trips OFF leaves the same 8 cached rows alive in both arms (the p7
+    /// mechanism, bounded), and the probe's +5.9 MB TextKit 2-over-control
+    /// footprint is one shared-host run, provisional until the F9 ON-vs-OFF
+    /// footprint. F14 — after each
     /// TextKit 2 series one more ON pick's count exceeds the root-owned
     /// TextKit 2 rows of that census (the root-only eligible count; zero
     /// here) with list-owned rows present, while the control's extra pick
