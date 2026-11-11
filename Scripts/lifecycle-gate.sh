@@ -135,11 +135,20 @@ select_xctestrun() {
 }
 
 BOOTED_BY_US=0; AGENT_PID=""; XCODEBUILD_PID=""
+# Signals go only to this script's own children, by recorded PID and only
+# while that PID is still our child: PIDs wrap within minutes on a busy
+# host, so a recorded PID whose process has exited can belong to another
+# worker's xcodebuild or test runner. Never pattern-match (pkill/killall).
+ours() { [[ -n "$1" && "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')" == "$$" ]]; }
+stop_child() {
+    if ours "$1"; then kill -TERM "$1" 2>/dev/null || true; fi
+    wait "$1" 2>/dev/null || true
+}
 cleanup() {
     local status=$?
     trap - EXIT
-    [[ -z "$XCODEBUILD_PID" ]] || kill "$XCODEBUILD_PID" 2>/dev/null || true
-    [[ -z "$AGENT_PID" ]] || { kill -TERM "$AGENT_PID" 2>/dev/null || true; wait "$AGENT_PID" 2>/dev/null || true; }
+    [[ -z "$XCODEBUILD_PID" ]] || stop_child "$XCODEBUILD_PID"
+    [[ -z "$AGENT_PID" ]] || stop_child "$AGENT_PID"
     if [[ $BOOTED_BY_US -eq 1 && $KEEP_BOOTED -eq 0 ]]; then
         log "shutting down $UDID (booted by this run)"
         xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
@@ -206,18 +215,16 @@ verdict_count() {
 }
 EXPECTED=$(echo "$TESTS" | wc -w | tr -d ' ')
 deadline=$(( SECONDS + SUITE_TIMEOUT ))
-while kill -0 "$XCODEBUILD_PID" 2>/dev/null; do
+while ours "$XCODEBUILD_PID"; do
     [[ "$(verdict_count)" -lt "$EXPECTED" ]] || break
     (( SECONDS < deadline )) || { log "suite timeout (${SUITE_TIMEOUT}s)"; break; }
     sleep 5
 done
 grace=$(( SECONDS + GRACE ))
-while kill -0 "$XCODEBUILD_PID" 2>/dev/null && (( SECONDS < grace )); do sleep 2; done
-kill "$XCODEBUILD_PID" 2>/dev/null || true
-wait "$XCODEBUILD_PID" 2>/dev/null || true
+while ours "$XCODEBUILD_PID" && (( SECONDS < grace )); do sleep 2; done
+stop_child "$XCODEBUILD_PID"
 XCODEBUILD_PID=""
-kill -TERM "$AGENT_PID" 2>/dev/null || true
-wait "$AGENT_PID" 2>/dev/null || true
+stop_child "$AGENT_PID"
 AGENT_PID=""
 
 # ------------------------------------------------------------------ report
