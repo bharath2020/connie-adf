@@ -12,7 +12,8 @@ import ADFPreparation
 /// (`stress-5k` block 503, a superscript wrapping onto a line of its own,
 /// measured 3.33 pt short at large and shifted every row below it on a
 /// renderer switch). Content the arm cannot match exactly is not eligible
-/// (`TextKit2Eligibility`), so it never reaches this check.
+/// (`TextKit2Eligibility`), so it never reaches this check. List text (list
+/// leaders and a list row's paragraphs) is swept the same way.
 @Suite("TextKit 2 fixture sweep", .serialized)
 @MainActor
 struct TextKit2FixtureSweepTests {
@@ -62,6 +63,79 @@ struct TextKit2FixtureSweepTests {
         }
         #expect(checked == Self.expectedEligible.values.reduce(0, +) * Self.sizes.count)
         print("TK2 fixture sweep: \(checked) measurements, worst |Δ| = \(worst.delta) \(worst.description); text roots on SwiftUI: \(fallbacks)")
+    }
+
+    nonisolated static let listDocuments = ["kitchen-sink", "stress-5k", "lists-parity", "list-dense"]
+    /// Eligible list leaves per document: leaders and a row's direct
+    /// paragraphs and headings at any depth (`TextKit2Scope`), linked ones
+    /// included (0, 0, 3 and 594 are TextKit 1-backed). Pinned so a walk
+    /// that finds no list text, or text that all falls back, fails here
+    /// rather than passing by measuring nothing.
+    nonisolated static let expectedEligibleListLeaves = ["kitchen-sink": 8, "stress-5k": 7_543, "lists-parity": 58, "list-dense": 3_686]
+
+    /// The leader as `ListRowView` hosts it, on one arm.
+    static func leaderHeight(_ segments: [InlineSegment], arm: ADFTextRenderer, size: DynamicTypeSize, width: CGFloat) -> CGFloat {
+        let leader = TextEngineLeaf(segments: segments, style: ListRowView.leaderStyle(theme: TK2Parity.theme), ownerID: nil) {
+            SegmentedTextView(segments: segments).textSelection(.enabled)
+        }
+        let host = UIHostingController(rootView: leader
+            .environment(\.adfTextRenderer, arm)
+            .environment(\.adfTheme, TK2Parity.theme)
+            .dynamicTypeSize(size))
+        host.safeAreaRegions = []
+        return host.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height
+    }
+
+    /// The same leaf drawn as list text: a leader as the list row hosts it,
+    /// a row's paragraph or heading as `RichTextBlockView`. Measured at the
+    /// sweep width (the list's own column widths are the hosted list
+    /// parity's), each distinct (text, style) once.
+    @Test("every eligible list leaf of the demo documents measures as Text does")
+    func everyEligibleListLeaf() async throws {
+        struct Key: Hashable {
+            let segments: [InlineSegment]
+            let style: TextBlockStyle?
+        }
+        var checked = 0
+        var worst: (delta: CGFloat, description: String) = (0, "")
+        var fallbacks: [TextKit2Eligibility.Fallback: Int] = [:]
+        for document in Self.listDocuments {
+            let doc = try await ADFParser().parse(try Self.fixtureData(document))
+            let blocks = DocumentPreparer(theme: TK2Parity.theme).prepare(doc)
+            var leaves: [TextKit2Scope.Leaf] = []
+            TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+                if leaf.position != .root { leaves.append(leaf) }
+            }
+            var eligible = 0
+            var measured: Set<Key> = []
+            for leaf in leaves {
+                if case .fallback(let reason) = TextKit2Eligibility.verdict(leaf.segments) {
+                    fallbacks[reason, default: 0] += 1
+                    continue
+                }
+                eligible += 1
+                guard measured.insert(Key(segments: leaf.segments, style: leaf.style)).inserted else { continue }
+                for size in Self.sizes {
+                    let h: (swiftUI: CGFloat, textKit2: CGFloat)
+                    if let style = leaf.style {
+                        h = TK2Parity.heights(TK2Parity.Fixture(name: leaf.ownerID, segments: leaf.segments, style: style), size: size, width: Self.width)
+                    } else {
+                        h = (Self.leaderHeight(leaf.segments, arm: .swiftUI, size: size, width: Self.width),
+                             Self.leaderHeight(leaf.segments, arm: .textKit2, size: size, width: Self.width))
+                    }
+                    let delta = abs(h.swiftUI - h.textKit2)
+                    let label = "\(document) \(leaf.ownerID) (\(leaf.position)) \(size): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)"
+                    checked += 1
+                    if delta > worst.delta { worst = (delta, label) }
+                    #expect(delta <= Self.tolerance, "\(label)")
+                }
+            }
+            #expect(eligible == Self.expectedEligibleListLeaves[document], "\(document): \(eligible) eligible list leaves")
+            #expect(!measured.isEmpty, "\(document): no list leaf measured")
+            print("TK2 list sweep \(document): \(eligible) eligible list leaves, \(measured.count) distinct measured")
+        }
+        #expect(checked > 0)
+        print("TK2 list sweep: \(checked) measurements, worst |Δ| = \(worst.delta) \(worst.description); list text on SwiftUI: \(fallbacks)")
     }
 }
 #endif
