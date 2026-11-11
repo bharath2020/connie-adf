@@ -6,15 +6,15 @@ import XCTest
 // `lists-parity`, `lists-links` (linked list text), `list-dense` and
 // `kitchen-sink`.
 //
-// Which rows must be TextKit 2. An assertion that a row is TextKit 2 under
-// ON targets a single-block row (a leader alone, or a continuation
-// paragraph after a nested list) in a list that holds only left-to-right
-// text: leaders and plain paragraphs, no code, container, table, sync
-// block, heading or sub/sup anywhere in the list. An assertion that a row
-// stays SwiftUI under ON targets an atom-bearing leader or a column with a
-// heading beside other text. Rows with a leader and trailing paragraphs,
-// and lists-parity's LP-S4 list (it holds a code block), are asserted
-// neither way while the rule for them is pending.
+// Which rows are TextKit 2 under ON (the list rules, `TextKit2Scope`, iOS
+// 26+): every row of a left-to-right list whose text column holds one text
+// block, or several paragraphs in the body style (plain, links, emoji,
+// bold/italic, inline code), unless its text holds an inline atom. A
+// heading, sub/superscript or small text beside other text, or any
+// non-text block in the row, keeps that row's text on SwiftUI; a row
+// holding both a panel and an expand keeps its whole list there. The
+// tests assert the renderer of each row they target, present or absent,
+// so a change to these rules fails them.
 //
 // Owners. A list row drawn by TextKit 2 is a `tk2-row:<owner>` element; a
 // leader's owner is its `PreparedListRow.id` (the item's node path), a
@@ -97,17 +97,16 @@ private enum ListUIParity {
     // §2 ordered list 0.3: the first two-digit marker.
     static let ord10 = ListUIRow(text: "LP-ORD-10 ten, a two-digit marker", owner: "0.3.2")
 
-    // §4 leaders (bullet list 0.8, which holds a code block, so its rule
-    // is pending: only the held link case uses it).
+    // §4 leaders (bullet list 0.8: TextKit 2 apart from its code-first
+    // item 0.8.12, whose own text stays SwiftUI).
     static let link = ListUIRow(text: "LP-LINK-A see the linked docs for details", owner: "0.8.2")
 }
 
 /// `Fixtures/list-dense.json` (600 root lists and nothing else, so no
-/// table to scroll past). Its first lists hold only left-to-right text,
-/// leaders and plain paragraphs, with no code, container, table, heading
-/// or sub/sup anywhere in the list: TextKit 2 draws their single-block
-/// rows on iOS 26+. Each list's first leader opens with a sentinel,
-/// `LD-<root>`, that a search matches once.
+/// table to scroll past). Its first lists hold only left-to-right body
+/// text, leaders and plain paragraphs: TextKit 2 draws their rows on iOS
+/// 26+ except where a leader holds an atom. Each list's first leader
+/// opens with a sentinel, `LD-<root>`, that a search matches once.
 private enum ListUIDense {
     static let fixture = "list-dense"
 
@@ -122,6 +121,11 @@ private enum ListUIDense {
     // (a row of its own, owned by the paragraph's block ID).
     static let leader3 = ListUIRow(text: "LD-003 vector chunk quartz", owner: "0.3.0")
     static let continuation3 = ListUIRow(text: "block table stress", owner: "0.3.0.2")
+    // Its nested item 0.3.0.1.0: a leader and a trailing paragraph, both
+    // body text, so both TextKit 2 (each its own row, the paragraph owned
+    // by its block ID).
+    static let nestedLeader3 = ListUIRow(text: "stress expand buffer table quartz", owner: "0.3.0.1.0")
+    static let nestedTrailing3 = ListUIRow(text: "swift theme block matrix", owner: "0.3.0.1.0.1")
     static let row3B = ListUIRow(text: "matrix fixture anchor scroll", owner: "0.3.1")
     static let row3C = ListUIRow(text: "atlas cursor stream quartz", owner: "0.3.2")
 
@@ -135,8 +139,8 @@ private enum ListUIDense {
     static let task13B = ListUIRow(text: "schema inline kernel", owner: "0.13.1")
     static let task13C = ListUIRow(text: "swift block confluence matrix", owner: "0.13.2")
 
-    // List 0.28 (not text-only: it holds a heading). Item 0.28.0 ends in
-    // a column of a paragraph and a heading, which SwiftUI draws under
+    // List 0.28: its leader 0.28.0 is TextKit 2; the item ends in a
+    // column of a paragraph and a heading, which SwiftUI draws under
     // either renderer.
     static let leader28 = ListUIRow(text: "LD-028 chunk spline", owner: "0.28.0")
     static let headingColumnParagraph = ListUIRow(text: "block theme confluence lazy theme", owner: "0.28.0.2",
@@ -232,8 +236,8 @@ private enum ListUILinks {
             ListUILink(fixture: links, section: s2,
                        row: ListUIRow(text: "LL-DECISION-LINK see the linked decision record", owner: "0.4.0"),
                        linkText: "linked decision record", url: url("decision"), linkCentre: 0.77),
-            // Last: a row with a leader and trailing blocks (the scope rule
-            // for those is pending, build plan running notes).
+            // A continuation row after a nested list, and a trailing
+            // paragraph beside its leader (a column of body paragraphs).
             ListUILink(fixture: links, section: s1,
                        row: ListUIRow(text: "LL-CONT-LINK a linked continuation", owner: "0.1.8.2"),
                        linkText: "linked continuation", url: url("continuation"), linkCentre: 0.72),
@@ -1234,7 +1238,8 @@ final class ListRendererUITests: XCTestCase {
         // matches once, so Next match stays on it.
         let cases = [
             Case(query: "block table stress", owner: ListUIDense.continuation3, eligible: true,
-                 neighbours: [ListUIDense.leader3, ListUIDense.row3B, ListUIDense.row3C]),
+                 neighbours: [ListUIDense.leader3, ListUIDense.nestedLeader3, ListUIDense.nestedTrailing3,
+                              ListUIDense.row3B, ListUIDense.row3C]),
             Case(query: "LD-004", owner: ListUIDense.leader4, eligible: true,
                  neighbours: [ListUIDense.row3C, ListUIDense.row4B]),
             Case(query: "LD-013", owner: ListUIDense.mentionTask, eligible: false,
@@ -1681,6 +1686,7 @@ final class ListStoryboardUITests: XCTestCase {
                 XCTAssertFalse(driver.textKit2Row(owner: block.owner).exists,
                     "\(block.owner), in a column of a paragraph and a heading, is a TextKit 2 row")
             }
+            XCTAssertTrue(driver.isTextKit2(ListUIDense.leader28), "the leader of that item is not a TextKit 2 row")
             pause()
             listUIAttach(app, "05b-heading-column-fallback")
 
@@ -1694,6 +1700,9 @@ final class ListStoryboardUITests: XCTestCase {
             driver.clearSearch()
             XCTAssertTrue(driver.isTextKit2(ListUIDense.continuation3),
                 "the paragraph did not return to TextKit 2 after clearing")
+            for row in [ListUIDense.nestedLeader3, ListUIDense.nestedTrailing3] {
+                XCTAssertTrue(driver.isTextKit2(row), "\(row.owner), in a column of body paragraphs, is not a TextKit 2 row")
+            }
             listUIAttach(app, "05d-search-cleared")
 
             driver.stepTextSize(2)
