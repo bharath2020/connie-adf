@@ -216,7 +216,13 @@ struct TextKit2RowViewTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/ADFRendering/TextKit2")
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasSuffix(".swift") }
-        #expect(files.count >= 6)
+        // The row view and the units extracted from it (S28) are all scanned.
+        let rowViewFiles: Set = [
+            "TextKit2RowView.swift", "TextKit2LayoutResult.swift", "TextKit2RowView+RunBackgrounds.swift",
+            "TextKit2CanvasView.swift", "TextKit1Stack.swift", "LayoutCache.swift",
+        ]
+        #expect(rowViewFiles.isSubset(of: files), "missing: \(rowViewFiles.subtracting(files).sorted())")
+        #expect(files.count >= 11)
         for file in files {
             let source = try String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8)
             for forbidden in ["invalidateIntrinsicContentSize", "setNeedsLayout", "onScrollVisibilityChange", "@State"] {
