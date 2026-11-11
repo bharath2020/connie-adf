@@ -171,5 +171,43 @@ struct TextKit2HeightParityTests {
         let h = TK2Parity.heights(fixture, size: .large, width: 370)
         #expect(h.swiftUI == h.textKit2)
     }
+
+    /// PR 1 leaf residual (found in PR 2's list parity work, accepted with
+    /// no fix): a paragraph with a link, an emoji pair, inline code and a
+    /// bold run, at AX3 in a 219 pt column (a list text column of a 320 pt
+    /// document), measures a pixel shorter on TextKit 2 than with `Text`
+    /// at both scales: 576 against 575.5 at 2x and 575.67 at 3x, as a root
+    /// paragraph and as a list leader (`phase5/h1-probe-2x.xcresult`,
+    /// `phase5/h1-probe2-2x.xcresult`, `phase5/r1-height-{2x,3x}.xcresult`
+    /// in the cadf3-tk2-stack-02 data directory). Without the link, or
+    /// without the emoji, it matches. A known issue, so a fix shows up as
+    /// an unexpected pass.
+    @Test("residual: linked text with an emoji pair and inline code is a pixel short at AX3 in a 219 pt column")
+    func linkedEmojiCodeResidual() async throws {
+        let filler = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa".split(separator: " ")
+        func words(_ n: Int) -> String { filler.prefix(n).joined(separator: " ") }
+        let link = "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com/later-line\"}}"
+        let code = "{\"type\":\"code\"}", strong = "{\"type\":\"strong\"}"
+        func content(link linked: Bool, emoji: Bool) -> String {
+            [
+                TK2Parity.adfText(words(6) + " "),
+                TK2Parity.adfText("linked words", marks: linked ? link : ""),
+                TK2Parity.adfText(" " + words(4) + (emoji ? " \u{1F600}\u{1F389} " : " ")),
+                TK2Parity.adfText("code", marks: code),
+                TK2Parity.adfText(" " + words(5), marks: strong),
+            ].joined(separator: ",")
+        }
+        let residual = try await TK2Parity.fixture("linked-emoji-code", content: content(link: true, emoji: true))
+        let h = TK2Parity.heights(residual, size: .accessibility3, width: 219)
+        withKnownIssue("PR 1 leaf residual: linked text with an emoji pair and inline code measures a pixel short at AX3, 219 pt") {
+            #expect(abs(h.swiftUI - h.textKit2) <= Self.tolerance, "swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
+        }
+        for (name, linked, emoji) in [("no-link", false, true), ("no-emoji", true, false)] {
+            let control = try await TK2Parity.fixture(name, content: content(link: linked, emoji: emoji))
+            let c = TK2Parity.heights(control, size: .accessibility3, width: 219)
+            #expect(abs(c.swiftUI - c.textKit2) <= Self.tolerance, "\(name): swiftUI=\(c.swiftUI) textKit2=\(c.textKit2)")
+        }
+        print("TK2 residual linked+emoji+code AX3 w=219 at scale \(TK2Parity.nativeScale): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)")
+    }
 }
 #endif
