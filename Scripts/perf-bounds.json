@@ -1,6 +1,16 @@
 {
   "app_sha256": "11b0e042f564d0990b08c938284c36c9ed2001806eea0ecfcff41872f91b52dc",
   "created_utc": "2026-10-26T20:09:21Z",
+  "fixture_sources": {
+    "list-dense": {
+      "app_sha256": "da6e6a7e42efe0ecf5485d41c86863d0484074d445dac90db19d66dc5d6b6fd6",
+      "fixture_sha256": "d9e39ebf915ffd0017488d2b8ff9a02ee530f4acf63abdf59a8391c44ea69559",
+      "measured_utc": "2026-11-11T20:51:27Z",
+      "merged_utc": "2026-11-11T20:51:32Z",
+      "source_csv": "/Users/bharath2020/Documents/firstmate/data/cadf3-tk2-stack-02/perf/bounds-list-dense-a2/trials.csv",
+      "source_csv_sha256": "77e3b16169943a47fc3240e3e1cd7ce351a053c42ce73f7a8b98c9fe2c99dadd"
+    }
+  },
   "fixtures": {
     "giant-table": {
       "first_chunk_ms": {
@@ -88,6 +98,50 @@
         "n_subsets": 120,
         "p95_abs": 1312.0,
         "p95_pct": 0.5467942519921315
+      }
+    },
+    "list-dense": {
+      "first_chunk_ms": {
+        "a_median": 64.0,
+        "n_pairs": 5,
+        "n_subsets": 10,
+        "p95_abs": 8.0,
+        "p95_pct": 12.5
+      },
+      "footprint_peak_kb": {
+        "a_median": 77795.0,
+        "n_pairs": 5,
+        "n_subsets": 10,
+        "p95_abs": 880.0,
+        "p95_pct": 1.131178096278681
+      },
+      "footprint_ready_kb": {
+        "a_median": 54403.0,
+        "n_pairs": 5,
+        "n_subsets": 10,
+        "p95_abs": 960.0,
+        "p95_pct": 1.7646085693803648
+      },
+      "launch_to_ready_ms": {
+        "a_median": 650.7,
+        "n_pairs": 5,
+        "n_subsets": 10,
+        "p95_abs": 89.79999999999995,
+        "p95_pct": 13.800522514215452
+      },
+      "rss_peak_kb": {
+        "a_median": 289280.0,
+        "n_pairs": 5,
+        "n_subsets": 10,
+        "p95_abs": 1232.0,
+        "p95_pct": 0.4258849557522124
+      },
+      "rss_ready_kb": {
+        "a_median": 260848.0,
+        "n_pairs": 5,
+        "n_subsets": 10,
+        "p95_abs": 992.0,
+        "p95_pct": 0.3802981046433172
       }
     },
     "stress-5k": {
