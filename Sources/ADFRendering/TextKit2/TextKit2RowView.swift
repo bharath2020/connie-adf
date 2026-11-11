@@ -304,7 +304,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         }
         let height = Self.pixelCeil(last.baseline + last.descent, scale: scale)
         let hugging = Self.pixelCeil(maxLineWidth, scale: scale)
-        let reportedWidth = width == Self.unboundedWidth ? hugging : min(hugging, Self.pixelCeil(width, scale: scale))
+        let reportedWidth = width == Self.unboundedWidth ? hugging : min(hugging, Self.proposalCeil(width, scale: scale))
         return TextKit2LayoutResult(
             width: width,
             size: CGSize(width: reportedWidth, height: height),
@@ -384,8 +384,13 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             ))
         }
         let usedRect = manager.usedRect(for: stack.container)
-        let hugging = Self.pixelCeil(min(usedRect.maxX, width) - max(usedRect.minX, 0), scale: scale)
-        let reportedWidth = width == Self.unboundedWidth ? hugging : min(hugging, Self.pixelCeil(width, scale: scale))
+        // A line that fills the container reports the container's width,
+        // ceiled as SwiftUI ceils it (`proposalCeil`).
+        let left = max(usedRect.minX, 0)
+        let hugging = usedRect.maxX < width
+            ? Self.pixelCeil(usedRect.maxX - left, scale: scale)
+            : Self.proposalCeil(width - left, scale: scale)
+        let reportedWidth = width == Self.unboundedWidth ? hugging : min(hugging, Self.proposalCeil(width, scale: scale))
         let first = lines.first?.baseline ?? 0
         let last = lines.last?.baseline ?? 0
         let bounds = CGRect(x: 0, y: 0, width: usedRect.maxX, height: usedRect.maxY)
@@ -504,6 +509,23 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     static func pixelCeil(_ value: CGFloat, scale: CGFloat) -> CGFloat {
         guard scale > 0 else { return value }
         let pixels = (value * scale).rounded(.up)
+        var result = pixels * (1 / scale)
+        while result * scale > pixels { result = result.nextDown }
+        return result
+    }
+
+    /// The widest a row reports at a bounded width: the width ceiled to the
+    /// pixel grid as SwiftUI ceils a length, `width ÷ (1/scale)` rounded up
+    /// — not `width × scale`, `pixelCeil`'s. A column width is a sum of
+    /// pixel lengths a few ulps off a pixel; there the two can differ by a
+    /// pixel (291.66666666666669 at 3x: 876 px, `pixelCeil` 875), and `Text`
+    /// reports a line that fills the column at this one's. A list holding
+    /// such a row grows to it and re-proposes every row wider; `lists-parity`
+    /// shifted a list 0.5 pt at AX1 in a 375 pt (iPhone SE) document
+    /// before this.
+    static func proposalCeil(_ width: CGFloat, scale: CGFloat) -> CGFloat {
+        guard scale > 0 else { return width }
+        let pixels = (width / (1 / scale)).rounded(.up)
         var result = pixels * (1 / scale)
         while result * scale > pixels { result = result.nextDown }
         return result
