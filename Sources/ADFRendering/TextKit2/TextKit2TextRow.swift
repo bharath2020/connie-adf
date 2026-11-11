@@ -168,11 +168,21 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
             text: text,
             alignment: style.alignment,
             isHeading: style.isHeading,
+            headingLevel: accessibilityHeadingLevel(style),
             sizeCategory: environment.dynamicTypeSize.uiContentSizeCategory,
             layoutDirection: environment.layoutDirection,
             displayScale: environment.displayScale,
             legibilityWeight: environment.legibilityWeight
         )
+    }
+
+    /// The heading level VoiceOver announces for `style`, as
+    /// `RichTextBlockView` maps it for `.accessibilityHeading` (a missing
+    /// level is 1, anything past 5 is 6); `nil` for body text.
+    static func accessibilityHeadingLevel(_ style: TextBlockStyle) -> Int? {
+        guard style.isHeading else { return nil }
+        let level = style.headingLevel ?? 1
+        return (1...5).contains(level) ? level : 6
     }
 }
 #endif

@@ -16,6 +16,10 @@ struct TextKit2RenderInputs: Hashable {
     var text: AttributedString
     var alignment: ADFAlignment?
     var isHeading: Bool
+    /// The level VoiceOver announces for a heading (1...6, as
+    /// `RichTextBlockView`'s `.accessibilityHeading` gives it); `nil` for
+    /// body text. It changes no layout (a level comes with its own font).
+    var headingLevel: Int?
     var sizeCategory: UIContentSizeCategory
     var layoutDirection: LayoutDirection
     var displayScale: CGFloat
@@ -25,6 +29,7 @@ struct TextKit2RenderInputs: Hashable {
         text: AttributedString,
         alignment: ADFAlignment? = nil,
         isHeading: Bool = false,
+        headingLevel: Int? = nil,
         sizeCategory: UIContentSizeCategory = .large,
         layoutDirection: LayoutDirection = .leftToRight,
         displayScale: CGFloat = 3,
@@ -33,6 +38,7 @@ struct TextKit2RenderInputs: Hashable {
         self.text = text
         self.alignment = alignment
         self.isHeading = isHeading
+        self.headingLevel = headingLevel
         self.sizeCategory = sizeCategory
         self.layoutDirection = layoutDirection
         self.displayScale = displayScale
