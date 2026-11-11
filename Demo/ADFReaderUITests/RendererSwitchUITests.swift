@@ -16,7 +16,10 @@ import XCTest
 /// Renderer proof (not the toolbar label): with TextKit 2 on, the anchor
 /// heading and "Heading two" are `tk2-row:<block id>` elements and About This
 /// Build counts live TextKit 2 rows > 0; back on SwiftUI no `tk2-row:` element
-/// remains and the count is 0. Scroll preservation: a parked heading's top
+/// remains on screen, and once the TextKit 2 scroll path has been retraced on
+/// SwiftUI the count is 0 (rows SwiftUI's lazy stack built before showing
+/// them keep their engine until the stack comes back to them;
+/// p7-diag/findings.md). Scroll preservation: a parked heading's top
 /// moves at most 2 px per switch and 2 px in total over five round trips, and
 /// back at the top of the document the title settles (stable for 2 s) within
 /// 2 px of where it settled on SwiftUI. The switch back to SwiftUI happens
@@ -222,6 +225,7 @@ final class RendererSwitchUITests: XCTestCase {
             attach(app, "07-textkit2-top")
         }
 
+        var deepestLandmark: String?
         try step("8. Scroll through the document on TextKit 2") {
             let scroll = app.scrollViews.firstMatch
             scroll.swipeUp(velocity: .slow)
@@ -230,9 +234,12 @@ final class RendererSwitchUITests: XCTestCase {
             scroll.swipeUp(velocity: .slow)
             pause()
             attach(app, "08b-textkit2-scrolled-twice")
+            // The deepest point scrolled on TextKit 2, for step 10's retrace.
+            deepestLandmark = KitchenSink.landmarks.last { reader.isVisible(reader.element(labelled: $0)) }
+            XCTContext.runActivity(named: "Deepest landmark on TextKit 2: \(deepestLandmark ?? "none")") { _ in }
         }
 
-        try step("9. Switch back to SwiftUI with a TextKit 2 heading in view — every row is released") {
+        try step("9. Switch back to SwiftUI with a TextKit 2 heading in view — no TextKit 2 row on screen") {
             // A heading (a TextKit 2 row) in view, so the switch visibly
             // changes engine: scroll back toward the top a little at a time
             // until one is, falling back to any landmark.
@@ -268,15 +275,55 @@ final class RendererSwitchUITests: XCTestCase {
                 "a TextKit 2 row is still on screen after switching back to SwiftUI"
             )
             attach(app, "09a-back-on-swiftui")
+            // Recorded, not asserted: rows SwiftUI's lazy stack built before
+            // showing them keep the engine they were built with until the
+            // stack approaches them (step 10).
             reader.openAbout()
             let live = readLiveTextKit2Rows(reader, until: { $0 == 0 })
-            XCTAssertEqual(live, 0, "TextKit 2 rows are still alive after switching back to SwiftUI")
+            let listLive = reader.readCount(Self.liveListRows, until: { $0 == 0 })
+            XCTAssertEqual(app.staticTexts[ReaderDriver.Identifier.buildRenderer].label, "SwiftUI")
+            attachText("Right after switching back to SwiftUI: live TextKit 2 rows \(live.map(String.init) ?? "?"), "
+                + "of which list text \(listLive.map(String.init) ?? "?") (recorded, not asserted)",
+                "09b-live-rows-right-after-off")
+            pause()
+            attach(app, "09c-about-right-after-off")
+            reader.closeAbout()
+        }
+
+        try step("10. Retrace the TextKit 2 scroll path on SwiftUI — every TextKit 2 row is released") {
+            // LazyVStack caches rows it builds before showing them; a switch misses those, and the stack
+            // re-evaluates each before it appears (p7-diag/findings.md), so retrace step 8's path first.
+            scrollToTop(reader)
+            let scroll = app.scrollViews.firstMatch
+            scroll.swipeUp(velocity: .slow)
+            pause()
+            XCTAssertFalse(reader.anyTextKit2Row.exists, "a TextKit 2 row appeared while retracing on SwiftUI")
+            scroll.swipeUp(velocity: .slow)
+            pause()
+            XCTAssertFalse(reader.anyTextKit2Row.exists, "a TextKit 2 row appeared while retracing on SwiftUI")
+            if let deepestLandmark {
+                scrollDown(toOrPast: deepestLandmark, reader)
+            }
+            // Half a screen on, past where step 8 stopped.
+            reader.drag(by: 300)
+            pause()
+            XCTAssertFalse(reader.anyTextKit2Row.exists, "a TextKit 2 row appeared while retracing on SwiftUI")
+            attach(app, "10a-retraced-on-swiftui")
+            reader.openAbout()
+            let live = readLiveTextKit2Rows(reader, until: { $0 == 0 })
+            XCTAssertEqual(live, 0, "TextKit 2 rows are still alive after retracing the TextKit 2 path on SwiftUI")
+            let listLive = reader.readCount(Self.liveListRows, until: { $0 == 0 })
+            XCTAssertEqual(listLive, 0, "TextKit 2 list rows are still alive after retracing the TextKit 2 path")
             XCTAssertEqual(app.staticTexts[ReaderDriver.Identifier.buildRenderer].label, "SwiftUI")
             pause()
-            attach(app, "09b-about-no-live-rows")
+            attach(app, "10b-about-no-live-rows")
             reader.closeAbout()
         }
     }
+
+    /// About This Build's count of live TextKit 2 list-text rows (a subset
+    /// of the live TextKit 2 rows).
+    private static let liveListRows = "tk2-list-live-rows"
 
     /// §3 of the stack plan: per switch and in total over five round trips.
     private static let roundTrips = 5
@@ -299,6 +346,14 @@ final class RendererSwitchUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func attachText(_ text: String, _ name: String) {
+        let attachment = XCTAttachment(string: text)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTContext.runActivity(named: text) { _ in }
     }
 
     /// The open About sheet's live row count, logged for the recording.
@@ -349,6 +404,20 @@ final class RendererSwitchUITests: XCTestCase {
             best = (name, distance)
         }
         return best?.name
+    }
+
+    /// Drags toward the end, half a screen at a time, until `landmark` is in
+    /// view or has passed above it.
+    private func scrollDown(toOrPast landmark: String, _ reader: ReaderDriver) {
+        let element = reader.element(labelled: landmark)
+        var drags = 0
+        while !(element.exists && element.frame.height > 0 && element.frame.maxY <= reader.viewport.maxY), drags < 12 {
+            reader.drag(by: 300)
+            pause(0.4)
+            XCTAssertFalse(reader.anyTextKit2Row.exists, "a TextKit 2 row appeared while retracing on SwiftUI")
+            drags += 1
+        }
+        XCTContext.runActivity(named: "Retraced to \(landmark) after \(drags) drags") { _ in }
     }
 
     private func scrollToTop(_ reader: ReaderDriver) {
