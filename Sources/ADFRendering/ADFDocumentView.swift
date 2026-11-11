@@ -36,9 +36,10 @@ public struct ADFDocumentView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// - Parameters:
-    ///   - textRenderer: The engine for top-level paragraphs and headings;
-    ///     `.textKit2` is opt-in and falls back to SwiftUI per block for
-    ///     content it does not cover.
+    ///   - textRenderer: The engine for top-level paragraphs and headings
+    ///     and the text of top-level lists (see `ADFTextRenderer`);
+    ///     `.textKit2` is opt-in and falls back to SwiftUI per text block
+    ///     for content it does not cover.
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
