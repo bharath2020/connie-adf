@@ -64,6 +64,7 @@ struct ReaderView: View {
                         taskStates: taskStates,
                         mentionContent: { AnyView(ProfileCard(name: $0)) },
                         textRenderer: activeRenderer)
+            .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
             .adfRebuildControl(rebuildControl)
             .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
             .navigationTitle(source.title)
@@ -241,6 +242,7 @@ struct ReaderView: View {
     private func handle(_ interaction: ADFInteraction) {
         switch interaction {
         case .taskToggled(let id, let isDone):
+            InteractionProbe.recordTask(id: id, isDone: isDone)
             taskStore.setState(isDone, taskId: id, docKey: source.storageKey)
             taskStates[id] = isDone
         }
@@ -357,5 +359,58 @@ struct ReaderView: View {
         let elapsed = start.duration(to: ContinuousClock.now)
         let (seconds, attoseconds) = elapsed.components
         return Double(seconds) * 1_000 + Double(attoseconds) / 1e15
+    }
+}
+
+/// `-interactionProbe` (UI tests only): counts what the document asks the
+/// host to do, so a test can prove a task checkbox dispatched one id and
+/// state exactly once and a link routed its exact URL. `ReaderView.handle`
+/// records each `.taskToggled`; `Capture` installs an `openURL` action that
+/// records each URL and handles it in place (no Safari hand-off). About This
+/// Build shows the figures. Without the flag `enabled` stays false: nothing
+/// is recorded and `Capture` returns the content untouched, so links open
+/// as they always do.
+@MainActor
+enum InteractionProbe {
+    static var enabled = false
+    private(set) static var taskDispatches = 0
+    /// `<id> <true|false>` of the last dispatch.
+    private(set) static var lastTask: String?
+    private(set) static var urlOpens = 0
+    private(set) static var lastURL: String?
+
+    static func recordTask(id: String, isDone: Bool) {
+        guard enabled else { return }
+        taskDispatches += 1
+        lastTask = "\(id) \(isDone)"
+        print("PROBE task id=\(id) isDone=\(isDone) dispatches=\(taskDispatches)")
+        fflush(stdout)
+    }
+
+    static func recordURL(_ url: URL) {
+        guard enabled else { return }
+        urlOpens += 1
+        lastURL = url.absoluteString
+        print("PROBE openURL url=\(url.absoluteString) opens=\(urlOpens)")
+        fflush(stdout)
+    }
+
+    /// The capturing `openURL` action when enabled; otherwise the content
+    /// as it is (the flag is fixed for the process, so the branch never
+    /// flips).
+    struct Capture: ViewModifier {
+        let enabled: Bool
+
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if enabled {
+                content.environment(\.openURL, OpenURLAction { url in
+                    InteractionProbe.recordURL(url)
+                    return .handled
+                })
+            } else {
+                content
+            }
+        }
     }
 }

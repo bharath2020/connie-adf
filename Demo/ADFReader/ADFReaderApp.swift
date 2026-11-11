@@ -43,6 +43,15 @@ import UIKit
 /// - `-scenePhaseProbe` shows the scene's own phase transitions in a small
 ///   overlay (see `ScenePhaseProbe`; lifecycle gate only) — the thrash
 ///   check's proof that Home, lock and the app switcher left the foreground.
+/// - `-interactionProbe` (UI tests only) records what the document asks the
+///   host to do: every `.taskToggled` the reader's interaction handler
+///   receives, and every URL the document opens — caught by an `openURL`
+///   action, so a link tap stays in the app instead of opening Safari.
+///   About This Build shows the counts and the last of each
+///   (`probe-task-dispatches`, `probe-task-last` = `<id> <true|false>`,
+///   `probe-url-opens`, `probe-url-last`) and each prints a `PROBE …` line.
+///   Without the flag nothing is recorded, no About rows appear and links
+///   open as usual (see `InteractionProbe`).
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -63,6 +72,7 @@ struct LaunchOptions: Sendable {
     var memoryReliefHook = false
     var rebuildControlPicks: Int?
     var scenePhaseProbe = false
+    var interactionProbe = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -102,6 +112,8 @@ struct LaunchOptions: Sendable {
                 rebuildControlPicks = max(Int(arguments[index]) ?? 0, 0)
             case "-scenePhaseProbe":
                 scenePhaseProbe = true
+            case "-interactionProbe":
+                interactionProbe = true
             default:
                 break
             }
@@ -120,6 +132,7 @@ struct ADFReaderApp: App {
         RendererPreference.apply(options)
         RebuildControl.picksLeft = options.rebuildControlPicks ?? 0
         RebuildControl.configured = options.rebuildControlPicks != nil
+        InteractionProbe.enabled = options.interactionProbe
         RotationHook.install()
         RejumpHook.install()
         if options.memoryReliefHook {

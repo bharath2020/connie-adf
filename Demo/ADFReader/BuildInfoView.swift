@@ -7,7 +7,9 @@ import SwiftUI
 /// renderer proof: > 0 while TextKit 2 draws rows on screen, 0 after a
 /// switch back to SwiftUI), of which how many are TextKit 1-backed (linked
 /// text, laid out and drawn by a TextKit 1 stack inside the row), and under
-/// `-rebuildControlPicks` the memory control's live rows. The checksum lets a screen recording be
+/// `-rebuildControlPicks` the memory control's live rows, and under
+/// `-interactionProbe` the task dispatches and URL opens it recorded
+/// (`InteractionProbe`). The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -23,6 +25,12 @@ struct BuildInfoView: View {
     @State private var liveTextKit2Rows: Int?
     @State private var liveTextKit1BackedRows: Int?
     @State private var rebuildControlRows: Int?
+    /// `InteractionProbe` figures, read when the sheet is built and on each
+    /// poll (they change only while the sheet is closed).
+    @State private var probeTaskDispatches = InteractionProbe.taskDispatches
+    @State private var probeLastTask = InteractionProbe.lastTask
+    @State private var probeURLOpens = InteractionProbe.urlOpens
+    @State private var probeLastURL = InteractionProbe.lastURL
 
     var body: some View {
         NavigationStack {
@@ -73,6 +81,9 @@ struct BuildInfoView: View {
                 } footer: {
                     Text(BuildIdentity.executableDescription)
                 }
+                if InteractionProbe.enabled {
+                    interactionProbeSection
+                }
             }
             .navigationTitle("About This Build")
             .navigationBarTitleDisplayMode(.inline)
@@ -95,8 +106,46 @@ struct BuildInfoView: View {
                     liveTextKit2Rows = stats.liveRowCount
                     liveTextKit1BackedRows = stats.textKit1BackedRowCount
                     rebuildControlRows = ADFTextRenderer.rebuildControlRows.live
+                    probeTaskDispatches = InteractionProbe.taskDispatches
+                    probeLastTask = InteractionProbe.lastTask
+                    probeURLOpens = InteractionProbe.urlOpens
+                    probeLastURL = InteractionProbe.lastURL
                     try? await Task.sleep(for: .milliseconds(250))
                 }
+            }
+        }
+    }
+
+    /// `-interactionProbe`: one row per kind — the count, then the last
+    /// value — each value its own element for a UI test to read. Placed
+    /// after the checksum so the checksum keeps its place on screen.
+    private var interactionProbeSection: some View {
+        Section("Interaction Probe") {
+            HStack(spacing: 8) {
+                Text("Tasks")
+                    .foregroundStyle(.secondary)
+                Text(verbatim: String(probeTaskDispatches))
+                    .monospacedDigit()
+                    .accessibilityIdentifier("probe-task-dispatches")
+                Spacer(minLength: 8)
+                Text(verbatim: probeLastTask ?? "none")
+                    .font(.footnote.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("probe-task-last")
+            }
+            HStack(spacing: 8) {
+                Text("URLs")
+                    .foregroundStyle(.secondary)
+                Text(verbatim: String(probeURLOpens))
+                    .monospacedDigit()
+                    .accessibilityIdentifier("probe-url-opens")
+                Spacer(minLength: 8)
+                Text(verbatim: probeLastURL ?? "none")
+                    .font(.footnote.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("probe-url-last")
             }
         }
     }
