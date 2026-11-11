@@ -10,8 +10,7 @@
 #   # × A/B/C × 3 pairs + 1 warm-up; no calibration):
 #   Scripts/perf-gate.sh --udid <UDID> --app-a <main .app> --app-b <branch .app> \
 #       --app-c <branch .app> --out <data>/perf/pr45-<sha>
-#   # lists stage (design pr2, ~75–80 min; pr45 + list-dense; refuses until
-#   # list-dense's trial timeout is frozen in DEFAULT_TIMEOUTS):
+#   # lists stage (design pr2, ~75–80 min; pr45 + list-dense):
 #   Scripts/perf-gate.sh --design pr2 --udid <UDID> --app-a <main+fixtures .app> \
 #       --app-b <branch .app> --app-c <branch .app> --out <data>/perf/pr2-<sha>
 #   # full gate (design full, ~8 h, once before the final parity PR):
@@ -74,9 +73,10 @@
 #   --trial-timeout-for "f=s …" per-fixture deadlines; defaults from the
 #                            2026-10-26 pilot (1.5 × longest scroll + 30 s):
 #                            kitchen-sink=45 stress-1k=180 stress-5k=775
-#                            giant-table=95 text-dense=425 long-paragraph=45.
-#                            A default of UNFROZEN (list-dense until its pilot)
-#                            refuses every non-pilot run of that fixture, with
+#                            giant-table=95 text-dense=425 long-paragraph=45;
+#                            list-dense=275 from its 2026-11-11 pilot.
+#                            A default of UNFROZEN (a new fixture until its
+#                            pilot) refuses every non-pilot run of it, with
 #                            or without this flag; a pilot must pass the
 #                            fixture's deadline here explicitly.
 #   --ready-timeout <s>      READY deadline; default 60
@@ -177,7 +177,7 @@ TRIAL_TIMEOUT=120
 # until the placeholder is replaced by the frozen number in a reviewed commit
 # (never a guess, never a command-line value standing in for it).
 TIMEOUT_UNFROZEN="UNFROZEN"
-DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45 list-dense=$TIMEOUT_UNFROZEN"
+DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45 list-dense=275"
 TIMEOUTS_FOR=""
 READY_TIMEOUT=60
 RSS_MS=200
