@@ -35,49 +35,55 @@ struct TextKit2ListCoverageTests {
         return try Data(contentsOf: url.appendingPathComponent("Fixtures/\(name).json"))
     }
 
-    @Test("lists-parity: 8 root text blocks, 35 leaders; 2 atom leaders fall back, 2 linked")
+    @Test("lists-parity: 8 root text blocks, 46 leaders; 6 atom leaders fall back, 3 linked")
     func listsParity() async throws {
         let blocks = try await Self.blocks("lists-parity")
         // 21 roots: 7 section headings + the closing paragraph (8 root
         // richText, all plain), 7 root lists, a panel, a quote, a table
         // (two slices), an expand and layout columns.
         #expect(blocks.count == 21)
-        // Three root lists keep all their text on SwiftUI, as a row holds a
-        // block other than text (`TextKit2Scope.listKeepsRenderer`): 0.8
-        // (the code-first item 0.8.12), 0.10 (the embedded-blocks item
-        // 0.10.2) and 0.12 (a sync block, a stray item). Leaders in the
-        // other four: 12 + 12 + 7 task + 4 decision = 35 non-empty (the
-        // empty task 0.5.5 has none); no row there holds more than one
-        // block (`rowKeepsRenderer`), and none holds a trailing paragraph.
-        // Atoms (fallback): 0.5.3, 0.6.1. Links (TextKit 1-backed): 0.5.4,
-        // 0.6.2. The text inside the panel, quote, table, expand and layout
-        // columns is out of scope.
+        // One root list keeps all its text on SwiftUI: 0.10, whose
+        // embedded-blocks item 0.10.2 holds a panel and an expand
+        // (`TextKit2Scope.listKeepsRenderer`). In the other six, a row
+        // holding a block other than text keeps its own text on SwiftUI
+        // (`rowKeepsRenderer`): the code-first item 0.8.12 (its paragraph
+        // follows the code block) and both rows of 0.12 (a sync block's
+        // list, a stray item's list). Leaders: 12 + 12 + 7 task + 4 decision
+        // + 11 in 0.8 (0.8.0–0.8.10) = 46 non-empty (the empty task 0.5.5
+        // and 0.8.11 have none); no row in those lists holds a trailing
+        // paragraph without a code block or a list beside it. Atoms
+        // (fallback): 0.5.3, 0.6.1, 0.8.7–0.8.10. Links (TextKit 1-backed):
+        // 0.5.4, 0.6.2, 0.8.2. The text inside the panel, quote, table,
+        // expand and layout columns is out of scope.
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 8, fallbackRoots: 13, textFallbackRoots: 0, linkRoots: 0,
-            eligibleTextLeaves: 41, linkedTextLeaves: 2, fallbackTextLeaves: 2,
-            listLeaderLeaves: 35, listTrailingLeaves: 0
+            eligibleTextLeaves: 48, linkedTextLeaves: 3, fallbackTextLeaves: 6,
+            listLeaderLeaves: 46, listTrailingLeaves: 0
         ), rootLeaves: (8, 0)))
     }
 
-    @Test("list-dense: 3,071 leaders and 239 list paragraphs and headings; 326 atom leaves fall back, 488 linked")
+    @Test("list-dense: 3,382 leaders and 550 list paragraphs and headings; 395 atom leaves fall back, 586 linked")
     func listDense() async throws {
         let blocks = try await Self.blocks("list-dense")
         // 600 root lists and nothing else. The generator's tally: leaders
         // 3,396 (atom 342, linked 515); trailing paragraphs 325 extra
         // (atom 38, linked 41) + 231 continuation (atom 20, linked 38) + 134
-        // headings = 690; no trailing lists. Rows holding more than one
-        // block keep all their text on SwiftUI
-        // (`TextKit2Scope.rowKeepsRenderer`): the 325 items with an extra
-        // paragraph (leaders: 31 atom, 58 linked; paragraphs: 38 atom, 41
-        // linked) and the 63 continuation rows with a paragraph and a
-        // heading (5 atom, 7 linked paragraphs). That leaves 3,071 leaders
-        // (311 atom, 457 linked) and 168 continuation paragraphs (15 atom,
-        // 31 linked) + 71 lone headings = 239 list paragraphs and headings.
+        // headings = 690; no trailing lists. Rows whose column holds more
+        // than one block keep all their text on SwiftUI unless every block
+        // is a body-styled paragraph (`TextKit2Scope.rowKeepsRenderer`):
+        // the 14 items whose leader or extra paragraph has a sub/superscript
+        // or small-text run (14 plain leaders; 13 plain and 1 linked
+        // paragraph) and the 63 continuation rows with a paragraph and a
+        // heading (5 atom, 7 linked paragraphs). That leaves 3,382 leaders
+        // (342 atom, 515 linked) and 311 extra paragraphs (38 atom, 40
+        // linked) + 168 continuation paragraphs (15 atom, 31 linked) + 71
+        // lone headings = 550 list paragraphs and headings: 395 atom leaves,
+        // 586 linked, 3,537 eligible.
         #expect(blocks.count == 600)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 0, fallbackRoots: 600, textFallbackRoots: 0, linkRoots: 0,
-            eligibleTextLeaves: 2_984, linkedTextLeaves: 488, fallbackTextLeaves: 326,
-            listLeaderLeaves: 3_071, listTrailingLeaves: 239
+            eligibleTextLeaves: 3_537, linkedTextLeaves: 586, fallbackTextLeaves: 395,
+            listLeaderLeaves: 3_382, listTrailingLeaves: 550
         ), rootLeaves: (0, 0)))
     }
 
@@ -99,11 +105,11 @@ struct TextKit2ListCoverageTests {
 
     /// The iOS 26 gate is one verdict (`TextKit2Eligibility.verdict`,
     /// owner `.list`): before iOS 26 exactly the list leaves eligible on
-    /// iOS 26 fall back as `.osGatedList` (lists-parity 33, kitchen-sink 8,
-    /// list-dense 2,984), never a root; from iOS 26 none does.
+    /// iOS 26 fall back as `.osGatedList` (lists-parity 40, kitchen-sink 8,
+    /// list-dense 3,537), never a root; from iOS 26 none does.
     @Test("before iOS 26 list text that is otherwise eligible falls back as osGatedList; roots never do")
     func osGatedLists() async throws {
-        for (name, listEligible) in [("lists-parity", 33), ("kitchen-sink", 8), ("list-dense", 2_984)] {
+        for (name, listEligible) in [("lists-parity", 40), ("kitchen-sink", 8), ("list-dense", 3_537)] {
             let blocks = try await Self.blocks(name)
             var gated = 0
             var gatedRoots = 0
@@ -177,7 +183,7 @@ struct TextKit2ListDiagnosticsTests {
         // Before iOS 26 no list text is eligible (`TextKit2Eligibility.listsMatchText`,
         // `.osGatedList`): list text draws on SwiftUI, roots as in PR 1.
         let lists = TextKit2Eligibility.listsMatchText
-        #expect(eligibleRoots.count == 8 && eligibleList.count == (lists ? 33 : 0))
+        #expect(eligibleRoots.count == 8 && eligibleList.count == (lists ? 40 : 0))
 
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 9_000))
         let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2))
@@ -194,11 +200,12 @@ struct TextKit2ListDiagnosticsTests {
         #expect(Set(rows.filter { $0.ownerKind == .root }.compactMap(\.ownerID)) == eligibleRoots)
         let listOwners = Set(rows.filter { $0.ownerKind == .list }.compactMap(\.ownerID))
         #expect(listOwners == eligibleList, "missing \(eligibleList.subtracting(listOwners).sorted()), unexpected \(listOwners.subtracting(eligibleList).sorted())")
-        #expect(rows.filter(\.isTextKit1Backed).count == (lists ? 2 : 0))
+        #expect(rows.filter(\.isTextKit1Backed).count == (lists ? 3 : 0))
         // Nothing inside an excluded container (the root panel, quote,
-        // table, expand and layout columns) or a list that keeps its text
-        // on SwiftUI (0.8, 0.10, 0.12).
-        let excluded = ["0.8", "0.10", "0.12", "0.14", "0.15", "0.16", "0.17", "0.18"]
+        // table, expand and layout columns), a row holding a block other
+        // than text (0.8.12, both rows of 0.12) or the list that keeps its
+        // text on SwiftUI (0.10).
+        let excluded = ["0.8.12", "0.10", "0.12", "0.14", "0.15", "0.16", "0.17", "0.18"]
         for owner in owners {
             #expect(!excluded.contains { owner == $0 || owner.hasPrefix($0 + ".") || owner.hasPrefix($0 + "#") }, "\(owner) is inside an excluded block")
         }
@@ -209,7 +216,7 @@ struct TextKit2ListDiagnosticsTests {
         // exactly the list rows.
         let listLive = diagnostics.liveListRowCount
         rows.removeAll()
-        #expect(listLive - diagnostics.liveListRowCount == (lists ? 33 : 0))
+        #expect(listLive - diagnostics.liveListRowCount == (lists ? 40 : 0))
     }
 }
 #endif

@@ -3,13 +3,14 @@ import ADFPreparation
 
 /// Where the host's text engine choice applies. `DocumentRow` passes it to
 /// top-level paragraphs and headings (`.richText`) and top-level lists
-/// (`.listRows`) whose rows hold only text (`listKeepsRenderer`). A list
-/// row passes it to its text when its text column holds one block, its
-/// leader or a single paragraph or heading (`rowKeepsRenderer`,
-/// `ListRowView`), laid out left to right (`listDirectionKeepsRenderer`);
-/// any other row draws all its text on SwiftUI. Before iOS 26 the leaf
-/// itself keeps list text on SwiftUI (`TextKit2Eligibility.listsMatchText`,
-/// a `.osGatedList` fallback the coverage counts). Every other top-level kind
+/// (`.listRows`) unless a row holds both a panel and an expand
+/// (`listKeepsRenderer`). A list row passes it to its text when its text
+/// column holds one text block, or only body-styled paragraphs
+/// (`rowKeepsRenderer`, `ListRowView`), laid out left to right
+/// (`listDirectionKeepsRenderer`); any other row draws all its text on
+/// SwiftUI. Before iOS 26 the leaf itself keeps list text on SwiftUI
+/// (`TextKit2Eligibility.listsMatchText`, a `.osGatedList` fallback the
+/// coverage counts). Every other top-level kind
 /// (panel, quote, table, code, media, expand, layout columns, card,
 /// extension, plugin, unknown) gets `.swiftUI`, and so does everything
 /// inside it, lists and paragraphs included. Those two views are the only
@@ -28,48 +29,64 @@ enum TextKit2Scope {
         }
     }
 
-    /// Whether a top-level list may hand its text to TextKit 2: when no row
-    /// holds a block other than a paragraph or heading (a code block, a
-    /// container, a table, media, a list under another node). Such a row is
-    /// drawn by SwiftUI on either engine and does not settle: lists-parity's
-    /// embedded-blocks item measured 2,127 pt tall and then 2,003 pt at
-    /// AX5 in its list, and reported a width a pixel wider than proposed,
-    /// so the list re-proposed its other rows and the document placed them
-    /// by whichever pass came last — its continuation paragraph drew
-    /// 31 pt lower on TextKit 2 (a 402 pt document); without the item the
-    /// document matched. Every row of such a list keeps its text on
-    /// SwiftUI.
+    /// Whether a top-level list may hand its text to TextKit 2: unless a
+    /// row holds both a panel and an expand. SwiftUI draws such a row on
+    /// either engine, and the list's other rows then land differently on
+    /// the two arms: lists-parity's embedded-blocks item (0.10.2: code,
+    /// panel, quote, expand, table, rule) left the list's TextKit 2 rows
+    /// drawn apart from `Text`'s at AX5 on a 402 pt phone (3x; the same
+    /// height, different pixels from 1,000 pt down). Without its panel, or
+    /// without its expand, the list matched; without its code block,
+    /// quote, table or rule it did not. A list with one row holding any
+    /// one of those kinds (code, panel, quote, expand, table, rule, a sync
+    /// block, an item that starts with a code block) matched at six sizes
+    /// and four widths, 3x and 2x. Every row of such a list keeps its text
+    /// on SwiftUI; a row holding any other non-text block keeps only its
+    /// own text there (`rowKeepsRenderer`).
     static func listKeepsRenderer(_ rows: [PreparedListRow]) -> Bool {
-        rows.allSatisfy { row in
-            row.trailingBlocks.allSatisfy { block in
-                if case .richText = block.kind { return true }
-                return false
-            }
+        !rows.contains { row in
+            row.trailingBlocks.contains { if case .panel = $0.kind { return true }; return false }
+                && row.trailingBlocks.contains { if case .expand = $0.kind { return true }; return false }
         }
     }
 
     /// Whether a list row's text may use TextKit 2: when its text column
-    /// holds one text block, its leader or a single trailing paragraph or
-    /// heading.
+    /// holds one text block (its leader, or a lone paragraph or heading),
+    /// or only paragraphs, leader included, every run of them set in the
+    /// body text style (`isBodyText`).
     ///
     /// A row's `HStack` lays its text column out a second time at the
     /// row's own height, and the column's `VStack` shares that height out
-    /// among its blocks, least flexible first. `Text` gives up whole lines
-    /// (it truncates) when its share is short; a TextKit 2 row keeps its
-    /// height. With two or more blocks a share can come up short wherever
-    /// the blocks' lines differ in height, and the engines then size and
-    /// place the column differently: lists-parity's embedded-blocks item
-    /// drew its text 14.5 pt lower in the document at xxxLarge on a 402 pt
-    /// phone. On hosted rows at three sizes and two widths, columns with a
-    /// heading or a superscript line beside other text mismatched, as did
-    /// columns with a trailing list or a container; a column of one block
-    /// has the height to itself and matched in every shape measured. A row
-    /// with more than one block keeps all its text, and everything in its
-    /// trailing blocks, on SwiftUI.
+    /// among its blocks. A column of one block has the height to itself
+    /// and matched in every shape measured. Columns of body paragraphs
+    /// matched too, in height and first and last baselines, links, emoji,
+    /// bold, italic and inline code included: every multi-paragraph row of
+    /// list-dense and lists-parity at Large to AX5 on 375 and 320 pt
+    /// documents, and synthetic shapes at xSmall to AX5 and Bold Text on
+    /// four widths, at 3x and 2x. A column with a superscript, subscript or
+    /// small-text run beside another block kept its height but put its
+    /// last baseline up to 62 pt apart (list-dense 0.410.2 at AX5, 375 pt:
+    /// 308.67 against 370.67). Such a column, a column with a heading
+    /// beside other text, and a row holding any other block (a trailing
+    /// list, a container, code, a table, media) keep all their text, and
+    /// everything in their trailing blocks, on SwiftUI.
     static func rowKeepsRenderer(_ row: PreparedListRow) -> Bool {
         if row.trailingBlocks.isEmpty { return !row.segments.isEmpty }
-        guard row.segments.isEmpty, row.trailingBlocks.count == 1, case .richText = row.trailingBlocks[0].kind else { return false }
-        return true
+        if row.segments.isEmpty, row.trailingBlocks.count == 1, case .richText = row.trailingBlocks[0].kind { return true }
+        guard isBodyText(row.segments) else { return false }
+        return row.trailingBlocks.allSatisfy { block in
+            guard case .richText(let segments, let style) = block.kind, !style.isHeading else { return false }
+            return isBodyText(segments)
+        }
+    }
+
+    /// Whether every text run of `segments` is set in the body text style
+    /// (`ADFFontSpec.textStyle`): no superscript, subscript or small text.
+    static func isBodyText(_ segments: [InlineSegment]) -> Bool {
+        segments.allSatisfy { segment in
+            guard case .text(let text) = segment else { return true }
+            return text.runs.allSatisfy { ($0.adfFontSpec?.textStyle ?? .body) == .body }
+        }
     }
 
     /// Whether list text laid out in `direction` may use TextKit 2: left

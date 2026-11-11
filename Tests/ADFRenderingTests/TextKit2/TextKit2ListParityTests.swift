@@ -142,7 +142,7 @@ struct TextKit2ListParityTests {
     // MARK: Hosting
 
     /// A list block as `ADFDocumentView`'s row hosts it (a list with a row
-    /// holding anything but text gets `.swiftUI`).
+    /// holding a panel and an expand gets `.swiftUI`).
     static func hostedList(_ block: RenderBlock, arm: ADFTextRenderer, env: TK2Parity.Environment, listWidth: CGFloat, theme: ADFTheme = TK2Parity.theme) -> some View {
         BlockView(block: block)
             .environment(\.adfTextRenderer, TextKit2Scope.inheritsRenderer(block.kind) ? arm : .swiftUI)
@@ -664,18 +664,21 @@ struct TextKit2ListParityTests {
 
     /// A row's text column shares the row's height out among its blocks
     /// on the `HStack`'s second pass (`TextKit2Scope.rowKeepsRenderer`).
-    /// A row whose column holds one block (a leader, or a lone paragraph
-    /// or heading after a nested list; superscript, emoji and inline code
-    /// lines included) stays on TextKit 2 and matches; a row with more
-    /// than one block, whether paragraphs, a heading, a container or a
-    /// trailing list, keeps all its text on SwiftUI, so it matches by
-    /// construction — the fixture's embedded-blocks and sync-block items
-    /// among them, which drew their text up to 14.5 pt off before.
-    @Test("rows with more than one block in their text column stay on SwiftUI; one-block rows stay on TextKit 2")
+    /// A row whose column holds one text block (a leader, or a lone
+    /// paragraph or heading after a nested list; superscript, emoji and
+    /// inline code lines included), or only body-styled paragraphs (links,
+    /// emoji, inline code, bold and italic included; the fixture's
+    /// multi-paragraph item among them), stays on TextKit 2 and matches. A
+    /// row with a sub/superscript or a heading beside other text, a
+    /// container or a trailing list keeps all its text on SwiftUI, so it
+    /// matches by construction — the fixture's embedded-blocks and
+    /// sync-block items among them.
+    @Test("rows of one text block or only body paragraphs stay on TextKit 2; other mixed columns stay on SwiftUI")
     func mixedColumns() async throws {
         func words(_ n: Int) -> String { Self.filler.prefix(n).joined(separator: " ") }
         let heading = { (level: Int, n: Int) in "{\"type\":\"heading\",\"attrs\":{\"level\":\(level)},\"content\":[\(Self.t(words(n)))]}" }
         let code = "{\"type\":\"code\"}"
+        let strong = "{\"type\":\"strong\"}", em = "{\"type\":\"em\"}"
         let panel = "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(Self.paragraph([Self.t("A panel paragraph long enough to wrap in a narrow column")]))]}"
         let stray = "{\"type\":\"listItem\",\"content\":[\(Self.list("bulletList", [Self.item(Self.paragraph([Self.t(words(3))])), Self.item(Self.paragraph([Self.t(words(12))])), Self.item(Self.paragraph([Self.t(words(3))]))]))]}"
         let mixedLine = [Self.t(words(10) + " \u{1F600}\u{1F389} "), Self.t("code", code), Self.t(" " + words(6) + " x"), Self.t("2", Self.sup), Self.t(" " + words(8))]
@@ -684,7 +687,12 @@ struct TextKit2ListParityTests {
             ("lone leader", Self.item(Self.paragraph(mixedLine)), true),
             ("lone paragraph", Self.item(Self.paragraph([Self.t(words(4))]), nested, Self.paragraph(mixedLine)), true),
             ("lone heading", Self.item(Self.paragraph([Self.t(words(4))]), nested, heading(2, 12)), true),
-            ("two paragraphs", Self.item(Self.paragraph([Self.t(words(12))]), Self.paragraph([Self.t(words(3))])), false),
+            ("two paragraphs", Self.item(Self.paragraph([Self.t(words(12))]), Self.paragraph([Self.t(words(3))])), true),
+            ("marked paragraphs", Self.item(
+                Self.paragraph([Self.t(words(6) + " "), Self.t("linked words", Self.link), Self.t(" " + words(4) + " \u{1F600}\u{1F389} "), Self.t("code", code), Self.t(" " + words(5), strong)]),
+                Self.paragraph([Self.t(words(10), em)]),
+                Self.paragraph([Self.t(words(3))])
+            ), true),
             ("superscript beside a paragraph", Self.item(Self.paragraph([Self.t(words(12))]), Self.paragraph([Self.t("x"), Self.t("2", Self.sup), Self.t(" " + words(3))]), Self.paragraph([Self.t(words(3))])), false),
             ("heading after the leader", Self.item(Self.paragraph([Self.t(words(12))]), heading(2, 12), Self.paragraph([Self.t(words(3))])), false),
             ("paragraph then heading", Self.item(Self.paragraph([Self.t(words(3))]), Self.paragraph([Self.t(words(12))]), heading(2, 12)), false),
@@ -702,8 +710,10 @@ struct TextKit2ListParityTests {
             #expect(TextKit2Scope.rowKeepsRenderer(row) == shape.keeps, "\(shape.name)")
             cases.append((shape.name, row, shape.keeps))
         }
+        let multi = try await Self.lists().first { $0.name == "lists-parity 0.10" }?.rows.first { $0.id == "0.10.0" }
         let parity = try await Self.lists().first { $0.name == "lists-parity 0.10" }?.rows.first { $0.id == "0.10.2" }
         let sync = try await Self.lists().first { $0.name == "lists-parity 0.12" }?.rows.first { $0.id == "0.12.0" }
+        cases.append(("lists-parity multi-paragraph item", try #require(multi), true))
         cases.append(("lists-parity embedded blocks", try #require(parity), false))
         cases.append(("lists-parity sync block", try #require(sync), false))
         let onePixel = 1 / TK2Parity.nativeScale
@@ -910,8 +920,9 @@ struct TextKit2ListParityTests {
     /// eligible neighbours on TextKit 2: an atom, empty text (the leader of
     /// a whitespace-free empty item has no leaf; a hard break alone is
     /// empty), two trailing hard breaks before iOS 26, right-to-left
-    /// layout, a list with a row holding a code block, host styling the
-    /// row does not reproduce, and a theme with a raw SwiftUI font.
+    /// layout, a row holding a code block, a list with a row holding a
+    /// panel and an expand, host styling the row does not reproduce, and a
+    /// theme with a raw SwiftUI font.
     @Test("fallback text in a list stays on SwiftUI; eligible neighbours stay on TextKit 2")
     func fallbacks() async throws {
         let mention = "{\"type\":\"mention\",\"attrs\":{\"id\":\"1\",\"text\":\"@sam\"}}"
@@ -983,18 +994,27 @@ struct TextKit2ListParityTests {
         let rtl = TK2Parity.Environment(direction: .rightToLeft)
         #expect(textKit2Owners(Self.hostedList(block, arm: .textKit2, env: rtl, listWidth: width), width: width).isEmpty)
 
-        // A list with a row holding a code block keeps every row on
-        // SwiftUI; a text-only list beside it does not
-        // (`TextKit2Scope.listKeepsRenderer`).
+        // A row holding a code block keeps its own text on SwiftUI, its
+        // plain neighbour does not (`TextKit2Scope.rowKeepsRenderer`); a
+        // list with a row holding a panel and an expand keeps every row on
+        // SwiftUI (`TextKit2Scope.listKeepsRenderer`); a text-only list
+        // keeps TextKit 2.
         let code = "{\"type\":\"codeBlock\",\"content\":[\(Self.t("let x = 1"))]}"
-        let pair = "{\"version\":1,\"type\":\"doc\",\"content\":[\(Self.list("bulletList", [Self.item(Self.paragraph([Self.t("Plain item")])), Self.item(Self.paragraph([Self.t("Item with code")]), code)])),\(Self.list("bulletList", [Self.item(Self.paragraph([Self.t("Text-only list")]))]))]}"
-        let pairBlocks = try await Self.blocks(Data(pair.utf8))
-        try #require(pairBlocks.count == 2)
-        var pairLeaves: [String] = []
-        TextKit2Scope.forEachLeaf(in: pairBlocks) { pairLeaves.append($0.ownerID) }
-        #expect(pairLeaves == ["0.1.0"], "leaves: \(pairLeaves)")
-        #expect(textKit2Owners(Self.hostedList(pairBlocks[0], arm: .textKit2, env: TK2Parity.Environment(), listWidth: width), width: width).isEmpty)
-        #expect(textKit2Owners(Self.hostedList(pairBlocks[1], arm: .textKit2, env: TK2Parity.Environment(), listWidth: width), width: width) == ["0.1.0"])
+        let panel = "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(Self.paragraph([Self.t("Panel text")]))]}"
+        let expand = "{\"type\":\"expand\",\"attrs\":{\"title\":\"Details\"},\"content\":[\(Self.paragraph([Self.t("Expand text")]))]}"
+        let lists = [
+            Self.list("bulletList", [Self.item(Self.paragraph([Self.t("Plain item")])), Self.item(Self.paragraph([Self.t("Item with code")]), code)]),
+            Self.list("bulletList", [Self.item(Self.paragraph([Self.t("Plain item")])), Self.item(Self.paragraph([Self.t("Item with a panel and an expand")]), panel, expand)]),
+            Self.list("bulletList", [Self.item(Self.paragraph([Self.t("Text-only list")]))]),
+        ]
+        let trioBlocks = try await Self.blocks(Data("{\"version\":1,\"type\":\"doc\",\"content\":[\(lists.joined(separator: ","))]}".utf8))
+        try #require(trioBlocks.count == 3)
+        var trioLeaves: [String] = []
+        TextKit2Scope.forEachLeaf(in: trioBlocks) { trioLeaves.append($0.ownerID) }
+        #expect(trioLeaves == ["0.0.0", "0.2.0"], "leaves: \(trioLeaves)")
+        #expect(textKit2Owners(Self.hostedList(trioBlocks[0], arm: .textKit2, env: TK2Parity.Environment(), listWidth: width), width: width) == ["0.0.0"])
+        #expect(textKit2Owners(Self.hostedList(trioBlocks[1], arm: .textKit2, env: TK2Parity.Environment(), listWidth: width), width: width).isEmpty)
+        #expect(textKit2Owners(Self.hostedList(trioBlocks[2], arm: .textKit2, env: TK2Parity.Environment(), listWidth: width), width: width) == ["0.2.0"])
 
         // Host styling the row does not reproduce: every list leaf falls back.
         let styled = Self.hostedList(block, arm: .textKit2, env: TK2Parity.Environment(), listWidth: width).lineSpacing(6)

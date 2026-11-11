@@ -46,14 +46,15 @@ import ADFPreparation
 
 /// Through the real document view under `.textKit2`: list leaders and a
 /// list row's direct paragraphs get TextKit 2 rows at every depth when
-/// the row holds one block. A row with more than one block (here two
-/// paragraphs) keeps all its text on SwiftUI
-/// (`TextKit2Scope.rowKeepsRenderer`), and a list with a row holding
-/// anything but text (here a code block, a panel and a sync block) keeps
-/// every row's text on SwiftUI, its plain neighbour and the list reached
-/// through the sync block included (`TextKit2Scope.listKeepsRenderer`). A
-/// list inside a container and text inside a list's container get no row.
-/// Before iOS 26 no list text gets one (`TextKit2Eligibility.listsMatchText`).
+/// the row's column holds one text block or only body-styled paragraphs
+/// (here two). A row holding anything but text (here a code block, a
+/// panel and a sync block) keeps all its own text on SwiftUI, the list
+/// reached through the sync block included, while its plain neighbour
+/// keeps TextKit 2 (`TextKit2Scope.rowKeepsRenderer`); a list with a row
+/// holding both a panel and an expand keeps every row's text on SwiftUI
+/// (`TextKit2Scope.listKeepsRenderer`). A list inside a container and text
+/// inside a list's container get no row. Before iOS 26 no list text gets
+/// one (`TextKit2Eligibility.listsMatchText`).
 @Suite("TextKit 2 list scope", .serialized)
 @MainActor
 struct TextKit2ListScopeTests {
@@ -80,26 +81,38 @@ struct TextKit2ListScopeTests {
         item(t("Third item"), t("Third item's second paragraph"))
       )),
       {"type":"panel","attrs":{"panelType":"note"},"content":[\(list("bulletList", item(t("Root panel list"))))]},
-      \(t("Root paragraph"))
+      \(t("Root paragraph")),
+      \(list("bulletList",
+        item(
+          t("Item with a panel and an expand"),
+          "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(t("Its panel text"))]}",
+          "{\"type\":\"expand\",\"attrs\":{\"title\":\"Details\"},\"content\":[\(t("Its expand text"))]}"
+        ),
+        item(t("Plain item in that list"))
+      ))
     ]}
     """
 
     /// Hand-derived from the document above.
     static let expectedRows: Set<String> = [
+        "0.0.1",          // the plain item beside the item holding a code block, a panel and a sync block
         "0.1.0",          // second list's first item's leader
         "0.1.0.1.0",      // flattened nested list's leader (depth 1)
         "0.1.0.2",        // the paragraph after it, alone in a continuation row (trailing .richText)
+        "0.1.1",          // third item's leader and
+        "0.1.1.1",        // its second paragraph: two body paragraphs in one column
         "0.3",            // root paragraph
     ]
-    /// Text on SwiftUI: the first list, whose first item also holds a code
-    /// block, a panel and a sync block — that item's own text (leader and
+    /// Text on SwiftUI: the first list's first item, which also holds a
+    /// code block, a panel and a sync block — its own text (leader and
     /// second paragraph), the panel and its list, the list reached through
-    /// the sync block (leader, paragraph) and the quote in its row, and
-    /// the plain item beside it; the second list's third item's leader and
-    /// second paragraph; the list in a root panel.
+    /// the sync block (leader, paragraph) and the quote in its row; the
+    /// list in a root panel; the last list, whose first item holds a panel
+    /// and an expand — that item's leader, its panel text and the plain
+    /// item beside it.
     static let excludedOwners: Set<String> = [
-        "0.0.0", "0.0.0.1", "0.0.0.3.0", "0.0.0.3.1.0", "0.0.0.4.0.0", "0.0.0.4.0.0.1", "0.0.0.4.0.0.2.0", "0.0.1",
-        "0.1.1", "0.1.1.1", "0.2.0.0",
+        "0.0.0", "0.0.0.1", "0.0.0.3.0", "0.0.0.3.1.0", "0.0.0.4.0.0", "0.0.0.4.0.0.1", "0.0.0.4.0.0.2.0",
+        "0.2.0.0", "0.4.0", "0.4.0.1.0", "0.4.1",
     ]
 
     static func model() async throws -> ADFDocumentModel {

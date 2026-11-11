@@ -5,11 +5,13 @@ import SwiftUI
 /// `.swiftUI` is the shipping path (`Text(AttributedString)`); `.textKit2`
 /// routes plain (atom-free) top-level paragraphs and headings, and the
 /// leaders and direct paragraphs of top-level lists (nested lists
-/// included), through a UIKit-hosted TextKit 2 row. A list row whose item
-/// holds more than one block keeps all its text on SwiftUI, and so does a
-/// whole list laid out right to left or with a row holding anything but
-/// text (a code block, a container, a list under another node), and every
-/// list before iOS 26. Everything
+/// included), through a UIKit-hosted TextKit 2 row. A list row keeps all
+/// its text on SwiftUI when its item holds more than one text block and
+/// they are not all body-styled paragraphs (a heading or a sub/superscript
+/// beside other text), or holds anything but text (a code block, a
+/// container, a list under another node); so does a whole list laid out
+/// right to left or with a row holding both a panel and an expand, and
+/// every list before iOS 26. Everything
 /// else stays on SwiftUI regardless of the setting: containers and the
 /// lists and text inside them, captions, table cells, and atom-bearing
 /// text. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.

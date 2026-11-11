@@ -23,10 +23,10 @@ struct ListBlockView: View {
 ///
 /// The text engine choice reaches a list only from a top-level list row
 /// (`DocumentRow`, `TextKit2Scope`). The row passes it to its leader
-/// (`TextEngineLeaf`, owned by the row's id) or its one trailing paragraph
-/// or heading, when that is the only block in its text column
-/// (`TextKit2Scope.rowKeepsRenderer`); any other row, and everything in
-/// its trailing blocks, draws on SwiftUI. Text whose column has no room
+/// (`TextEngineLeaf`, owned by the row's id) and its trailing paragraphs
+/// and headings when its text column holds one text block or only
+/// body-styled paragraphs (`TextKit2Scope.rowKeepsRenderer`); any other
+/// row, and everything in its trailing blocks, draws on SwiftUI. Text whose column has no room
 /// left (deep nesting at accessibility sizes) stays on SwiftUI too
 /// (`TextKit2Scope.listTextFits`), and so does every list row laid out
 /// right to left (`TextKit2Scope.listDirectionKeepsRenderer`). Before
