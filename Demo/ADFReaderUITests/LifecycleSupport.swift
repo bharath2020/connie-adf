@@ -289,32 +289,118 @@ struct ReaderDriver {
     /// Top edges (points) of every uniquely labelled element fully inside the
     /// viewport, from one accessibility snapshot of the document.
     func visibleLabels() throws -> [String: CGFloat] {
+        try documentSnapshot().tops
+    }
+
+    /// One accessibility snapshot of the document scroll view: the labelled
+    /// elements fully inside the viewport, and every TextKit 2 row
+    /// (`tk2-row:<owner>`) anywhere in the snapshot.
+    func documentSnapshot() throws -> DocumentSnapshot {
         let root = try app.scrollViews.firstMatch.snapshot()
         let viewport = viewport
-        var tops: [String: CGFloat] = [:]
-        var duplicates: Set<String> = []
+        var visible: [DocumentSnapshot.Node] = []
+        var textKit2Rows: [String: String] = [:]
         func walk(_ node: XCUIElementSnapshot) {
             let frame = node.frame
+            let owner = node.identifier.hasPrefix(Identifier.textKit2RowPrefix)
+                ? String(node.identifier.dropFirst(Identifier.textKit2RowPrefix.count)) : nil
+            if let owner {
+                textKit2Rows[owner] = node.label
+            }
             // Scroll indicators carry a page-count label that tracks the
             // estimated content height, not a row.
             let isIndicator = node.label.hasPrefix("Vertical scroll bar") || node.label.hasPrefix("Horizontal scroll bar")
             if !node.label.isEmpty, !isIndicator, frame.height > 0,
                frame.minY >= viewport.minY, frame.maxY <= viewport.maxY {
-                if tops[node.label] != nil, tops[node.label] != frame.minY {
-                    duplicates.insert(node.label)
-                } else {
-                    tops[node.label] = frame.minY
-                }
+                visible.append(DocumentSnapshot.Node(label: node.label, frame: frame, owner: owner))
             }
             for child in node.children {
                 walk(child)
             }
         }
         walk(root)
-        for label in duplicates {
-            tops[label] = nil
+        return DocumentSnapshot(visible: visible, textKit2Rows: textKit2Rows)
+    }
+
+    /// Waits up to `timeout` for `element` to be fully inside the viewport.
+    func waitUntilVisible(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if isVisible(element) { return true }
+            pause(0.25)
+        } while Date() < deadline
+        return isVisible(element)
+    }
+
+    // MARK: Text size, fixture list, tasks
+
+    /// Opens the toolbar's Text Size popover, taps its larger (`steps` > 0)
+    /// or smaller (`steps` < 0) button `|steps|` times, reads the percent
+    /// readout and dismisses the popover. Launch with `-fontSizeStep 0` so
+    /// the taps never write the persisted per-document size.
+    @discardableResult
+    func stepTextSize(_ steps: Int) -> String? {
+        let toggle = app.buttons["Text Size"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "Text Size control missing")
+        toggle.tap()
+        let button = app.buttons[steps > 0 ? "Increase Text Size" : "Decrease Text Size"]
+        XCTAssertTrue(button.waitForExistence(timeout: 5), "Text Size popover did not open")
+        for _ in 0 ..< abs(steps) {
+            button.tap()
+            pause(0.4)
         }
-        return tops
+        let readout = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "^[0-9]+%$")).firstMatch
+        let value = readout.exists ? readout.label : nil
+        let dismissRegion = app.otherElements["PopoverDismissRegion"]
+        if dismissRegion.exists {
+            dismissRegion.tap()
+        } else {
+            toggle.tap()
+        }
+        XCTAssertTrue(waitForDisappearance(of: button, timeout: 5), "Text Size popover did not close")
+        pause(0.5)
+        return value
+    }
+
+    /// From the fixture list (a launch without `-fixture`), opens `name`.
+    func openFixture(_ name: String) {
+        let candidates = [app.buttons[name], app.cells.containing(.staticText, identifier: name).firstMatch,
+                          app.staticTexts[name]]
+        var swipes = 0
+        while swipes < 8 {
+            if let link = candidates.first(where: { $0.exists && $0.isHittable }) {
+                link.tap()
+                return
+            }
+            app.swipeUp()
+            swipes += 1
+        }
+        XCTFail("\(name) is not in the fixture list")
+    }
+
+    /// Back from a pushed reader to the fixture list ("Confluence").
+    func goBack() {
+        let bar = app.navigationBars.firstMatch
+        let back = bar.buttons["Confluence"]
+        (back.exists ? back : bar.buttons.element(boundBy: 0)).tap()
+        XCTAssertTrue(app.navigationBars["Confluence"].waitForExistence(timeout: 10), "did not return to the fixture list")
+        pause(0.5)
+    }
+
+    /// The task checkbox ("Task" / "Completed task") on the row whose leader
+    /// is labelled `leader`: the checkbox left of the leader that overlaps
+    /// its first line.
+    func taskMarker(leader: String) -> XCUIElement? {
+        let lead = element(labelled: leader)
+        guard lead.exists else { return nil }
+        let line = lead.frame
+        let boxes = app.buttons.matching(
+            NSPredicate(format: "label == %@ OR label == %@", "Task", "Completed task")
+        ).allElementsBoundByIndex
+        return boxes.filter {
+            let frame = $0.frame
+            return frame.maxX <= line.minX + 1 && frame.maxY > line.minY && frame.minY < line.minY + min(line.height, 40)
+        }.min { abs($0.frame.midY - line.minY) < abs($1.frame.midY - line.minY) }
     }
 
     /// A slow, held drag (no fling momentum): `points` > 0 moves the content
@@ -356,5 +442,95 @@ struct LabelShift {
         common = count
         maxPixels = worst.pixels
         worstLabel = worst.label
+    }
+
+    /// Pairs of common labels whose top-to-bottom order differs between the
+    /// two snapshots (pairs within 1 pt of each other in `before`, such as a
+    /// marker and its leader, are not ordered).
+    static func orderInversions(from before: [String: CGFloat], to after: [String: CGFloat]) -> [String] {
+        let common = before.compactMap { label, y0 in after[label].map { (label: label, y0: y0, y1: $0) } }
+            .sorted { $0.y0 < $1.y0 }
+        var inversions: [String] = []
+        for (i, upper) in common.enumerated() {
+            for lower in common[(i + 1)...] where lower.y0 - upper.y0 > 1 && lower.y1 <= upper.y1 {
+                inversions.append("\(upper.label.prefix(24)) / \(lower.label.prefix(24))")
+            }
+        }
+        return inversions
+    }
+
+    /// `tops` measured from `anchor`'s top (nil when `anchor` is absent).
+    static func relative(_ tops: [String: CGFloat], to anchor: String) -> [String: CGFloat]? {
+        guard let origin = tops[anchor] else { return nil }
+        return tops.mapValues { $0 - origin }
+    }
+}
+
+/// One accessibility snapshot of the document (`ReaderDriver.documentSnapshot`).
+struct DocumentSnapshot {
+    struct Node {
+        let label: String
+        let frame: CGRect
+        /// The owner ID when this element is a TextKit 2 row (`tk2-row:<owner>`).
+        let owner: String?
+    }
+
+    /// Labelled elements fully inside the viewport, in snapshot order.
+    let visible: [Node]
+    /// Owner → label of every TextKit 2 row in the snapshot, in or out of
+    /// the viewport.
+    let textKit2Rows: [String: String]
+
+    /// Top edge (points) of every uniquely labelled visible element; a label
+    /// seen at two different tops is dropped (it recurs, so it cannot be
+    /// tracked).
+    var tops: [String: CGFloat] {
+        var tops: [String: CGFloat] = [:]
+        var duplicates: Set<String> = []
+        for node in visible {
+            if tops[node.label] != nil, tops[node.label] != node.frame.minY {
+                duplicates.insert(node.label)
+            } else {
+                tops[node.label] = node.frame.minY
+            }
+        }
+        for label in duplicates {
+            tops[label] = nil
+        }
+        return tops
+    }
+
+    /// Visible label → TextKit 2 owner, for the uniquely labelled visible
+    /// elements that are TextKit 2 rows.
+    var owners: [String: String] {
+        let tops = tops
+        var owners: [String: String] = [:]
+        for node in visible where tops[node.label] != nil {
+            if let owner = node.owner { owners[node.label] = owner }
+        }
+        return owners
+    }
+
+    /// TextKit 2 rows owned by a root block (`0.<n>`: a top-level paragraph
+    /// or heading, the PR 1 scope).
+    var rootOwnedRows: Int { textKit2Rows.keys.filter(Self.isRootOwner).count }
+    /// TextKit 2 rows owned below a root (list leaders, `PreparedListRow.id`,
+    /// and list trailing text, its block's node path).
+    var listOwnedRows: Int { textKit2Rows.count - rootOwnedRows }
+
+    static func isRootOwner(_ owner: String) -> Bool {
+        let parts = owner.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 2 && parts[0] == "0" && Int(parts[1]) != nil
+    }
+
+    /// The top of the visible element labelled `marker` on `leader`'s row:
+    /// left of the leader and overlapping its first line (an ordered list
+    /// marker; bullets are hidden from accessibility).
+    func markerTop(_ marker: String, leader: String) -> CGFloat? {
+        guard let line = visible.first(where: { $0.label == leader })?.frame else { return nil }
+        return visible.filter {
+            $0.label == marker && $0.frame.maxX <= line.minX + 1 && $0.frame.maxY > line.minY
+                && $0.frame.minY < line.minY + min(line.height, 40)
+        }.min { abs($0.frame.minY - line.minY) < abs($1.frame.minY - line.minY) }?.frame.minY
     }
 }
