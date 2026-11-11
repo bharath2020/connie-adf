@@ -5,9 +5,15 @@
 State lives in $FAKE_SIM_ROOT: one fake device, udid $FAKE_UDID. The
 installed "app" is a shell script; `launch` prints the demo app's READY /
 RENDERER_STATS / SCROLL_METRICS lines for the arm it infers from the flags
-(-textkit2 -> C, -rendererStats -> B, else A).
+(-textkit2 -> C, -rendererStats -> B, else A). Every arm prints the
+SCROLL_METRICS completion fields (main >= 86abd56 does); RENDERER_STATS
+carries the lists-stage fields (tk2ListLive and the leaf coverage). Like the
+demo's "Fixture Not Found" screen, a fixture whose JSON is not in the
+installed app never prints READY.
 
 FAKE_SCENARIO  normal | c_slow | c_crash | a_timeout | c_timeout | b_wrong_renderer
+               | c_no_list_live (C reports tk2ListLive=0 on list-dense)
+               | a_short (A's scroll stops one block early, completed=0)
 FAKE_OTHER_BOOTED  if set, a second device is reported Booted
 """
 import json
@@ -24,8 +30,9 @@ scenario = os.environ.get("FAKE_SCENARIO", "normal")
 os.makedirs(root, exist_ok=True)
 state_file = os.path.join(root, "state")
 container = os.path.join(root, "Devices", udid, "data", "Containers", "Bundle", "Application", "X", "ADFReader.app")
-BLOCKS = {"kitchen-sink": 38, "stress-1k": 1000, "stress-5k": 5000, "giant-table": 402}
-ELIGIBLE = {"kitchen-sink": 10, "stress-1k": 480, "stress-5k": 2400, "giant-table": 1}
+BLOCKS = {"kitchen-sink": 38, "stress-1k": 1000, "stress-5k": 5000, "giant-table": 402, "list-dense": 640}
+ELIGIBLE = {"kitchen-sink": 10, "stress-1k": 480, "stress-5k": 2400, "giant-table": 1, "list-dense": 40}
+LIST_LEAVES = {"kitchen-sink": 8, "stress-1k": 1815, "stress-5k": 8914, "list-dense": 3000}
 
 
 def state():
@@ -76,6 +83,9 @@ elif cmd == "launch":
     blocks = BLOCKS.get(fixture, 100)
     eligible = ELIGIBLE.get(fixture, 1)
     hang = (scenario == "a_timeout" and arm == "A") or (scenario == "c_timeout" and arm == "C")
+    if not os.path.exists(os.path.join(container, f"{fixture}.json")):
+        print(f"fake: no bundled fixture named {fixture}.json (Fixture Not Found; no READY)", flush=True)
+        time.sleep(3600)
     time.sleep(1.0 + rng.random() * 0.02)  # long enough that host jitter stays far below 15 %
     print(f"READY fixture={fixture} blocks={blocks} firstChunkMs={12 + rng.randint(0, 1)}", flush=True)
 
@@ -84,11 +94,18 @@ elif cmd == "launch":
         if scenario == "b_wrong_renderer" and arm == "B" and not final:
             renderer = "textkit2"
         c = arm == "C"
+        list_leaves = LIST_LEAVES.get(fixture, 0)
+        list_live = min(list_leaves, 2 if final else 4) if c else 0
+        if scenario == "c_no_list_live" and fixture == "list-dense":
+            list_live = 0
         return (f"RENDERER_STATS renderer={renderer} tk2Live={(3 if final else 9) if c else 0} "
                 f"tk2Layouts={eligible + 1 if c else 0} tk2Draws={eligible + 3 if c and final else 0} "
                 f"tk2NativeDraws={eligible + 2 if c and final else 0} tk1BackedRows={1 if c else 0} "
                 f"tk1BackedDraws={1 if c and final else 0} eligibleRoots={eligible} fallbackRoots={blocks - eligible} "
-                f"textFallbackRoots=2 linkRoots=1")
+                f"textFallbackRoots=2 linkRoots=1 tk2ListLive={list_live} "
+                f"eligibleTextLeaves={eligible + list_leaves * 8 // 10} linkedTextLeaves={1 + list_leaves // 10} "
+                f"fallbackTextLeaves={2 + list_leaves // 10} listLeaderLeaves={list_leaves * 9 // 10} "
+                f"listTrailingLeaves={list_leaves // 10}")
 
     if arm in ("B", "C"):
         print(stats(False), flush=True)
@@ -103,8 +120,8 @@ elif cmd == "launch":
     if scenario == "c_slow" and arm == "C":
         dropped += 40
     line = f"SCROLL_METRICS fixture={fixture} frames=600 dropped={dropped} hitchRatioMsPerS={dropped * 0.5:.2f}"
-    if arm in ("B", "C"):
-        line += f" startRow=0 endRow={blocks - 1} scrollMs=500 completed=1"
+    short = scenario == "a_short" and arm == "A"
+    line += f" startRow=0 endRow={blocks - (2 if short else 1)} scrollMs=500 completed={0 if short else 1}"
     print(line, flush=True)
     if arm in ("B", "C"):
         print(stats(True), flush=True)

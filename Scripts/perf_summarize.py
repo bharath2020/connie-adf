@@ -13,10 +13,14 @@ USAGE
     # pilot (plan.pilot = true; never PASS) and deadline suggestion:
     python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot [--suggest-timeouts]
     # what a design declares (perf-gate.sh reads its defaults from here):
-    python3 -I Scripts/perf_summarize.py --print-design pr45
+    python3 -I Scripts/perf_summarize.py --print-design pr45|pr2|full
     # resolution bounds from an A–A′ run of untouched main (BOUNDS below):
     python3 -I Scripts/perf_summarize.py <cal>/trials.csv --measure-bounds \
         --write-bounds Scripts/perf-bounds.json
+    # add a newly measured fixture's bounds to the frozen file (never
+    # replaces an entry; records the fixture's own reference build):
+    python3 -I Scripts/perf_summarize.py --merge-bounds <cal>/bounds.json \
+        [--bounds Scripts/perf-bounds.json] [--write-bounds <out>]
 
     The run's plan.json (written by perf-gate.sh next to trials.csv; or
     --plan) declares the design, fixtures, runs, warm-ups, host state at
@@ -33,10 +37,23 @@ DESIGNS (DESIGNS below; a run that declares less is INCOMPLETE, never PASS)
           pairs, >= 1 discarded warm-up per (fixture, arm), sampler and
           footprint on, B/C completion and renderer markers on. Rule
           "median-relative". About 40 min including boot and a 5-min settle.
+    pr2   lists stage (PR 2): pr45's three fixtures plus list-dense, each ×
+          A, B, C × 3 pairs, 1 warm-up, rule and thresholds as pr45 (one
+          named cumulative design, never a separately combined verdict:
+          Fable F2). On top of pr45: list-dense needs the list-native proof
+          (list_proof), arm A must report SCROLL_METRICS completion
+          (baseline_completion: main >= 86abd56 prints endRow/completed),
+          the plan must record every arm's bundled fixture JSON sha256 and
+          they must agree (fixture_hashes), and a FAIL under pr45 for the
+          same candidate binaries refuses a pr2 run (includes). About 75–80
+          min plus the quiet-host wait. list-dense has no measured READY
+          bound until one is merged (advisory until then) and its trial
+          timeout is frozen in perf-gate.sh after the pilot.
     full  kitchen-sink, stress-5k, giant-table × A, B, C × >= 10 pairs,
           frozen A–A′ calibration. Rule "calibrated-ucb". About 8 h.
     Reduced (INCOMPLETE, exit 5): a declared fixture, an arm of a fixture or
-    pairs missing, sampler or footprint off, B/C markers off.
+    pairs missing, sampler or footprint off, B/C markers off, A's
+    completion markers off where the design requires them.
 
 VALIDITY (fail closed) — every declared (fixture, arm) has exactly one row
     per run 1..runs; each row: status ok, launch_exit 0, installed and app
@@ -52,6 +69,20 @@ VALIDITY (fail closed) — every declared (fixture, arm) has exactly one row
     tk2NativeDraws > 0; B renderer=swiftui, tk2Layouts = tk2Live =
     tk2NativeDraws = tk1BackedDraws = 0. A non-pilot plan must record the
     host check at start.
+    LIST PROOF (a fixture named in any design's list_proof, e.g. list-dense;
+    columns from perf_trial.py STATS_FIELDS): C needs tk2_list_live > 0 at
+    READY or at the end (live TextKit 2 rows owned by list text: a
+    heading/paragraph native-draw total is not list proof), the leaf
+    coverage columns present, list leaves in scope and at least one
+    eligible list leaf (eligible_text_leaves − eligible_roots > 0, else
+    every list leaf falls back to SwiftUI); B needs tk2_list_live = 0 on
+    both lines (a B row that reports it on any fixture must report 0).
+    FIXTURE BYTES: where the plan records arms.<arm>.fixture_sha256
+    (perf-gate.sh preflight; required by fixture_hashes designs), every arm
+    of a fixture must bundle the same JSON and each trial's installed copy
+    (installed_fixture_sha256) must match. A reference arm that requires
+    completion (baseline_completion) is held to the same endRow rule; its
+    truncated scroll is a baseline failure (INVALID), a candidate's is FAIL.
 
 CEILINGS (both designs, every counted trial) — hitch > 10 ms/s; dropped
     rate > 1 % on a trial with >= 2,000 frames; > 3 dropped frames on a
@@ -74,9 +105,15 @@ BOUNDS (Scripts/perf-bounds.json, written by --measure-bounds from an A–A′
     first chunk 11–20 % (8–11 ms); memory 0.5–10 %. A metric in
     BOUND_GATED_METRICS (launch→READY) gates a fixture only when its bound
     is <= 15 % (or <= the metric's absolute floor); a fixture with no
-    measured bound (stress-1k) is advisory. The plan records the bounds
-    sha256 and the gated fixtures when the run starts; a later change makes
-    the run INVALID. So the gate catches a >= 15 % memory, first-chunk or
+    measured bound (stress-1k, list-dense until merged) is advisory. The
+    plan records the bounds sha256 and the gated fixtures when the run
+    starts; a later change makes the run INVALID. The file's app_sha256
+    (and fixture_sources.<f>.app_sha256 for a merged fixture) is
+    provenance only: no gate compares it with arm A, because bounds
+    describe a fixture's noise on main, and every reference build since has
+    had a different executable digest (a resource-only rebuild changes it).
+    --merge-bounds adds a measured fixture without touching the existing
+    entries and refuses to replace one. So the gate catches a >= 15 % memory, first-chunk or
     kitchen-sink READY regression and any stall or sustained drop over the
     ceilings; it misses smaller shifts, about half of true 15 % shifts on
     the noisiest memory metric, rare stalls that land in none of 3 trials,
@@ -119,7 +156,10 @@ RERUN LEDGER — every verdict is appended to perf-ledger.jsonl in the run
     FAIL-HOST-BUSY for the same binaries counts as FAIL. After one
     INCONCLUSIVE or INVALID, one rerun is allowed, a second is REFUSED.
     Re-summarising the same run directory is not a rerun. Pilot,
-    INCOMPLETE and PASS entries do not count.
+    INCOMPLETE and PASS entries do not count. A design that includes
+    another (pr2 includes pr45) is also REFUSED after a FAIL of the
+    included design for the same candidate binaries: it re-measures those
+    fixtures, so a PASS would rerun that FAIL to green.
 
 LABELS — launch_to_ready_ms is "preparation readiness" (READY: model
     prepared), not first visible content; rss_peak_kb is a sampled peak;
@@ -192,10 +232,32 @@ DESIGNS = {
     "pr45": {"title": "per-PR gate (~45 min)",
              "fixtures": {"kitchen-sink": ALL_ARMS, "stress-1k": ALL_ARMS, "giant-table": ALL_ARMS},
              "runs": 3, "warmup": 1, "rule": "median-relative"},
+    # Lists stage (PR 2, Fable F2/F7): pr45 + list-dense, same arms, pairs,
+    # warm-up and rule. Optional keys (absent = off):
+    #   list_proof           fixtures whose C rows must prove live TextKit 2
+    #                        list rows and whose B rows must report none
+    #   baseline_completion  the reference arm must report SCROLL_METRICS
+    #                        completion (endRow = blocks − 1)
+    #   fixture_hashes       the plan must record each arm's bundled fixture
+    #                        JSON sha256 (perf-gate.sh preflight)
+    #   includes             designs whose FAILs (same candidate binaries)
+    #                        refuse this design in the ledger
+    "pr2": {"title": "per-PR gate, lists stage (~75–80 min)",
+            "fixtures": {"kitchen-sink": ALL_ARMS, "stress-1k": ALL_ARMS, "giant-table": ALL_ARMS,
+                         "list-dense": ALL_ARMS},
+            "runs": 3, "warmup": 1, "rule": "median-relative",
+            "list_proof": ["list-dense"], "baseline_completion": True, "fixture_hashes": True,
+            "includes": ["pr45"]},
     "full": {"title": "full gate (~8 h, before the final parity PR)",
              "fixtures": {"kitchen-sink": ALL_ARMS, "stress-5k": ALL_ARMS, "giant-table": ALL_ARMS},
              "runs": MIN_PAIRS, "warmup": 1, "rule": "calibrated-ucb"},
 }
+
+
+def list_proof_fixtures() -> set[str]:
+    """Fixtures that need the list-native proof in every run that carries
+    renderer markers (a pilot of list-dense included), from all designs."""
+    return {f for d in DESIGNS.values() for f in d.get("list_proof", [])}
 
 # Rule pr45 ("median-relative").
 REL_LIMIT_PCT = 15.0
@@ -229,6 +291,16 @@ NATIVE_DRAWS = "tk2_native_draws"
 TK1_BACKED_ROWS = "tk1_backed_rows"
 TK1_BACKED_DRAWS = "tk1_backed_draws"
 LINK_ROOTS = "link_roots"
+# List-native proof and leaf coverage columns (perf_trial.py STATS_FIELDS /
+# READY_STATS_FIELDS map them from the RENDERER_STATS log keys).
+LIST_LIVE = "tk2_list_live"
+LIST_LIVE_READY = "tk2_list_live_ready"
+ELIGIBLE_LEAVES = "eligible_text_leaves"
+LINKED_LEAVES = "linked_text_leaves"
+FALLBACK_LEAVES = "fallback_text_leaves"
+LIST_LEADER_LEAVES = "list_leader_leaves"
+LIST_TRAILING_LEAVES = "list_trailing_leaves"
+LEAF_COLUMNS = [ELIGIBLE_LEAVES, LINKED_LEAVES, FALLBACK_LEAVES, LIST_LEADER_LEAVES, LIST_TRAILING_LEAVES]
 
 # One-sided 95 % Student t quantiles; between table rows the next LOWER df is
 # used (a larger quantile, i.e. conservative).
@@ -403,6 +475,7 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
     metrics = gated_metrics(plan)
     clean: dict = {(f, a): {} for f in fixtures for a in declared[f] if a in arms}
     seen: dict = {}
+    list_proof = list_proof_fixtures()
 
     for row in rows:
         run_v = finite(row.get("run"))
@@ -433,6 +506,11 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
         if row.get("installed_sha256", "") != spec.get("sha256"):
             problems.add("invalid", f"installed sha256 {row.get('installed_sha256') or '∅'} != plan {spec.get('sha256')}",
                          **where)
+            provenance_ok = False
+        want_fixture = (spec.get("fixture_sha256") or {}).get(fixture)
+        if want_fixture and (row.get("installed_fixture_sha256") or "") != want_fixture:
+            problems.add("invalid", f"installed {fixture}.json sha256 {row.get('installed_fixture_sha256') or '∅'} != "
+                                    f"plan {want_fixture} (the arm's bundled fixture at preflight)", **where)
             provenance_ok = False
         argv = flags_in(row.get("argv", ""))
         missing = [f for f in spec.get("required_flags", []) if f not in argv]
@@ -494,14 +572,18 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
                 traversal.append(f"scroll ended at row {end_row:g}, not the last block {blocks - 1:g}")
         renderer = spec.get("expected_renderer")
         if renderer:
-            bad += renderer_problems(row, renderer)
+            bad += renderer_problems(row, renderer, fixture in list_proof)
         if bad:
             for message in bad:
                 problems.add("invalid", message, **where)
             continue
         if traversal:
+            # A candidate that stops short FAILs; a reference arm held to
+            # completion (baseline_completion) that stops short is the
+            # environment's problem: INVALID.
+            kind = "candidate_failure" if role == "candidate" else "baseline_failure"
             for message in traversal:
-                problems.add("candidate_failure", message, **where)
+                problems.add(kind, message, **where)
             continue
         clean[(fixture, arm)][run] = row
 
@@ -526,7 +608,7 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
             continue
         a_frames = statistics.median(ref_frames)
         for arm, spec in arms.items():
-            if not spec.get("requires_completion") or (fixture, arm) not in clean:
+            if arm == ref or not spec.get("requires_completion") or (fixture, arm) not in clean:
                 continue
             for run, row in list(clean[(fixture, arm)].items()):
                 frames = finite(row.get("frames")) or 0.0
@@ -537,8 +619,9 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
     return clean
 
 
-def renderer_problems(row: dict, renderer: str) -> list[str]:
-    """The RENDERER_STATS proof for one candidate row (final line counters)."""
+def renderer_problems(row: dict, renderer: str, list_proof: bool = False) -> list[str]:
+    """The RENDERER_STATS proof for one candidate row (final line counters);
+    `list_proof` adds the list-native proof (LIST PROOF)."""
     if row.get("renderer") != renderer or row.get("renderer_ready") != renderer:
         return [f"RENDERER_STATS renderer={row.get('renderer_ready') or '∅'} at READY / "
                 f"{row.get('renderer') or '∅'} at the end (need {renderer} on both)"]
@@ -551,12 +634,51 @@ def renderer_problems(row: dict, renderer: str) -> list[str]:
         if native is None or native <= 0:
             out.append(f"TextKit 2 arm with tk2NativeDraws={row.get(NATIVE_DRAWS) or '∅'} (need > 0: native "
                        "TextKit 2 drew glyphs)")
+        if list_proof:
+            out += list_proof_problems(row)
         return out
     zero = {"tk2_layouts": layouts, "tk2_live": finite(row.get("tk2_live")),
             "tk2_live_ready": finite(row.get("tk2_live_ready")), NATIVE_DRAWS: native,
             TK1_BACKED_DRAWS: finite(row.get(TK1_BACKED_DRAWS))}
+    # A build that reports live list rows must report none with the switch
+    # OFF; on a list-proof fixture the counter is required.
+    if list_proof or row.get(LIST_LIVE) or row.get(LIST_LIVE_READY):
+        zero[LIST_LIVE_READY] = finite(row.get(LIST_LIVE_READY))
+        zero[LIST_LIVE] = finite(row.get(LIST_LIVE))
     nonzero = {k: row.get(k) or "∅" for k, v in zero.items() if v != 0}
     return [f"SwiftUI arm with nonzero/missing TextKit 2 counters {nonzero}"] if nonzero else []
+
+
+def list_proof_problems(row: dict) -> list[str]:
+    """LIST PROOF for a C row: live TextKit 2 rows owned by list text at READY
+    or at the end, and static leaf coverage that leaves list text eligible.
+    Root headings and paragraphs drawing natively prove nothing about lists."""
+    out = []
+    live = [v for v in (finite(row.get(LIST_LIVE_READY)), finite(row.get(LIST_LIVE))) if v is not None]
+    if not live:
+        out.append(f"list-native proof missing: RENDERER_STATS reports no {LIST_LIVE} (live TextKit 2 list rows) "
+                   "at READY or at the end")
+    elif max(live) <= 0:
+        out.append(f"TextKit 2 arm with {LIST_LIVE_READY}={row.get(LIST_LIVE_READY) or '∅'} and "
+                   f"{LIST_LIVE}={row.get(LIST_LIVE) or '∅'}: no live TextKit 2 list rows (lists stayed on SwiftUI; "
+                   "a heading/paragraph native-draw total is not list proof)")
+    leaves = {c: finite(row.get(c)) for c in LEAF_COLUMNS}
+    missing = [c for c, v in leaves.items() if v is None]
+    if missing:
+        out.append(f"list leaf coverage missing from RENDERER_STATS: {missing}")
+        return out
+    list_leaves = leaves[LIST_LEADER_LEAVES] + leaves[LIST_TRAILING_LEAVES]
+    # eligible_text_leaves spans root richText and list text; eligible_roots
+    # is the root richText share of it, so the difference is list text.
+    eligible_list = leaves[ELIGIBLE_LEAVES] - (finite(row.get("eligible_roots")) or 0.0)
+    if list_leaves <= 0:
+        out.append(f"no list text in scope ({LIST_LEADER_LEAVES} + {LIST_TRAILING_LEAVES} = 0): the fixture exercises "
+                   "no list leaves")
+    elif eligible_list <= 0:
+        out.append(f"all list leaves fall back to SwiftUI: {ELIGIBLE_LEAVES} {leaves[ELIGIBLE_LEAVES]:g} − "
+                   f"eligible_roots {row.get('eligible_roots') or '∅'} leaves 0 of {list_leaves:g} list leaves "
+                   "eligible")
+    return out
 
 
 def ceiling_breaches(row: dict) -> list[str]:
@@ -620,10 +742,37 @@ def design_conformance(plan: dict, problems: Problems, pilot: bool) -> tuple[dic
         spec = plan["arms"].get(arm)
         if spec and not (spec.get("requires_completion") and spec.get("expected_renderer")):
             reduced.append(f"arm {arm} lacks completion/renderer markers")
+    ref = plan.get("reference", "A")
+    if design.get("baseline_completion") and not plan["arms"].get(ref, {}).get("requires_completion"):
+        reduced.append(f"arm {ref} lacks completion markers (design {name} holds the reference to endRow = "
+                       "blocks − 1)")
     if int(plan.get("warmup", 0)) < design["warmup"] and not pilot:
         problems.add("invalid", f"warmup {plan.get('warmup', 0)} < {design['warmup']} (one discarded warm-up per "
                                 "fixture and arm)")
     return design, reduced
+
+
+def check_fixture_hashes(plan: dict, design: dict | None, problems: Problems) -> None:
+    """FIXTURE BYTES: every arm of a fixture bundles the same JSON (sha256s
+    recorded by perf-gate.sh's preflight as arms.<arm>.fixture_sha256).
+    Required by a fixture_hashes design; checked whenever recorded."""
+    arms = plan["arms"]
+    recorded = any(isinstance(spec.get("fixture_sha256"), dict) for spec in arms.values())
+    if not (recorded or (design or {}).get("fixture_hashes")):
+        return
+    for fixture, fixture_arm_list in fixture_arms(plan).items():
+        shas = {}
+        for arm in fixture_arm_list:
+            sha = (arms.get(arm, {}).get("fixture_sha256") or {}).get(fixture)
+            if sha:
+                shas[arm] = sha
+            else:
+                problems.add("invalid", f"plan records no sha256 of {fixture}.json in arm {arm}'s .app (fixture "
+                                        "preflight)", fixture, arm)
+        if len(set(shas.values())) > 1:
+            problems.add("invalid", f"{fixture}.json differs across arms ("
+                         + ", ".join(f"{a} {s[:12]}" for a, s in sorted(shas.items()))
+                         + "): the arms do not open the same document", fixture)
 
 
 def metric_value(row: dict, metric: str) -> float | None:
@@ -662,11 +811,16 @@ def tk1_share(rows: list[dict]) -> dict:
         values = [v for v in (finite(r.get(key)) for r in rows) if v is not None]
         return statistics.median(values) if values else None
     out = {k: med(k) for k in ("eligible_roots", LINK_ROOTS, "tk2_draws", NATIVE_DRAWS, TK1_BACKED_DRAWS,
-                                TK1_BACKED_ROWS, "tk2_layouts", "text_fallback_roots", "fallback_roots")}
+                                TK1_BACKED_ROWS, "tk2_layouts", "text_fallback_roots", "fallback_roots",
+                                LIST_LIVE_READY, LIST_LIVE, *LEAF_COLUMNS)}
     out["link_root_share_pct"] = (out[LINK_ROOTS] / out["eligible_roots"] * 100.0
                                   if out[LINK_ROOTS] is not None and out["eligible_roots"] else None)
     out["tk1_draw_share_pct"] = (out[TK1_BACKED_DRAWS] / out["tk2_draws"] * 100.0
                                  if out[TK1_BACKED_DRAWS] is not None and out["tk2_draws"] else None)
+    eligible, linked, fallback = out[ELIGIBLE_LEAVES], out[LINKED_LEAVES], out[FALLBACK_LEAVES]
+    out["linked_leaf_share_pct"] = linked / eligible * 100.0 if linked is not None and eligible else None
+    out["fallback_leaf_share_pct"] = (fallback / (eligible + fallback) * 100.0
+                                      if fallback is not None and eligible is not None and eligible + fallback else None)
     return out
 
 
@@ -709,11 +863,13 @@ def measure_bounds(rows: list[dict], plan: dict, csv_path: str) -> dict:
         problems.add("invalid", f"plan mode is {plan.get('mode')!r}; bounds come from an A–A′ (calibrate) run")
     ref, cands = plan.get("reference", "A"), plan.get("candidates", [])
     rep_arm = cands[0] if cands else "A2"
+    check_fixture_hashes(plan, None, problems)
     clean = check_rows(rows, plan, problems, plan.get("expected_blocks", {}), True)
     runs = int(plan["runs"])
     out = {"version": 1, "kind": "perf-resolution-bounds", "created_utc": now_utc(),
            "source_csv": os.path.abspath(csv_path), "source_csv_sha256": sha256_file(csv_path),
            "app_sha256": plan["arms"].get(ref, {}).get("sha256"), "pairs_per_gate": BOUND_PAIRS,
+           "fixture_sha256": dict(plan["arms"].get(ref, {}).get("fixture_sha256") or {}),
            "percentile": BOUND_PERCENTILE,
            "method": f"{BOUND_PERCENTILE:g}th percentile (nearest rank) of |median of {BOUND_PAIRS} A–A′ deltas| "
                      f"over every {BOUND_PAIRS}-subset of the clean pairs; p95_pct relative to A's median",
@@ -754,6 +910,40 @@ def render_bounds(b: dict) -> str:
     return "\n".join(lines)
 
 
+def merge_bounds(base: dict | None, measured: dict) -> tuple[dict | None, list[str]]:
+    """Adds the fixtures of a --measure-bounds result to the frozen bounds.
+    Never replaces an entry (a bound is frozen once gates have used it) and
+    records each added fixture's own provenance in fixture_sources, since the
+    top-level app_sha256 describes only the entries measured with it."""
+    errors = []
+    if measured.get("kind") != "perf-resolution-bounds" or measured.get("verdict") != "MEASURED":
+        errors.append(f"measured bounds verdict {measured.get('verdict')!r} (need MEASURED from --measure-bounds)")
+    if not isinstance(base, dict) or not isinstance(base.get("fixtures"), dict):
+        errors.append("no base bounds file to merge into (--bounds)")
+        return None, errors
+    for key in ("pairs_per_gate", "percentile"):
+        if base.get(key) != measured.get(key):
+            errors.append(f"{key} {measured.get(key)!r} != base {base.get(key)!r} (bounds must share one method)")
+    added = measured.get("fixtures") or {}
+    if not added:
+        errors.append("measured bounds name no fixtures")
+    clash = sorted(f for f in added if f in base["fixtures"])
+    if clash:
+        errors.append(f"already bounded: {clash} (frozen; a replacement needs its own reviewed change)")
+    if errors:
+        return None, errors
+    out = json.loads(json.dumps(base))
+    sources = out.setdefault("fixture_sources", {})
+    for fixture, metrics in added.items():
+        out["fixtures"][fixture] = metrics
+        sources[fixture] = {"app_sha256": measured.get("app_sha256"),
+                            "fixture_sha256": (measured.get("fixture_sha256") or {}).get(fixture),
+                            "source_csv": measured.get("source_csv"),
+                            "source_csv_sha256": measured.get("source_csv_sha256"),
+                            "measured_utc": measured.get("created_utc"), "merged_utc": now_utc()}
+    return out, []
+
+
 # ------------------------------------------------------------- calibration
 
 
@@ -778,6 +968,7 @@ def calibrate(rows: list[dict], plan: dict, args: argparse.Namespace, csv_path: 
         problems.add("invalid", "calibration arms must be the same .app (same sha256)")
     host_busy = host_state(plan, rows, problems, pilot)
     check_fixture_arms(plan, problems)
+    check_fixture_hashes(plan, None, problems)
     if not pilot:
         if int(plan.get("warmup", 0)) < 1:
             problems.add("invalid", "warmup 0: one discarded warm-up per fixture and arm is required")
@@ -896,6 +1087,7 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
     if plan.get("mode") != "gate":
         problems.add("invalid", f"plan mode is {plan.get('mode')!r}, not 'gate'")
     design, reduced = design_conformance(plan, problems, pilot)
+    check_fixture_hashes(plan, design, problems)
     rule = design["rule"] if design else None
     arms = plan["arms"]
     ref = plan.get("reference", "A")
@@ -985,7 +1177,8 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
             fx["renderer"][arm] = {k: describe([v for v in (finite(r.get(k)) for r in arm_rows) if v is not None])
                                    for k in ["tk2_live_ready", "tk2_live", "tk2_layouts", "tk2_draws", NATIVE_DRAWS,
                                              TK1_BACKED_ROWS, TK1_BACKED_DRAWS, "eligible_roots", "fallback_roots",
-                                             "text_fallback_roots", LINK_ROOTS]}
+                                             "text_fallback_roots", LINK_ROOTS, LIST_LIVE_READY, LIST_LIVE,
+                                             *LEAF_COLUMNS]}
             fx["sampler"][arm] = {k: describe([v for v in (finite(r.get(k)) for r in arm_rows) if v is not None])
                                   for k in ["rss_interval_ms_median", "rss_interval_ms_max",
                                             "footprint_interval_ms_median", "footprint_interval_ms_max",
@@ -1055,6 +1248,8 @@ def apply_ledger(result: dict, ledger_path: str, run_dir: str) -> None:
     result["ledger"] = ledger_path
     result["rerun_count"] = 0
     prior = []
+    included = DESIGNS.get(result.get("design") or "", {}).get("includes", [])
+    included_fails = []
     if os.path.exists(ledger_path):
         with open(ledger_path, encoding="utf-8") as handle:
             for line in handle:
@@ -1062,16 +1257,24 @@ def apply_ledger(result: dict, ledger_path: str, run_dir: str) -> None:
                     entry = json.loads(line)
                 except ValueError:
                     continue
-                if (entry.get("run_dir") != run_dir and entry.get("design") == result.get("design")
-                        and entry.get("candidate_sha256") == result.get("candidate_sha256")
-                        and not entry.get("pilot")):
+                if (entry.get("run_dir") == run_dir or entry.get("candidate_sha256") != result.get("candidate_sha256")
+                        or entry.get("pilot")):
+                    continue
+                if entry.get("design") == result.get("design"):
                     prior.append(entry)
+                elif (entry.get("design") in included
+                      and (entry.get("verdict_before_refusal") or entry.get("verdict")) == "FAIL"):
+                    included_fails.append(entry)
     by_dir: dict = {}
     for entry in prior:
         by_dir[entry["run_dir"]] = entry.get("verdict_before_refusal") or entry.get("verdict")
     if not result.get("pilot"):
         if "FAIL" in by_dir.values():
             result["refused"] = "a FAIL is never rerun to green without a code change (candidate sha256 unchanged)"
+        elif included_fails:
+            result["refused"] = (f"these candidate binaries FAILed design {included_fails[0].get('design')} "
+                                 f"({included_fails[0].get('run_dir')}), which design {result.get('design')} "
+                                 "includes: a FAIL is never rerun to green without a code change")
         elif result["verdict"] == "FAIL-HOST-BUSY" and "FAIL-HOST-BUSY" in by_dir.values():
             # The one quiet-window rerun is spent: this FAIL counts.
             result["host_busy_rerun_spent"] = True
@@ -1128,7 +1331,21 @@ def share_line(share: dict | None) -> str:
             f"TextKit 1 draws {fmt(share[TK1_BACKED_DRAWS], 'frames')} of {fmt(share['tk2_draws'], 'frames')} "
             f"TK2-row draws ({pct(share['tk1_draw_share_pct'])}); native TextKit 2 draws "
             f"{fmt(share[NATIVE_DRAWS], 'frames')}; TextKit 1-backed rows live at the end "
-            f"{fmt(share[TK1_BACKED_ROWS], 'frames')}.")
+            f"{fmt(share[TK1_BACKED_ROWS], 'frames')}." + leaf_line(share, pct))
+
+
+def leaf_line(share: dict, pct) -> str:
+    """The leaf coverage of the F4 scope (root richText + list text), when the
+    build reports it (lists stage); empty otherwise."""
+    if share.get(ELIGIBLE_LEAVES) is None:
+        return ""
+    return (f" Leaf coverage (root richText + list text, potential): list leaves "
+            f"{fmt(share[LIST_LEADER_LEAVES], 'frames')} leaders + {fmt(share[LIST_TRAILING_LEAVES], 'frames')} "
+            f"trailing; eligible text leaves {fmt(share[ELIGIBLE_LEAVES], 'frames')}, linked (TextKit 1-backed) "
+            f"{fmt(share[LINKED_LEAVES], 'frames')} ({pct(share['linked_leaf_share_pct'])}), SwiftUI fallback "
+            f"{fmt(share[FALLBACK_LEAVES], 'frames')} ({pct(share['fallback_leaf_share_pct'])} of eligible + "
+            f"fallback); live TextKit 2 list rows at READY / end {fmt(share[LIST_LIVE_READY], 'frames')} / "
+            f"{fmt(share[LIST_LIVE], 'frames')}.")
 
 
 def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
@@ -1338,7 +1555,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bounds", default=BOUNDS_PATH, help="resolution bounds JSON (default: Scripts/perf-bounds.json)")
     parser.add_argument("--measure-bounds", action="store_true",
                         help="write resolution bounds from this A–A′ (calibrate-mode) run and exit")
-    parser.add_argument("--write-bounds", help="bounds JSON to write (with --measure-bounds)")
+    parser.add_argument("--write-bounds", help="bounds JSON to write (with --measure-bounds / --merge-bounds; "
+                                               "--merge-bounds default: the --bounds file, in place)")
+    parser.add_argument("--merge-bounds", metavar="MEASURED_JSON",
+                        help="add the fixtures of a --measure-bounds result to --bounds (never replaces one) and exit")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1353,9 +1573,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fixtures={' '.join(design['fixtures'])}\n"
               f"fixture_arms={' '.join(f + '=' + ','.join(v) for f, v in design['fixtures'].items())}\n"
               f"arms={' '.join(arms)}\nruns={design['runs']}\nwarmup={design['warmup']}\nrule={design['rule']}\n"
+              f"list_proof={' '.join(design.get('list_proof', []))}\n"
+              f"baseline_completion={1 if design.get('baseline_completion') else 0}\n"
+              f"fixture_hashes={1 if design.get('fixture_hashes') else 0}\n"
+              f"includes={' '.join(design.get('includes', []))}\n"
               f"bounds_sha256={bounds_sha or ''}\nbound_gated={json.dumps(gated, sort_keys=True)}\n"
               f"host_quiet_load_max={HOST_QUIET_LOAD_MAX:g}\nhost_process_cpu_max={HOST_PROCESS_CPU_MAX:g}\n"
               f"host_wait_s={HOST_WAIT_S}\nhost_poll_s={HOST_POLL_S}")
+        return 0
+    if args.merge_bounds:
+        try:
+            with open(args.merge_bounds, encoding="utf-8") as handle:
+                measured = json.load(handle)
+            base, _ = load_bounds(args.bounds)
+        except (OSError, ValueError) as error:
+            print(f"error: cannot read bounds: {error}", file=sys.stderr)
+            return 2
+        merged, errors = merge_bounds(base, measured)
+        if errors:
+            for message in errors:
+                print(f"error: merge refused: {message}", file=sys.stderr)
+            return 2
+        target = args.write_bounds or args.bounds
+        with open(target, "w", encoding="utf-8") as handle:
+            json.dump(merged, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        print(f"bounds merged: {sorted(measured['fixtures'])} into {target} (sha256 {sha256_file(target)})",
+              file=sys.stderr)
         return 0
     if not args.csv:
         parser.error("trials.csv is required")

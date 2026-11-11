@@ -10,6 +10,10 @@
 #   # × A/B/C × 3 pairs + 1 warm-up; no calibration):
 #   Scripts/perf-gate.sh --udid <UDID> --app-a <main .app> --app-b <branch .app> \
 #       --app-c <branch .app> --out <data>/perf/pr45-<sha>
+#   # lists stage (design pr2, ~75–80 min; pr45 + list-dense; refuses until
+#   # list-dense's trial timeout is frozen in DEFAULT_TIMEOUTS):
+#   Scripts/perf-gate.sh --design pr2 --udid <UDID> --app-a <main+fixtures .app> \
+#       --app-b <branch .app> --app-c <branch .app> --out <data>/perf/pr2-<sha>
 #   # full gate (design full, ~8 h, once before the final parity PR):
 #   Scripts/perf-gate.sh --calibrate --udid <UDID> --app-a <main .app> \
 #       --out <data>/perf/calibration
@@ -23,6 +27,13 @@
 # INCOMPLETE. A design names its fixtures and the arms each runs
 # (perf_summarize.py DESIGNS); the plan records them as fixture_arms.
 #
+# FIXTURE PREFLIGHT  before any trial (and before booting), every arm's .app
+# must bundle <fixture>.json for each fixture the arm runs, and every arm of
+# a fixture must bundle the same bytes; otherwise the run is refused (exit 2:
+# a fixture missing from arm A used to cost a 60 s READY wait per trial and
+# end INVALID). plan.json records arms.<arm>.fixture_sha256; every trial
+# records the installed copy's sha256 (installed_fixture_sha256).
+#
 # OPTIONS
 #   --udid <UDID>            required; the device must exist (never created).
 #                            Booted if shut down, then settled (--settle) and
@@ -30,8 +41,9 @@
 #                            device that was already booted is left booted.
 #                            Refuses to run if another simulator is booted.
 #   --app-a / --app-b / --app-c <ADFReader.app>   (B and C required for a gate)
-#   --design <pr45|full>     default pr45; fixtures, pairs and warm-ups default
-#                            to the design (perf_summarize.py --print-design)
+#   --design <pr45|pr2|full> default pr45; fixtures, pairs and warm-ups default
+#                            to the design (perf_summarize.py --print-design);
+#                            pr2 also holds arm A to SCROLL_METRICS completion
 #   --calibrate              A vs A2 (both --app-a) for design full; writes
 #                            calibration.json
 #   --calibration <json>     frozen calibration (design full); its sha256 is
@@ -62,7 +74,11 @@
 #   --trial-timeout-for "f=s …" per-fixture deadlines; defaults from the
 #                            2026-10-26 pilot (1.5 × longest scroll + 30 s):
 #                            kitchen-sink=45 stress-1k=180 stress-5k=775
-#                            giant-table=95 text-dense=425 long-paragraph=45
+#                            giant-table=95 text-dense=425 long-paragraph=45.
+#                            A default of UNFROZEN (list-dense until its pilot)
+#                            refuses every non-pilot run of that fixture, with
+#                            or without this flag; a pilot must pass the
+#                            fixture's deadline here explicitly.
 #   --ready-timeout <s>      READY deadline; default 60
 #   --rss-ms <ms> / --footprint-ms <ms>  sampler periods; default 200 / 1000
 #   --no-sampler             pilot only: no memory sampling (sampler overhead)
@@ -155,7 +171,13 @@ CANDIDATE_MARKERS=1
 EXTRA_ARGS=""
 EXPECTED_BLOCKS=""
 TRIAL_TIMEOUT=120
-DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45"
+# Frozen per-fixture deadlines (1.5 × the pilot's longest scroll + 30 s, from
+# `perf_summarize.py <pilot>/trials.csv --pilot --suggest-timeouts`).
+# TIMEOUT_UNFROZEN marks a fixture whose pilot has not run yet: no gate runs it
+# until the placeholder is replaced by the frozen number in a reviewed commit
+# (never a guess, never a command-line value standing in for it).
+TIMEOUT_UNFROZEN="UNFROZEN"
+DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45 list-dense=$TIMEOUT_UNFROZEN"
 TIMEOUTS_FOR=""
 READY_TIMEOUT=60
 RSS_MS=200
@@ -172,6 +194,8 @@ APPEARANCE="light"
 BUNDLE_ID="com.connie.adfreader"
 KEEP_BOOTED=0
 DRY_RUN=0
+BASELINE_COMPLETION=0
+ARM_FIXTURE_SHAS=""
 
 # ---------------------------------------------------------------- helpers
 log() { printf '[perf-gate %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -256,7 +280,14 @@ arm_flags() {
     esac
 }
 arm_requires_completion() {
-    case "$1" in B|C) [ "$CANDIDATE_MARKERS" -eq 1 ] && echo 1 || echo 0 ;; *) echo 0 ;; esac
+    case "$1" in
+        B|C) [ "$CANDIDATE_MARKERS" -eq 1 ] && echo 1 || echo 0 ;;
+        # design pr2: main >= 86abd56 prints endRow/completed, so the
+        # reference is held to a full traversal too (a short A is INVALID).
+        A) [ "$MODE" = "gate" ] && [ "$BASELINE_COMPLETION" -eq 1 ] && [ "$CANDIDATE_MARKERS" -eq 1 ] \
+               && echo 1 || echo 0 ;;
+        *) echo 0 ;;
+    esac
 }
 
 # fixture_arms_of <fixture> -> its arms ("A B C"), from FIXTURE_ARMS
@@ -289,6 +320,58 @@ all_arms() {
     echo "${out# }"
 }
 
+# fixture_preflight: FIXTURE PREFLIGHT. Every arm's .app must bundle
+# <fixture>.json (the demo's Bundle.main lookup: the bundle root) for each
+# fixture the arm runs, with the same bytes in every arm of the fixture.
+# Refuses (exit 2) before any trial; sets ARM_FIXTURE_SHAS, one
+# "<arm> <fixture> <sha256>" line per checked file, for plan.json.
+fixture_preflight() {
+    local arm app f sha missing="" lines="" differ checked=0
+    for arm in $(all_arms); do
+        app=$(arm_app "$arm")
+        if [ ! -d "$app" ]; then
+            [ "$DRY_RUN" -eq 1 ] || die "fixture preflight: arm $arm: not a directory: $app"
+            log "fixture preflight: arm $arm: $app does not exist (dry run): not checked"
+            continue
+        fi
+        for f in $FIXTURES; do
+            case " $(fixture_arms_of "$f") " in *" $arm "*) ;; *) continue ;; esac
+            if [ -f "$app/$f.json" ]; then
+                sha=$(shasum -a 256 "$app/$f.json" | awk '{print $1}')
+                lines="$lines$arm $f $sha
+"
+                checked=$(( checked + 1 ))
+            else
+                missing="$missing $f.json (arm $arm: $app);"
+            fi
+        done
+    done
+    [ -z "$missing" ] || die "fixture preflight: design fixture missing from the arm's .app bundle:$missing rebuild that arm with the fixture JSON (arm A = main + the new fixture files only, with FILES-ADDED.txt); nothing was run"
+    differ=$(printf '%s' "$lines" | awk 'NF == 3 {
+        seen[$2] = seen[$2] " " $1 "=" substr($3, 1, 12)
+        if (!($2 in first)) first[$2] = $3; else if (first[$2] != $3) bad[$2] = 1
+    } END { for (f in bad) printf " %s.json (%s );", f, seen[f] }')
+    [ -z "$differ" ] || die "fixture preflight: fixture JSON differs across arms:$differ every arm must open the same document (rebuild arm A from main + the branch's fixture bytes); nothing was run"
+    ARM_FIXTURE_SHAS="$lines"
+    log "fixture preflight: $checked bundled fixture file(s) present, identical across arms"
+}
+
+# arm_fixture_sha <arm> <fixture> -> the preflight sha256 of that arm's bundled fixture
+arm_fixture_sha() {
+    printf '%s' "$ARM_FIXTURE_SHAS" | awk -v a="$1" -v f="$2" '$1 == a && $2 == f { print $3 }'
+}
+
+# installed_fixture_sha <fixture> -> sha256 of the installed app's <fixture>.json, or ""
+installed_fixture_sha() {
+    local container
+    container=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" app 2>/dev/null || true)
+    if [ -n "$container" ] && [ -f "$container/$1.json" ]; then
+        shasum -a 256 "$container/$1.json" | awk '{print $1}'
+    else
+        echo ""
+    fi
+}
+
 write_plan() {
     local arms
     arms=$(all_arms)
@@ -308,6 +391,7 @@ write_plan() {
     P_CAL="$CALIBRATION" P_CAL_SHA="$cal_sha" P_UDID="$UDID" P_BUNDLE="$BUNDLE_ID" \
     P_DESIGN="$DESIGN" P_HOST="$HOST_START_JSON" P_SETTLE="$SETTLE" P_FIXTURE_ARMS="$FIXTURE_ARMS" \
     P_HOST_WAIT="$HOST_WAIT_JSON" P_BOUNDS_SHA="$BOUNDS_SHA" P_BOUND_GATED="$BOUND_GATED" \
+    P_FIXTURE_SHAS="$ARM_FIXTURE_SHAS" \
     python3 -I - "$OUT/plan.json" <<'PY'
 import json, os, sys
 env = os.environ
@@ -330,13 +414,17 @@ for line in env["ARM_SPECS"].strip().splitlines():
         "requires_completion": completion == "1",
         "expected_renderer": renderer,
     }
+for line in env["P_FIXTURE_SHAS"].splitlines():
+    parts = line.split()
+    if len(parts) == 3 and parts[0] in arms:
+        arms[parts[0]].setdefault("fixture_sha256", {})[parts[1]] = parts[2]
 expected = {}
 for pair in env["P_EXPECTED"].split():
     k, _, v = pair.partition("=")
     expected[k] = int(v)
 sampler = env["P_SAMPLER"] == "1"
 plan = {
-    "version": 3, "mode": mode, "design": env["P_DESIGN"], "pilot": env["P_PILOT"] == "1",
+    "version": 4, "mode": mode, "design": env["P_DESIGN"], "pilot": env["P_PILOT"] == "1",
     "fixtures": env["P_FIXTURES"].split(), "runs": int(env["P_RUNS"]), "warmup": int(env["P_WARMUP"]),
     "reference": "A", "candidates": ["A2"] if mode == "calibrate" else [a for a in ("C", "B") if a in arms],
     "arms": arms, "extra_args": env["P_EXTRA"].split(), "appearance": env["P_APPEARANCE"],
@@ -400,9 +488,13 @@ import json, os, sys
 print(";".join("%s=%g%s" % (os.path.basename(p["command"]), p["cpu"], "*" if p.get("simulator") else "")
                for p in json.load(sys.stdin)["top"]))')
 
-    local installed
+    local installed installed_fixture want_fixture
     installed=$(install_arm "$app")
     [ "$installed" = "$sha" ] || log "$stem: PROVENANCE MISMATCH installed=${installed:-none} expected=$sha"
+    installed_fixture=$(installed_fixture_sha "$fixture")
+    want_fixture=$(arm_fixture_sha "$arm" "$fixture")
+    [ "$installed_fixture" = "$want_fixture" ] || \
+        log "$stem: FIXTURE MISMATCH installed $fixture.json=${installed_fixture:-none} expected=${want_fixture:-none}"
     xcrun simctl ui "$UDID" appearance "$APPEARANCE" >/dev/null 2>&1 || true
 
     if [ "$SAMPLER" -eq 1 ]; then
@@ -443,6 +535,7 @@ print(";".join("%s=%g%s" % (os.path.basename(p["command"]), p["cpu"], "*" if p.g
     digest=$(python3 -I "$TRIAL_PY" parse --log "$logf" --samples "$samplef" --csv "$csv" \
         --meta "run=$run" --meta "fixture=$fixture" --meta "arm=$arm" --meta "label=$label" \
         --meta "order_index=$order_index" --meta "app_sha256=$sha" --meta "installed_sha256=$installed" \
+        --meta "installed_fixture_sha256=$installed_fixture" \
         --meta "argv=${argv[*]}" --meta "requires_completion=$(arm_requires_completion "$arm")" \
         --meta "trial_timeout_s=$deadline" --meta "shell_status=$shell_status" \
         --meta "started_utc=$started" --meta "host_load1=$load1" --meta "host_top3=$top3")
@@ -577,6 +670,8 @@ main() {
     d_warmup=$(printf '%s\n' "$shape" | sed -n 's/^warmup=//p')
     BOUNDS_SHA=$(printf '%s\n' "$shape" | sed -n 's/^bounds_sha256=//p')
     BOUND_GATED=$(printf '%s\n' "$shape" | sed -n 's/^bound_gated=//p')
+    BASELINE_COMPLETION=$(printf '%s\n' "$shape" | sed -n 's/^baseline_completion=//p')
+    [ -n "$BASELINE_COMPLETION" ] || BASELINE_COMPLETION=0
     HOST_LOAD_MAX=$(printf '%s\n' "$shape" | sed -n 's/^host_quiet_load_max=//p')
     HOST_CPU_MAX=$(printf '%s\n' "$shape" | sed -n 's/^host_process_cpu_max=//p')
     [ -n "$HOST_WAIT" ] || HOST_WAIT=$(printf '%s\n' "$shape" | sed -n 's/^host_wait_s=//p')
@@ -600,6 +695,26 @@ main() {
         [ "$CANDIDATE_MARKERS" -eq 1 ] || die "--no-candidate-markers is pilot-only (a gate proves completion and renderer)"
         case " $CANDIDATE_ARGS " in *" -rendererStats "*) ;; *) die "--candidate-args must keep -rendererStats (renderer proof) unless --pilot" ;; esac
     fi
+
+    # Deadlines: a fixture whose default is still TIMEOUT_UNFROZEN has no
+    # frozen deadline. No gate runs it; a pilot runs it only with an explicit
+    # --trial-timeout-for (the pilot is what the frozen value comes from).
+    local f tf
+    for f in $FIXTURES; do
+        if [ "$(lookup "$f" "$DEFAULT_TIMEOUTS")" = "$TIMEOUT_UNFROZEN" ]; then
+            [ "$PILOT" -eq 1 ] || die "$f has no frozen trial timeout (DEFAULT_TIMEOUTS $f=$TIMEOUT_UNFROZEN in Scripts/perf-gate.sh): run its pilot, then commit $f=<1.5 x the pilot's longest scroll + 30 s> (python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot --suggest-timeouts); --trial-timeout-for cannot stand in for it in a gate run"
+            [ -n "$(lookup "$f" "$TIMEOUTS_FOR")" ] || die "--pilot: $f has no frozen trial timeout yet; pass --trial-timeout-for \"$f=<s>\" with a generous deadline (e.g. 900)"
+        fi
+        tf=$(timeout_for "$f")
+        case "$tf" in ''|*[!0-9]*) die "trial timeout for $f is not a number of seconds: '$tf'" ;; esac
+    done
+    # The plan records the bound-gated fixtures of THIS run, in run order: a
+    # pilot may run a subset of the design's fixtures, and the summarizer
+    # recomputes the list over the plan's fixtures (a mismatch is INVALID).
+    BOUND_GATED=$(printf '%s' "$BOUND_GATED" | python3 -I -c '
+import json, sys
+gated, keep = json.loads(sys.stdin.read() or "{}"), sys.argv[1].split()
+print(json.dumps({m: [f for f in keep if f in v] for m, v in gated.items()}, sort_keys=True))' "$FIXTURES")
 
     if [ "$MODE" = "calibrate" ]; then
         [ -z "$APP_B$APP_C" ] || die "--calibrate uses --app-a only (as A and A2)"
@@ -668,6 +783,7 @@ main() {
     if [ "$MODE" = "gate" ] && [ "$SHA_A" = "$SHA_C" ]; then
         log "WARNING: app-a and app-c have the same binary sha256"
     fi
+    fixture_preflight
 
     if [ "$DRY_RUN" -eq 1 ]; then
         HOST_START_JSON=$(python3 -I "$TRIAL_PY" host --top-samples 2)
@@ -696,6 +812,7 @@ main() {
             echo "udid=$UDID device=$(sim_device_field "$UDID" name) runtime=$(sim_device_field "$UDID" runtime)"
             echo "mode=$MODE design=$DESIGN pilot=$PILOT fixtures=$FIXTURES runs=$RUNS warmup=$WARMUP settle=$SETTLE"
             echo "fixture_arms=$FIXTURE_ARMS bounds_sha256=$BOUNDS_SHA bound_gated=$BOUND_GATED"
+            printf '%s' "$ARM_FIXTURE_SHAS" | sed 's/^/fixture_sha256 /'
             echo "host_wait=$HOST_WAIT_JSON"
             echo "sampler=$SAMPLER rss_ms=$RSS_MS footprint_ms=$FOOTPRINT_MS"
             echo "host_start=$HOST_START_JSON"
