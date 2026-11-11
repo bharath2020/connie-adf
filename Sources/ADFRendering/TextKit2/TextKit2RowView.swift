@@ -549,11 +549,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     /// Re-syncs the layout manager to the layout SwiftUI placed this row
     /// from (`placedResult(for:)`, whose container width can be wider than
-    /// the bounds of a hugging row) and sizes the canvas: the bounds horizontally (SwiftUI's `Text`
-    /// clips glyph overhang at its frame's edges — measured: a line-initial
-    /// "j" under an indentation loses its tail) and the bounds plus the ink
-    /// overhang vertically. Called on bounds changes, on new inputs, and
-    /// before every draw and hit test.
+    /// the bounds of a hugging row) and sizes the canvas: the bounds plus
+    /// the ink overhang vertically; horizontally the bounds (SwiftUI's
+    /// `Text` clips glyph overhang at its frame's edges — measured: a
+    /// line-initial "j" under an indentation loses its tail), except for
+    /// linked text, which `Text` draws with TextKit 1 unclipped (measured:
+    /// a list leader's line-initial "j" keeps the pixel left of its frame).
+    /// Called on bounds changes, on new inputs, and before every draw and
+    /// hit test.
     @discardableResult
     private func syncToBounds() -> TextKit2LayoutResult? {
         guard inputs != nil, bounds.width > 0 else { return nil }
@@ -565,7 +568,15 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         let top = min(bounds.minY, ink.minY)
         let bottom = max(bounds.maxY, ink.maxY)
         let rows = CGRect(x: 0, y: top, width: 1, height: bottom - top).integral
-        let canvasFrame = CGRect(x: bounds.minX, y: rows.minY, width: bounds.width, height: rows.height)
+        var columns = CGRect(x: bounds.minX, y: 0, width: bounds.width, height: 1)
+        if isTextKit1Backed {
+            // TextKit 1 can wrap differently from the TextKit 2 layout the
+            // ink comes from, so a line-initial glyph's overhang is not
+            // always in it: half an em of the tallest line covers any.
+            let margin = (current.lines.map(\.ascent).max() ?? 0) / 2
+            columns = columns.insetBy(dx: -margin, dy: 0).union(CGRect(x: ink.minX, y: 0, width: ink.width, height: 1)).integral
+        }
+        let canvasFrame = CGRect(x: columns.minX, y: rows.minY, width: columns.width, height: rows.height)
         if canvas.frame != canvasFrame {
             canvas.frame = canvasFrame
             canvas.setNeedsDisplay()
