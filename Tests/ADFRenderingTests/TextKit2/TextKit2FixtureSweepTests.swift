@@ -67,11 +67,12 @@ struct TextKit2FixtureSweepTests {
 
     nonisolated static let listDocuments = ["kitchen-sink", "stress-5k", "lists-parity", "list-dense"]
     /// Eligible list leaves per document: leaders and a row's direct
-    /// paragraphs and headings at any depth (`TextKit2Scope`), linked ones
-    /// included (0, 0, 3 and 594 are TextKit 1-backed). Pinned so a walk
-    /// that finds no list text, or text that all falls back, fails here
-    /// rather than passing by measuring nothing.
-    nonisolated static let expectedEligibleListLeaves = ["kitchen-sink": 8, "stress-5k": 7_543, "lists-parity": 58, "list-dense": 3_686]
+    /// paragraphs and headings at any depth, in rows that keep the
+    /// renderer (`TextKit2Scope`), linked ones included (0, 0, 2 and 488
+    /// are TextKit 1-backed). Pinned so a walk that finds no list text, or
+    /// text that all falls back, fails here rather than passing by
+    /// measuring nothing.
+    nonisolated static let expectedEligibleListLeaves = ["kitchen-sink": 8, "stress-5k": 7_543, "lists-parity": 33, "list-dense": 2_984]
 
     /// The leader as `ListRowView` hosts it, on one arm.
     static func leaderHeight(_ segments: [InlineSegment], arm: ADFTextRenderer, size: DynamicTypeSize, width: CGFloat) -> CGFloat {
@@ -89,8 +90,10 @@ struct TextKit2FixtureSweepTests {
     /// The same leaf drawn as list text: a leader as the list row hosts it,
     /// a row's paragraph or heading as `RichTextBlockView`. Measured at the
     /// sweep width (the list's own column widths are the hosted list
-    /// parity's), each distinct (text, style) once.
-    @Test("every eligible list leaf of the demo documents measures as Text does")
+    /// parity's), each distinct (text, style) once. From iOS 26: before it
+    /// lists keep their text on SwiftUI (`TextKit2Eligibility.listsMatchText`).
+    @Test("every eligible list leaf of the demo documents measures as Text does",
+          .enabled(if: TextKit2Eligibility.listsMatchText, "before iOS 26 lists keep their text on SwiftUI"))
     func everyEligibleListLeaf() async throws {
         struct Key: Hashable {
             let segments: [InlineSegment]
@@ -109,7 +112,7 @@ struct TextKit2FixtureSweepTests {
             var eligible = 0
             var measured: Set<Key> = []
             for leaf in leaves {
-                if case .fallback(let reason) = TextKit2Eligibility.verdict(leaf.segments) {
+                if case .fallback(let reason) = leaf.verdict {
                     fallbacks[reason, default: 0] += 1
                     continue
                 }

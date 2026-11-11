@@ -5,10 +5,14 @@ import SwiftUI
 /// `.swiftUI` is the shipping path (`Text(AttributedString)`); `.textKit2`
 /// routes plain (atom-free) top-level paragraphs and headings, and the
 /// leaders and direct paragraphs of top-level lists (nested lists
-/// included), through a UIKit-hosted TextKit 2 row. Everything else stays
-/// on SwiftUI regardless of the setting: containers and the lists and text
-/// inside them, captions, table cells, and atom-bearing text. On platforms
-/// without UIKit, `.textKit2` behaves as `.swiftUI`.
+/// included), through a UIKit-hosted TextKit 2 row. A list row whose item
+/// holds more than one block keeps all its text on SwiftUI, and so does a
+/// whole list laid out right to left or with a row holding anything but
+/// text (a code block, a container, a list under another node), and every
+/// list before iOS 26. Everything
+/// else stays on SwiftUI regardless of the setting: containers and the
+/// lists and text inside them, captions, table cells, and atom-bearing
+/// text. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
     case swiftUI = "swiftui"
     case textKit2 = "textkit2"
@@ -32,11 +36,13 @@ private struct ADFRebuildControlKey: EnvironmentKey {
     static let defaultValue = false
 }
 
-/// Diagnostics only: whose text a leaf draws. `.list` is a list row's leader
-/// or one of its direct paragraphs and headings (`ListRowView` sets it on
-/// its content); `.root` is everything else. A TextKit 2 row counts itself
-/// by it, so `ADFTextKit2Stats.liveListRowCount` proves that list text, not
-/// only top-level text, is drawn by TextKit 2.
+/// Whose text a leaf draws. `.list` is a list row's leader or one of its
+/// direct paragraphs and headings (`ListRowView` sets it on its content);
+/// `.root` is everything else. A TextKit 2 row counts itself by it, so
+/// `ADFTextKit2Stats.liveListRowCount` proves that list text, not only
+/// top-level text, is drawn by TextKit 2; and the eligibility verdict keeps
+/// `.list` text on SwiftUI before iOS 26
+/// (`TextKit2Eligibility.listsMatchText`).
 enum TextKit2OwnerKind: Sendable, Hashable {
     case root
     case list
@@ -44,6 +50,10 @@ enum TextKit2OwnerKind: Sendable, Hashable {
 
 private struct ADFTextOwnerKindKey: EnvironmentKey {
     static let defaultValue: TextKit2OwnerKind = .root
+}
+
+private struct ADFListWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
 }
 
 extension EnvironmentValues {
@@ -66,6 +76,17 @@ extension EnvironmentValues {
     var adfTextOwnerKind: TextKit2OwnerKind {
         get { self[ADFTextOwnerKindKey.self] }
         set { self[ADFTextOwnerKindKey.self] = newValue }
+    }
+
+    /// The width a top-level list is laid out at, the document's content
+    /// column (`ADFDocumentView`'s rows); `nil` when the host does not know
+    /// it. A list row works out its own text column from it, and keeps
+    /// that text on SwiftUI when the column has no room
+    /// (`TextKit2Scope.listTextFits`). Only top-level lists draw TextKit 2
+    /// text (`TextKit2Scope.rowKeepsRenderer`), so nested ones never need it.
+    var adfListWidth: CGFloat? {
+        get { self[ADFListWidthKey.self] }
+        set { self[ADFListWidthKey.self] = newValue }
     }
 }
 

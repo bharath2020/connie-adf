@@ -16,50 +16,69 @@ struct TextKit2ListCoverageTests {
         return DocumentPreparer(theme: .default).prepare(doc)
     }
 
+    /// `lists` from iOS 26. Before it list text falls back
+    /// (`TextKit2Eligibility.listsMatchText`, `.osGatedList`): the eligible
+    /// and linked leaves are the roots' (`rootLeaves`), and the list leaves
+    /// that were eligible count as fallbacks; the list leaf counts stay.
+    static func pinned(_ lists: ADFTextKit2Coverage, rootLeaves: (eligible: Int, linked: Int)) -> ADFTextKit2Coverage {
+        guard !TextKit2Eligibility.listsMatchText else { return lists }
+        var gated = lists
+        gated.fallbackTextLeaves += lists.eligibleTextLeaves - rootLeaves.eligible
+        gated.eligibleTextLeaves = rootLeaves.eligible
+        gated.linkedTextLeaves = rootLeaves.linked
+        return gated
+    }
+
     nonisolated static func fixtureData(_ name: String) throws -> Data {
         var url = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { url.deleteLastPathComponent() } // …/Tests/ADFRenderingTests/TextKit2 → repo root
         return try Data(contentsOf: url.appendingPathComponent("Fixtures/\(name).json"))
     }
 
-    @Test("lists-parity: 8 root text blocks, 58 leaders, 6 list paragraphs; 6 atom leaders fall back, 3 linked")
+    @Test("lists-parity: 8 root text blocks, 35 leaders; 2 atom leaders fall back, 2 linked")
     func listsParity() async throws {
         let blocks = try await Self.blocks("lists-parity")
         // 21 roots: 7 section headings + the closing paragraph (8 root
         // richText, all plain), 7 root lists, a panel, a quote, a table
         // (two slices), an expand and layout columns.
         #expect(blocks.count == 21)
-        // Leaders: 55 non-empty in the root lists (12 + 12 + 7 task + 4
-        // decision + 11 + 7 + 2; empty: the empty task 0.5.5, the empty
-        // paragraph 0.8.11, the code-first item 0.8.12 and the two
-        // continuation rows of 0.10.1) + 3 in trailing lists (the sync block
-        // 0.12.0.1.0 and the stray item 0.12.1.1.0). List paragraphs: 0.8.12.1
-        // (after a code block), 0.10.0.1, 0.10.0.2, 0.10.1.2, 0.10.1.4 and
-        // the heading 0.10.1.5. Atoms (fallback): 0.5.3, 0.6.1, 0.8.7–0.8.10.
-        // Links (TextKit 1-backed): 0.5.4, 0.6.2, 0.8.2. Hard breaks and the
-        // Unicode emoji are text; no leaf ends in two breaks. The text inside
-        // the panel, quote, table, expand, layout columns and the items'
-        // embedded blocks is out of scope.
-        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
+        // Three root lists keep all their text on SwiftUI, as a row holds a
+        // block other than text (`TextKit2Scope.listKeepsRenderer`): 0.8
+        // (the code-first item 0.8.12), 0.10 (the embedded-blocks item
+        // 0.10.2) and 0.12 (a sync block, a stray item). Leaders in the
+        // other four: 12 + 12 + 7 task + 4 decision = 35 non-empty (the
+        // empty task 0.5.5 has none); no row there holds more than one
+        // block (`rowKeepsRenderer`), and none holds a trailing paragraph.
+        // Atoms (fallback): 0.5.3, 0.6.1. Links (TextKit 1-backed): 0.5.4,
+        // 0.6.2. The text inside the panel, quote, table, expand and layout
+        // columns is out of scope.
+        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 8, fallbackRoots: 13, textFallbackRoots: 0, linkRoots: 0,
-            eligibleTextLeaves: 66, linkedTextLeaves: 3, fallbackTextLeaves: 6,
-            listLeaderLeaves: 58, listTrailingLeaves: 6
-        ))
+            eligibleTextLeaves: 41, linkedTextLeaves: 2, fallbackTextLeaves: 2,
+            listLeaderLeaves: 35, listTrailingLeaves: 0
+        ), rootLeaves: (8, 0)))
     }
 
-    @Test("list-dense: 3,396 leaders and 690 list paragraphs; 400 atom leaves fall back, 594 linked")
+    @Test("list-dense: 3,071 leaders and 239 list paragraphs and headings; 326 atom leaves fall back, 488 linked")
     func listDense() async throws {
         let blocks = try await Self.blocks("list-dense")
         // 600 root lists and nothing else. The generator's tally: leaders
         // 3,396 (atom 342, linked 515); trailing paragraphs 325 extra
         // (atom 38, linked 41) + 231 continuation (atom 20, linked 38) + 134
-        // headings = 690; no trailing lists.
+        // headings = 690; no trailing lists. Rows holding more than one
+        // block keep all their text on SwiftUI
+        // (`TextKit2Scope.rowKeepsRenderer`): the 325 items with an extra
+        // paragraph (leaders: 31 atom, 58 linked; paragraphs: 38 atom, 41
+        // linked) and the 63 continuation rows with a paragraph and a
+        // heading (5 atom, 7 linked paragraphs). That leaves 3,071 leaders
+        // (311 atom, 457 linked) and 168 continuation paragraphs (15 atom,
+        // 31 linked) + 71 lone headings = 239 list paragraphs and headings.
         #expect(blocks.count == 600)
-        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
+        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 0, fallbackRoots: 600, textFallbackRoots: 0, linkRoots: 0,
-            eligibleTextLeaves: 3_686, linkedTextLeaves: 594, fallbackTextLeaves: 400,
-            listLeaderLeaves: 3_396, listTrailingLeaves: 690
-        ))
+            eligibleTextLeaves: 2_984, linkedTextLeaves: 488, fallbackTextLeaves: 326,
+            listLeaderLeaves: 3_071, listTrailingLeaves: 239
+        ), rootLeaves: (0, 0)))
     }
 
     @Test("kitchen-sink: the PR 1 root counts plus 8 plain list leaders")
@@ -71,11 +90,36 @@ struct TextKit2ListCoverageTests {
         // (2) and the decision list (1), all plain; no list paragraphs. The
         // lists in the layout columns, table and expand are out of scope.
         #expect(blocks.count == 38)
-        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
+        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 10, fallbackRoots: 28, textFallbackRoots: 2, linkRoots: 1,
             eligibleTextLeaves: 18, linkedTextLeaves: 1, fallbackTextLeaves: 2,
             listLeaderLeaves: 8, listTrailingLeaves: 0
-        ))
+        ), rootLeaves: (10, 1)))
+    }
+
+    /// The iOS 26 gate is one verdict (`TextKit2Eligibility.verdict`,
+    /// owner `.list`): before iOS 26 exactly the list leaves eligible on
+    /// iOS 26 fall back as `.osGatedList` (lists-parity 33, kitchen-sink 8,
+    /// list-dense 2,984), never a root; from iOS 26 none does.
+    @Test("before iOS 26 list text that is otherwise eligible falls back as osGatedList; roots never do")
+    func osGatedLists() async throws {
+        for (name, listEligible) in [("lists-parity", 33), ("kitchen-sink", 8), ("list-dense", 2_984)] {
+            let blocks = try await Self.blocks(name)
+            var gated = 0
+            var gatedRoots = 0
+            var otherwiseEligible = 0
+            TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+                if case .fallback(.osGatedList) = leaf.verdict {
+                    if leaf.position == .root { gatedRoots += 1 } else { gated += 1 }
+                }
+                if leaf.position != .root, case .eligible = TextKit2Eligibility.verdict(leaf.segments, owner: .root) {
+                    otherwiseEligible += 1
+                }
+            }
+            #expect(otherwiseEligible == listEligible, "\(name)")
+            #expect(gatedRoots == 0, "\(name)")
+            #expect(gated == (TextKit2Eligibility.listsMatchText ? 0 : listEligible), "\(name): \(gated) list leaves gated")
+        }
     }
 }
 
@@ -127,10 +171,13 @@ struct TextKit2ListDiagnosticsTests {
         var eligibleRoots: Set<String> = []
         var eligibleList: Set<String> = []
         TextKit2Scope.forEachLeaf(in: model.blocks) { leaf in
-            guard TextKit2Eligibility.describableText(leaf.segments) != nil else { return }
+            guard case .eligible = leaf.verdict else { return }
             if leaf.position == .root { eligibleRoots.insert(leaf.ownerID) } else { eligibleList.insert(leaf.ownerID) }
         }
-        #expect(eligibleRoots.count == 8 && eligibleList.count == 58)
+        // Before iOS 26 no list text is eligible (`TextKit2Eligibility.listsMatchText`,
+        // `.osGatedList`): list text draws on SwiftUI, roots as in PR 1.
+        let lists = TextKit2Eligibility.listsMatchText
+        #expect(eligibleRoots.count == 8 && eligibleList.count == (lists ? 33 : 0))
 
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 9_000))
         let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2))
@@ -147,10 +194,11 @@ struct TextKit2ListDiagnosticsTests {
         #expect(Set(rows.filter { $0.ownerKind == .root }.compactMap(\.ownerID)) == eligibleRoots)
         let listOwners = Set(rows.filter { $0.ownerKind == .list }.compactMap(\.ownerID))
         #expect(listOwners == eligibleList, "missing \(eligibleList.subtracting(listOwners).sorted()), unexpected \(listOwners.subtracting(eligibleList).sorted())")
-        #expect(rows.filter(\.isTextKit1Backed).count == 3)
-        // Nothing inside an excluded container: the root panel, quote,
-        // table, expand and layout columns, or an item's embedded blocks.
-        let excluded = ["0.14", "0.15", "0.16", "0.17", "0.18", "0.8.12.0"] + (1...6).map { "0.10.2.\($0)" }
+        #expect(rows.filter(\.isTextKit1Backed).count == (lists ? 2 : 0))
+        // Nothing inside an excluded container (the root panel, quote,
+        // table, expand and layout columns) or a list that keeps its text
+        // on SwiftUI (0.8, 0.10, 0.12).
+        let excluded = ["0.8", "0.10", "0.12", "0.14", "0.15", "0.16", "0.17", "0.18"]
         for owner in owners {
             #expect(!excluded.contains { owner == $0 || owner.hasPrefix($0 + ".") || owner.hasPrefix($0 + "#") }, "\(owner) is inside an excluded block")
         }
@@ -161,7 +209,7 @@ struct TextKit2ListDiagnosticsTests {
         // exactly the list rows.
         let listLive = diagnostics.liveListRowCount
         rows.removeAll()
-        #expect(listLive - diagnostics.liveListRowCount == 58)
+        #expect(listLive - diagnostics.liveListRowCount == (lists ? 33 : 0))
     }
 }
 #endif

@@ -153,7 +153,7 @@ extension ADFTextRenderer {
             case .listLeader: coverage.listLeaderLeaves += 1
             case .listTrailing: coverage.listTrailingLeaves += 1
             }
-            switch TextKit2Eligibility.verdict(leaf.segments) {
+            switch leaf.verdict {
             case .eligible(let text):
                 let linked = text.runs.contains { $0.link != nil }
                 coverage.eligibleTextLeaves += 1
@@ -196,6 +196,10 @@ enum TextKit2Eligibility {
         /// also drops the middle empty line's negative leading at AX3+
         /// (0.333–1.333 pt shorter, no exact rule found).
         case trailingBreaks
+        /// List text (a list row's leader, or a paragraph or heading in its
+        /// text column) before iOS 26, where list rows miss `Text`'s
+        /// placement (`listsMatchText`).
+        case osGatedList
     }
 
     enum Verdict: Sendable {
@@ -203,16 +207,19 @@ enum TextKit2Eligibility {
         case fallback(Fallback)
     }
 
-    /// The merged text of an all-text segment list that TextKit 2 draws,
-    /// or `nil` when it falls back (`verdict`). The preparer emits one
-    /// merged run per gap, so the common case returns the stored value
-    /// without building a new string.
-    static func describableText(_ segments: [InlineSegment]) -> AttributedString? {
-        if case .eligible(let text) = verdict(segments) { return text }
+    /// The merged text of an all-text segment list that TextKit 2 draws
+    /// for `owner`, or `nil` when it falls back (`verdict`). The preparer
+    /// emits one merged run per gap, so the common case returns the stored
+    /// value without building a new string.
+    static func describableText(_ segments: [InlineSegment], owner: TextKit2OwnerKind = .root) -> AttributedString? {
+        if case .eligible(let text) = verdict(segments, owner: owner) { return text }
         return nil
     }
 
-    static func verdict(_ segments: [InlineSegment]) -> Verdict {
+    /// The engine verdict for text drawn for `owner` (top-level or list
+    /// text). The views (`TextEngineLeaf`) and the coverage walk
+    /// (`TextKit2Scope.Leaf.verdict`) both decide through it.
+    static func verdict(_ segments: [InlineSegment], owner: TextKit2OwnerKind = .root) -> Verdict {
         // Atoms first, so an atom paragraph (word-chunked, many segments)
         // builds no throwaway merged string.
         for segment in segments {
@@ -226,12 +233,29 @@ enum TextKit2Eligibility {
         if !trailingBreaksMatchText, text.characters.reversed().prefix(while: \.isNewline).count >= 2 {
             return .fallback(.trailingBreaks)
         }
+        if owner == .list, !listsMatchText { return .fallback(.osGatedList) }
         return .eligible(text)
     }
 
     /// Whether the row's trailing-break rule reproduces `Text` for two or
     /// more trailing breaks (measured exact on iOS 26.3; not on iOS 18.5).
     static var trailingBreaksMatchText: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+
+    /// Whether list text may use TextKit 2 on this OS: from iOS 26. On
+    /// iOS 18.5 (3x) list rows missed the parity iOS 26.3 holds: a row
+    /// whose words are wider than its column (lists-parity's depth-three
+    /// `LP-ORDERED-L4-A` leader at AX3) laid out a pixel taller on TextKit 2
+    /// than `Text`, so lists and documents grew by up to 3 pt (AX1–AX3, and
+    /// xxxLarge with Bold Text) in documents 320–402 pt wide; text in a
+    /// column 16 pt wide or narrower measured up to 1.7 pt taller; and
+    /// Hebrew text filling its column reported a width a pixel narrower
+    /// than `Text`'s. None of it reproduces on iOS 26.3. Before iOS 26 list
+    /// text that would otherwise be eligible falls back as `.osGatedList`;
+    /// top-level paragraphs and headings are unaffected.
+    static var listsMatchText: Bool {
         if #available(iOS 26.0, *) { return true }
         return false
     }

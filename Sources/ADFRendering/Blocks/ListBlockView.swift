@@ -23,33 +23,44 @@ struct ListBlockView: View {
 ///
 /// The text engine choice reaches a list only from a top-level list row
 /// (`DocumentRow`, `TextKit2Scope`). The row passes it to its leader
-/// (`TextEngineLeaf`, owned by the row's id) and to its direct paragraphs,
-/// headings and lists. Every other trailing block gets `.swiftUI`, and so
-/// does everything inside it. The marker column, spacing, depth padding and
-/// decision background are SwiftUI chrome under either engine.
+/// (`TextEngineLeaf`, owned by the row's id) or its one trailing paragraph
+/// or heading, when that is the only block in its text column
+/// (`TextKit2Scope.rowKeepsRenderer`); any other row, and everything in
+/// its trailing blocks, draws on SwiftUI. Text whose column has no room
+/// left (deep nesting at accessibility sizes) stays on SwiftUI too
+/// (`TextKit2Scope.listTextFits`), and so does every list row laid out
+/// right to left (`TextKit2Scope.listDirectionKeepsRenderer`). Before
+/// iOS 26 the leaves keep list text on SwiftUI themselves
+/// (`TextKit2Eligibility.listsMatchText`, by `adfTextOwnerKind`). The marker
+/// column, spacing, depth padding and decision background are SwiftUI
+/// chrome under either engine.
 struct ListRowView: View {
     let row: PreparedListRow
 
     @Environment(\.adfTheme) private var theme
     @Environment(\.adfTextRenderer) private var renderer
+    @Environment(\.adfListWidth) private var listWidth
+    @Environment(\.layoutDirection) private var layoutDirection
     /// Marker column width, scaled with Dynamic Type so glyphs stay aligned
     /// with the text they annotate.
     @ScaledMetric(relativeTo: .body) private var markerWidth: CGFloat = 28
 
     var body: some View {
+        let keepsRenderer = TextKit2Scope.listDirectionKeepsRenderer(layoutDirection) && TextKit2Scope.rowKeepsRenderer(row)
         HStack(alignment: .firstTextBaseline, spacing: theme.spacing) {
             markerView
                 .frame(width: markerWidth, alignment: .trailing)
             VStack(alignment: .leading, spacing: theme.spacing * 0.5) {
                 if !row.segments.isEmpty {
-                    TextEngineLeaf(segments: row.segments, style: Self.leaderStyle(theme: theme), ownerID: row.id) {
+                    TextEngineLeaf(segments: row.segments, style: Self.leaderStyle(theme: theme), ownerID: row.id,
+                                   allowsTextKit2: keepsRenderer && TextKit2Scope.listTextFits(textColumnWidth)) {
                         SegmentedTextView(segments: row.segments, ownerID: row.id)
                             .textSelection(.enabled)
                     }
                 }
                 ForEach(row.trailingBlocks) { block in
                     BlockView(block: block)
-                        .environment(\.adfTextRenderer, TextKit2Scope.inheritsRenderer(block.kind) ? renderer : .swiftUI)
+                        .environment(\.adfTextRenderer, keepsRenderer && textFits(block) ? renderer : .swiftUI)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -76,6 +87,22 @@ struct ListRowView: View {
     private var isDecision: Bool {
         if case .decision = row.marker { return true }
         return false
+    }
+
+    /// The width the row's `HStack` proposes its text column: the list's
+    /// width less the depth padding, the decision padding, the marker
+    /// column and the gap after it. `nil` when the list's width is unknown.
+    private var textColumnWidth: CGFloat? {
+        guard let listWidth else { return nil }
+        let inset = CGFloat(row.depth) * (markerWidth + theme.spacing) + (isDecision ? 2 * theme.spacing : 0)
+        return listWidth - inset - markerWidth - theme.spacing
+    }
+
+    /// Whether a trailing paragraph or heading has room for TextKit 2, less
+    /// its own indentation.
+    private func textFits(_ block: RenderBlock) -> Bool {
+        guard case .richText(_, let style) = block.kind else { return false }
+        return TextKit2Scope.listTextFits(textColumnWidth.map { $0 - RichTextBlockView.indentationPadding(style, theme: theme) })
     }
 
     @ViewBuilder

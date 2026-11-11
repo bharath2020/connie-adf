@@ -55,6 +55,10 @@ struct RichTextBlockView: View {
 
     /// Indentation mark: one leading step per level (1...6).
     private var indentationPadding: CGFloat {
+        Self.indentationPadding(style, theme: theme)
+    }
+
+    static func indentationPadding(_ style: TextBlockStyle, theme: ADFTheme) -> CGFloat {
         CGFloat(max(style.indentation, 0)) * theme.spacing * 3
     }
 

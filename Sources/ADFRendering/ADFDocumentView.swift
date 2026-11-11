@@ -318,6 +318,11 @@ private struct DocumentRow: View {
             if isInRenderRegion || heights.isEmpty {
                 BlockView(block: block)
                     .environment(\.adfTextRenderer, rowTextRenderer)
+                    // The width a top-level list is laid out at, so its
+                    // rows can tell when their text column has no room
+                    // (`TextKit2Scope.listTextFits`); unknown (0) until
+                    // the stack's first width observation.
+                    .environment(\.adfListWidth, containerWidth > 0 ? containerWidth : nil)
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
                     // Full width so the size measured below reports the

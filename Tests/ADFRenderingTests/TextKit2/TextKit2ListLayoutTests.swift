@@ -22,25 +22,28 @@ import ADFPreparation
 /// materialisation costs about 1.9 times a root paragraph's, ~42 µs more
 /// per leaf. That is not optimised here (the baseline path is unchanged);
 /// these pins make any change to it, a cheaper natural-width answer or a new
-/// probe, a measured decision.
-@Suite("TextKit 2 list leader layouts", .serialized)
+/// probe, a measured decision. From iOS 26: before it lists keep their
+/// text on SwiftUI (`TextKit2Eligibility.listsMatchText`).
+@Suite("TextKit 2 list leader layouts", .serialized,
+       .enabled(if: TextKit2Eligibility.listsMatchText, "before iOS 26 lists keep their text on SwiftUI"))
 @MainActor
 struct TextKit2ListLayoutTests {
     static let long = "A list leader long enough to wrap onto a second and a third line at phone width, with a few more words after it"
 
-    /// A short leader, a long one with a trailing paragraph and a nested
-    /// list (owners `0.0.0`, `0.0.1`, `0.0.1.1`, `0.0.1.2.0`).
+    /// A short leader, a long one with a nested list and a paragraph after
+    /// it, alone in a continuation row (owners `0.0.0`, `0.0.1`,
+    /// `0.0.1.1.0`, `0.0.1.2`).
     static let listJSON = """
     {"version":1,"type":"doc","content":[{"type":"bulletList","content":[
       {"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Short leader"}]}]},
       {"type":"listItem","content":[
         {"type":"paragraph","content":[{"type":"text","text":"\(long)"}]},
-        {"type":"paragraph","content":[{"type":"text","text":"\(long)"}]},
-        {"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"\(long)"}]}]}]}
+        {"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"\(long)"}]}]}]},
+        {"type":"paragraph","content":[{"type":"text","text":"\(long)"}]}
       ]}
     ]}]}
     """
-    static let listOwners = ["0.0.0", "0.0.1", "0.0.1.1", "0.0.1.2.0"]
+    static let listOwners = ["0.0.0", "0.0.1", "0.0.1.1.0", "0.0.1.2"]
     static let paragraphJSON = """
     {"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"\(long)"}]}]}
     """
@@ -110,7 +113,7 @@ struct TextKit2ListLayoutTests {
         for owner in Self.listOwners {
             let row = try #require(list[owner])
             #expect(row.layouts == 2, "\(owner)")
-            #expect(row.widths == [.infinity, owner == "0.0.1.2.0" ? 286 : 322], "\(owner): \(row.widths)")
+            #expect(row.widths == [.infinity, owner == "0.0.1.1.0" ? 286 : 322], "\(owner): \(row.widths)")
         }
         let paragraph = try await materialise(Self.paragraphJSON)
         #expect(paragraph.count == 1)
@@ -163,10 +166,10 @@ struct TextKit2ListLayoutTests {
     /// natural layout never serves placement (`placedResult(for:)`). A root
     /// paragraph pays that last pass too (∞, 829, 829.33).
     static let materialised: [(name: String, width: CGFloat?, list: [Int], paragraph: Int)] = [
-        ("zero", 0, [2, 2, 2, 1], 0),
-        ("narrow", 40, [3, 3, 3, 1], 1),
+        ("zero", 0, [2, 2, 1, 2], 0),
+        ("narrow", 40, [3, 3, 1, 3], 1),
         ("phone", 300, [2, 2, 2, 2], 1),
-        ("unspecified", nil, [4, 4, 4, 3], 3),
+        ("unspecified", nil, [4, 4, 3, 4], 3),
     ]
 
     @Test("materialising: per-row layout passes per proposal, list vs root paragraph")

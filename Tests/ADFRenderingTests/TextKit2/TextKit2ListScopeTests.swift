@@ -45,10 +45,15 @@ import ADFPreparation
 @testable import ADFRendering
 
 /// Through the real document view under `.textKit2`: list leaders and a
-/// list row's direct paragraphs get TextKit 2 rows at every depth,
-/// including a list reached as a trailing block (here through a sync
-/// block), whose own trailing container resets to SwiftUI. A list inside a
-/// container and text inside a list's container get no row.
+/// list row's direct paragraphs get TextKit 2 rows at every depth when
+/// the row holds one block. A row with more than one block (here two
+/// paragraphs) keeps all its text on SwiftUI
+/// (`TextKit2Scope.rowKeepsRenderer`), and a list with a row holding
+/// anything but text (here a code block, a panel and a sync block) keeps
+/// every row's text on SwiftUI, its plain neighbour and the list reached
+/// through the sync block included (`TextKit2Scope.listKeepsRenderer`). A
+/// list inside a container and text inside a list's container get no row.
+/// Before iOS 26 no list text gets one (`TextKit2Eligibility.listsMatchText`).
 @Suite("TextKit 2 list scope", .serialized)
 @MainActor
 struct TextKit2ListScopeTests {
@@ -68,7 +73,11 @@ struct TextKit2ListScopeTests {
           "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(t("Panel text")),\(list("bulletList", item(t("Panel list"))))]}",
           "{\"type\":\"bodiedSyncBlock\",\"attrs\":{\"resourceId\":\"ari:cloud:confluence:site/s\",\"localId\":\"s\"},\"content\":[\(list("orderedList", item(t("Synced leader"), t("Synced paragraph"), "{\"type\":\"blockquote\",\"content\":[\(t("Synced quote"))]}")))]}"
         ),
-        item(t("Second item"), list("bulletList", item(t("Nested leader"))))
+        item(t("Plain item beside it"))
+      )),
+      \(list("bulletList",
+        item(t("Second item"), list("bulletList", item(t("Nested leader"))), t("Second item, after its list")),
+        item(t("Third item"), t("Third item's second paragraph"))
       )),
       {"type":"panel","attrs":{"panelType":"note"},"content":[\(list("bulletList", item(t("Root panel list"))))]},
       \(t("Root paragraph"))
@@ -77,17 +86,21 @@ struct TextKit2ListScopeTests {
 
     /// Hand-derived from the document above.
     static let expectedRows: Set<String> = [
-        "0.0.0",          // leader
-        "0.0.0.1",        // the item's second paragraph (trailing .richText)
-        "0.0.0.4.0.0",    // leader of the list inside the sync block (trailing .listRows)
-        "0.0.0.4.0.0.1",  // that row's own trailing paragraph
-        "0.0.1",          // second item's leader
-        "0.0.1.1.0",      // flattened nested list's leader (depth 1)
-        "0.2",            // root paragraph
+        "0.1.0",          // second list's first item's leader
+        "0.1.0.1.0",      // flattened nested list's leader (depth 1)
+        "0.1.0.2",        // the paragraph after it, alone in a continuation row (trailing .richText)
+        "0.3",            // root paragraph
     ]
-    /// Text in excluded subtrees: the panel and its list inside the list
-    /// item, the quote inside the synced list's row, the list in a root panel.
-    static let excludedOwners: Set<String> = ["0.0.0.3.0", "0.0.0.3.1.0", "0.0.0.4.0.0.2.0", "0.1.0.0"]
+    /// Text on SwiftUI: the first list, whose first item also holds a code
+    /// block, a panel and a sync block — that item's own text (leader and
+    /// second paragraph), the panel and its list, the list reached through
+    /// the sync block (leader, paragraph) and the quote in its row, and
+    /// the plain item beside it; the second list's third item's leader and
+    /// second paragraph; the list in a root panel.
+    static let excludedOwners: Set<String> = [
+        "0.0.0", "0.0.0.1", "0.0.0.3.0", "0.0.0.3.1.0", "0.0.0.4.0.0", "0.0.0.4.0.0.1", "0.0.0.4.0.0.2.0", "0.0.1",
+        "0.1.1", "0.1.1.1", "0.2.0.0",
+    ]
 
     static func model() async throws -> ADFDocumentModel {
         let model = ADFDocumentModel()
@@ -132,7 +145,8 @@ struct TextKit2ListScopeTests {
         }
         try await TextKit2DiagnosticsTests.settle(window)
         let found = Set(TextKit2DiagnosticsTests.identifiers(in: host.view).map { String($0.dropFirst("tk2-row:".count)) })
-        #expect(found == Self.expectedRows, "missing \(Self.expectedRows.subtracting(found).sorted()), unexpected \(found.subtracting(Self.expectedRows).sorted())")
+        let expected: Set<String> = TextKit2Eligibility.listsMatchText ? Self.expectedRows : ["0.3"]
+        #expect(found == expected, "missing \(expected.subtracting(found).sorted()), unexpected \(found.subtracting(expected).sorted())")
         #expect(found.isDisjoint(with: Self.excludedOwners))
 
         host.rootView = ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .swiftUI)
