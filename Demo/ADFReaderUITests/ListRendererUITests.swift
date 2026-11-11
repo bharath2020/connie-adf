@@ -1393,11 +1393,46 @@ final class ListRendererUITests: XCTestCase {
         }
     }
 
+    /// The VoiceOver differences between the renderers that PR 2 accepts
+    /// (build plan running notes, 2026-11-11, from
+    /// `p4-uitests/runs/r14-voiceover-ios27.xcresult`). They are the only
+    /// normalisation before the comparison; every other word, the heading
+    /// level included, must match exactly.
+    ///
+    /// | Difference              | SwiftUI `Text`                          | TextKit 2 row                     | Treatment |
+    /// |-------------------------|-----------------------------------------|-----------------------------------|-----------|
+    /// | Link on a linked leader | "…decision record Link Use the rotor…"  | "…decision record Actions available" | compare the text before the announcement; SwiftUI must say `swiftUILink`, TextKit 2 `textKit2Link` (PR 1 exposes a row's links as custom actions) |
+    /// | Space before a link     | two spaces ("see the  decision record") | one                               | both arms collapse runs of whitespace |
+    ///
+    /// Not accepted: "Heading level 2" on SwiftUI against "Heading" on
+    /// TextKit 2 (the row set no heading level), a defect fixed in this PR.
+    private enum AcceptedVoiceOverDifference {
+        /// SwiftUI's announcement after a linked leader's text, followed
+        /// by the rotor hint ("Use the rotor to access…").
+        static let swiftUILink = "Link"
+        /// TextKit 2's announcement after a linked leader's text.
+        static let textKit2Link = "Actions available"
+        /// Stands in for either announcement in the compared utterances.
+        static let placeholder = "<link>"
+
+        /// `utterance` with runs of whitespace collapsed and, when it
+        /// carries `announcement` (a whole word, last in the utterance or
+        /// followed by a hint), cut there and ended with `placeholder`.
+        static func normalised(_ utterance: String, announcement: String) -> (text: String, announcesLink: Bool) {
+            let text = utterance.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            guard let range = text.range(of: " " + announcement, options: .backwards),
+                  range.upperBound == text.endIndex || text[range.upperBound] == " "
+            else { return (text, false) }
+            return (String(text[..<range.lowerBound]) + " " + placeholder, true)
+        }
+    }
+
     /// VoiceOver speech over the short nested task/decision example (LP-S3)
     /// under both renderers, compared utterance by utterance: reading
     /// order, "Task"/"Completed task", "Decision", the heading and link
-    /// announcements. Needs `XCUIDevice.voiceOverService` (iOS 27); skips
-    /// on older runtimes, where only a manual VoiceOver pass can show this.
+    /// announcements, with only `AcceptedVoiceOverDifference` normalised.
+    /// Needs `XCUIDevice.voiceOverService` (iOS 27); skips on older
+    /// runtimes, where only a manual VoiceOver pass can show this.
     func testVoiceOverTraversalOfTasksAndDecisions() throws {
         guard #available(iOS 27.0, *) else {
             throw XCTSkip("VoiceOver automation (XCUIDevice.voiceOverService) needs an iOS 27 runtime; "
@@ -1443,30 +1478,16 @@ final class ListRendererUITests: XCTestCase {
             XCTAssertFalse(spoken.contains { $0.contains("•") || $0.contains("◦") || $0.contains("▪") },
                            "\(arm): VoiceOver spoke a bullet glyph")
         }
-        // Two accepted differences (build plan running notes, 2026-11-11),
-        // normalised narrowly before the comparison: SwiftUI speaks a
-        // double space before a link, TextKit 2 one; a linked leader is
-        // "…, Link, Use the rotor…" on SwiftUI and "…, Actions available"
-        // on TextKit 2 (PR 1's custom-action links). Utterances arrive cut
-        // at about 64 characters. Everything else, the heading level
-        // included, must match.
-        func normalised(_ spoken: [String], textKit2: Bool) -> [String] {
-            spoken.map { utterance in
-                var text = utterance.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-                if !textKit2, let range = text.range(of: " Link Use the rotor") {
-                    text = String(text[..<range.lowerBound]) + " <link>"
-                } else if textKit2, text.hasSuffix(" Actions available") {
-                    text = String(text.dropLast(" Actions available".count)) + " <link>"
-                }
-                return text
-            }
-        }
-        let swiftUISpoken = normalised(swiftUI, textKit2: false)
-        let textKit2Spoken = normalised(textKit2, textKit2: true)
-        let links = { (spoken: [String]) in spoken.filter { $0.hasSuffix(" <link>") } }
-        XCTAssertGreaterThanOrEqual(links(swiftUISpoken).count, 2, "SwiftUI announced fewer than the two linked leaders")
-        XCTAssertEqual(links(textKit2Spoken), links(swiftUISpoken), "linked leaders are announced differently")
-        XCTAssertEqual(textKit2Spoken, swiftUISpoken,
+        // Utterances arrive cut at about 64 characters.
+        let accepted = AcceptedVoiceOverDifference.self
+        let swiftUISpoken = swiftUI.map { accepted.normalised($0, announcement: accepted.swiftUILink) }
+        let textKit2Spoken = textKit2.map { accepted.normalised($0, announcement: accepted.textKit2Link) }
+        let linked = { (spoken: [(text: String, announcesLink: Bool)]) in spoken.filter(\.announcesLink).map(\.text) }
+        XCTAssertGreaterThanOrEqual(linked(swiftUISpoken).count, 2,
+            "SwiftUI said \"\(accepted.swiftUILink)\" after fewer than the two linked leaders")
+        XCTAssertEqual(linked(textKit2Spoken), linked(swiftUISpoken),
+            "TextKit 2 must say \"\(accepted.textKit2Link)\" after the same text where SwiftUI says \"\(accepted.swiftUILink)\"")
+        XCTAssertEqual(textKit2Spoken.map(\.text), swiftUISpoken.map(\.text),
                        "VoiceOver speaks the task/decision example differently under TextKit 2")
     }
 }
