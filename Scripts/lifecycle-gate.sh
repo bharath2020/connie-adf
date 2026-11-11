@@ -38,11 +38,16 @@
 #                   relaunch, toolbar pick persists; ~1 min);
 #                   PR 2 lists (Astra §6, Fable F14/F16; fixtures
 #                   lists-parity and list-dense):
-#                   testL1ListFiveRoundTripsAtParkedPositions (6.1, ~4 min),
-#                   testL2ListCollapseRoundTripBothDirections (6.2, ~4 min),
-#                   testL3aListRotateAndSizeDriftMatchesSwiftUI (6.3, ~6 min),
-#                   testL3bListStateSurvivesRotateSizeAndSwitch (6.3 state,
-#                   ~3 min), testL4aListSwitchDuringStreamingLoad (6.4, ~1
+#                   testL1ListFiveRoundTripsAtParkedPositions (6.1 on
+#                   lists-parity, ~2 min), testL1bListFiveRoundTripsListDense
+#                   (6.1 on list-dense, ~2 min),
+#                   testL2ListCollapseRoundTripBothDirections (6.2, ~10 min),
+#                   testL3aListRotateAndSizeDriftMatchesSwiftUI (6.3, ~8 min),
+#                   testL3bListStateSurvivesRotateSizeAndSwitch (6.3 state on
+#                   lists-parity, ~3 min),
+#                   testL3cListStateSurvivesRotateSizeAndSwitchListDense (6.3
+#                   state on list-dense, ~4 min),
+#                   testL4aListSwitchDuringStreamingLoad (6.4, ~1
 #                   min), testL4bListCollidingIDsReplacementDocument (6.4,
 #                   ~2 min), testL5aFlingThrashSoakListDenseSwiftUI,
 #                   testL5bFlingThrashSoakListDenseTextKit2 (6.5, ~3 each),
@@ -53,7 +58,7 @@
 # PASS (exit 0) only when every selected test case printed `passed` and every
 # recorded check passed. Exit 1 on any failure/skip/missing result, 2 on
 # usage errors. Estimated duration: ~43 min for tests 1-8 (test7 ~30, the
-# two soak tests ~3 each) + ~56 min for the list tests (testL6 ~30) = ~100
+# two soak tests ~3 each) + ~70 min for the list tests (testL6 ~30) = ~115
 # min, plus ~4 min for a fresh build; the default --suite-timeout (9000 s)
 # leaves room for a loaded host. A failed check whose record carries
 # failure_class (a no-switch control drift over 2 px) is the known lifecycle
@@ -71,7 +76,7 @@ AGENT_PY="$SCRIPT_DIR/lifecycle_agent.py"
 BUNDLE_ID="com.connie.adfreader"
 XCODEGEN="${XCODEGEN:-xcodegen}"
 CLASS="LifecycleUITests"
-ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense"
+ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense"
 
 UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=9000; GRACE=120
 KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0

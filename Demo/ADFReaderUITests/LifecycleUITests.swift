@@ -16,6 +16,16 @@ import XCTest
 /// foundation's (F16): a no-switch control drift over 2 px is the known
 /// lifecycle flake (PR 1 test1), recorded as `failure_class` and not a
 /// renderer verdict — rerun, never re-tune.
+///
+/// Known baseline (not a list verdict): on the SwiftUI arm, scrolling
+/// lists-parity's block 0.10 (an ordered list whose item 0.10.2 holds a code
+/// block, panel, quote, expand and table) spins SwiftUI's lazy-stack layout
+/// and then blocks accessibility, so XCTest reports "App event loop idle
+/// notification not received" / "Timed out while evaluating UI query". It
+/// reproduces on main + fixtures (arm A, 2026-11-11) — issue #8's class. A
+/// `testL1`/`testL3b` failure with only that symptom is classified
+/// baseline; `testL1b` and `testL3c` carry the same assertions on the
+/// table-free `list-dense`, so a run still produces list evidence.
 @MainActor
 final class LifecycleUITests: XCTestCase {
     /// Per switch / per round trip tolerance (plan §3), device pixels.
@@ -29,6 +39,10 @@ final class LifecycleUITests: XCTestCase {
     private static let maxGrowthKB = 5 * 1_024
     /// CPU must settle to <= 2 % within this many seconds (plan §3.5).
     private static let maxSettleSeconds = 5.0
+    /// Rows SwiftUI's lazy stack builds but never shows (prefetch below the
+    /// viewport, the document's last row), which About's live TextKit 2
+    /// count includes and the rows on screen do not (p7-retain-diag).
+    private static let unshownRowAllowance = 3
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -561,11 +575,13 @@ final class LifecycleUITests: XCTestCase {
         /// exist); per OFF pick both kinds'.
         var on: [Int] = [], onOther: [Int] = [], off: [Int] = []
         var figures: [String: Any] = [:]
-        /// With `census`, one more ON pick after the measured series: the
-        /// count waited for, and the TextKit 2 rows in an accessibility
-        /// snapshot split by owner level (F14). Taken after the last
-        /// footprint, so the snapshot never touches the gated growth.
-        var censusRows = -1, censusRootOwned = -1, censusListOwned = -1
+        /// With `census`, one more ON pick after the measured series: About's
+        /// count for the arm (`censusRows`: rebuilt rows, or `tk2Live`), and
+        /// the TextKit 2 row elements of an accessibility snapshot
+        /// (`censusAXRows`, owners merged) split by owner level (F14).
+        /// Taken after the last footprint, so it never touches the gated
+        /// growth.
+        var censusRows = -1, censusAXRows = -1, censusRootOwned = -1, censusListOwned = -1
 
         /// Every ON pick showed the same nonzero count of its kind and none
         /// of the other; every OFF pick, none of either.
@@ -623,18 +639,36 @@ final class LifecycleUITests: XCTestCase {
                 // sees its rebuilt rows and no TextKit 2 row.
                 reader.chooseRenderer(textKit2: true)
                 let first = series.on.first
-                let rows = reader.liveRows(control: control, until: { $0 > 0 && (first == nil || $0 == first) },
-                                           settled: true)
-                let snapshot = try reader.documentSnapshot()
-                series.censusRows = (control ? rows.control : rows.textKit2) ?? -1
-                series.censusRootOwned = snapshot.rootOwnedRows
-                series.censusListOwned = snapshot.listOwnedRows
-                series.figures["census_after_series"] = [
-                    "rows": series.censusRows, "tk2_rows_root_owned": series.censusRootOwned,
-                    "tk2_rows_list_owned": series.censusListOwned,
-                    "tk2_list_owners_sample": snapshot.textKit2Rows.keys.filter { !DocumentSnapshot.isRootOwner($0) }
-                        .sorted().prefix(8).map { $0 },
-                ]
+                var points: [[String: Any]] = []
+                // At the series viewport, then 600 pt further and back: About's
+                // live count against the accessibility census at each.
+                for (step, drag) in [("series viewport", 0), ("600 pt on", 600), ("back", -600)] {
+                    if drag != 0 {
+                        reader.drag(by: CGFloat(drag))
+                        reader.pause(1.5)
+                    }
+                    let rows = reader.liveRows(control: control, until: {
+                        $0 > 0 && (drag != 0 || first == nil || $0 == first)
+                    }, settled: true)
+                    let snapshot = try reader.documentSnapshot()
+                    let count = (control ? rows.control : rows.textKit2) ?? -1
+                    if drag == 0 {
+                        series.censusRows = count
+                        series.censusAXRows = snapshot.textKit2Nodes
+                        series.censusRootOwned = snapshot.rootOwnedRows
+                        series.censusListOwned = snapshot.listOwnedRows
+                    }
+                    let byRoot = Dictionary(grouping: snapshot.textKit2Rows.keys) {
+                        $0.split(separator: ".").dropFirst().first.map(String.init) ?? $0
+                    }.mapValues(\.count)
+                    points.append([
+                        "step": step, "about_rows": count, "about_tk2_live": rows.textKit2 ?? -1,
+                        "ax_tk2_elements": snapshot.textKit2Nodes, "ax_tk2_owners": snapshot.textKit2Rows.count,
+                        "ax_root_owned": snapshot.rootOwnedRows, "ax_list_owned": snapshot.listOwnedRows,
+                        "ax_owners_per_root": byRoot,
+                    ])
+                }
+                series.figures["census_after_series"] = points
             }
         } catch {
             XCTFail("twenty-flip series failed: \(error)")
@@ -687,8 +721,9 @@ final class LifecycleUITests: XCTestCase {
 
     // MARK: - PR 2 lists (Astra §6 items 1–6; Fable F14, F16)
 
-    /// 6.1 — five round trips (ON, OFF) at a parked list position in each
-    /// list fixture (`parityPosition`, `densePosition`). Gated per position:
+    /// 6.1 — five round trips (ON, OFF) at a parked list position:
+    /// `parityPosition` here (lists-parity; a stall is the class baseline,
+    /// see the type comment), `densePosition` in `testL1b`. Gated:
     /// every switch moves every common label ≤ 2 px; no accumulation (each
     /// OFF within 2 px of the start, each ON within 2 px of the first ON);
     /// the ordered marker stays on its leader's line (offset change ≤ 2 px);
@@ -699,11 +734,13 @@ final class LifecycleUITests: XCTestCase {
     /// that must release every row. The leader's summed travel (the
     /// foundation's "2 px in total" figure) is recorded.
     func testL1ListFiveRoundTripsAtParkedPositions() throws {
-        let agent = try HostAgent.fromEnvironment()
-        var failures: [String] = []
-        for position in [Self.parityPosition, Self.densePosition] {
-            failures += try fiveRoundTrips(at: position, agent)
-        }
+        let failures = try fiveRoundTrips(at: Self.parityPosition, HostAgent.fromEnvironment())
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
+    }
+
+    /// 6.1 on the table-free list-dense (`densePosition`): `testL1`'s gates.
+    func testL1bListFiveRoundTripsListDense() throws {
+        let failures = try fiveRoundTrips(at: Self.densePosition, HostAgent.fromEnvironment())
         XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
     }
 
@@ -786,32 +823,48 @@ final class LifecycleUITests: XCTestCase {
     }
 
     /// 6.2 — test1's method on list-dense (`densePosition`, ~63,000 pt
-    /// down): a no-switch control away-and-back first; forward — ON at the
-    /// park, twelve 600 pt drags away until the parked list's rows have left
-    /// the render region, OFF there, back; reverse — ON then OFF at the park,
-    /// away, ON there, back, so the parked list rematerialises naturally as
-    /// TextKit 2 rows. Forward returns within 2 px of the control's park,
-    /// reverse within 2 px of the ON park; every switch moves labels ≤ 2 px;
-    /// no label pair changes order across either trip; landmarks (leader,
-    /// marker, nested row, continuation paragraph, trailing heading) keep
-    /// their order and pinned owners. A control drift over 2 px alone is
-    /// F16's known flake (`failure_class`).
+    /// down), with a label-anchored return: the re-jump park does not land
+    /// repeatably there (the 1e778df shakedown's SwiftUI-only control came
+    /// back 1,372 px off), so "back" is `returnTo` and a return trip is
+    /// measured from the leader (every label's top minus the leader's).
+    /// A no-switch control trip first; forward — ON at the start, twelve
+    /// 600 pt drags away until the list's rows have left the render region,
+    /// OFF there, back; reverse — ON then OFF at the start, away, ON there,
+    /// back, so the list rematerialises naturally as TextKit 2 rows. Each
+    /// return ≤ 2 px from its start (control and forward: the SwiftUI start;
+    /// reverse: the TextKit 2 start); every in-place switch moves labels
+    /// ≤ 2 px; no label pair changes order across either trip; landmarks
+    /// (leader, marker, nested row, continuation paragraph, trailing
+    /// heading) keep their order and pinned owners. A control drift over
+    /// 2 px alone is F16's known flake (`failure_class`).
     func testL2ListCollapseRoundTripBothDirections() throws {
         let agent = try HostAgent.fromEnvironment()
         let position = Self.densePosition
         let reader = try launch(at: position, agent)
         let scale = reader.pixelScale()
         let limit = Self.shiftLimit
-        // As test1: the first park after launch lands on estimated heights.
-        try awayAndBack(reader, agent)
+        let top = reader.element(labelled: position.leader).frame.minY
+        var returns: [Double] = []
+        func back() throws {
+            XCTAssertTrue(try returnTo(position, top: top, reader), "the leader is not back in view")
+            returns.append(Double(reader.element(labelled: position.leader).frame.minY - top))
+        }
+        func anchored(_ from: DocumentSnapshot, _ to: DocumentSnapshot) -> LabelShift {
+            LabelShift(from: LabelShift.relative(from.tops, to: position.leader) ?? [:],
+                       to: LabelShift.relative(to.tops, to: position.leader) ?? [:], scale: scale)
+        }
+        // One trip first, as test1: it measures the rows on the way.
+        try away(reader)
+        try back()
 
         // Control: away and back, SwiftUI only.
         let s0 = try reader.documentSnapshot()
-        try awayAndBack(reader, agent)
+        try away(reader)
+        try back()
         let s1 = try reader.documentSnapshot()
-        let control = LabelShift(from: s0.tops, to: s1.tops, scale: scale)
+        let control = anchored(s0, s1)
 
-        // Forward: ON at the park, OFF far away, back.
+        // Forward: ON in place, OFF far away, back.
         reader.chooseRenderer(textKit2: true)
         reader.pause()
         let s2 = try reader.documentSnapshot()
@@ -820,11 +873,11 @@ final class LifecycleUITests: XCTestCase {
         try away(reader)
         let forwardAlive = forwardParked.filter { reader.element(labelled: $0).exists }
         reader.chooseRenderer(textKit2: false)
-        try park(reader, agent)
+        try back()
         let s3 = try reader.documentSnapshot()
-        let forward = LabelShift(from: s1.tops, to: s3.tops, scale: scale)
+        let forward = anchored(s1, s3)
 
-        // Reverse: TextKit 2 at the park, OFF there, ON far away, back.
+        // Reverse: TextKit 2 in place, OFF there, ON far away, back.
         reader.chooseRenderer(textKit2: true)
         reader.pause()
         let s4 = try reader.documentSnapshot()
@@ -837,9 +890,9 @@ final class LifecycleUITests: XCTestCase {
         try away(reader)
         let reverseAlive = reverseParked.filter { reader.element(labelled: $0).exists }
         reader.chooseRenderer(textKit2: true)
-        try park(reader, agent)
+        try back()
         let s6 = try reader.documentSnapshot()
-        let reverse = LabelShift(from: s4.tops, to: s6.tops, scale: scale)
+        let reverse = anchored(s4, s6)
         attach(reader.app, "list-collapse-reverse-back")
         reader.app.terminate()
 
@@ -855,7 +908,8 @@ final class LifecycleUITests: XCTestCase {
         let inversions = LabelShift.orderInversions(from: s1.tops, to: s3.tops)
             + LabelShift.orderInversions(from: s4.tops, to: s6.tops)
         let switched = [forwardOn, forward, reverseOn, reverseOff, reverse]
-        let rendererOK = control.common > 0 && switched.allSatisfy { $0.common > 0 && $0.maxPixels <= limit }
+        let rendererOK = returns.count == 4 && control.common > 0
+            && switched.allSatisfy { $0.common > 0 && $0.maxPixels <= limit }
             && !forwardParked.isEmpty && !reverseParked.isEmpty && forwardAlive.isEmpty && reverseAlive.isEmpty
             && badLandmarks.isEmpty && inversions.isEmpty
         let pass = rendererOK && control.maxPixels <= limit
@@ -871,6 +925,9 @@ final class LifecycleUITests: XCTestCase {
             "reverse_parked_labels": reverseParked.count, "reverse_still_materialised_when_far": reverseAlive.count,
             "order_inversions": inversions, "landmark_failures": badLandmarks,
             "scroll_away_pt": Double(CGFloat(Self.awayLegs) * Self.awayDistance),
+            "measure": "round trips: label tops relative to the leader after a label-anchored return; "
+                + "switches in place: absolute tops",
+            "return_leader_offsets_pt": returns,
         ])
         XCTAssertGreaterThan(control.common, 0, "no label survived the control round trip")
         XCTAssertLessThanOrEqual(control.maxPixels, limit, "the re-jump itself does not return exactly (F16 flake)")
@@ -889,25 +946,42 @@ final class LifecycleUITests: XCTestCase {
 
     /// 6.3 — rotation and Text Size on list-dense (`densePosition`), each
     /// arm in its own launch with `-fontSizeStep 0` (the popover never
-    /// writes the persisted size). An away-and-back first gives distant
-    /// lists (7,200 pt away) and nearby ones cached heights; then from the
-    /// park: rotation round trip, return trip, Text Size 0→3 and a return
-    /// trip at size 3, 3→0, return trip. Every drift's TextKit 2 excess over
-    /// the SwiftUI arm ≤ 2 px; CPU settles ≤ 2 % within 5 s after the
-    /// rotation, the size round trip and the last return; the size readout
-    /// moved and came back to 100 %; landmarks hold at the final park.
+    /// writes the persisted size). A trip away first gives distant lists
+    /// (7,200 pt away) and nearby ones cached heights; then: rotation round
+    /// trip, return trip, Text Size 0→3 and a return trip at size 3, 3→0,
+    /// return trip. Returns are label-anchored (`returnTo`, see 6.2) and
+    /// measured from the leader, as is the in-place size round trip. The
+    /// rotation round trip moves list-dense's viewport ~1,800–2,000 px in
+    /// both arms (the leader leaves the screen: a renderer-agnostic
+    /// re-anchor after the width change), so test2's absolute in-place
+    /// drift is recorded per arm (`rotation_displacement_px`) but not
+    /// gated; `rotation_layout` aligns the leader back first and is gated.
+    /// Every gated leg's TextKit 2 excess over the SwiftUI arm ≤ 2 px; CPU settles
+    /// ≤ 2 % within 5 s after the rotation, the size round trip and the last
+    /// return; the size readout moved and came back to 100 %; landmarks hold
+    /// at the end.
     func testL3aListRotateAndSizeDriftMatchesSwiftUI() throws {
         let agent = try HostAgent.fromEnvironment()
         let position = Self.densePosition
-        let legs = ["rotation", "rotation_return", "size3_return", "size_round_trip", "size_return"]
+        let legs = ["rotation_layout", "rotation_return", "size3_return", "size_round_trip", "size_return"]
         var drift: [Bool: [String: LabelShift]] = [:]
         var arms: [String: Any] = [:]
-        var settleOK = true, sizeOK = true, landmarksOK = true
+        var settleOK = true, sizeOK = true, landmarksOK = true, returnsOK = true
         for textKit2 in [false, true] {
             let arm = textKit2 ? "textkit2" : "swiftui"
             let reader = try launch(at: position, agent, textKit2: textKit2, extra: ["-fontSizeStep", "0"])
             let scale = reader.pixelScale()
-            try awayAndBack(reader, agent)
+            let top = reader.element(labelled: position.leader).frame.minY
+            var returned: [Bool] = []
+            func trip() throws {
+                try away(reader)
+                returned.append(try returnTo(position, top: top, reader))
+            }
+            func anchored(_ from: [String: CGFloat], _ to: [String: CGFloat]) -> LabelShift {
+                LabelShift(from: LabelShift.relative(from, to: position.leader) ?? [:],
+                           to: LabelShift.relative(to, to: position.leader) ?? [:], scale: scale)
+            }
+            try trip()
             let start = try reader.visibleLabels()
 
             try agent.request("rotate")
@@ -916,31 +990,35 @@ final class LifecycleUITests: XCTestCase {
             reader.pause(2.5)
             let rotationSettle = try agent.cpuSettleSeconds()
             let rotated = try reader.visibleLabels()
-            try awayAndBack(reader, agent)
+            returned.append(try align(position, top: top, reader))
+            let rotatedAligned = try reader.visibleLabels()
+            try trip()
             let rotatedReturn = try reader.visibleLabels()
 
             let larger = reader.stepTextSize(3)
             reader.pause(1.5)
-            try park(reader, agent)
+            returned.append(try align(position, top: top, reader))
             let large = try reader.visibleLabels()
-            try awayAndBack(reader, agent)
+            try trip()
             let largeReturn = try reader.visibleLabels()
             let restored = reader.stepTextSize(-3)
             reader.pause(1.5)
             let sizeSettle = try agent.cpuSettleSeconds()
+            returned.append(try align(position, top: top, reader))
             let sized = try reader.visibleLabels()
-            try awayAndBack(reader, agent)
+            try trip()
             let final = try reader.documentSnapshot()
             let finalSettle = try agent.cpuSettleSeconds()
             attach(reader.app, "list-rotate-size-\(arm)")
             reader.app.terminate()
 
+            let displacement = LabelShift(from: start, to: rotated, scale: scale)
             let shifts = [
-                "rotation": LabelShift(from: start, to: rotated, scale: scale),
-                "rotation_return": LabelShift(from: start, to: rotatedReturn, scale: scale),
-                "size3_return": LabelShift(from: large, to: largeReturn, scale: scale),
-                "size_round_trip": LabelShift(from: start, to: sized, scale: scale),
-                "size_return": LabelShift(from: start, to: final.tops, scale: scale),
+                "rotation_layout": anchored(start, rotatedAligned),
+                "rotation_return": anchored(start, rotatedReturn),
+                "size3_return": anchored(large, largeReturn),
+                "size_round_trip": anchored(start, sized),
+                "size_return": anchored(start, final.tops),
             ]
             drift[textKit2] = shifts
             let found = landmarks(position, final, textKit2: textKit2)
@@ -948,13 +1026,17 @@ final class LifecycleUITests: XCTestCase {
             settleOK = settleOK && settles.allSatisfy { $0 >= 0 && $0 <= Self.maxSettleSeconds }
             sizeOK = sizeOK && larger != nil && larger != "100%" && restored == "100%"
             landmarksOK = landmarksOK && found.ok
+            returnsOK = returnsOK && returned.count == 7 && returned.allSatisfy { $0 }
             arms[arm] = [
+                "rotation_displacement_px": Double(displacement.maxPixels),
+                "rotation_displacement_labels": displacement.common,
                 "drift_px": shifts.mapValues { Double($0.maxPixels) }, "labels": shifts.mapValues(\.common),
                 "worst": shifts.mapValues { String($0.worstLabel.prefix(32)) },
                 "cpu_settle_s": ["rotation": settles[0], "size": settles[1], "final": settles[2]],
                 "cpu_samples": ["rotation": rotationSettle.samples, "size": sizeSettle.samples,
                                 "final": finalSettle.samples],
                 "size_readouts": [larger ?? "missing", restored ?? "missing"], "final_landmarks": found.figures,
+                "leader_back_in_view": returned,
             ]
         }
         let swiftUI = try XCTUnwrap(drift[false]), textKit2 = try XCTUnwrap(drift[true])
@@ -969,38 +1051,91 @@ final class LifecycleUITests: XCTestCase {
             excess[leg] = Double(value)
             driftOK = driftOK && base.common > 0 && candidate.common > 0 && value <= Self.shiftLimit
         }
-        let pass = driftOK && settleOK && sizeOK && landmarksOK
+        let pass = driftOK && settleOK && sizeOK && landmarksOK && returnsOK
         try agent.record("6.3 rotation + Text Size 0→3→0 with cached lists (\(position.name))", pass: pass, [
             "gated": "per leg TextKit 2 drift minus SwiftUI drift <= 2.01 px; CPU <= 2 % within 5 s; size restored; "
-                + "final landmarks",
+                + "final landmarks; leader back in view after every return",
+            "measure": "label tops relative to the leader (returns and the rotation leg are label-anchored); "
+                + "rotation_displacement_px per arm: absolute in-place move, recorded, not gated",
             "excess_px": excess, "arms": arms,
         ])
         XCTAssertTrue(driftOK, "TextKit 2 drifts beyond SwiftUI + 2 px: \(excess)")
         XCTAssertTrue(settleOK, "CPU did not settle within 5 s: \(arms)")
         XCTAssertTrue(sizeOK, "Text Size did not step and return to 100 %: \(arms)")
-        XCTAssertTrue(landmarksOK, "landmarks at the final park: \(arms)")
+        XCTAssertTrue(landmarksOK, "landmarks at the end: \(arms)")
+        XCTAssertTrue(returnsOK, "a label-anchored return lost the leader: \(arms)")
     }
 
     /// 6.3 (state) — on lists-parity, which has no media, so this check is
     /// not exposed to kitchen-sink's pre-existing lazy-stack livelock that
-    /// fails test4: a Find-in-Page query over list text (`LP-CONT`: a
-    /// leader, nested leaders, continuation paragraphs, a trailing heading),
-    /// an expand inside a list item and a root expand opened, and a task
-    /// toggled (another left as the control); then ON, rotation round trip,
-    /// Text Size 0→3→0, OFF, rotation round trip, Text Size 0→3→0 — search,
-    /// expands, tasks and renderer checked after each step.
+    /// fails test4 (lists-parity's block 0.10 has the same class: see the
+    /// type comment; `testL3c` is the table-free variant): a Find-in-Page
+    /// query over list text (`LP-CONT`: a leader, nested leaders,
+    /// continuation paragraphs, a trailing heading), an expand inside a list
+    /// item and a root expand opened, and a task toggled (another left as
+    /// the control); then ON, rotation round trip, Text Size 0→3→0, OFF,
+    /// rotation round trip, Text Size 0→3→0 — search, expands, tasks and
+    /// renderer checked after each step.
     func testL3bListStateSurvivesRotateSizeAndSwitch() throws {
+        try listState(ListStateCase(
+            fixture: "lists-parity", top: Self.parityTitle, query: "LP-CONT",
+            // One is a trailing block of list item 0.10.2, one a root (0.17).
+            expands: [
+                ("LP-EMBED-EXPAND expand inside a list item", "LP-EMBED-EXPAND-BODY"),
+                ("LP-EXPAND lists inside an expand", "LP-IN-EXPAND-BULLET"),
+            ],
+            toggledTask: "LP-TASK-A undone task", otherTask: "LP-TASK-C nested undone task", listRows: [],
+            searchMatch: nil
+        ))
+    }
+
+    /// 6.3 (state) on the table-free list-dense: `testL3b`'s steps and
+    /// gates without expands (the fixture has none), with a query that
+    /// lands on root 5 (`LD-005`: a leader with a nested list and a trailing
+    /// heading below it) and root 13's tasks; plus list proof after every
+    /// step: under TextKit 2 the trailing heading, the next leader and the
+    /// toggled task are `tk2-row`s drawn by their pinned list owners, and
+    /// the leader holding the search match is not one (`TextKit2TextRow`
+    /// keeps an owner with search highlights on SwiftUI); under SwiftUI no
+    /// `tk2-row` exists.
+    func testL3cListStateSurvivesRotateSizeAndSwitchListDense() throws {
+        try listState(ListStateCase(
+            fixture: "list-dense", top: "LD-000 kernel batch inline render lazy", query: "LD-005", expands: [],
+            toggledTask: "schema inline kernel", otherTask: "swift block confluence matrix",
+            listRows: [
+                ("mark kernel expand", "0.5.0.2"), ("kernel render inline panel", "0.5.1"),
+                ("schema inline kernel", "0.13.1"),
+            ],
+            searchMatch: ("LD-005 ledger actor mark lazy", "0.5.0")
+        ))
+    }
+
+    private struct ListStateCase {
+        let fixture: String
+        /// The document's first label (`reveal` starts from it).
+        let top: String
+        let query: String
+        let expands: [(title: String, body: String)]
+        let toggledTask: String, otherTask: String
+        /// Rows a TextKit 2 step must show drawn by these owners.
+        let listRows: [(label: String, owner: String)]
+        /// A row holding the search match: never a `tk2-row` while the
+        /// search is active.
+        let searchMatch: (label: String, owner: String)?
+    }
+
+    private func listState(_ test: ListStateCase) throws {
         let agent = try HostAgent.fromEnvironment()
-        let top = Self.parityTitle
+        let top = test.top
         let reader = ReaderDriver(launching: [
-            "-fixture", "lists-parity", "-rendererReset", "-rendererStats", "-fontSizeStep", "0",
+            "-fixture", test.fixture, "-rendererReset", "-rendererStats", "-fontSizeStep", "0",
         ])
         let app = reader.app
         reader.waitForRenderer("SwiftUI")
-        XCTAssertTrue(reader.element(labelled: top).waitForExistence(timeout: 15), "lists-parity missing")
+        XCTAssertTrue(reader.element(labelled: top).waitForExistence(timeout: 15), "\(test.fixture) missing")
 
         // Search first: running it scrolls to the first match.
-        let query = "LP-CONT"
+        let query = test.query
         app.buttons["Find in Page"].tap()
         let field = app.textFields[ReaderDriver.Identifier.searchField]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "search field missing")
@@ -1012,11 +1147,7 @@ final class LifecycleUITests: XCTestCase {
         let counterBefore = counter.label
         XCTAssertNotEqual(counterBefore, "0", "the query found nothing")
 
-        // Expands: one is a trailing block of list item 0.10.2, one a root (0.17).
-        let expands = [
-            ("LP-EMBED-EXPAND expand inside a list item", "LP-EMBED-EXPAND-BODY"),
-            ("LP-EXPAND lists inside an expand", "LP-IN-EXPAND-BULLET"),
-        ]
+        let expands = test.expands
         for (title, body) in expands {
             let button = app.buttons[title]
             XCTAssertTrue(reveal(button, reader, top: top), "\(title) never came into view")
@@ -1024,9 +1155,9 @@ final class LifecycleUITests: XCTestCase {
             XCTAssertTrue(reader.element(labelled: body).waitForExistence(timeout: 5), "\(title) did not open")
         }
 
-        // Tasks: LP-TASK-A toggled, LP-TASK-C untouched (states persist per
-        // document, so the wanted states are read, not assumed).
-        let toggledTask = "LP-TASK-A undone task", otherTask = "LP-TASK-C nested undone task"
+        // Tasks: one toggled, one untouched (states persist per document,
+        // so the wanted states are read, not assumed).
+        let toggledTask = test.toggledTask, otherTask = test.otherTask
         XCTAssertTrue(reveal(reader.element(labelled: toggledTask), reader, top: top), "the task list never came into view")
         let box = try XCTUnwrap(reader.taskMarker(leader: toggledTask), "no checkbox on \(toggledTask)")
         let wantToggled = box.label == "Completed task" ? "Task" : "Completed task"
@@ -1045,13 +1176,38 @@ final class LifecycleUITests: XCTestCase {
             let tasksKept = reveal(reader.element(labelled: toggledTask), reader, top: top)
                 && reader.taskMarker(leader: toggledTask)?.label == wantToggled
                 && reader.taskMarker(leader: otherTask)?.label == wantOther
+            // List proof: each row brought into view, every tk2-row seen.
+            var drawn: [String: String] = [:]
+            var unseen: [String] = []
+            for row in test.listRows + (test.searchMatch.map { [$0] } ?? []) {
+                guard reveal(reader.element(labelled: row.label), reader, top: top),
+                      let snapshot = try? reader.documentSnapshot()
+                else { unseen.append(row.label); continue }
+                drawn.merge(snapshot.textKit2Rows) { first, _ in first }
+            }
+            let listKept = unseen.isEmpty && (textKit2
+                ? test.listRows.allSatisfy { drawn[$0.owner] == $0.label }
+                    && test.searchMatch.map { drawn[$0.owner] == nil } ?? true
+                : drawn.isEmpty)
             let rendererKept = reader.isRenderer(textKit2 ? "TextKit 2" : "SwiftUI", timeout: 2)
             attach(app, "list-state-\(step)")
-            return [
+            var figures: [String: Any] = [
                 "step": step, "search_kept": searchKept, "counter": counter.exists ? counter.label : "missing",
                 "expands_kept": expandsKept, "tasks_kept": tasksKept, "renderer_kept": rendererKept,
-                "pass": searchKept && expandsKept && tasksKept && rendererKept,
+                "pass": searchKept && expandsKept && tasksKept && rendererKept && listKept,
             ]
+            if !test.listRows.isEmpty {
+                figures["list_rows_kept"] = listKept
+                figures["list_rows_drawn"] = Dictionary(uniqueKeysWithValues: test.listRows.map {
+                    ($0.owner, drawn[$0.owner] ?? "none")
+                })
+                figures["tk2_rows_seen"] = drawn.count
+                figures["list_rows_unseen"] = unseen
+                if let match = test.searchMatch {
+                    figures["search_match_row_drawn"] = "\(match.owner)=\(drawn[match.owner] ?? "none")"
+                }
+            }
+            return figures
         }
 
         var observations: [[String: Any]] = []
@@ -1075,11 +1231,11 @@ final class LifecycleUITests: XCTestCase {
             observations.append(observe("\(step)-\(textKit2 ? "textkit2" : "swiftui")", textKit2: textKit2))
         }
         let pass = observations.allSatisfy { $0["pass"] as? Bool == true }
-        try agent.record("6.3 search, expand and task state across switch, rotation and size (lists-parity)",
-                         pass: pass, [
-                             "query": query, "counter_before": counterBefore, "toggled_task_state": wantToggled,
-                             "control_task_state": wantOther, "observations": observations,
-                         ])
+        let what = test.expands.isEmpty ? "search, task and list-row state" : "search, expand and task state"
+        try agent.record("6.3 \(what) across switch, rotation and size (\(test.fixture))", pass: pass, [
+            "query": query, "counter_before": counterBefore, "toggled_task_state": wantToggled,
+            "control_task_state": wantOther, "observations": observations,
+        ])
         XCTAssertTrue(pass, "state lost: \(observations)")
     }
 
@@ -1222,14 +1378,21 @@ final class LifecycleUITests: XCTestCase {
 
     /// 6.6 — test7's rule-B design (four launches, alternating, medians of
     /// two; test7 itself stays on stress-5k) at list-dense three 300 pt
-    /// drags down, where every root is a list. Also gated: all four series
-    /// show the same ON count (the control rebuilds exactly the leaves
-    /// TextKit 2 draws, list leaders and trailing text included), and F14 —
-    /// after each TextKit 2 series one more ON pick's count exceeds the
-    /// root-owned TextKit 2 rows of an accessibility snapshot (the
-    /// root-only eligible count; zero here) with list-owned rows present,
-    /// while the control's extra pick shows its rebuilt rows and no
-    /// TextKit 2 row.
+    /// drags down, where every root is a list. Also gated, like for like:
+    /// the control's rebuilt-row count (its `onAppear`s: rows shown) equals
+    /// the TextKit 2 rows on screen (the accessibility census) in all four
+    /// series. About's TextKit 2 count (`tk2Live`, live row views) is
+    /// gated separately: ≥ the rows shown and at most
+    /// `unshownRowAllowance` above them. SwiftUI's lazy stack builds rows it
+    /// never shows (prefetch below the viewport, the document's last row)
+    /// and keeps them off the window with the renderer they were built
+    /// with, at main too (p7-retain-diag); here 56 live for 53 shown at the
+    /// series viewport, 79 for 71 after 600 pt more and 61 for 53 back
+    /// (recorded, not gated), every row released at OFF. F14 — after each
+    /// TextKit 2 series one more ON pick's count exceeds the root-owned
+    /// TextKit 2 rows of that census (the root-only eligible count; zero
+    /// here) with list-owned rows present, while the control's extra pick
+    /// shows its rebuilt rows and no TextKit 2 row.
     func testL6TwentyFlipsListDense() throws {
         let agent = try HostAgent.fromEnvironment()
         let (control, flips) = twentyFlipDesign(agent, fixture: "list-dense", landmark: "LD-000", census: true)
@@ -1237,28 +1400,41 @@ final class LifecycleUITests: XCTestCase {
         let flipMedian = Self.median(flips.map(\.growth))
         let excess = flipMedian - controlMedian
         let rowsOK = (control + flips).allSatisfy(\.rowsOK)
-        let onCounts = (control + flips).map { $0.on.first ?? -1 }
-        let matched = Set(onCounts).count == 1
+        // Like for like: the control's About count (rebuilt rows on screen,
+        // onAppear-counted) against TextKit 2's on-screen rows (the
+        // accessibility census). About's tk2Live counts live row views,
+        // reported separately (`tk2_live_*`).
+        let controlCounts = control.map { $0.on.first ?? -1 }
+        let textKit2OnScreen = flips.map(\.censusAXRows)
+        let matched = Set(controlCounts + textKit2OnScreen).count == 1
         let listProof = flips.allSatisfy {
             $0.censusListOwned > 0 && ($0.on.first ?? 0) > $0.censusRootOwned && $0.censusRows == $0.on.first
         }
         let controlCensus = control.allSatisfy {
-            $0.censusRootOwned == 0 && $0.censusListOwned == 0 && $0.censusRows == $0.on.first
+            $0.censusRootOwned == 0 && $0.censusListOwned == 0 && $0.censusAXRows == 0 && $0.censusRows == $0.on.first
         }
-        let pass = rowsOK && matched && listProof && controlCensus && excess <= Self.maxGrowthKB
+        let liveOK = flips.allSatisfy {
+            $0.censusRows >= $0.censusAXRows && $0.censusRows - $0.censusAXRows <= Self.unshownRowAllowance
+        }
+        let pass = rowsOK && matched && liveOK && listProof && controlCensus && excess <= Self.maxGrowthKB
         try agent.record("6.6 twenty flips (list-dense)", pass: pass, [
             "gated_metric": "median over 2 runs of raw settled phys_footprint growth over twenty switches, "
                 + "TextKit 2 minus a control that rebuilds the same rows as SwiftUI (<= 5,120 KB; no pressure relief); "
-                + "equal ON counts across arms; F14 census",
+                + "control rebuilt rows == TextKit 2 rows on screen; tk2Live allowance; F14 census",
             "control_growth_median_kb": controlMedian, "flips_growth_median_kb": flipMedian,
-            "flips_minus_control_kb": excess, "first_on_counts": onCounts,
+            "flips_minus_control_kb": excess, "control_rebuilt_rows": controlCounts,
+            "tk2_on_screen_rows_ax": textKit2OnScreen, "tk2_live_row_views": flips.map { $0.on.first ?? -1 },
+            "tk2_live_minus_on_screen": flips.map { $0.censusRows - $0.censusAXRows },
+            "tk2_live_gate": "tk2Live >= rows on screen and tk2Live - rows on screen <= \(Self.unshownRowAllowance) "
+                + "(lazy-stack rows built but never shown)",
             "control_runs": control.map(\.figures), "flip_runs": flips.map(\.figures),
         ])
         for (index, series) in (control + flips).enumerated() {
             XCTAssertTrue(series.rowsOK, "series \(index + 1) (\(series.control ? "control" : "TextKit 2")): "
                 + "ON \(series.on) / other kind \(series.onOther), OFF \(series.off)")
         }
-        XCTAssertTrue(matched, "control and TextKit 2 ON counts differ: \(onCounts)")
+        XCTAssertTrue(matched, "control rebuilt rows \(controlCounts) vs TextKit 2 on-screen rows \(textKit2OnScreen)")
+        XCTAssertTrue(liveOK, "tk2Live vs rows on screen: \(flips.map { ($0.censusRows, $0.censusAXRows) })")
         XCTAssertTrue(listProof, "F14: TextKit 2 census \(flips.map(\.figures))")
         XCTAssertTrue(controlCensus, "control census: \(control.map(\.figures))")
         XCTAssertLessThanOrEqual(excess, Self.maxGrowthKB,
@@ -1282,6 +1458,8 @@ final class LifecycleUITests: XCTestCase {
         let marker: String
         let heading: String
         let rows: [(label: String, owner: String?)]
+        /// list-dense: the `LD-<n>` root holding the leader (`align`).
+        var anchorRoot: Int?
         var leader: String { rows[0].label }
     }
 
@@ -1306,17 +1484,23 @@ final class LifecycleUITests: XCTestCase {
     /// list-dense block 288 (`LD-288`) → root 289 (≈ 63,000 pt down): the
     /// ordered leader `1.` (with a run background), a nested bullet, a
     /// continuation paragraph, a trailing level-5 heading, and a linked
-    /// second leader (TextKit 1-backed; its owner is not pinned).
+    /// second leader (TextKit 1-backed; its owner is not pinned). The
+    /// paragraph and heading share one continuation row, which the list
+    /// scope may keep on SwiftUI (a row with more than one text block does,
+    /// as of `TextKit2Scope.rowKeepsRenderer`), so they are order landmarks
+    /// with no pinned owner; the leader and the nested leader (rows with
+    /// one text block) are pinned.
     private static let densePosition = ListPosition(
         name: "list-dense @ LD-289", fixture: "list-dense", fraction: "0.4808", arrival: "LD-288",
         marker: "1.", heading: "scroll chunk media",
         rows: [
             ("LD-289 ledger atlas buffer expand buffer corpus", "0.289.0"),
             ("media table swift", "0.289.0.1.0"),
-            ("kernel glyph vector atlas block", "0.289.0.2"),
-            ("scroll chunk media", "0.289.0.3"),
+            ("kernel glyph vector atlas block", nil),
+            ("scroll chunk media", nil),
             ("signal vector render", nil),
-        ]
+        ],
+        anchorRoot: 289
     )
 
     private static let parityTitle = "LP-S1 Nesting: alternating bullet and ordered ancestry"
@@ -1350,9 +1534,54 @@ final class LifecycleUITests: XCTestCase {
         reader.pause()
     }
 
-    private func awayAndBack(_ reader: ReaderDriver, _ agent: HostAgent) throws {
-        try away(reader)
-        try park(reader, agent)
+    /// Label-anchored return from `away`: twelve 600 pt drags back, then
+    /// `align`. The re-jump park does not land repeatably on list-dense
+    /// (the 1e778df shakedown's SwiftUI-only control came back 1,372 px
+    /// off, its SwiftUI rotation/size arm 504 px), so trips there are
+    /// measured from the leader, not from the screen.
+    private func returnTo(_ position: ListPosition, top: CGFloat, _ reader: ReaderDriver) throws -> Bool {
+        for _ in 0 ..< Self.awayLegs {
+            reader.drag(by: -Self.awayDistance)
+        }
+        reader.pause()
+        return try align(position, top: top, reader)
+    }
+
+    /// Drags until `position`'s leader is in view: toward it by the
+    /// `LD-<n>` roots in view while it is not materialised, by its distance
+    /// from `top` once it is; then up to three corrective drags toward
+    /// `top`. Short drags barely scroll, so the leader can settle tens of
+    /// points off `top` (6.2 records it: ~46 pt); drift after a return is
+    /// measured relative to the leader, so that offset is not in the figure.
+    @discardableResult
+    private func align(_ position: ListPosition, top: CGFloat, _ reader: ReaderDriver) throws -> Bool {
+        let leader = reader.element(labelled: position.leader)
+        var steps = 0
+        while !reader.isVisible(leader), steps < 40 {
+            steps += 1
+            if leader.exists {
+                reader.drag(by: leader.frame.minY - top)
+            } else {
+                let roots = try reader.visibleLabels().keys.compactMap(Self.denseRoot)
+                if let target = position.anchorRoot, let low = roots.min(), let high = roots.max() {
+                    reader.drag(by: high < target ? 300 : low > target ? -300 : 120)
+                } else {
+                    reader.drag(by: -300)
+                }
+            }
+            reader.pause(0.5)
+        }
+        for _ in 0 ..< 3 where leader.exists && abs(leader.frame.minY - top) > 3 {
+            reader.drag(by: leader.frame.minY - top)
+            reader.pause(0.5)
+        }
+        reader.pause()
+        return reader.isVisible(leader)
+    }
+
+    /// The root number of a list-dense first leader (`LD-<nnn> …`).
+    private static func denseRoot(_ label: String) -> Int? {
+        label.hasPrefix("LD-") ? Int(label.dropFirst(3).prefix(3)) : nil
     }
 
     /// Labels distinctive enough to prove a row is gone 7,200 pt away:

@@ -300,12 +300,14 @@ struct ReaderDriver {
         let viewport = viewport
         var visible: [DocumentSnapshot.Node] = []
         var textKit2Rows: [String: String] = [:]
+        var textKit2Nodes = 0
         func walk(_ node: XCUIElementSnapshot) {
             let frame = node.frame
             let owner = node.identifier.hasPrefix(Identifier.textKit2RowPrefix)
                 ? String(node.identifier.dropFirst(Identifier.textKit2RowPrefix.count)) : nil
             if let owner {
                 textKit2Rows[owner] = node.label
+                textKit2Nodes += 1
             }
             // Scroll indicators carry a page-count label that tracks the
             // estimated content height, not a row.
@@ -319,7 +321,7 @@ struct ReaderDriver {
             }
         }
         walk(root)
-        return DocumentSnapshot(visible: visible, textKit2Rows: textKit2Rows)
+        return DocumentSnapshot(visible: visible, textKit2Rows: textKit2Rows, textKit2Nodes: textKit2Nodes)
     }
 
     /// Waits up to `timeout` for `element` to be fully inside the viewport.
@@ -480,6 +482,9 @@ struct DocumentSnapshot {
     /// Owner → label of every TextKit 2 row in the snapshot, in or out of
     /// the viewport.
     let textKit2Rows: [String: String]
+    /// TextKit 2 row elements in the snapshot, counted without merging
+    /// owners (equals `textKit2Rows.count` unless an owner appears twice).
+    let textKit2Nodes: Int
 
     /// Top edge (points) of every uniquely labelled visible element; a label
     /// seen at two different tops is dropped (it recurs, so it cannot be
