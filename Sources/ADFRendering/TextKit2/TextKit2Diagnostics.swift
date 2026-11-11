@@ -184,7 +184,10 @@ enum TextKit2Eligibility {
         case atom
         /// Empty text: SwiftUI sizes an empty `Text` from a fixed 12 pt
         /// system font (measured: 14 pt tall at every Dynamic Type size), a
-        /// placeholder with nothing to draw.
+        /// placeholder with nothing to draw. Text of hard breaks only draws
+        /// nothing either, and `Text` puts its baselines where no line
+        /// metric does (one break at Large: both at 22 pt, where a body
+        /// line's baseline sits at 16.33 pt); a list marker aligns to them.
         case empty
         /// A run without a font spec (a theme font supplied as a raw
         /// SwiftUI `Font`): TextKit cannot resolve the font `Text` would.
@@ -216,7 +219,7 @@ enum TextKit2Eligibility {
             guard case .text = segment else { return .fallback(.atom) }
         }
         guard let text = SegmentedTextView.mergedText(segments) else { return .fallback(.atom) }
-        guard !text.characters.isEmpty else { return .fallback(.empty) }
+        guard !text.characters.allSatisfy(\.isNewline) else { return .fallback(.empty) }
         for run in text.runs where run.adfFontSpec == nil {
             return .fallback(.undescribable)
         }
