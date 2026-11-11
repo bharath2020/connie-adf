@@ -90,8 +90,11 @@ struct TextKit2DiagnosticsTests {
             return nil
         }.first)
 
+        // Leaves: the three eligible roots and the list leader; the atom
+        // root falls back; panel and caption text are out of scope.
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
-            eligibleRoots: 3, fallbackRoots: blocks.count - 3, textFallbackRoots: 1, linkRoots: 1
+            eligibleRoots: 3, fallbackRoots: blocks.count - 3, textFallbackRoots: 1, linkRoots: 1,
+            eligibleTextLeaves: 4, linkedTextLeaves: 1, fallbackTextLeaves: 1, listLeaderLeaves: 1, listTrailingLeaves: 0
         ))
 
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
@@ -107,6 +110,7 @@ struct TextKit2DiagnosticsTests {
         var rows = TextKit2FallbackTests.rows(in: host.view)
         #expect(rows.count == 4)
         #expect(rows.filter(\.isTextKit1Backed).map(\.ownerID) == [linked.id])
+        #expect(rows.filter { $0.ownerKind == .list }.map(\.ownerID) == [listItem.id])
         for row in rows {
             #expect(row.relayoutCount >= 1, "\(row.ownerID ?? "?") never laid out")
         }
@@ -138,9 +142,11 @@ struct TextKit2DiagnosticsTests {
         // all four rows now, and the live counters drop with them.
         let live = diagnostics.liveRowCount
         let backedRows = diagnostics.textKit1BackedRowCount
+        let listRows = diagnostics.liveListRowCount
         rows.removeAll()
         #expect(live - diagnostics.liveRowCount == 4, "rows released: \(live - diagnostics.liveRowCount)")
         #expect(backedRows - diagnostics.textKit1BackedRowCount == 1)
+        #expect(listRows - diagnostics.liveListRowCount == 1)
 
         window.isHidden = true
         window.rootViewController = nil
@@ -200,10 +206,10 @@ struct TextKit2DiagnosticsTests {
             return
         }
         #expect(TextKit2Eligibility.describableText(segments) == nil)
-        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 1, textFallbackRoots: 1))
+        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 1, textFallbackRoots: 1, fallbackTextLeaves: 1))
         // The default (spec-first) theme stays eligible.
         let defaultBlocks = DocumentPreparer(theme: .default).prepare(doc)
-        #expect(ADFTextRenderer.textKit2Coverage(of: defaultBlocks) == ADFTextKit2Coverage(eligibleRoots: 1, fallbackRoots: 0))
+        #expect(ADFTextRenderer.textKit2Coverage(of: defaultBlocks) == ADFTextKit2Coverage(eligibleRoots: 1, fallbackRoots: 0, eligibleTextLeaves: 1))
     }
 }
 #endif

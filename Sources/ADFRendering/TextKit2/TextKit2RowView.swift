@@ -58,6 +58,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     }
     /// Whether the row's TextKit 1 stack lays out and draws its text.
     private(set) var isTextKit1Backed = false
+    /// Diagnostics only: whose text the row draws, set by the representable
+    /// (`TextKit2Diagnostics.liveListRowCount`).
+    var ownerKind: TextKit2OwnerKind = .root {
+        didSet {
+            guard ownerKind != oldValue else { return }
+            TextKit2Diagnostics.shared.row(listText: ownerKind == .list)
+        }
+    }
     /// Width the layout manager is currently laid out at (`-1`: none).
     private var containerWidth: CGFloat = -1
     /// The layout being drawn and hit-tested (set by `syncToBounds`), and
@@ -111,12 +119,13 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     deinit {
         let backed = isTextKit1Backed
+        let list = ownerKind == .list
         // UIKit releases views on the main thread; hop there if a caller
         // ever drops the last reference elsewhere.
         if Thread.isMainThread {
-            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed) }
+            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, listText: list) }
         } else {
-            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed) }
+            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, listText: list) }
         }
     }
 
@@ -159,6 +168,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     private func rebuildText() {
         guard let inputs else { return }
         attributed = TextKit2TextBuilder.attributedString(for: inputs, linkColor: Self.linkColor)
+        TextKit2Diagnostics.shared.didConvert()
         contentStorage.attributedString = attributed
         canvas.contentScaleFactor = inputs.displayScale
         containerWidth = -1

@@ -17,6 +17,7 @@ struct TextEngineLeaf<Fallback: View>: View {
     let fallback: Fallback
 
     @Environment(\.adfTextRenderer) private var renderer
+    @Environment(\.adfTextOwnerKind) private var ownerKind
 
     init(segments: [InlineSegment], style: TextBlockStyle, ownerID: String?, @ViewBuilder fallback: () -> Fallback) {
         self.segments = segments
@@ -28,7 +29,7 @@ struct TextEngineLeaf<Fallback: View>: View {
     var body: some View {
         #if canImport(UIKit)
         if renderer == .textKit2, let text = TextKit2Eligibility.describableText(segments) {
-            TextKit2Leaf(text: text, style: style, ownerID: ownerID) { fallback }
+            TextKit2Leaf(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind) { fallback }
         } else {
             fallback
         }

@@ -6,13 +6,14 @@ import ADFPreparation
 ///
 /// Every counter is about TextKit 2 rows only: text that falls back renders
 /// through SwiftUI's `Text` and is not counted here (see
-/// `ADFTextKit2Coverage` for which roots fall back). A row whose text has
+/// `ADFTextKit2Coverage` for which text falls back). A row whose text has
 /// a link is laid out and drawn by its own TextKit 1 stack, as `Text` lays
 /// out linked text: such rows and their draws are counted apart
-/// (`textKit1Backed…`) and never as native TextKit 2 draws. `liveRowCount`
-/// and `textKit1BackedRowCount` count row views currently alive (back to
-/// zero once a switch to `.swiftUI` has released them); the others are
-/// cumulative since launch. Always zero on platforms without UIKit.
+/// (`textKit1Backed…`) and never as native TextKit 2 draws. `liveRowCount`,
+/// `liveListRowCount` and `textKit1BackedRowCount` count row views
+/// currently alive (back to zero once a switch to `.swiftUI` has released
+/// them); the others are cumulative since launch. Always zero on platforms
+/// without UIKit.
 public struct ADFTextKit2Stats: Sendable, Hashable {
     /// TextKit 2 row views currently alive.
     public var liveRowCount: Int
@@ -30,10 +31,20 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
     /// Of `drawCount`: draw passes TextKit 1 performed (never counted in
     /// `nativeDrawCount`).
     public var textKit1BackedDrawCount: Int
+    /// Of `liveRowCount`: rows drawing list text, a list row's leader or one
+    /// of its direct paragraphs and headings (the list-native proof: a
+    /// top-level heading drawing natively proves nothing about lists).
+    public var liveListRowCount: Int
+    /// Conversions of prepared text (`AttributedString`) into the
+    /// `NSAttributedString` a row lays out, since launch: one when a row
+    /// first gets its text and one per later text or layout-input change,
+    /// never for an appearance flip.
+    public var conversionCount: Int
 
     public init(
         liveRowCount: Int, layoutCount: Int, drawCount: Int, nativeDrawCount: Int = 0,
-        textKit1BackedRowCount: Int = 0, textKit1BackedDrawCount: Int = 0
+        textKit1BackedRowCount: Int = 0, textKit1BackedDrawCount: Int = 0,
+        liveListRowCount: Int = 0, conversionCount: Int = 0
     ) {
         self.liveRowCount = liveRowCount
         self.layoutCount = layoutCount
@@ -41,32 +52,75 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
         self.nativeDrawCount = nativeDrawCount
         self.textKit1BackedRowCount = textKit1BackedRowCount
         self.textKit1BackedDrawCount = textKit1BackedDrawCount
+        self.liveListRowCount = liveListRowCount
+        self.conversionCount = conversionCount
     }
 }
 
-/// How many top-level blocks of a document the TextKit 2 renderer draws
-/// (`eligibleRoots`: see `TextKit2Eligibility`) versus how many stay on
-/// SwiftUI (`fallbackRoots`: everything else — containers, lists, code,
-/// tables, media, and the paragraphs and headings counted in
-/// `textFallbackRoots`). Content-based, plus one OS rule (two or more
-/// trailing hard breaks fall back before iOS 26), so the counts can differ
-/// between iOS 18 and iOS 26 for the same document.
+/// Which of a document's text the TextKit 2 renderer may draw, from its
+/// prepared blocks (static: it does not know an active search, which keeps
+/// highlighted owners on SwiftUI, or the host's text environment, so it is
+/// potential coverage; the live counters in `ADFTextKit2Stats` are the
+/// execution proof). Content-based, plus one OS rule (two or more trailing
+/// hard breaks fall back before iOS 26), so the counts can differ between
+/// iOS 18 and iOS 26 for the same document.
+///
+/// **Text leaves** count every text-bearing view in the renderer's scope
+/// (`TextKit2Scope`): top-level paragraphs and headings, list leaders (a
+/// row with empty segments has none) and a list row's direct paragraphs
+/// and headings, at every list depth. Text inside containers, tables,
+/// captions and expand bodies, including lists there, is out of scope and
+/// not counted. Each leaf is eligible or falls back:
+/// `eligibleTextLeaves + fallbackTextLeaves == eligibleRoots +
+/// textFallbackRoots + listLeaderLeaves + listTrailingLeaves`.
+///
+/// **Roots (root richText, legacy)**: `eligibleRoots`, `fallbackRoots`,
+/// `textFallbackRoots` and `linkRoots` keep their PR 1 meaning, top-level
+/// blocks only. `fallbackRoots` is every top-level block that is not an
+/// eligible paragraph or heading, top-level lists included. It is not a
+/// count of blocks drawn wholly by SwiftUI; use the leaf counts for that.
 public struct ADFTextKit2Coverage: Sendable, Hashable {
+    /// Top-level paragraphs and headings TextKit 2 draws (root richText,
+    /// legacy).
     public var eligibleRoots: Int
+    /// Every other top-level block (root richText, legacy).
     public var fallbackRoots: Int
     /// Of `fallbackRoots`: top-level paragraphs and headings that stay on
     /// SwiftUI (inline atoms, undescribable theme fonts, empty text,
-    /// trailing hard breaks before iOS 26).
+    /// trailing hard breaks before iOS 26) (root richText, legacy).
     public var textFallbackRoots: Int
     /// Of `eligibleRoots`: those containing a link, which the row lays out
-    /// and draws with TextKit 1 (`ADFTextKit2Stats.textKit1BackedRowCount`).
+    /// and draws with TextKit 1 (`ADFTextKit2Stats.textKit1BackedRowCount`)
+    /// (root richText, legacy).
     public var linkRoots: Int
+    /// Text leaves TextKit 2 draws: the eligible roots plus eligible list
+    /// leaders and list rows' direct paragraphs and headings.
+    public var eligibleTextLeaves: Int
+    /// Of `eligibleTextLeaves`: those containing a link (TextKit 1-backed
+    /// rows).
+    public var linkedTextLeaves: Int
+    /// Text leaves in scope that stay on SwiftUI (the reasons above).
+    public var fallbackTextLeaves: Int
+    /// Text leaves that are list leaders, eligible or not.
+    public var listLeaderLeaves: Int
+    /// Text leaves that are a list row's direct paragraphs and headings,
+    /// eligible or not.
+    public var listTrailingLeaves: Int
 
-    public init(eligibleRoots: Int, fallbackRoots: Int, textFallbackRoots: Int = 0, linkRoots: Int = 0) {
+    public init(
+        eligibleRoots: Int, fallbackRoots: Int, textFallbackRoots: Int = 0, linkRoots: Int = 0,
+        eligibleTextLeaves: Int = 0, linkedTextLeaves: Int = 0, fallbackTextLeaves: Int = 0,
+        listLeaderLeaves: Int = 0, listTrailingLeaves: Int = 0
+    ) {
         self.eligibleRoots = eligibleRoots
         self.fallbackRoots = fallbackRoots
         self.textFallbackRoots = textFallbackRoots
         self.linkRoots = linkRoots
+        self.eligibleTextLeaves = eligibleTextLeaves
+        self.linkedTextLeaves = linkedTextLeaves
+        self.fallbackTextLeaves = fallbackTextLeaves
+        self.listLeaderLeaves = listLeaderLeaves
+        self.listTrailingLeaves = listTrailingLeaves
     }
 }
 
@@ -87,26 +141,34 @@ extension ADFTextRenderer {
         (TextKit2Diagnostics.shared.rebuildControlLiveRows, TextKit2Diagnostics.shared.rebuildControlAppearances)
     }
 
-    /// Classifies a document's top-level blocks (`ADFDocumentModel.blocks`)
-    /// by whether the TextKit 2 renderer draws them.
+    /// Classifies a document's text (`ADFDocumentModel.blocks`) by whether
+    /// the TextKit 2 renderer draws it: its text leaves in the renderer's
+    /// scope, and its top-level blocks (see `ADFTextKit2Coverage`).
     public static func textKit2Coverage(of blocks: [RenderBlock]) -> ADFTextKit2Coverage {
-        var eligible = 0
-        var textFallback = 0
-        var linked = 0
-        for block in blocks {
-            guard case .richText(let segments, _) = block.kind else { continue }
-            switch TextKit2Eligibility.verdict(segments) {
+        var coverage = ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 0)
+        TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+            let root = leaf.position == .root
+            switch leaf.position {
+            case .root: break
+            case .listLeader: coverage.listLeaderLeaves += 1
+            case .listTrailing: coverage.listTrailingLeaves += 1
+            }
+            switch TextKit2Eligibility.verdict(leaf.segments) {
             case .eligible(let text):
-                eligible += 1
-                if text.runs.contains(where: { $0.link != nil }) { linked += 1 }
+                let linked = text.runs.contains { $0.link != nil }
+                coverage.eligibleTextLeaves += 1
+                if linked { coverage.linkedTextLeaves += 1 }
+                if root {
+                    coverage.eligibleRoots += 1
+                    if linked { coverage.linkRoots += 1 }
+                }
             case .fallback:
-                textFallback += 1
+                coverage.fallbackTextLeaves += 1
+                if root { coverage.textFallbackRoots += 1 }
             }
         }
-        return ADFTextKit2Coverage(
-            eligibleRoots: eligible, fallbackRoots: blocks.count - eligible,
-            textFallbackRoots: textFallback, linkRoots: linked
-        )
+        coverage.fallbackRoots = blocks.count - coverage.eligibleRoots
+        return coverage
     }
 }
 
@@ -189,6 +251,8 @@ final class TextKit2Diagnostics {
     private(set) var nativeDrawCount = 0
     private(set) var textKit1BackedRowCount = 0
     private(set) var textKit1BackedDrawCount = 0
+    private(set) var liveListRowCount = 0
+    private(set) var conversionCount = 0
     /// The rebuild control's leaves (`View.adfRebuildControl`).
     private(set) var rebuildControlLiveRows = 0
     private(set) var rebuildControlAppearances = 0
@@ -197,7 +261,8 @@ final class TextKit2Diagnostics {
         ADFTextKit2Stats(
             liveRowCount: liveRowCount, layoutCount: layoutCount,
             drawCount: drawCount, nativeDrawCount: nativeDrawCount,
-            textKit1BackedRowCount: textKit1BackedRowCount, textKit1BackedDrawCount: textKit1BackedDrawCount
+            textKit1BackedRowCount: textKit1BackedRowCount, textKit1BackedDrawCount: textKit1BackedDrawCount,
+            liveListRowCount: liveListRowCount, conversionCount: conversionCount
         )
     }
 
@@ -205,15 +270,27 @@ final class TextKit2Diagnostics {
         liveRowCount += 1
     }
 
-    func rowDestroyed(textKit1Backed: Bool = false) {
+    func rowDestroyed(textKit1Backed: Bool = false, listText: Bool = false) {
         liveRowCount -= 1
         if textKit1Backed { textKit1BackedRowCount -= 1 }
+        if listText { liveListRowCount -= 1 }
     }
 
     /// A live row started (`true`) or stopped being laid out and drawn by
     /// its TextKit 1 stack.
     func row(textKit1Backed: Bool) {
         textKit1BackedRowCount += textKit1Backed ? 1 : -1
+    }
+
+    /// A live row started (`true`) or stopped drawing list text
+    /// (`TextKit2OwnerKind`).
+    func row(listText: Bool) {
+        liveListRowCount += listText ? 1 : -1
+    }
+
+    /// A row converted its prepared text into the string it lays out.
+    func didConvert() {
+        conversionCount += 1
     }
 
     func didLayout() {

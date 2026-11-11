@@ -32,6 +32,20 @@ private struct ADFRebuildControlKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+/// Diagnostics only: whose text a leaf draws. `.list` is a list row's leader
+/// or one of its direct paragraphs and headings (`ListRowView` sets it on
+/// its content); `.root` is everything else. A TextKit 2 row counts itself
+/// by it, so `ADFTextKit2Stats.liveListRowCount` proves that list text, not
+/// only top-level text, is drawn by TextKit 2.
+enum TextKit2OwnerKind: Sendable, Hashable {
+    case root
+    case list
+}
+
+private struct ADFTextOwnerKindKey: EnvironmentKey {
+    static let defaultValue: TextKit2OwnerKind = .root
+}
+
 extension EnvironmentValues {
     /// The text engine a text leaf (`TextEngineLeaf`) should use.
     /// `ADFDocumentView`'s rows set it to the host's choice for top-level
@@ -46,6 +60,12 @@ extension EnvironmentValues {
     var adfRebuildControl: Bool {
         get { self[ADFRebuildControlKey.self] }
         set { self[ADFRebuildControlKey.self] = newValue }
+    }
+
+    /// `TextKit2OwnerKind` (diagnostics).
+    var adfTextOwnerKind: TextKit2OwnerKind {
+        get { self[ADFTextOwnerKindKey.self] }
+        set { self[ADFTextOwnerKindKey.self] = newValue }
     }
 }
 

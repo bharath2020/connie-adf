@@ -10,11 +10,12 @@ import ADFPreparation
 /// SwiftUI `Text` path). Only constructed when the switch is ON, so the
 /// SwiftUI arm reads none of these values.
 /// Under `View.adfRebuildControl` (diagnostics) the row's place holds
-/// `fallback` instead, counted.
+/// `fallback` instead, counted. `ownerKind` is for diagnostics only.
 struct TextKit2Leaf<Fallback: View>: View {
     let text: AttributedString
     let style: TextBlockStyle
     let ownerID: String?
+    let ownerKind: TextKit2OwnerKind
     let fallback: Fallback
 
     @Environment(\.lineSpacing) private var lineSpacing
@@ -25,10 +26,14 @@ struct TextKit2Leaf<Fallback: View>: View {
     @Environment(\.adfRebuildControl) private var rebuildControl
     @Environment(\.adfDocumentSearch) private var search
 
-    init(text: AttributedString, style: TextBlockStyle, ownerID: String?, @ViewBuilder fallback: () -> Fallback) {
+    init(
+        text: AttributedString, style: TextBlockStyle, ownerID: String?, ownerKind: TextKit2OwnerKind = .root,
+        @ViewBuilder fallback: () -> Fallback
+    ) {
         self.text = text
         self.style = style
         self.ownerID = ownerID
+        self.ownerKind = ownerKind
         self.fallback = fallback()
     }
 
@@ -42,7 +47,7 @@ struct TextKit2Leaf<Fallback: View>: View {
                     .onAppear { TextKit2Diagnostics.shared.rebuildControlRow(appeared: true) }
                     .onDisappear { TextKit2Diagnostics.shared.rebuildControlRow(appeared: false) }
             } else {
-                TextKit2TextRow(text: text, style: style, ownerID: ownerID)
+                TextKit2TextRow(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind)
             }
         } else {
             fallback
@@ -84,13 +89,14 @@ struct TextKit2TextRow: View {
     let text: AttributedString
     let style: TextBlockStyle
     var ownerID: String? = nil
+    var ownerKind: TextKit2OwnerKind = .root
 
     var body: some View {
         // A handle per evaluation, not view state (the TK2 sources hold
         // none, `TextKit2RowViewTests`): the alignment guides query the
         // live row view's layout cache through it.
         let handle = TextKit2RowHandle()
-        TextKit2RowRepresentable(text: text, style: style, ownerID: ownerID, handle: handle)
+        TextKit2RowRepresentable(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, handle: handle)
             .alignmentGuide(.firstTextBaseline) { dimensions in
                 let size = CGSize(width: dimensions.width, height: dimensions.height)
                 return MainActor.assumeIsolated { handle.firstBaseline(placedAt: size) } ?? dimensions.height
@@ -124,6 +130,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
     let text: AttributedString
     let style: TextBlockStyle
     let ownerID: String?
+    var ownerKind: TextKit2OwnerKind = .root
     let handle: TextKit2RowHandle
 
     func makeUIView(context: Context) -> TextKit2RowView {
@@ -144,6 +151,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
 
     private func update(_ view: TextKit2RowView, context: Context) {
         handle.view = view
+        view.ownerKind = ownerKind
         view.apply(
             Self.inputs(text: text, style: style, environment: context.environment),
             colorScheme: context.environment.colorScheme,

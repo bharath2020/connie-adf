@@ -53,6 +53,7 @@ struct ListRowView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .environment(\.adfTextOwnerKind, .list)
         }
         .padding(.leading, CGFloat(row.depth) * (markerWidth + theme.spacing))
         .padding(isDecision ? theme.spacing : 0)
