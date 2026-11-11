@@ -250,35 +250,6 @@ struct TextKit2RowViewTests {
         #expect(!body.accessibilityTraits.contains(.header))
     }
 
-    /// The SwiftUI arm says "Heading level 2" (`RichTextBlockView`'s
-    /// `.accessibilityHeading`); the row carries the same level on its
-    /// label's heading-level attribute, the label text and traits as
-    /// before. Body text has no level, and loses one it had.
-    @Test("accessibility: a heading's level is on its label, as the SwiftUI arm maps it; body text has none", arguments: [1, 2, 3, 4, 5, 6, 7, 0, nil] as [Int?])
-    func headingLevel(level: Int?) throws {
-        let expected = level.map { (1...5).contains($0) ? $0 : 6 } ?? 1
-        let style = TextBlockStyle(font: .title, isHeading: true, headingLevel: level, alignment: nil, indentation: 0, breakout: nil)
-        let inputs = TextKit2RowRepresentable.inputs(text: text("Heading text", spec: ADFFontSpec(textStyle: .title, bold: true)), style: style, environment: EnvironmentValues())
-        #expect(inputs.headingLevel == expected)
-        let view = TextKit2RowView()
-        view.apply(inputs, ownerID: "3")
-        #expect(view.accessibilityLabel == "Heading text")
-        #expect(view.accessibilityTraits == [.staticText, .header])
-        let label = try #require(view.accessibilityAttributedLabel)
-        var range = NSRange()
-        #expect(label.string == "Heading text")
-        #expect(label.attribute(.accessibilityTextHeadingLevel, at: 0, effectiveRange: &range) as? Int == expected)
-        #expect(range == NSRange(location: 0, length: label.length))
-
-        let paragraph = TextBlockStyle(font: .body, isHeading: false, headingLevel: nil, alignment: nil, indentation: 0, breakout: nil)
-        let body = TextKit2RowRepresentable.inputs(text: text("Body text"), style: paragraph, environment: EnvironmentValues())
-        #expect(body.headingLevel == nil)
-        view.apply(body, ownerID: "3")
-        #expect(view.accessibilityLabel == "Body text")
-        #expect(view.accessibilityTraits == [.staticText])
-        #expect(view.accessibilityAttributedLabel?.attribute(.accessibilityTextHeadingLevel, at: 0, effectiveRange: nil) == nil)
-    }
-
     // MARK: Font resolver
 
     nonisolated static let categories: [UIContentSizeCategory] = [

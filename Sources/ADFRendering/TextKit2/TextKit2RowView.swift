@@ -145,14 +145,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         guard newInputs != inputs else { return }
         inputs = newInputs
         rebuildText()
-        let label = String(newInputs.text.characters)
-        accessibilityLabel = label
-        if let level = newInputs.headingLevel {
-            // VoiceOver announces the level ("Heading level 2") from the
-            // label's heading-level attribute; setting the plain label
-            // above clears it for body text.
-            accessibilityAttributedLabel = NSAttributedString(string: label, attributes: [.accessibilityTextHeadingLevel: level])
-        }
+        accessibilityLabel = String(newInputs.text.characters)
         accessibilityValue = nil
         accessibilityTraits = newInputs.isHeading ? [.staticText, .header] : [.staticText]
     }
