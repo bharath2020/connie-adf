@@ -144,11 +144,17 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
 
     private func update(_ view: TextKit2RowView, context: Context) {
         handle.view = view
-        view.apply(Self.inputs(text: text, style: style, environment: context.environment), ownerID: ownerID)
+        view.apply(
+            Self.inputs(text: text, style: style, environment: context.environment),
+            colorScheme: context.environment.colorScheme,
+            ownerID: ownerID
+        )
         let action = context.environment.openURL
         view.openURL = { url in action(url) }
     }
 
+    /// The row's layout inputs; the colour scheme is applied apart, as a
+    /// paint input (`TextKit2RowView.apply(_:colorScheme:ownerID:)`).
     static func inputs(text: AttributedString, style: TextBlockStyle, environment: EnvironmentValues) -> TextKit2RenderInputs {
         TextKit2RenderInputs(
             text: text,
@@ -157,8 +163,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
             sizeCategory: environment.dynamicTypeSize.uiContentSizeCategory,
             layoutDirection: environment.layoutDirection,
             displayScale: environment.displayScale,
-            legibilityWeight: environment.legibilityWeight,
-            colorScheme: environment.colorScheme
+            legibilityWeight: environment.legibilityWeight
         )
     }
 }

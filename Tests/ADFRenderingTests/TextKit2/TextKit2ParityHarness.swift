@@ -124,7 +124,6 @@ enum TK2Parity {
         values.dynamicTypeSize = env.size
         values.layoutDirection = env.direction
         values.legibilityWeight = env.legibility
-        values.colorScheme = env.dark ? .dark : .light
         values.displayScale = nativeScale
         return TextKit2RowRepresentable.inputs(text: try #require(fixture.describableText), style: fixture.style, environment: values)
     }
@@ -213,7 +212,17 @@ enum TK2Parity {
         window.isHidden = false
         window.layoutIfNeeded()
         host.view.layoutIfNeeded()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        return try bitmap(of: window, width: width)
+    }
 
+    /// The window's laid-out layer tree at the device's native scale (see
+    /// `render`), cropped to the whole pixel columns of `width`.
+    @MainActor
+    static func bitmap(of window: UIWindow, width: CGFloat) throws -> Bitmap {
         let scale = window.traitCollection.displayScale
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
@@ -221,8 +230,6 @@ enum TK2Parity {
         let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
             window.layer.render(in: context.cgContext)
         }
-        window.isHidden = true
-        window.rootViewController = nil
         let cgImage = try #require(image.cgImage)
 
         // Only whole pixel columns: at a width that is not a whole number

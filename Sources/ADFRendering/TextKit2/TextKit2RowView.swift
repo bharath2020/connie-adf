@@ -97,12 +97,12 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         canvas.row = self
         addSubview(canvas)
         isAccessibilityElement = true
-        // No trait-change registration: the colour scheme arrives as an
-        // input (`apply` sets the override and redraws), and the override
-        // shields the row from its ancestors' scheme. No tap recognizer
-        // either until the text has a link (`rebuildLinks`): rows are
-        // created and released by the screenful on every switch, so each
-        // per-row object counts.
+        // No trait-change registration: the colour scheme arrives as a
+        // paint input (`apply` sets the override and redraws), and the
+        // override shields the row from its ancestors' scheme. No tap
+        // recognizer either until the text has a link (`rebuildLinks`):
+        // rows are created and released by the screenful on every switch,
+        // so each per-row object counts.
         TextKit2Diagnostics.shared.rowCreated()
     }
 
@@ -124,22 +124,36 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     /// Re-applies the text when (and only when) `inputs` changed; a no-op
     /// otherwise, so repeated SwiftUI updates with the same value cost one
-    /// `Hashable` compare.
-    func apply(_ newInputs: TextKit2RenderInputs, ownerID newOwnerID: String? = nil) {
+    /// `Hashable` compare. The colour scheme is a paint input, applied
+    /// before that compare: a change repaints the row without rebuilding
+    /// or laying out its text (`applyColorScheme`).
+    func apply(_ newInputs: TextKit2RenderInputs, colorScheme: ColorScheme = .light, ownerID newOwnerID: String? = nil) {
         if newOwnerID != ownerID {
             ownerID = newOwnerID
             accessibilityIdentifier = newOwnerID.map { "tk2-row:\($0)" }
         }
+        applyColorScheme(colorScheme)
         guard newInputs != inputs else { return }
-        let schemeChanged = newInputs.colorScheme != inputs?.colorScheme
         inputs = newInputs
-        if schemeChanged {
-            overrideUserInterfaceStyle = newInputs.colorScheme == .dark ? .dark : .light
-        }
         rebuildText()
         accessibilityLabel = String(newInputs.text.characters)
         accessibilityValue = nil
         accessibilityTraits = newInputs.isHeading ? [.staticText, .header] : [.staticText]
+    }
+
+    /// Pins the row's (and its canvas's) appearance to the SwiftUI scheme,
+    /// shielding it from its ancestors' traits, and repaints. Every colour
+    /// in the text is a `UIColor` resolved when the canvas draws (TextKit 2
+    /// fragments, TextKit 1 glyphs and fills, `RunBackgrounds`), so a flip
+    /// rebuilds nothing: the string, the TextKit 1 stack, the layout cache
+    /// and the laid-out container all stay as they are. (UIKit also
+    /// redisplays a canvas in a window when its appearance changes; the
+    /// explicit repaint does not depend on that.)
+    private func applyColorScheme(_ colorScheme: ColorScheme) {
+        let style: UIUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+        guard style != overrideUserInterfaceStyle else { return }
+        overrideUserInterfaceStyle = style
+        canvas.setNeedsDisplay()
     }
 
     private func rebuildText() {
