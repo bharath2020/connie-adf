@@ -69,6 +69,38 @@
 //                       has its own https://example.com/lists-links/<slug>
 //                       URL and every leaf a unique `LL-…` sentinel. Not
 //                       part of arm A, visual parity or the perf designs.
+//   code-parity.json    compact code-block fixture for the TextKit 2 code
+//                       stage: 24 top-level code blocks under headings
+//                       `CP-S1`…`CP-S6` (plain ASCII shapes and a wide
+//                       block to pan; breakout wide/full-width; blank
+//                       lines, trailing newlines, whitespace; the canvas
+//                       budget boundary; tabs, emoji/CJK, combining marks,
+//                       Hebrew/Arabic, `""` and `"\n"`), then one code
+//                       block inside a bullet item, a panel and an expand.
+//                       No table, no media. Each block's first non-empty
+//                       line carries `CP-<nn>` (the two blocks without
+//                       text carry it as their language). Top-level node
+//                       index = block id `0.<index>`; append new cases
+//                       just before `CP-END`, never reorder.
+//   code-dense.json     600 top-level code blocks and nothing else, for the
+//                       code perf gate: exact line-count and width quotas
+//                       paired by a seeded shuffle, first line
+//                       `// CD-<iii>`, printable ASCII and line feeds only.
+//                       A block over the canvas budget has its widest line
+//                       shortened (true maximum recomputed after every
+//                       cut) except a deliberate 18 (3 %) left over
+//                       budget. Sized for 100–150 s of autoscroll; the
+//                       generator prints the realised histograms, the
+//                       estimate and the hand-countable totals.
+//   code-tall.json      a 400-line, 60-column code block (over the canvas
+//                       budget), the largest 60-column block declared
+//                       under it, and a short closing block (`-fixture
+//                       code-tall`; an ungated pilot like list-tall).
+//
+// The three code fixtures size and declare every "over budget" / "just
+// under budget" block through `codeBudgetVerdict`, which reads only the
+// constants in `CodeCanvasModel` (documented values for the default
+// configuration, not measurements — correct them there).
 //
 // Fully deterministic: seeded LCG, no Date(), no system randomness.
 // Output is byte-stable across runs (JSONSerialization + .sortedKeys,
@@ -1426,6 +1458,1014 @@ func makeListsLinks() -> [String: Any] {
     ])
 }
 
+// MARK: - Code fixtures: the canvas budget model
+
+/// Generator-side model of the TextKit 2 code canvas gate at the DEFAULT
+/// configuration: the default theme's code font (monospaced body) at the
+/// default size category (`large`, 17 pt), regular weight, left to right.
+///
+/// The arithmetic mirrors `TextKit2Scope.codeCanvasEstimate`
+/// (Sources/ADFRendering/TextKit2/TextKit2Scope.swift):
+///
+///     pixelWidth  = ceil(maxLineUTF16 × advance × scale) + 2
+///     pixelHeight = ceil(((lineCount + 2) × lineHeight + 2) × scale)
+///     admitted when both are ≤ 8,192 and width × height × 4 ≤ 16 MiB
+///
+/// The generator cannot link UIKit, so the two font metrics are constants
+/// read from the font file's tables (SF Mono, `SFUIMono.ttf`, the same in
+/// the iOS 18.2 to 27.1 simulator runtimes), not measured in the app: the
+/// gate measures them from the resolved font at run time
+/// (`TextKit2CodeMetrics`). The reserves and caps are copies.
+/// CORRECT THEM HERE, and only here: every "over budget" and "just under
+/// budget" block of code-parity, code-dense and code-tall is sized and
+/// declared through `codeBudgetVerdict`, which reads nothing else. A change
+/// moves fixture bytes (code-parity CP-16 and CP-17, code-dense's shortened
+/// and kept blocks, code-tall's CT-NEAR), so settle the values before the
+/// fixtures are frozen.
+enum CodeCanvasModel {
+    /// Advance of one code glyph, in 1/1000 pt. 17 pt SF Mono: every
+    /// printable ASCII glyph advances 1266/2048 em = 10.509 pt; rounded up.
+    /// (The plan's "about 10.2 pt" is Menlo's 1233/2048 em.)
+    static let advanceMilliPoints = 10_510
+    /// Height of one code line, in 1/1000 pt. 17 pt SF Mono: ascender 1950
+    /// and descender 494 of 2048, no line gap = 20.287 pt; rounded up.
+    static let lineHeightMilliPoints = 20_300
+    /// The display scale the declared verdicts are for. The summary prints
+    /// the 2x verdict beside it.
+    static let displayScale = 3
+    /// `TextKit2Scope.maximumCodeCanvasDimension`: pixels per dimension.
+    static let maximumDimensionPixels = 8_192
+    /// `TextKit2Scope.maximumCodeCanvasBytes`: 16 MiB at `bytesPerPixel`.
+    static let maximumBytes = 16 * 1_024 * 1_024
+    static let bytesPerPixel = 4
+    /// `TextKit2Scope.codeCanvasInkReserveLines`.
+    static let inkReserveLines = 2
+    /// `TextKit2Scope.codeCanvasRoundingReservePoints`, in 1/1000 pt.
+    static let roundingReserveMilliPoints = 2_000
+    /// `TextKit2Scope.codeCanvasWidthReservePixels`.
+    static let widthReservePixels = 2
+    /// Safety margin on the two font metrics, in 1/1000. A block is
+    /// DECLARED under budget only if its bound is within the caps with both
+    /// metrics this much larger, and over budget only if it is past a cap
+    /// with both this much smaller. Anything in between is `.marginal`,
+    /// and the generator emits none.
+    static let metricMarginPermille = 30
+}
+
+/// The canvas bound of a code block of `lineCount` lines whose widest line
+/// is `maxColumns` UTF-16 units, in pixels at `scale`.
+struct CodeCanvasEstimate {
+    let widthPixels: Int
+    let heightPixels: Int
+
+    var bytes: Int { widthPixels * heightPixels * CodeCanvasModel.bytesPerPixel }
+
+    var isWithinCaps: Bool {
+        widthPixels <= CodeCanvasModel.maximumDimensionPixels
+            && heightPixels <= CodeCanvasModel.maximumDimensionPixels
+            && bytes <= CodeCanvasModel.maximumBytes
+    }
+}
+
+/// The mirror of `TextKit2Scope.codeCanvasEstimate`, in integers, with both
+/// font metrics scaled by `metricPermille`/1000.
+func codeCanvasEstimate(lineCount: Int, maxColumns: Int, scale: Int, metricPermille: Int = 1_000) -> CodeCanvasEstimate {
+    // Metrics in 1/1,000,000 pt.
+    let advance = CodeCanvasModel.advanceMilliPoints * metricPermille
+    let lineHeight = CodeCanvasModel.lineHeightMilliPoints * metricPermille
+    let width = maxColumns * advance * scale
+    let reservedLines = lineCount + CodeCanvasModel.inkReserveLines
+    let height = (reservedLines * lineHeight + CodeCanvasModel.roundingReserveMilliPoints * 1_000) * scale
+    return CodeCanvasEstimate(
+        widthPixels: (width + 999_999) / 1_000_000 + CodeCanvasModel.widthReservePixels,
+        heightPixels: (height + 999_999) / 1_000_000
+    )
+}
+
+enum CodeBudgetVerdict: String {
+    /// Within the caps even with the metric margin added: expected on
+    /// TextKit 2 (if its text is in the admitted cohort).
+    case under
+    /// Past a cap even with the metric margin taken off: expected on
+    /// SwiftUI.
+    case over
+    /// Inside the safety band: not declared either way. Never emitted.
+    case marginal
+}
+
+/// THE budget decision of the code fixtures, for the default configuration
+/// at `scale`. Every declared over-budget or under-budget block, every
+/// "largest under" and "smallest over" size and the code-dense shortening
+/// rule go through this one function.
+func codeBudgetVerdict(lineCount: Int, maxColumns: Int, scale: Int = CodeCanvasModel.displayScale) -> CodeBudgetVerdict {
+    let margin = CodeCanvasModel.metricMarginPermille
+    let generous = codeCanvasEstimate(lineCount: lineCount, maxColumns: maxColumns, scale: scale, metricPermille: 1_000 + margin)
+    if generous.isWithinCaps {
+        return .under
+    }
+    let tight = codeCanvasEstimate(lineCount: lineCount, maxColumns: maxColumns, scale: scale, metricPermille: 1_000 - margin)
+    if !tight.isWithinCaps {
+        return .over
+    }
+    return .marginal
+}
+
+/// The largest line count declared under budget at `columns` (0 if none).
+func largestLineCountUnderBudget(columns: Int, scale: Int = CodeCanvasModel.displayScale) -> Int {
+    var lines = 0
+    while codeBudgetVerdict(lineCount: lines + 1, maxColumns: columns, scale: scale) == .under {
+        lines += 1
+    }
+    return lines
+}
+
+/// The widest line declared under budget over `lineCount` lines (0 if none).
+func largestColumnsUnderBudget(lineCount: Int, scale: Int = CodeCanvasModel.displayScale) -> Int {
+    var columns = 0
+    while codeBudgetVerdict(lineCount: lineCount, maxColumns: columns + 1, scale: scale) == .under {
+        columns += 1
+    }
+    return columns
+}
+
+/// The smallest line count declared over budget at `columns`.
+func smallestLineCountOverBudget(columns: Int, scale: Int) -> Int {
+    var lines = 1
+    while codeBudgetVerdict(lineCount: lines, maxColumns: columns, scale: scale) != .over {
+        lines += 1
+    }
+    return lines
+}
+
+// MARK: - Code fixtures: emitted-text measurement
+
+/// What the generator measured on one emitted code string, in one pass
+/// over its UTF-16 units — its own count, independent of the library's
+/// prepared code shape and of the coverage walker.
+struct CodeTextShape {
+    /// Line feeds + 1 (the autoscroll estimator's definition; 1 for `""`).
+    var lineCount = 1
+    /// The widest line, in UTF-16 units (= columns for ASCII text).
+    var maxLineUTF16 = 0
+    var trailingNewlineCount = 0
+    /// Every UTF-16 unit, line feeds included.
+    var utf16Count = 0
+    var isEmpty = true
+    /// Non-empty and nothing but line feeds.
+    var isAllNewlines = false
+    /// Every unit is U+0020…U+007E or a line feed (the admitted cohort's
+    /// content rule; an empty string satisfies it vacuously).
+    var isPrintableASCIIAndLF = true
+    var hasTabs = false
+    var hasNonASCII = false
+}
+
+func codeTextShape(_ text: String) -> CodeTextShape {
+    var shape = CodeTextShape()
+    var currentLine = 0
+    var trailingNewlines = 0
+    var sawText = false
+    for unit in text.utf16 {
+        shape.isEmpty = false
+        shape.utf16Count += 1
+        if unit == 0x0A {
+            shape.lineCount += 1
+            shape.maxLineUTF16 = max(shape.maxLineUTF16, currentLine)
+            currentLine = 0
+            trailingNewlines += 1
+            continue
+        }
+        trailingNewlines = 0
+        sawText = true
+        currentLine += 1
+        if unit == 0x09 { shape.hasTabs = true }
+        if unit > 0x7F { shape.hasNonASCII = true }
+        if unit < 0x20 || unit > 0x7E { shape.isPrintableASCIIAndLF = false }
+    }
+    shape.maxLineUTF16 = max(shape.maxLineUTF16, currentLine)
+    shape.trailingNewlineCount = trailingNewlines
+    shape.isAllNewlines = !shape.isEmpty && !sawText
+    return shape
+}
+
+/// One emitted top-level code block as the generator measured it. The emit
+/// step prints these: the hand-countable source for fixture notes and pins.
+struct CodeBlockRecord {
+    /// Top-level node index; the block's id is `0.<index>`.
+    let index: Int
+    /// `CP-<nn>`, `CD-<iii>` or `CT-…`.
+    let label: String
+    let note: String
+    let language: String?
+    let breakoutMode: String?
+    let shape: CodeTextShape
+}
+
+struct CodeFixture {
+    let document: [String: Any]
+    /// The top-level code blocks, in document order.
+    let records: [CodeBlockRecord]
+    /// Lines about what is not a top-level code block (nested code).
+    var notes: [String] = []
+}
+
+// MARK: - Code fixtures: node and text builders
+
+/// Zero-padded 2-digit label.
+func pad2(_ n: Int) -> String {
+    n < 10 ? "0" + String(n) : String(n)
+}
+
+/// A `codeBlock` node. `language` nil omits `attrs` (the model's
+/// `language: nil`); `""` keeps an empty `language`. An empty `text` omits
+/// `content` (a text node may not be empty in the ADF schema). `text` is
+/// carried in one text node, exactly as given.
+func codeBlockNode(language: String?, text: String, breakoutMode: String? = nil) -> [String: Any] {
+    var node: [String: Any] = ["type": "codeBlock"]
+    if let language {
+        let attrs: [String: Any] = ["language": language]
+        node["attrs"] = attrs
+    }
+    if !text.isEmpty {
+        let content: [[String: Any]] = [textNode(text)]
+        node["content"] = content
+    }
+    if let breakoutMode {
+        let modeAttrs: [String: Any] = ["mode": breakoutMode]
+        let mark: [String: Any] = ["type": "breakout", "attrs": modeAttrs]
+        let marks: [[String: Any]] = [mark]
+        node["marks"] = marks
+    }
+    return node
+}
+
+/// One code-like statement from the word soup: printable ASCII, no tab, no
+/// leading or trailing space.
+func codeStatement(_ rng: inout LCG) -> String {
+    let a = rng.pick(words)
+    let b = rng.pick(words)
+    let c = rng.pick(words)
+    let n = rng.int(0 ..< 1_000)
+    switch rng.int(0 ..< 8) {
+    case 0: return "let \(a)\(n) = \(b).\(c)(\(n))"
+    case 1: return "\(a).\(b) = \(c)[\(n)]"
+    case 2: return "if \(a).\(b) > \(n) { return \(c) }"
+    case 3: return "// \(a) \(b) \(c) \(n)"
+    case 4: return "guard let \(a) = \(b)[\(n)] else { return nil }"
+    case 5: return "\(a).append(\(b)(\(c): \(n)))"
+    case 6: return "for \(a) in \(b) where \(a).\(c) != \(n) {"
+    default: return "return \(a)(\(b), \(c): \(n))"
+    }
+}
+
+/// A statement of at most `columns` columns: a full `codeStatement` when
+/// it fits, otherwise one of the three longest short forms that do ("}"
+/// when nothing else fits). No statement is ever cut mid-token.
+func fittingCodeStatement(_ rng: inout LCG, columns: Int) -> String {
+    let statement = codeStatement(&rng)
+    if statement.utf8.count <= columns {
+        return statement
+    }
+    let a = rng.pick(words)
+    let b = rng.pick(words)
+    let n = rng.int(0 ..< 100)
+    let shortForms: [String] = [
+        "let \(a) = \(b)(\(n))",
+        "\(a).\(b)()",
+        "let \(a) = \(n)",
+        "return \(a)",
+        "\(a) += \(n)",
+        "\(a)()",
+        "return",
+        "break",
+    ]
+    var fitting: [String] = []
+    for form in shortForms where form.utf8.count <= columns {
+        fitting.append(form)
+    }
+    if fitting.isEmpty {
+        return "}"
+    }
+    let choices = Array(fitting.prefix(3))
+    return rng.pick(choices)
+}
+
+/// `count` lowercase hex digits.
+func codeHex(_ rng: inout LCG, count: Int) -> String {
+    let digits: [Character] = Array("0123456789abcdef")
+    var text = ""
+    for _ in 0 ..< count {
+        text.append(rng.pick(digits))
+    }
+    return text
+}
+
+/// Appends whole tokens to `line` while they fit in `columns`: comment
+/// words inside a comment, chained calls after a closing parenthesis,
+/// otherwise a trailing comment opened together with its first word (so no
+/// comment is left empty). Returns whether the line now ends inside a
+/// comment.
+func extendCodeLine(_ rng: inout LCG, _ line: inout String, columns: Int, inComment: Bool) -> Bool {
+    var commenting = inComment
+    while true {
+        let token: String
+        var opensComment = false
+        if commenting {
+            token = " " + rng.pick(words)
+        } else if line.hasSuffix(")") {
+            let name = rng.pick(words)
+            let argument = rng.int(0 ..< 100)
+            token = ".\(name)(\(argument))"
+        } else {
+            token = " // " + rng.pick(words)
+            opensComment = true
+        }
+        if line.utf8.count + token.utf8.count > columns {
+            return commenting
+        }
+        line += token
+        if opensComment {
+            commenting = true
+        }
+    }
+}
+
+/// Pads `line` to exactly `columns` columns with hex digits (in a trailing
+/// comment, opened here if there is room) or, for a gap of one or two
+/// columns outside a comment, semicolons. Never leaves a trailing space.
+func padCodeLine(_ rng: inout LCG, _ line: inout String, columns: Int, inComment: Bool) {
+    let gap = columns - line.utf8.count
+    if gap <= 0 {
+        return
+    }
+    if inComment {
+        if gap == 1 {
+            line += codeHex(&rng, count: 1)
+        } else {
+            line += " " + codeHex(&rng, count: gap - 1)
+        }
+    } else if gap >= 5 {
+        line += " // " + codeHex(&rng, count: gap - 4)
+    } else if gap == 4 {
+        line += " //" + codeHex(&rng, count: 1)
+    } else if gap == 3 {
+        line += " //"
+    } else {
+        line += String(repeating: ";", count: gap)
+    }
+}
+
+/// One code line of at most `columns` columns, exactly `columns` when
+/// `exact`: up to `indent` leading spaces, a statement that fits, then
+/// whole tokens while they fit, then (if `exact`) hex padding. Printable
+/// ASCII only, never blank, never ending in a space, never cut mid-token.
+func codeLine(_ rng: inout LCG, columns: Int, indent: Int = 0, exact: Bool = false) -> String {
+    guard columns > 0 else { return "" }
+    let leading = min(indent, max(0, columns - 8))
+    let statement = fittingCodeStatement(&rng, columns: columns - leading)
+    var line = String(repeating: " ", count: leading) + statement
+    let inComment = extendCodeLine(&rng, &line, columns: columns, inComment: statement.hasPrefix("//"))
+    if exact {
+        padCodeLine(&rng, &line, columns: columns, inComment: inComment)
+    }
+    return line
+}
+
+/// `line` (ASCII) shortened to at most `columns` columns at a token
+/// boundary: everything from the last space or "." that still fits is
+/// dropped, then trailing spaces and an emptied trailing comment.
+func shortenedCodeLine(_ line: String, to columns: Int) -> String {
+    guard line.utf8.count > columns else { return line }
+    var cells: [Character] = Array(line.prefix(columns + 1))
+    while let last = cells.last, last != " ", last != "." {
+        cells.removeLast()
+    }
+    while let last = cells.last, last == " " || last == "." {
+        cells.removeLast()
+    }
+    var text = String(cells)
+    if text.hasSuffix(" //") {
+        text.removeLast(3)
+        while text.hasSuffix(" ") {
+            text.removeLast()
+        }
+    }
+    return text
+}
+
+/// A ruler of exactly `columns` characters: "." filler, ":" at every 5th
+/// column and the column number right-aligned at every 10th
+/// (`....:...10....:...20`), so a capture shows which column it is at.
+func columnRuler(_ columns: Int) -> String {
+    var cells = [Character](repeating: ".", count: columns)
+    var column = 5
+    while column <= columns {
+        cells[column - 1] = ":"
+        column += 10
+    }
+    column = 10
+    while column <= columns {
+        let digits: [Character] = Array(String(column))
+        for (offset, digit) in digits.enumerated() {
+            cells[column - digits.count + offset] = digit
+        }
+        column += 10
+    }
+    return String(cells)
+}
+
+/// The ruler as a comment line: still exactly `columns` wide, with the
+/// column numbers in place (`// .:...10....:...20`).
+func commentRuler(_ columns: Int) -> String {
+    "// " + String(columnRuler(columns).dropFirst(3))
+}
+
+/// A generated block of exactly `lineCount` lines whose widest line is
+/// exactly `columns`: the `header` line, a comment ruler (exactly
+/// `columns` wide), then code lines capped at a width drawn from
+/// `minColumns`…`columns`, on a wandering indent.
+func generatedCodeBlock(_ rng: inout LCG, header: String, lineCount: Int, columns: Int, minColumns: Int) -> String {
+    precondition(lineCount >= 2 && minColumns <= columns && header.utf16.count <= columns,
+                 "generatedCodeBlock: \(lineCount) lines x \(columns) columns cannot hold its header and ruler")
+    var lines = [header, commentRuler(columns)]
+    var depth = 0
+    while lines.count < lineCount {
+        depth = max(0, min(3, depth + rng.int(0 ..< 3) - 1))
+        let width = rng.int(minColumns ..< columns + 1)
+        lines.append(codeLine(&rng, columns: width, indent: 4 * depth))
+    }
+    return lines.joined(separator: "\n")
+}
+
+// MARK: - Fixture 10: code-parity.json
+
+enum CodeParitySpec {
+    /// CP-03, the storyboard's block: wide enough to pan by 200 pt on any
+    /// iPhone (about 1,260 pt of text), under half of the byte budget.
+    static let storyboardColumns = 120
+    /// CP-15: the E2 shape "one 300-column line among short ones".
+    static let longLineColumns = 300
+    /// CP-16 and CP-17: the width of the two budget-boundary blocks.
+    static let budgetColumns = 100
+}
+
+/// Top-level node index → node (block ids are `0.<index>`; every node maps
+/// to exactly one prepared block, because there is no table). Append new
+/// cases just before `CP-END`, never reorder.
+///
+///   0 heading CP-S1    1 CP-01 one short line (language present)
+///                      2 CP-02 8 lines under 40 columns
+///                      3 CP-03 wide block for the storyboard (6 × 120)
+///                      4 CP-04 no language attribute
+///                      5 CP-05 empty language
+///   6 heading CP-S2    7 CP-06 breakout wide      8 CP-07 breakout full-width
+///   9 heading CP-S3   10 CP-08 one blank line    11 CP-09 three blank lines
+///                     12 CP-10 leading blank line
+///                     13 CP-11 / 14 CP-12 / 15 CP-13 one, two, three trailing newlines
+///                     16 CP-14 whitespace-only line, trailing spaces on the longest line
+///  17 heading CP-S4   18 CP-15 one 300-column line (over 8,192 px wide at 3x, under at 2x)
+///                     19 CP-16 just under the canvas budget
+///                     20 CP-17 over the canvas budget (at 3x and at 2x)
+///                     21 CP-18 short block after it
+///  22 heading CP-S5   23 CP-19 tabs              24 CP-20 emoji and CJK
+///                     25 CP-21 combining marks   26 CP-22 Hebrew and Arabic
+///                     27 CP-23 `""`              28 CP-24 `"\n"`
+///  29 heading CP-S6   30 bulletList (CP-25 at 0.30.0.1), 31 panel (CP-26 at 0.31.1),
+///                     32 expand (CP-27 at 0.32.1)
+///  33 paragraph CP-END
+///
+/// Groups run from the plainest admitted text to the excluded cases:
+/// CP-S1 and CP-S2 are printable ASCII and line feeds, well inside the
+/// budget; CP-S3 is still ASCII but blank-line and trailing-newline shapes;
+/// CP-S4 is the budget boundary; CP-S5 is outside the admitted cohort
+/// (tabs, non-ASCII, no text); CP-S6 is nested code, which stays SwiftUI.
+/// No table and no media (issue #8's lazy-stack livelock stays out).
+func makeCodeParity() -> CodeFixture {
+    var rng = LCG(seed: 0x5EED_C024)
+    var blocks: [[String: Any]] = []
+    var records: [CodeBlockRecord] = []
+
+    func section(_ title: String) {
+        blocks.append(headingNode(level: 2, title))
+    }
+
+    /// Appends top-level code block `CP-<number>` and records what was
+    /// emitted. The label must be on the first non-empty line, or be the
+    /// language when the block has no text; the declared budget verdict
+    /// (default configuration, 3x) must be the measured one.
+    func code(
+        _ number: Int, _ note: String, _ text: String,
+        language: String?, breakout: String? = nil, expect: CodeBudgetVerdict = .under
+    ) {
+        let label = "CP-" + pad2(number)
+        let shape = codeTextShape(text)
+        let firstLine = text.components(separatedBy: "\n").first(where: { !$0.isEmpty }) ?? ""
+        if firstLine.isEmpty {
+            precondition(language == label, "code-parity \(label): a block without text carries its label as the language")
+        } else {
+            precondition(firstLine.contains(label), "code-parity \(label): the first non-empty line must carry the label")
+        }
+        let verdict = codeBudgetVerdict(lineCount: shape.lineCount, maxColumns: shape.maxLineUTF16)
+        precondition(verdict == expect,
+                     "code-parity \(label): declared \(expect.rawValue), measured \(verdict.rawValue); re-size it or correct CodeCanvasModel")
+        records.append(CodeBlockRecord(
+            index: blocks.count, label: label, note: note,
+            language: language, breakoutMode: breakout, shape: shape
+        ))
+        blocks.append(codeBlockNode(language: language, text: text, breakoutMode: breakout))
+    }
+
+    func joined(_ lines: [String]) -> String {
+        lines.joined(separator: "\n")
+    }
+
+    // CP-S1: printable ASCII and line feeds, no blank line, no trailing
+    // newline, far inside the budget.
+    section("CP-S1 Plain code")
+    code(1, "one short line; language present", "let answer = 42 // CP-01", language: "swift")
+    code(2, "8 lines under 40 columns", joined([
+        "// CP-02 eight short lines",
+        "struct Point {",
+        "    var x: Double",
+        "    var y: Double",
+        "    func length() -> Double {",
+        "        (x * x + y * y).squareRoot()",
+        "    }",
+        "}",
+    ]), language: "swift")
+    let wide = CodeParitySpec.storyboardColumns
+    let wideFull = codeLine(&rng, columns: wide, indent: 0, exact: true)
+    let wideSecond = codeLine(&rng, columns: 88, indent: 4, exact: true)
+    let wideThird = codeLine(&rng, columns: 104, indent: 4, exact: true)
+    let wideLast = codeLine(&rng, columns: 36, indent: 0, exact: true)
+    code(3, "wide block for the storyboard: 6 lines, widest \(wide) columns", joined([
+        "// CP-03 wide block: pan horizontally to column \(wide)",
+        commentRuler(wide),
+        wideFull,
+        wideSecond,
+        wideThird,
+        wideLast,
+    ]), language: "swift")
+    code(4, "language nil (no attrs)", joined([
+        "# CP-04 no language attribute",
+        "total = sum(values)",
+        "print(total)",
+    ]), language: nil)
+    code(5, "language empty", joined([
+        "# CP-05 empty language attribute",
+        "echo \"done\"",
+    ]), language: "")
+
+    // CP-S2: the same plain text under a breakout mark.
+    section("CP-S2 Breakout")
+    code(6, "breakout wide", joined([
+        "// CP-06 breakout wide",
+        "let columns = layout.columns(for: .wide)",
+        "render(columns)",
+    ]), language: "swift", breakout: "wide")
+    code(7, "breakout full-width", joined([
+        "// CP-07 breakout full-width",
+        "let columns = layout.columns(for: .fullWidth)",
+        "render(columns)",
+    ]), language: "swift", breakout: "full-width")
+
+    // CP-S3: blank lines, trailing newlines, whitespace. Still printable
+    // ASCII and line feeds only.
+    section("CP-S3 Blank lines and trailing newlines")
+    code(8, "one blank line in the middle",
+         "// CP-08 one blank line\nlet first = 1\n\nlet second = 2", language: "swift")
+    code(9, "three blank lines in the middle",
+         "// CP-09 three blank lines\nlet first = 1\n\n\n\nlet second = 2", language: "swift")
+    code(10, "a leading blank line (label on line 2)",
+         "\n// CP-10 leading blank line\nlet value = 3", language: "swift")
+    code(11, "one trailing newline",
+         "// CP-11 one trailing newline\nlet value = 4\n", language: "swift")
+    code(12, "two trailing newlines",
+         "// CP-12 two trailing newlines\nlet value = 5\n\n", language: "swift")
+    code(13, "three trailing newlines",
+         "// CP-13 three trailing newlines\nlet value = 6\n\n\n", language: "swift")
+    code(14, "a whitespace-only line; four trailing spaces on the longest line", joined([
+        "// CP-14 whitespace-only line",
+        "let padded = \"the longest line ends in four spaces\"    ",
+        "    ",
+        "let after = 7",
+    ]), language: "swift")
+
+    // CP-S4: the canvas budget boundary. CP-16 and CP-17 are sized by
+    // `codeBudgetVerdict`: CP-16 is the tallest block declared under the
+    // budget at this width (3x), CP-17 the shortest declared over it at
+    // both 3x and 2x. Their neighbours (CP-16, CP-18) are admitted.
+    section("CP-S4 Canvas budget")
+    let longLine = codeLine(&rng, columns: CodeParitySpec.longLineColumns, indent: 0, exact: true)
+    code(15, "one \(CodeParitySpec.longLineColumns)-column line among short ones", joined([
+        "// CP-15 one \(CodeParitySpec.longLineColumns)-column line",
+        "let short = 1",
+        longLine,
+        "let after = 2",
+    ]), language: "swift", expect: .over)
+    let budgetColumns = CodeParitySpec.budgetColumns
+    let nearLines = largestLineCountUnderBudget(columns: budgetColumns)
+    let overLines = max(
+        smallestLineCountOverBudget(columns: budgetColumns, scale: CodeCanvasModel.displayScale),
+        smallestLineCountOverBudget(columns: budgetColumns, scale: 2)
+    )
+    let nearText = generatedCodeBlock(
+        &rng, header: "// CP-16 just under the canvas budget: \(nearLines) lines x \(budgetColumns) columns",
+        lineCount: nearLines, columns: budgetColumns, minColumns: 40
+    )
+    code(16, "just under the canvas budget: the most lines declared under at \(budgetColumns) columns",
+         nearText, language: "swift")
+    let overText = generatedCodeBlock(
+        &rng, header: "// CP-17 over the canvas budget: \(overLines) lines x \(budgetColumns) columns",
+        lineCount: overLines, columns: budgetColumns, minColumns: 40
+    )
+    code(17, "over the canvas budget at 3x and 2x: the fewest lines declared over at \(budgetColumns) columns",
+         overText, language: "swift", expect: .over)
+    precondition(codeBudgetVerdict(lineCount: overLines, maxColumns: budgetColumns, scale: 2) == .over,
+                 "code-parity CP-17 must also be over budget at 2x")
+    code(18, "short block after the over-budget one",
+         "// CP-18 after the over-budget block\nlet neighbour = true", language: "swift")
+
+    // CP-S5: outside the admitted cohort (tabs, non-ASCII, no text).
+    section("CP-S5 Tabs, Unicode and empty code")
+    code(19, "leading tabs and a mid-line tab", joined([
+        "// CP-19 leading tabs and a mid-line tab",
+        "\tlet indented = 1",
+        "\t\tlet deeper = 2",
+        "let mid = 3\t// after a mid-line tab",
+    ]), language: "swift")
+    code(20, "emoji and CJK in a comment", joined([
+        "// CP-20 emoji 🚀 ✅ 👩🏽‍💻 and CJK 日本語 中文 한국어",
+        "let launched = true",
+    ]), language: "swift")
+    code(21, "combining marks", joined([
+        "// CP-21 combining marks: e\u{0301} n\u{0303} a\u{0308} o\u{0302}\u{0323}",
+        "let cafe\u{0301} = \"nai\u{0308}ve\"",
+    ]), language: "swift")
+    code(22, "Hebrew and Arabic strings", joined([
+        "// CP-22 Hebrew and Arabic strings",
+        "let hebrew = \"שלום עולם\"",
+        "let arabic = \"مرحبا بالعالم\"",
+    ]), language: "swift")
+    code(23, "empty code (no content); the label is the language", "", language: "CP-23")
+    code(24, "one newline only; the label is the language", "\n", language: "CP-24")
+
+    // CP-S6: nested code stays SwiftUI. Not recorded as top-level code.
+    // Only the code carries `CP-25`…`CP-27`; the containers' own text is
+    // labelled `CP-LIST`, `CP-PANEL`, `CP-EXPAND` and `CP-EXPAND-BODY`.
+    section("CP-S6 Nested code")
+    var notes: [String] = []
+    notes.append("0.\(blocks.count).0.1 CP-25 code inside a bullet item (its leader paragraph is 0.\(blocks.count).0.0)")
+    blocks.append(bulletListNode([
+        listItemNode([
+            paragraph([textNode("CP-LIST bullet item that holds a code block")]),
+            codeBlockNode(language: "swift", text: "// CP-25 code inside a bullet item\nlet nested = \"list\""),
+        ]),
+    ]))
+    let panelContent: [[String: Any]] = [
+        paragraph([textNode("CP-PANEL panel that holds a code block")]),
+        codeBlockNode(language: "swift", text: "// CP-26 code inside a panel\nlet nested = \"panel\""),
+    ]
+    let panelAttrs: [String: Any] = ["panelType": "info"]
+    let inPanel: [String: Any] = ["type": "panel", "attrs": panelAttrs, "content": panelContent]
+    notes.append("0.\(blocks.count).1 CP-26 code inside a panel")
+    blocks.append(inPanel)
+    let expandContent: [[String: Any]] = [
+        paragraph([textNode("CP-EXPAND-BODY paragraph inside the expand")]),
+        codeBlockNode(language: "swift", text: "// CP-27 code inside an expand\nlet nested = \"expand\""),
+    ]
+    let expandAttrs: [String: Any] = ["title": "CP-EXPAND expand that holds a code block"]
+    let inExpand: [String: Any] = ["type": "expand", "attrs": expandAttrs, "content": expandContent]
+    notes.append("0.\(blocks.count).1 CP-27 code inside an expand (collapsed at launch; its body is prepared on first expansion)")
+    blocks.append(inExpand)
+
+    blocks.append(paragraph([textNode("CP-END end of the code parity fixture")]))
+    return CodeFixture(document: doc(blocks), records: records, notes: notes)
+}
+
+// MARK: - Fixture 11: code-dense.json
+
+/// The frozen composition of code-dense. Quotas are exact (a seeded
+/// shuffle pairs them), so the line-count and drawn-width histograms are
+/// these numbers by construction.
+enum CodeDenseSpec {
+    static let blockCount = 600
+    /// Line-count buckets and quotas: 5 % one line, 40 % 3–8, 40 % 9–20,
+    /// 15 % 21–40. Uniform within a bucket.
+    static let lineBuckets: [ClosedRange<Int>] = [1 ... 1, 3 ... 8, 9 ... 20, 21 ... 40]
+    static let lineQuotas = [30, 240, 240, 90]
+    /// Width buckets (the widest line, in columns) and quotas: 55 % up to
+    /// 40, 35 % 60–120, 10 % 150–220. Uniform within a bucket.
+    static let widthBuckets: [ClosedRange<Int>] = [16 ... 40, 60 ... 120, 150 ... 220]
+    static let widthQuotas = [330, 210, 60]
+    /// Blocks deliberately left over the canvas budget: 3 % of 600.
+    static let overBudgetCount = 18
+    /// Blocks 0..<3 are pinned to 3–8 lines and at most 40 columns, so at
+    /// least two admitted blocks are on the first screen.
+    static let firstScreenBlocks = 3
+    /// Language by index: none for `i % 20 == 3` (30 blocks), empty for
+    /// `i % 20 == 13` (30 blocks), otherwise `languages[i % 6]`.
+    static let languages = ["swift", "json", "python", "sql", "bash", "kotlin"]
+}
+
+/// What happened to code-dense on the way out; printed by the emit step.
+struct CodeDenseSummary {
+    /// Blocks per [line bucket][width bucket], as drawn (before the
+    /// budget rule moves any width).
+    var drawnJoint: [[Int]] = []
+    /// Blocks whose drawn shape was declared over budget / marginal.
+    var drawnOver = 0
+    var drawnMarginal = 0
+    /// Indices deliberately left over budget.
+    var keptOver: [Int] = []
+    /// Indices the budget rule shortened, and how many lines it cut.
+    var shortenedBlocks: [Int] = []
+    var shortenedLines = 0
+}
+
+struct CodeDenseShape {
+    let lineBucket: Int
+    let widthBucket: Int
+    let lineCount: Int
+    let columns: Int
+}
+
+/// `quotas[k]` copies of bucket `k`, shuffled (Fisher–Yates on `rng`).
+func codeDenseShuffledBuckets(_ rng: inout LCG, quotas: [Int]) -> [Int] {
+    var buckets: [Int] = []
+    for (bucket, quota) in quotas.enumerated() {
+        buckets.append(contentsOf: [Int](repeating: bucket, count: quota))
+    }
+    var i = buckets.count - 1
+    while i > 0 {
+        let j = rng.int(0 ..< i + 1)
+        buckets.swapAt(i, j)
+        i -= 1
+    }
+    return buckets
+}
+
+/// Makes the first-screen blocks draw bucket `wanted`, by swapping each
+/// with the first later block that drew it. The quotas stay exact.
+func codeDensePinFirstScreen(_ buckets: inout [Int], to wanted: Int) {
+    let pinned = CodeDenseSpec.firstScreenBlocks
+    for i in 0 ..< pinned where buckets[i] != wanted {
+        var j = pinned
+        while j < buckets.count, buckets[j] != wanted {
+            j += 1
+        }
+        precondition(j < buckets.count, "code-dense: no later block drew bucket \(wanted)")
+        buckets.swapAt(i, j)
+    }
+}
+
+/// Pass 1: every block's shape, before any text is drawn — so the joint
+/// distribution depends on the seed and the quotas only, never on the
+/// text synthesiser.
+func codeDenseShapes(_ rng: inout LCG) -> [CodeDenseShape] {
+    var lineBuckets = codeDenseShuffledBuckets(&rng, quotas: CodeDenseSpec.lineQuotas)
+    var widthBuckets = codeDenseShuffledBuckets(&rng, quotas: CodeDenseSpec.widthQuotas)
+    precondition(lineBuckets.count == CodeDenseSpec.blockCount && widthBuckets.count == CodeDenseSpec.blockCount,
+                 "code-dense: quotas must add up to the block count")
+    codeDensePinFirstScreen(&lineBuckets, to: 1)
+    codeDensePinFirstScreen(&widthBuckets, to: 0)
+    var shapes: [CodeDenseShape] = []
+    shapes.reserveCapacity(CodeDenseSpec.blockCount)
+    for i in 0 ..< CodeDenseSpec.blockCount {
+        let lineRange = CodeDenseSpec.lineBuckets[lineBuckets[i]]
+        let widthRange = CodeDenseSpec.widthBuckets[widthBuckets[i]]
+        let lineCount = rng.int(lineRange.lowerBound ..< lineRange.upperBound + 1)
+        let columns = rng.int(widthRange.lowerBound ..< widthRange.upperBound + 1)
+        shapes.append(CodeDenseShape(
+            lineBucket: lineBuckets[i], widthBucket: widthBuckets[i],
+            lineCount: lineCount, columns: columns
+        ))
+    }
+    return shapes
+}
+
+/// Pass 2: the lines of block `index`. Line 0 starts with `// CD-<iii>`
+/// (and is exactly that unless the block has one line, which continues as
+/// a comment to the block's width). One later line, drawn at random, is
+/// exactly `shape.columns` wide; the others are capped at a width drawn
+/// from 12…64 (never above the block's width), one in six of them from the
+/// upper half of the block's width instead.
+func codeDenseLines(_ rng: inout LCG, index: Int, shape: CodeDenseShape) -> [String] {
+    let sentinel = "// CD-" + pad3(index)
+    if shape.lineCount == 1 {
+        var line = sentinel
+        _ = extendCodeLine(&rng, &line, columns: shape.columns, inComment: true)
+        padCodeLine(&rng, &line, columns: shape.columns, inComment: true)
+        return [line]
+    }
+    var lines = [sentinel]
+    let widestRow = rng.int(1 ..< shape.lineCount)
+    var depth = 0
+    for row in 1 ..< shape.lineCount {
+        depth = max(0, min(3, depth + rng.int(0 ..< 3) - 1))
+        let columns: Int
+        if row == widestRow {
+            columns = shape.columns
+        } else if rng.oneIn(6) {
+            columns = rng.int(shape.columns / 2 ..< shape.columns + 1)
+        } else {
+            let typical = min(shape.columns, 64)
+            columns = rng.int(min(12, typical) ..< typical + 1)
+        }
+        lines.append(codeLine(&rng, columns: columns, indent: 4 * depth, exact: row == widestRow))
+    }
+    return lines
+}
+
+/// The frozen budget rule (part of the generator, not a tuning pass):
+/// while the block is not declared under budget, shorten its widest line
+/// (at a token boundary) to at most the widest length that is. The TRUE
+/// maximum is recomputed across all lines after every cut, so a second
+/// line that was nearly as wide is shortened too. Returns how many lines
+/// were shortened.
+func shortenCodeLinesToBudget(_ lines: inout [String]) -> Int {
+    var cuts = 0
+    while true {
+        var widest = 0
+        var widestIndex = 0
+        for (index, line) in lines.enumerated() where line.utf16.count > widest {
+            widest = line.utf16.count
+            widestIndex = index
+        }
+        if codeBudgetVerdict(lineCount: lines.count, maxColumns: widest) == .under {
+            return cuts
+        }
+        let target = largestColumnsUnderBudget(lineCount: lines.count)
+        precondition(target >= 16 && target < widest,
+                     "code-dense: \(lines.count) lines cannot be brought under budget by shortening (target \(target))")
+        lines[widestIndex] = shortenedCodeLine(lines[widestIndex], to: target)
+        cuts += 1
+    }
+}
+
+func codeDenseLanguage(index: Int) -> String? {
+    switch index % 20 {
+    case 3: return nil
+    case 13: return ""
+    default: return CodeDenseSpec.languages[index % CodeDenseSpec.languages.count]
+    }
+}
+
+/// A breakout mark on `i % 20 == 7` (30 blocks, 5 %): `wide` in even
+/// twenties, `full-width` in odd ones (15 each).
+func codeDenseBreakout(index: Int) -> String? {
+    guard index % 20 == 7 else { return nil }
+    return (index / 20) % 2 == 0 ? "wide" : "full-width"
+}
+
+/// 600 top-level code blocks and nothing else. Three passes on one seed:
+/// shapes, then text, then the budget rule — which keeps
+/// `CodeDenseSpec.overBudgetCount` of the blocks drawn over budget (evenly
+/// spaced through them, in index order) and shortens every other block
+/// that is not declared under budget.
+func makeCodeDense(summary: inout CodeDenseSummary) -> CodeFixture {
+    var rng = LCG(seed: 0x5EED_C600)
+    let shapes = codeDenseShapes(&rng)
+
+    var blockLines: [[String]] = []
+    blockLines.reserveCapacity(shapes.count)
+    for (index, shape) in shapes.enumerated() {
+        blockLines.append(codeDenseLines(&rng, index: index, shape: shape))
+    }
+
+    summary.drawnJoint = [[Int]](
+        repeating: [Int](repeating: 0, count: CodeDenseSpec.widthBuckets.count),
+        count: CodeDenseSpec.lineBuckets.count
+    )
+    var drawnOver: [Int] = []
+    for (index, shape) in shapes.enumerated() {
+        summary.drawnJoint[shape.lineBucket][shape.widthBucket] += 1
+        // Measured on the text, not taken from the drawn shape.
+        let measured = codeTextShape(blockLines[index].joined(separator: "\n"))
+        precondition(measured.lineCount == shape.lineCount && measured.maxLineUTF16 == shape.columns,
+                     "code-dense CD-\(pad3(index)): emitted text does not have its drawn shape")
+        switch codeBudgetVerdict(lineCount: measured.lineCount, maxColumns: measured.maxLineUTF16) {
+        case .over: drawnOver.append(index)
+        case .marginal: summary.drawnMarginal += 1
+        case .under: break
+        }
+    }
+    summary.drawnOver = drawnOver.count
+    precondition(drawnOver.count >= CodeDenseSpec.overBudgetCount,
+                 "code-dense: only \(drawnOver.count) blocks drew over budget; \(CodeDenseSpec.overBudgetCount) must be kept")
+    var keptOver = Set<Int>()
+    for k in 0 ..< CodeDenseSpec.overBudgetCount {
+        keptOver.insert(drawnOver[k * drawnOver.count / CodeDenseSpec.overBudgetCount])
+    }
+    precondition(keptOver.count == CodeDenseSpec.overBudgetCount, "code-dense: kept over-budget blocks must be distinct")
+    summary.keptOver = keptOver.sorted()
+
+    var blocks: [[String: Any]] = []
+    var records: [CodeBlockRecord] = []
+    blocks.reserveCapacity(shapes.count)
+    records.reserveCapacity(shapes.count)
+    for index in 0 ..< blockLines.count {
+        var lines = blockLines[index]
+        let kept = keptOver.contains(index)
+        if !kept {
+            let cuts = shortenCodeLinesToBudget(&lines)
+            if cuts > 0 {
+                summary.shortenedBlocks.append(index)
+                summary.shortenedLines += cuts
+            }
+        }
+        let text = lines.joined(separator: "\n")
+        let shape = codeTextShape(text)
+        let verdict = codeBudgetVerdict(lineCount: shape.lineCount, maxColumns: shape.maxLineUTF16)
+        let label = "CD-" + pad3(index)
+        // The eligible-code contract of this fixture: admitted-cohort text
+        // and no shape a parity rule could exclude (no blank or
+        // whitespace-only line, no trailing space, no trailing newline).
+        precondition(shape.isPrintableASCIIAndLF && shape.trailingNewlineCount == 0,
+                     "code-dense \(label): text must be printable ASCII and line feeds with no trailing newline")
+        precondition(!lines.contains(where: { $0.isEmpty || $0.hasSuffix(" ") }),
+                     "code-dense \(label): no line may be blank or end in a space")
+        precondition(lines[0].hasPrefix("// " + label), "code-dense \(label): the first line must start with the sentinel")
+        precondition(verdict == (kept ? CodeBudgetVerdict.over : CodeBudgetVerdict.under),
+                     "code-dense \(label): measured \(verdict.rawValue) after the budget rule")
+        let language = codeDenseLanguage(index: index)
+        let breakout = codeDenseBreakout(index: index)
+        records.append(CodeBlockRecord(
+            index: index, label: label, note: kept ? "kept over budget" : "",
+            language: language, breakoutMode: breakout, shape: shape
+        ))
+        blocks.append(codeBlockNode(language: language, text: text, breakoutMode: breakout))
+    }
+    return CodeFixture(document: doc(blocks), records: records)
+}
+
+// MARK: - Fixture 12: code-tall.json
+
+enum CodeTallSpec {
+    /// Width of the two large blocks.
+    static let columns = 60
+    /// CT-TALL: over the height limit and the byte budget at any scale.
+    static let tallLineCount = 400
+}
+
+/// Three top-level code blocks and nothing else:
+///   0.0 CT-TALL  400 lines × 60 columns, over budget (SwiftUI in both
+///                arms). Every 50th line is a `// CT-L<iii>` marker.
+///   0.1 CT-NEAR  60 columns × the most lines declared under budget: the
+///                largest eligible canvas of the default configuration.
+///   0.2 CT-END   a short closing block, so the autoscroll's last leg
+///                crosses CT-NEAR.
+func makeCodeTall() -> CodeFixture {
+    var rng = LCG(seed: 0x5EED_C400)
+    let columns = CodeTallSpec.columns
+    let tallLineCount = CodeTallSpec.tallLineCount
+    var blocks: [[String: Any]] = []
+    var records: [CodeBlockRecord] = []
+
+    func code(_ label: String, _ note: String, _ text: String, expect: CodeBudgetVerdict) {
+        let shape = codeTextShape(text)
+        let verdict = codeBudgetVerdict(lineCount: shape.lineCount, maxColumns: shape.maxLineUTF16)
+        precondition(shape.isPrintableASCIIAndLF && text.hasPrefix("// " + label),
+                     "code-tall \(label): text must be printable ASCII and line feeds and start with its label")
+        precondition(verdict == expect,
+                     "code-tall \(label): declared \(expect.rawValue), measured \(verdict.rawValue); re-size it or correct CodeCanvasModel")
+        records.append(CodeBlockRecord(
+            index: blocks.count, label: label, note: note,
+            language: "swift", breakoutMode: nil, shape: shape
+        ))
+        blocks.append(codeBlockNode(language: "swift", text: text))
+    }
+
+    var tall = ["// CT-TALL \(tallLineCount) lines x \(columns) columns: over the budget"]
+    var depth = 0
+    for row in 2 ... tallLineCount {
+        if row % 50 == 0 {
+            tall.append("// CT-L" + pad3(row) + " line \(row) of \(tallLineCount)")
+            continue
+        }
+        depth = max(0, min(3, depth + rng.int(0 ..< 3) - 1))
+        // Every tenth line is exactly `columns` wide; the rest are capped
+        // at a width drawn from 20…columns.
+        let exact = row % 10 == 5
+        let width = exact ? columns : rng.int(20 ..< columns + 1)
+        tall.append(codeLine(&rng, columns: width, indent: 4 * depth, exact: exact))
+    }
+    let tallText = tall.joined(separator: "\n")
+    precondition(codeTextShape(tallText).maxLineUTF16 == columns && tall.count == tallLineCount,
+                 "code-tall CT-TALL must be exactly \(tallLineCount) lines x \(columns) columns")
+    code("CT-TALL", "\(tallLineCount) lines x \(columns) columns, over budget", tallText, expect: .over)
+
+    let nearLines = largestLineCountUnderBudget(columns: columns)
+    let nearText = generatedCodeBlock(
+        &rng, header: "// CT-NEAR just under budget: \(nearLines) lines x \(columns) columns",
+        lineCount: nearLines, columns: columns, minColumns: 20
+    )
+    code("CT-NEAR", "the most lines declared under budget at \(columns) columns", nearText, expect: .under)
+
+    code("CT-END", "short closing block", "// CT-END closing block\nlet done = true", expect: .under)
+    return CodeFixture(document: doc(blocks), records: records)
+}
+
 // MARK: - Emit
 
 let repoRoot = URL(fileURLWithPath: #filePath)
@@ -1437,6 +2477,10 @@ try FileManager.default.createDirectory(at: fixturesDir, withIntermediateDirecto
 let stress5K = makeStress5K()
 var listDenseTally = ListDenseTally()
 let listDense = makeListDense(tally: &listDenseTally)
+let codeParity = makeCodeParity()
+var codeDenseSummary = CodeDenseSummary()
+let codeDense = makeCodeDense(summary: &codeDenseSummary)
+let codeTall = makeCodeTall()
 let fixtures: [(name: String, document: [String: Any])] = [
     ("stress-5k.json", stress5K),
     ("stress-1k.json", makeStress1K(from: stress5K)),
@@ -1448,6 +2492,9 @@ let fixtures: [(name: String, document: [String: Any])] = [
     ("list-dense.json", listDense),
     ("list-tall.json", makeListTall()),
     ("lists-links.json", makeListsLinks()),
+    ("code-parity.json", codeParity.document),
+    ("code-dense.json", codeDense.document),
+    ("code-tall.json", codeTall.document),
 ]
 
 for (name, document) in fixtures {
@@ -1469,3 +2516,220 @@ print("  leaders: \(sortedTally(listDenseTally.leaders))")
 print("  extra paragraphs: \(sortedTally(listDenseTally.extraParagraphs))")
 print("  continuation paragraphs: \(sortedTally(listDenseTally.continuationParagraphs))")
 print("  trailing headings: \(listDenseTally.trailingHeadings)")
+
+// MARK: - Code fixture summaries
+
+/// `numerator / denominator` with `places` decimals, rounded half up
+/// (integer arithmetic: locale-free).
+func fixedDecimal(_ numerator: Int, _ denominator: Int, places: Int) -> String {
+    var scale = 1
+    for _ in 0 ..< places {
+        scale *= 10
+    }
+    let scaled = (2 * numerator * scale + denominator) / (2 * denominator)
+    guard places > 0 else { return String(scaled) }
+    let whole = String(scaled / scale)
+    let fraction = String(scaled % scale)
+    let padding = String(repeating: "0", count: places - fraction.count)
+    return "\(whole).\(padding)\(fraction)"
+}
+
+func codeLanguageLabel(_ language: String?) -> String {
+    guard let language else { return "nil" }
+    return language.isEmpty ? "empty" : language
+}
+
+/// Where a block's text stands against the admitted cohort's content rule.
+func codeCohortLabel(_ shape: CodeTextShape) -> String {
+    if shape.isEmpty { return "empty" }
+    if shape.isAllNewlines { return "newlines-only" }
+    if shape.isPrintableASCIIAndLF { return "ascii+lf" }
+    var reasons: [String] = []
+    if shape.hasTabs { reasons.append("tabs") }
+    if shape.hasNonASCII { reasons.append("non-ascii") }
+    if reasons.isEmpty { reasons.append("control") }
+    return reasons.joined(separator: "+")
+}
+
+func codeVerdictLabel(_ shape: CodeTextShape, scale: Int) -> String {
+    codeBudgetVerdict(lineCount: shape.lineCount, maxColumns: shape.maxLineUTF16, scale: scale).rawValue
+}
+
+/// The bound at the documented metrics (no margin), for the record.
+func codeCanvasLabel(_ shape: CodeTextShape, scale: Int) -> String {
+    let estimate = codeCanvasEstimate(lineCount: shape.lineCount, maxColumns: shape.maxLineUTF16, scale: scale)
+    let mebibytes = fixedDecimal(estimate.bytes, 1_048_576, places: 2)
+    return "\(estimate.widthPixels)x\(estimate.heightPixels)px=\(mebibytes)MiB"
+}
+
+func codeRangeName(_ range: ClosedRange<Int>) -> String {
+    if range.lowerBound == range.upperBound {
+        return String(range.lowerBound)
+    }
+    return "\(range.lowerBound)-\(range.upperBound)"
+}
+
+/// `sum(19 x lines + 28)`: the autoscroll estimator's height of these
+/// code blocks, in points (`BlockHeightEstimator`, AutoScroller.swift).
+func codeEstimatorPoints(_ records: [CodeBlockRecord]) -> Int {
+    var points = 0
+    for record in records {
+        points += 19 * record.shape.lineCount + 28
+    }
+    return points
+}
+
+func codeHistogram(_ values: [Int], bins: [ClosedRange<Int>]) -> String {
+    var parts: [String] = []
+    var counted = 0
+    for bin in bins {
+        var count = 0
+        for value in values where bin.contains(value) {
+            count += 1
+        }
+        counted += count
+        let name = codeRangeName(bin)
+        parts.append("\(name)=\(count)")
+    }
+    let other = values.count - counted
+    parts.append("other=\(other)")
+    return parts.joined(separator: " ")
+}
+
+func printCodeBlockTable(_ title: String, _ fixture: CodeFixture) {
+    print(title)
+    let scale = CodeCanvasModel.displayScale
+    for record in fixture.records {
+        let shape = record.shape
+        let language = codeLanguageLabel(record.language)
+        let breakout = record.breakoutMode ?? "-"
+        let cohort = codeCohortLabel(shape)
+        let verdict = codeVerdictLabel(shape, scale: scale)
+        let verdict2x = codeVerdictLabel(shape, scale: 2)
+        let canvas = codeCanvasLabel(shape, scale: scale)
+        var fields: [String] = []
+        fields.append("0.\(record.index)")
+        fields.append(record.label)
+        fields.append("lines=\(shape.lineCount)")
+        fields.append("cols=\(shape.maxLineUTF16)")
+        fields.append("trailingLF=\(shape.trailingNewlineCount)")
+        fields.append("lang=\(language)")
+        fields.append("breakout=\(breakout)")
+        fields.append("cohort=\(cohort)")
+        fields.append("budget=\(verdict)")
+        fields.append("budget2x=\(verdict2x)")
+        fields.append("bound=\(canvas)")
+        if !record.note.isEmpty {
+            fields.append(" # \(record.note)")
+        }
+        let row = fields.joined(separator: " ")
+        print("  \(row)")
+    }
+    for note in fixture.notes {
+        print("  nested: \(note)")
+    }
+    let points = codeEstimatorPoints(fixture.records)
+    let seconds = fixedDecimal(points, 1_200, places: 1)
+    print("  top-level code blocks: \(fixture.records.count); estimator height of the code blocks: \(points) pt = \(seconds) s at 1,200 pt/s")
+}
+
+func printCodeDenseSummary(_ fixture: CodeFixture, _ summary: CodeDenseSummary) {
+    let records = fixture.records
+    let scale = CodeCanvasModel.displayScale
+    let overName = CodeBudgetVerdict.over.rawValue
+    var lineCounts: [Int] = []
+    var widths: [Int] = []
+    var totalLines = 0
+    var totalUnits = 0
+    var languages: [String: Int] = [:]
+    var breakouts: [String: Int] = [:]
+    var scale2: [String: Int] = [:]
+    var overLabels: [String] = []
+    var overAt2x: [String] = []
+    for record in records {
+        let shape = record.shape
+        lineCounts.append(shape.lineCount)
+        widths.append(shape.maxLineUTF16)
+        totalLines += shape.lineCount
+        totalUnits += shape.utf16Count
+        languages[codeLanguageLabel(record.language), default: 0] += 1
+        breakouts[record.breakoutMode ?? "none", default: 0] += 1
+        let verdict2x = codeVerdictLabel(shape, scale: 2)
+        scale2[verdict2x, default: 0] += 1
+        if verdict2x == overName {
+            overAt2x.append(record.label)
+        }
+        if codeVerdictLabel(shape, scale: scale) == overName {
+            overLabels.append("\(record.label)(\(shape.lineCount)x\(shape.maxLineUTF16))")
+        }
+    }
+    let blockCount = records.count
+    let points = codeEstimatorPoints(records)
+    var legPoints = points
+    if let last = records.last {
+        legPoints -= 19 * last.shape.lineCount + 28
+    }
+    var joint: [String] = []
+    for (bucket, row) in summary.drawnJoint.enumerated() {
+        let name = codeRangeName(CodeDenseSpec.lineBuckets[bucket])
+        let counts = row.map { String($0) }.joined(separator: "/")
+        joint.append("\(name) lines: \(counts)")
+    }
+    var widthQuotas: [String] = []
+    for (bucket, quota) in CodeDenseSpec.widthQuotas.enumerated() {
+        let name = codeRangeName(CodeDenseSpec.widthBuckets[bucket])
+        widthQuotas.append("\(name)=\(quota)")
+    }
+    var firstScreen: [String] = []
+    for record in records.prefix(CodeDenseSpec.firstScreenBlocks) {
+        let verdict = codeVerdictLabel(record.shape, scale: scale)
+        firstScreen.append("\(record.label) \(record.shape.lineCount)x\(record.shape.maxLineUTF16) \(verdict)")
+    }
+    let meanLines = fixedDecimal(totalLines, max(blockCount, 1), places: 2)
+    let seconds = fixedDecimal(points, 1_200, places: 1)
+    let legSeconds = fixedDecimal(legPoints, 1_200, places: 1)
+    let lineHistogram = codeHistogram(lineCounts, bins: CodeDenseSpec.lineBuckets)
+    let emittedBins: [ClosedRange<Int>] = [1 ... 15, 16 ... 40, 41 ... 59, 60 ... 120, 121 ... 149, 150 ... 220]
+    let widthHistogram = codeHistogram(widths, bins: emittedBins)
+    let widthQuotaLine = widthQuotas.joined(separator: " ")
+    let jointLine = joint.joined(separator: "; ")
+    let shortenedLine = summary.shortenedBlocks.map { "CD-" + pad3($0) }.joined(separator: " ")
+    let overShare = fixedDecimal(100 * overLabels.count, max(blockCount, 1), places: 1)
+    let overLine = overLabels.joined(separator: " ")
+    let over2xLine = overAt2x.isEmpty ? "none" : overAt2x.joined(separator: " ")
+    let scale2Line = sortedTally(scale2)
+    let languageLine = sortedTally(languages)
+    let breakoutLine = sortedTally(breakouts)
+    let firstScreenLine = firstScreen.joined(separator: ", ")
+
+    print("code-dense summary (emitted text measured by the generator, not preparer output):")
+    print("  blocks: \(blockCount), all top-level code blocks; lines: \(totalLines), mean \(meanLines); UTF-16 units: \(totalUnits)")
+    print("  autoscroll estimate: sum(19 x lines + 28) = \(points) pt = \(seconds) s at 1,200 pt/s (\(legSeconds) s of scroll legs: the last block is only a target)")
+    print("  line counts (LF + 1): \(lineHistogram)")
+    print("  widths drawn (quotas; widest line in columns): \(widthQuotaLine)")
+    print("  widths emitted (true widest line, after the budget rule): \(widthHistogram)")
+    print("  drawn pairs, by width bucket in that order: \(jointLine)")
+    print("  budget rule: drawn over=\(summary.drawnOver) marginal=\(summary.drawnMarginal); kept over=\(summary.keptOver.count); shortened blocks=\(summary.shortenedBlocks.count) (lines cut=\(summary.shortenedLines))")
+    print("  shortened: \(shortenedLine)")
+    print("  declared over budget (\(scale)x, default size): \(overLabels.count) of \(blockCount) = \(overShare) %: \(overLine)")
+    print("  at 2x, default size: \(scale2Line); over: \(over2xLine)")
+    print("  language: \(languageLine) (nil: i % 20 == 3; empty: i % 20 == 13)")
+    print("  breakout: \(breakoutLine) (i % 20 == 7; wide in even twenties)")
+    print("  first screen: \(firstScreenLine)")
+}
+
+func printCodeCanvasModel() {
+    let advance = fixedDecimal(CodeCanvasModel.advanceMilliPoints, 1_000, places: 3)
+    let lineHeight = fixedDecimal(CodeCanvasModel.lineHeightMilliPoints, 1_000, places: 3)
+    let rounding = fixedDecimal(CodeCanvasModel.roundingReserveMilliPoints, 1_000, places: 1)
+    let margin = fixedDecimal(CodeCanvasModel.metricMarginPermille, 10, places: 1)
+    print("code canvas model (CodeCanvasModel: documented constants for the default configuration, not measurements):")
+    print("  advance \(advance) pt, line height \(lineHeight) pt, scale \(CodeCanvasModel.displayScale)x; caps \(CodeCanvasModel.maximumDimensionPixels) px per dimension and \(CodeCanvasModel.maximumBytes) bytes")
+    print("  bound = (ceil(cols x advance x scale) + \(CodeCanvasModel.widthReservePixels)) x ceil(((lines + \(CodeCanvasModel.inkReserveLines)) x lineHeight + \(rounding)) x scale) px, x \(CodeCanvasModel.bytesPerPixel) bytes")
+    print("  under = within the caps with both metrics \(margin) % larger; over = past a cap with both \(margin) % smaller")
+}
+
+printCodeCanvasModel()
+printCodeBlockTable("code-parity top-level code blocks (id, label, lines = LF + 1, cols = widest line in UTF-16 units):", codeParity)
+printCodeDenseSummary(codeDense, codeDenseSummary)
+printCodeBlockTable("code-tall blocks:", codeTall)
