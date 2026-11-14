@@ -763,8 +763,12 @@ struct TextKit2CodeFallbackTests {
         // metrics.
         let bold = try #require(TextKit2CodeMetrics.metrics(for: TK2CodeLogic.mono, category: .large, legibilityWeight: .bold))
         let boldColumns = Self.longestAdmittedLine(bold, scale: scale)
-        #expect(Self.fits(TK2CodeLogic.stamped(String(repeating: "x", count: boldColumns)), .large, weight: .bold, scale: scale))
-        #expect(!Self.fits(TK2CodeLogic.stamped(String(repeating: "x", count: boldColumns + 1)), .large, weight: .bold, scale: scale))
+        // `LegibilityWeight.bold`, not `.bold`: with the bare member the
+        // macro's four-argument call resolves to its optional-result overload
+        // with a `Void` result, so the `Bool` is discarded and the check
+        // always passes.
+        #expect(Self.fits(TK2CodeLogic.stamped(String(repeating: "x", count: boldColumns)), .large, weight: LegibilityWeight.bold, scale: scale))
+        #expect(!Self.fits(TK2CodeLogic.stamped(String(repeating: "x", count: boldColumns + 1)), .large, weight: LegibilityWeight.bold, scale: scale))
     }
 
     @Test("hosted: the code row leaves at a text size that needs too large a canvas and returns at one that fits")
