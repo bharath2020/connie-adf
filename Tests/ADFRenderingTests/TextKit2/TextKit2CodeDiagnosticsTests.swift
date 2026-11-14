@@ -20,9 +20,11 @@ struct TK2CodeCoveragePin: Sendable {
     let fallbackTextLeaves: Int
 }
 
-/// The pins of a fixture that is not generated yet: every value is a
-/// TODO(lead), to be counted by hand from the JSON once it exists
-/// (`TextKit2CodeCoverageTests.toFill`).
+/// The pins of one of PR 3's generated code fixtures, counted from its JSON
+/// by a standalone script outside the project's code (Python, `json.load`;
+/// the shape, content verdict and canvas bound re-derived from their
+/// documented rules, the bound at SF Mono's font-file metrics), not by the
+/// coverage walk.
 struct TK2CodeNewFixturePins {
     /// Top-level nodes (each prepares to one top-level block).
     var blocks: Int
@@ -167,16 +169,9 @@ struct TextKit2CodeCoverageTests {
         #endif
     }
 
-    // MARK: The three new fixtures (TODO(lead))
+    // MARK: The three new fixtures
 
-    /// A pin still to be counted by hand. No count equals it, so a test
-    /// enabled before its pins are filled in fails instead of passing.
-    nonisolated static let toFill = -1_000_000
-
-    /// The same for a set of block ids.
-    nonisolated static let idsToFill: Set<String> = ["TODO(lead)"]
-
-    /// The checks a new fixture's pins feed, once the fixture exists.
+    /// The checks a new fixture's pins feed.
     static func check(_ name: String, _ pins: TK2CodeNewFixturePins) async throws {
         let blocks = try await TextKit2ListCoverageTests.blocks(name)
         let coverage = ADFTextRenderer.textKit2Coverage(of: blocks)
@@ -205,36 +200,29 @@ struct TextKit2CodeCoverageTests {
         #endif
     }
 
-    @Test("code-parity: code pins (TODO(lead): disabled until the fixture is generated and counted by hand)",
-          .disabled("TODO(lead): Fixtures/code-parity.json is not generated yet. Generate it, fill every TODO(lead) pin in from a hand count of the JSON, then remove this trait."))
+    @Test("code-parity: code pins")
     func codeParityPins() async throws {
-        // The predictions quoted are fixture-notes section 5's, from the
-        // generator's Python port: a cross-check for the hand count, not a
-        // substitute for it.
+        // Counted from the JSON; each agrees with fixture-notes section 5.
         try await Self.check("code-parity", TK2CodeNewFixturePins(
-            blocks: Self.toFill,              // TODO(lead): top-level nodes of code-parity.json (predicted 34)
-            codeBlocks: Self.toFill,          // TODO(lead): top-level codeBlock nodes (predicted 24)
-            eligible: Self.toFill,            // TODO(lead): eligibleCodeRoots from iOS 26 (predicted 18, CP-01 to CP-18)
-            eligibleBeforeIOS26: Self.toFill, // TODO(lead): the same without the blocks ending in two or more line feeds (predicted 16: not CP-12, CP-13)
-            admittedAt3x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 3x (predicted 16: not CP-15, CP-17)
-            admittedAt2x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 2x (predicted 17: not CP-17)
-            nestedCode: Self.toFill           // TODO(lead): code blocks prepared inside the list item and the panel (predicted 2; the expand's is not prepared)
+            blocks: 34,              // top-level nodes
+            codeBlocks: 24,          // top-level codeBlock nodes
+            eligible: 18,            // eligibleCodeRoots from iOS 26: CP-01 to CP-18
+            eligibleBeforeIOS26: 16, // the same without the blocks ending in two or more line feeds (CP-12, CP-13)
+            admittedAt3x: 16,        // codeAdmitted at Large on 3x: not CP-15 (9,461 px wide), CP-17
+            admittedAt2x: 17,        // codeAdmitted at Large on 2x: not CP-17
+            nestedCode: 2            // code in the list item (0.30.0.1) and the panel (0.31.1); the expand's is not prepared
         ))
     }
 
-    @Test("code-parity: which blocks fall back by content, and which the canvas gates (TODO(lead): disabled until the fixture is generated and read by hand)",
-          .disabled("TODO(lead): Fixtures/code-parity.json is not generated yet. Generate it, fill every TODO(lead) id set in from a hand read of the JSON, then remove this trait."))
+    @Test("code-parity: which blocks fall back by content, and which the canvas gates")
     func codeParityBlocks() async throws {
-        // TODO(lead): the block ids (`0.<index>`) of each kind. Predicted in
-        // fixture-notes section 5: tabs 0.23; non-ASCII 0.24, 0.25, 0.26;
-        // empty or line feeds only 0.27, 0.28; two or more trailing line
-        // feeds 0.14, 0.15; over the canvas at 3x 0.18, 0.20; at 2x 0.20.
-        let tabs = Self.idsToFill                 // TODO(lead): blocks with a horizontal tab
-        let nonASCII = Self.idsToFill             // TODO(lead): blocks with a scalar above U+007F
-        let empty = Self.idsToFill                // TODO(lead): blocks with no text, or line feeds only
-        let trailingLineFeeds = Self.idsToFill    // TODO(lead): blocks ending in two or more line feeds
-        let overCanvasAt3x = Self.idsToFill       // TODO(lead): eligible blocks gated at Large on 3x
-        let overCanvasAt2x = Self.idsToFill       // TODO(lead): eligible blocks gated at Large on 2x
+        // The block ids (`0.<index>`) of each kind, read from the JSON.
+        let tabs: Set<String> = ["0.23"]                       // CP-19: a horizontal tab
+        let nonASCII: Set<String> = ["0.24", "0.25", "0.26"]   // CP-20 to CP-22: a scalar above U+007F
+        let empty: Set<String> = ["0.27", "0.28"]              // CP-23 (no text), CP-24 (one line feed)
+        let trailingLineFeeds: Set<String> = ["0.14", "0.15"]  // CP-12, CP-13: two and three trailing line feeds
+        let overCanvasAt3x: Set<String> = ["0.18", "0.20"]     // CP-15 (width cap), CP-17
+        let overCanvasAt2x: Set<String> = ["0.20"]             // CP-17
 
         let blocks = try await TextKit2ListCoverageTests.blocks("code-parity")
         var reasons: [TextKit2Eligibility.Fallback: Set<String>] = [:]
@@ -264,34 +252,37 @@ struct TextKit2CodeCoverageTests {
         #endif
     }
 
-    @Test("code-dense: code pins (TODO(lead): disabled until the fixture is generated and counted by hand)",
-          .disabled("TODO(lead): Fixtures/code-dense.json is not generated yet. Generate it, fill every TODO(lead) pin in from a hand count of the JSON, then remove this trait."))
+    @Test("code-dense: code pins")
     func codeDensePins() async throws {
-        // Predictions: fixture-notes section 6 (the same for the three
-        // versions of the lighten ladder, but for the 2x count).
+        // Counted from the JSON (lighten ladder version 1); each agrees with
+        // fixture-notes section 6.
         try await Self.check("code-dense", TK2CodeNewFixturePins(
-            blocks: Self.toFill,              // TODO(lead): top-level nodes of code-dense.json (predicted 600)
-            codeBlocks: Self.toFill,          // TODO(lead): top-level codeBlock nodes (predicted 600)
-            eligible: Self.toFill,            // TODO(lead): eligibleCodeRoots (predicted 600: printable ASCII and LF, no trailing line feed)
-            eligibleBeforeIOS26: Self.toFill, // TODO(lead): the same before iOS 26 (predicted 600)
-            admittedAt3x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 3x (predicted 582: 18 kept over the budget)
-            admittedAt2x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 2x (predicted 596 for versions 1 and 2, 600 for version 3)
-            nestedCode: Self.toFill           // TODO(lead): nested code blocks (predicted 0)
+            blocks: 600,              // top-level nodes
+            codeBlocks: 600,          // top-level codeBlock nodes
+            eligible: 600,            // eligibleCodeRoots: printable ASCII and LF, no trailing line feed
+            eligibleBeforeIOS26: 600, // the same before iOS 26
+            admittedAt3x: 582,        // codeAdmitted at Large on 3x: the 18 blocks kept over the budget are gated
+            // codeAdmitted at Large on 2x: CD-005, CD-374, CD-534 and CD-271
+            // are gated. CD-271 (21 lines x 214 columns, 16.10 MiB at the
+            // font-file metrics) is the one block inside the generator's 3 %
+            // metric band. If a run admits it (597), the measured metrics are
+            // below the font file's: re-pin from the run, not from this count.
+            admittedAt2x: 596,
+            nestedCode: 0             // no nested code
         ))
     }
 
-    @Test("code-tall: code pins (TODO(lead): disabled until the fixture is generated and counted by hand)",
-          .disabled("TODO(lead): Fixtures/code-tall.json is not generated yet. Generate it, fill every TODO(lead) pin in from a hand count of the JSON, then remove this trait."))
+    @Test("code-tall: code pins")
     func codeTallPins() async throws {
-        // Predictions: fixture-notes section 7.
+        // Counted from the JSON; each agrees with fixture-notes section 7.
         try await Self.check("code-tall", TK2CodeNewFixturePins(
-            blocks: Self.toFill,              // TODO(lead): top-level nodes of code-tall.json (predicted 12: 11 code blocks and the CT-SEQ heading)
-            codeBlocks: Self.toFill,          // TODO(lead): top-level codeBlock nodes (predicted 11: CT-TALL, CT-NEAR, CT-END, CT-SEQ-1 to CT-SEQ-8)
-            eligible: Self.toFill,            // TODO(lead): eligibleCodeRoots (predicted 11)
-            eligibleBeforeIOS26: Self.toFill, // TODO(lead): the same before iOS 26 (predicted 11: no block ends in a line feed)
-            admittedAt3x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 3x (predicted 10: CT-TALL, the 400-line block, is over the height cap)
-            admittedAt2x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 2x (predicted 10: CT-TALL is over the height cap at any scale)
-            nestedCode: Self.toFill           // TODO(lead): nested code blocks (predicted 0)
+            blocks: 12,              // top-level nodes: 11 code blocks and the CT-SEQ heading
+            codeBlocks: 11,          // CT-TALL, CT-NEAR, CT-END, CT-SEQ-1 to CT-SEQ-8
+            eligible: 11,            // eligibleCodeRoots
+            eligibleBeforeIOS26: 11, // the same before iOS 26: no block ends in a line feed
+            admittedAt3x: 10,        // codeAdmitted at Large on 3x: CT-TALL, the 400-line block, is over the height cap
+            admittedAt2x: 10,        // codeAdmitted at Large on 2x: CT-TALL is over the height cap at any scale
+            nestedCode: 0            // no nested code
         ))
     }
 }
