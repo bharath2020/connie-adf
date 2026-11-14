@@ -6,7 +6,24 @@ import UIKit
 ///   (name without the `.json` extension).
 /// - `-scrollToFraction <f>` scrolls, once the document is ready, to the
 ///   block at fraction `f` of `model.blocks` (animated, then re-jumped
-///   without animation ~1.5 s after ready so the landing is exact).
+///   without animation ~1.5 s after ready so the landing is exact). About
+///   1 s after the re-jump (about 2.6 s after READY), once per launch, it
+///   prints these lines together, in this order:
+///
+///       SCROLL_LANDED fixture=<name> fraction=<f> index=<i> block=<id> blocks=<n>
+///       RENDERER_STATS …
+///       TK2_CODE_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+///
+///   `SCROLL_LANDED` names the block the jump went to (`block=`, the
+///   `RenderBlock.id` at `index=` of `blocks=`: the jump's target, not a
+///   measured position) and is printed with or without `-rendererStats`;
+///   the other two only with it. `RENDERER_STATS` is the READY line's keys
+///   with fresh values (the stats printed at READY predate the jump).
+///   `TK2_CODE_ROWS` lists each live TextKit 2 row drawing a code block's
+///   code by owner, with its native draw passes; with none it is
+///   `TK2_CODE_ROWS live=0 owners=-`. `Scripts/visual_diff.py` reads the
+///   three as a capture's engine proof, so a capture must wait for them
+///   (see `RendererStats` and `ReaderView.scrollToFraction`).
 /// - `-autoscroll` waits 3s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
 ///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
@@ -28,7 +45,9 @@ import UIKit
 /// - `-rendererStats` prints one `RENDERER_STATS …` line (active renderer,
 ///   live/cumulative TextKit 2 row counters, eligible/fallback roots) right
 ///   after READY and again right after `SCROLL_METRICS` — the perf gate's
-///   proof of which engine drew (see `RendererStats`).
+///   proof of which engine drew (see `RendererStats`) — and, after a
+///   `-scrollToFraction` jump, once more between `SCROLL_LANDED` and
+///   `TK2_CODE_ROWS` (above).
 /// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
 ///   streamed chunk arrives (the document is still loading) the way the
 ///   toolbar does, marked as automation's like `-textkit2` (the next launch
