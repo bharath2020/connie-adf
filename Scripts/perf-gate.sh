@@ -13,6 +13,11 @@
 #   # lists stage (design pr2, ~75–80 min; pr45 + list-dense):
 #   Scripts/perf-gate.sh --design pr2 --udid <UDID> --app-a <main+fixtures .app> \
 #       --app-b <branch .app> --app-c <branch .app> --out <data>/perf/pr2-<sha>
+#   # code-block stage (design pr3; pr2 + code-dense, ~85–110 min, then the
+#   # enforced D/C predecessor block on list-dense and kitchen-sink, ~40 min):
+#   Scripts/perf-gate.sh --design pr3 --udid <UDID> --app-a <main+fixtures .app> \
+#       --app-b <branch .app> --app-c <branch .app> --app-d <PR 2 tip .app> \
+#       --out <data>/perf/pr3-<sha>
 #   # full gate (design full, ~8 h, once before the final parity PR):
 #   Scripts/perf-gate.sh --calibrate --udid <UDID> --app-a <main .app> \
 #       --out <data>/perf/calibration
@@ -40,9 +45,19 @@
 #                            device that was already booted is left booted.
 #                            Refuses to run if another simulator is booted.
 #   --app-a / --app-b / --app-c <ADFReader.app>   (B and C required for a gate)
-#   --design <pr45|pr2|full> default pr45; fixtures, pairs and warm-ups default
-#                            to the design (perf_summarize.py --print-design);
-#                            pr2 also holds arm A to SCROLL_METRICS completion
+#   --app-d <ADFReader.app>  the predecessor build (PREDECESSOR below); required
+#                            by a gate whose design declares the supplement
+#                            (pr3), refused by a design that does not
+#   --predecessor-runs <n>   D/C pairs per predecessor fixture; default and
+#                            minimum for a gate: the design's (pr3: 5)
+#   --predecessor-warmup <n> discarded D/C warm-ups per (fixture, arm);
+#                            default and minimum for a gate: the design's (1)
+#   --predecessor-fixtures "<names>"  pilot only: a subset of the design's
+#                            predecessor fixtures
+#   --design <pr45|pr2|pr3|full> default pr45; fixtures, pairs and warm-ups
+#                            default to the design (perf_summarize.py
+#                            --print-design); pr2 and pr3 also hold arm A to
+#                            SCROLL_METRICS completion
 #   --calibrate              A vs A2 (both --app-a) for design full; writes
 #                            calibration.json
 #   --calibration <json>     frozen calibration (design full); its sha256 is
@@ -74,11 +89,14 @@
 #                            2026-10-26 pilot (1.5 × longest scroll + 30 s):
 #                            kitchen-sink=45 stress-1k=180 stress-5k=775
 #                            giant-table=95 text-dense=425 long-paragraph=45;
-#                            list-dense=275 from its 2026-11-11 pilot.
+#                            list-dense=275 from its 2026-11-11 pilot;
+#                            code-dense=UNFROZEN until its pilot.
 #                            A default of UNFROZEN (a new fixture until its
 #                            pilot) refuses every non-pilot run of it, with
 #                            or without this flag; a pilot must pass the
-#                            fixture's deadline here explicitly.
+#                            fixture's deadline here explicitly. A fixture
+#                            with no default at all (list-tall, code-tall:
+#                            pilot-only) silently takes --trial-timeout.
 #   --ready-timeout <s>      READY deadline; default 60
 #   --rss-ms <ms> / --footprint-ms <ms>  sampler periods; default 200 / 1000
 #   --no-sampler             pilot only: no memory sampling (sampler overhead)
@@ -112,9 +130,24 @@
 #       the shipping path with the switch OFF (font-spec baking, switch
 #       plumbing)
 #   A2  (calibration) the reference again, identical argv
+#   D   (predecessor supplement) the previous stage's final build (--app-d)
+#       with C's flags: TextKit 2 ON. Never a plan arm, never the reference.
 #   Balanced order per run: odd runs A,C,B / even runs B,C,A (every A–C and
 #   A–B pair alternates), filtered to the fixture's arms; calibration
 #   alternates A,A2 / A2,A.
+#
+# PREDECESSOR  (a design that declares it: pr3; perf_summarize.py PREDECESSOR)
+#   After the A/B/C trials, --app-d runs the paired D vs C block inside the
+#   same run, device session and sampler: per predecessor fixture, the
+#   warm-up(s), then interleaved pairs, D,C on odd pairs and C,D on even
+#   ones. Rows go to predecessor.csv / predecessor-warmup.csv (stems
+#   pred-run<n>-<fixture>-<arm>), the declaration to plan.json under
+#   "predecessor". Refused before any trial: a gate of such a design without
+#   --app-d, with fewer pairs or warm-ups than it declares; D with the
+#   candidate's or the reference's binary; D with another sha256 than the
+#   design pins (a pilot runs it and its supplement is INVALID); D or C
+#   lacking a predecessor fixture, or bundling different bytes. The
+#   supplement is reported in its own section and never changes the verdict.
 #
 # PROCEDURE (per trial)
 #   terminate + uninstall + install the arm's .app (fresh install: no
@@ -132,6 +165,7 @@
 #                  calibration/host_start
 #   trials.csv     counted trials (columns: Scripts/perf_trial.py CSV_COLUMNS)
 #   warmup.csv     discarded warm-ups
+#   predecessor.csv / predecessor-warmup.csv   the D/C block (with --app-d)
 #   env.txt        host, Xcode, device, apps
 #   logs/<stem>.log      stamped app output (#T0, lines, #EXIT)
 #   samples/<stem>.tsv   memory samples with their own timestamps
@@ -154,8 +188,9 @@ SUMMARIZE_PY="$SCRIPT_DIR/perf_summarize.py"
 
 # ---------------------------------------------------------------- defaults
 UDID=""
-APP_A=""; APP_B=""; APP_C=""
+APP_A=""; APP_B=""; APP_C=""; APP_D=""
 LABEL_A="main"; LABEL_B="branch (switch OFF)"; LABEL_C="branch (TextKit 2)"
+LABEL_D="predecessor (TextKit 2)"
 MODE="gate"
 DESIGN=""
 CALIBRATION=""
@@ -177,7 +212,7 @@ TRIAL_TIMEOUT=120
 # until the placeholder is replaced by the frozen number in a reviewed commit
 # (never a guess, never a command-line value standing in for it).
 TIMEOUT_UNFROZEN="UNFROZEN"
-DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45 list-dense=275"
+DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45 list-dense=275 code-dense=$TIMEOUT_UNFROZEN"
 TIMEOUTS_FOR=""
 READY_TIMEOUT=60
 RSS_MS=200
@@ -196,6 +231,18 @@ KEEP_BOOTED=0
 DRY_RUN=0
 BASELINE_COMPLETION=0
 ARM_FIXTURE_SHAS=""
+# PREDECESSOR (the design's D/C block; empty when the design declares none).
+PRED_FIXTURES=""
+PRED_FIXTURES_OPT=""
+PRED_RUNS=""
+PRED_WARMUP=""
+PRED_SHA_PIN=""
+PRED_SENSITIVITY=""
+PRED_FIXTURE_SHAS=""
+PRED_CSV_NAME="predecessor.csv"
+PRED_WARMUP_CSV_NAME="predecessor-warmup.csv"
+SHA_D=""
+STEM_PREFIX=""
 
 # ---------------------------------------------------------------- helpers
 log() { printf '[perf-gate %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -269,19 +316,20 @@ install_arm() {
 }
 
 # arm_* lookups (bash 3.2: no associative arrays)
-arm_app()  { case "$1" in A|A2) echo "$APP_A" ;; B) echo "$APP_B" ;; C) echo "$APP_C" ;; esac; }
-arm_sha()  { case "$1" in A|A2) echo "$SHA_A" ;; B) echo "$SHA_B" ;; C) echo "$SHA_C" ;; esac; }
-arm_label() { case "$1" in A) echo "$LABEL_A" ;; A2) echo "$LABEL_A (repeat)" ;; B) echo "$LABEL_B" ;; C) echo "$LABEL_C" ;; esac; }
+arm_app()  { case "$1" in A|A2) echo "$APP_A" ;; B) echo "$APP_B" ;; C) echo "$APP_C" ;; D) echo "$APP_D" ;; esac; }
+arm_sha()  { case "$1" in A|A2) echo "$SHA_A" ;; B) echo "$SHA_B" ;; C) echo "$SHA_C" ;; D) echo "$SHA_D" ;; esac; }
+arm_label() { case "$1" in A) echo "$LABEL_A" ;; A2) echo "$LABEL_A (repeat)" ;; B) echo "$LABEL_B" ;; C) echo "$LABEL_C" ;; D) echo "$LABEL_D" ;; esac; }
 arm_flags() {
     case "$1" in
         A|A2) echo "" ;;
         B) echo "-rendererReset $CANDIDATE_ARGS" ;;
-        C) echo "$ARM_C_ARGS $CANDIDATE_ARGS" ;;
+        # D (the predecessor) runs exactly as C does: TextKit 2 ON.
+        C|D) echo "$ARM_C_ARGS $CANDIDATE_ARGS" ;;
     esac
 }
 arm_requires_completion() {
     case "$1" in
-        B|C) [ "$CANDIDATE_MARKERS" -eq 1 ] && echo 1 || echo 0 ;;
+        B|C|D) [ "$CANDIDATE_MARKERS" -eq 1 ] && echo 1 || echo 0 ;;
         # design pr2: main >= 86abd56 prints endRow/completed, so the
         # reference is held to a full traversal too (a short A is INVALID).
         A) [ "$MODE" = "gate" ] && [ "$BASELINE_COMPLETION" -eq 1 ] && [ "$CANDIDATE_MARKERS" -eq 1 ] \
@@ -307,6 +355,11 @@ arm_order() {
         case " $(fixture_arms_of "$fixture") " in *" $arm "*) out="$out $arm" ;; esac
     done
     echo "${out# }"
+}
+
+# Arm order for predecessor pair <n>: D,C on odd pairs, C,D on even ones.
+pred_order() {
+    if [ $(( $1 % 2 )) -eq 1 ]; then echo "D C"; else echo "C D"; fi
 }
 
 # all_arms -> the arms any fixture runs, in plan order
@@ -356,9 +409,44 @@ fixture_preflight() {
     log "fixture preflight: $checked bundled fixture file(s) present, identical across arms"
 }
 
+# predecessor_preflight: PREDECESSOR. D's and C's .app must each bundle every
+# predecessor fixture, with the same bytes (the fixture preflight has already
+# held C to A's bytes for the fixtures the gate runs). Refuses (exit 2)
+# before any trial; sets PRED_FIXTURE_SHAS ("<arm> <fixture> <sha256>").
+predecessor_preflight() {
+    local arm app f sha missing="" lines="" differ checked=0
+    [ -n "$APP_D" ] || return 0
+    for arm in D C; do
+        app=$(arm_app "$arm")
+        if [ ! -d "$app" ]; then
+            [ "$DRY_RUN" -eq 1 ] || die "predecessor preflight: arm $arm: not a directory: $app"
+            log "predecessor preflight: arm $arm: $app does not exist (dry run): not checked"
+            continue
+        fi
+        for f in $PRED_FIXTURES; do
+            if [ -f "$app/$f.json" ]; then
+                sha=$(shasum -a 256 "$app/$f.json" | awk '{print $1}')
+                lines="$lines$arm $f $sha
+"
+                checked=$(( checked + 1 ))
+            else
+                missing="$missing $f.json (arm $arm: $app);"
+            fi
+        done
+    done
+    [ -z "$missing" ] || die "predecessor preflight: predecessor fixture missing from the arm's .app bundle:$missing nothing was run"
+    differ=$(printf '%s' "$lines" | awk 'NF == 3 {
+        seen[$2] = seen[$2] " " $1 "=" substr($3, 1, 12)
+        if (!($2 in first)) first[$2] = $3; else if (first[$2] != $3) bad[$2] = 1
+    } END { for (f in bad) printf " %s.json (%s );", f, seen[f] }')
+    [ -z "$differ" ] || die "predecessor preflight: fixture JSON differs between D and C:$differ the predecessor pair must open the same document (an altered fixture is no comparison); nothing was run"
+    PRED_FIXTURE_SHAS="$lines"
+    log "predecessor preflight: $checked bundled fixture file(s) present, identical in D and C"
+}
+
 # arm_fixture_sha <arm> <fixture> -> the preflight sha256 of that arm's bundled fixture
 arm_fixture_sha() {
-    printf '%s' "$ARM_FIXTURE_SHAS" | awk -v a="$1" -v f="$2" '$1 == a && $2 == f { print $3 }'
+    printf '%s%s' "$ARM_FIXTURE_SHAS" "$PRED_FIXTURE_SHAS" | awk -v a="$1" -v f="$2" '$1 == a && $2 == f { print $3; exit }'
 }
 
 # installed_fixture_sha <fixture> -> sha256 of the installed app's <fixture>.json, or ""
@@ -384,6 +472,9 @@ write_plan() {
     [ -z "$CALIBRATION" ] || cal_sha=$(shasum -a 256 "$CALIBRATION" | awk '{print $1}')
     local timeouts="" f
     for f in $FIXTURES; do timeouts="$timeouts $f=$(timeout_for "$f")"; done
+    if [ -n "$APP_D" ]; then
+        for f in $PRED_FIXTURES; do timeouts="$timeouts $f=$(timeout_for "$f")"; done
+    fi
     ARM_SPECS="$arm_specs" P_MODE="$MODE" P_ARM_C="$ARM_C_ARGS" P_CAND="$CANDIDATE_ARGS" \
     P_MARKERS="$CANDIDATE_MARKERS" P_EXPECTED="$EXPECTED_BLOCKS" P_PILOT="$PILOT" P_FIXTURES="$FIXTURES" \
     P_RUNS="$RUNS" P_WARMUP="$WARMUP" P_EXTRA="$EXTRA_ARGS" P_APPEARANCE="$APPEARANCE" P_SAMPLER="$SAMPLER" \
@@ -392,6 +483,9 @@ write_plan() {
     P_DESIGN="$DESIGN" P_HOST="$HOST_START_JSON" P_SETTLE="$SETTLE" P_FIXTURE_ARMS="$FIXTURE_ARMS" \
     P_HOST_WAIT="$HOST_WAIT_JSON" P_BOUNDS_SHA="$BOUNDS_SHA" P_BOUND_GATED="$BOUND_GATED" \
     P_FIXTURE_SHAS="$ARM_FIXTURE_SHAS" \
+    P_PRED_APP="$APP_D" P_PRED_SHA="$SHA_D" P_PRED_LABEL="$LABEL_D" P_PRED_FIXTURES="$PRED_FIXTURES" \
+    P_PRED_RUNS="$PRED_RUNS" P_PRED_WARMUP="$PRED_WARMUP" P_PRED_SENSITIVITY="$PRED_SENSITIVITY" \
+    P_PRED_FIXTURE_SHAS="$PRED_FIXTURE_SHAS" P_PRED_CSV="$PRED_CSV_NAME" P_PRED_WARMUP_CSV="$PRED_WARMUP_CSV_NAME" \
     python3 -I - "$OUT/plan.json" <<'PY'
 import json, os, sys
 env = os.environ
@@ -445,6 +539,29 @@ plan = {
 if mode != "calibrate":
     plan["bounds_sha256"] = env["P_BOUNDS_SHA"] or None
     plan["bound_gated"] = json.loads(env["P_BOUND_GATED"]) if env["P_BOUND_GATED"] else None
+if env["P_PRED_APP"]:
+    # PREDECESSOR: D is declared here, never among the plan's arms. It runs
+    # with C's flags; the sensitivity is the design's, recorded as printed.
+    pred_shas = {}
+    for line in env["P_PRED_FIXTURE_SHAS"].splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            pred_shas.setdefault(parts[0], {})[parts[1]] = parts[2]
+    plan["predecessor"] = {
+        "arm": "D", "against": "C", "label": env["P_PRED_LABEL"],
+        "fixtures": env["P_PRED_FIXTURES"].split(),
+        "runs": int(env["P_PRED_RUNS"]), "warmup": int(env["P_PRED_WARMUP"]),
+        "sensitivity_dropped_frames": float(env["P_PRED_SENSITIVITY"]),
+        "arms": {
+            "D": {"label": env["P_PRED_LABEL"], "app": env["P_PRED_APP"], "sha256": env["P_PRED_SHA"],
+                  "role": "predecessor", "required_flags": arm_c + cand, "forbidden_flags": [],
+                  "requires_completion": markers,
+                  "expected_renderer": "textkit2" if markers and "-rendererStats" in cand else None,
+                  "fixture_sha256": pred_shas.get("D", {})},
+            "C": {"sha256": arms.get("C", {}).get("sha256"), "fixture_sha256": pred_shas.get("C", {})},
+        },
+        "csv": env["P_PRED_CSV"], "warmup_csv": env["P_PRED_WARMUP_CSV"],
+    }
 with open(sys.argv[1], "w") as fh:
     json.dump(plan, fh, indent=2, sort_keys=True)
     fh.write("\n")
@@ -467,7 +584,7 @@ run_trial() {
     local run="$1" fixture="$2" arm="$3" csv="$4" order_index="$5"
     local app sha label stem logf samplef deadline
     app=$(arm_app "$arm"); sha=$(arm_sha "$arm"); label=$(arm_label "$arm")
-    stem="run${run}-${fixture}-${arm}"
+    stem="${STEM_PREFIX}run${run}-${fixture}-${arm}"
     logf="$OUT/logs/$stem.log"; samplef="$OUT/samples/$stem.tsv"
     deadline=$(timeout_for "$fixture")
 
@@ -614,9 +731,14 @@ main() {
             --app-a) APP_A="$2"; shift 2 ;;
             --app-b) APP_B="$2"; shift 2 ;;
             --app-c) APP_C="$2"; shift 2 ;;
+            --app-d) APP_D="$2"; shift 2 ;;
+            --predecessor-runs) PRED_RUNS="$2"; shift 2 ;;
+            --predecessor-warmup) PRED_WARMUP="$2"; shift 2 ;;
+            --predecessor-fixtures) PRED_FIXTURES_OPT="$2"; shift 2 ;;
             --label-a) LABEL_A="$2"; shift 2 ;;
             --label-b) LABEL_B="$2"; shift 2 ;;
             --label-c) LABEL_C="$2"; shift 2 ;;
+            --label-d) LABEL_D="$2"; shift 2 ;;
             --design) DESIGN="$2"; shift 2 ;;
             --calibrate) MODE="calibrate"; shift ;;
             --calibration) CALIBRATION="$2"; shift 2 ;;
@@ -662,8 +784,8 @@ main() {
         DESIGN="full"
     fi
     [ -n "$DESIGN" ] || DESIGN="pr45"
-    local shape d_fixtures d_fixture_arms d_runs d_warmup
-    shape=$(python3 -I "$SUMMARIZE_PY" --print-design "$DESIGN") || die "unknown --design $DESIGN"
+    local shape d_fixtures d_fixture_arms d_runs d_warmup d_pred_fixtures d_pred_runs d_pred_warmup
+    shape=$(python3 -I "$SUMMARIZE_PY" --print-design "$DESIGN") || die "--design $DESIGN is unknown or its declarations are refused (see the error above)"
     d_fixtures=$(printf '%s\n' "$shape" | sed -n 's/^fixtures=//p')
     d_fixture_arms=$(printf '%s\n' "$shape" | sed -n 's/^fixture_arms=//p')
     d_runs=$(printf '%s\n' "$shape" | sed -n 's/^runs=//p')
@@ -672,6 +794,11 @@ main() {
     BOUND_GATED=$(printf '%s\n' "$shape" | sed -n 's/^bound_gated=//p')
     BASELINE_COMPLETION=$(printf '%s\n' "$shape" | sed -n 's/^baseline_completion=//p')
     [ -n "$BASELINE_COMPLETION" ] || BASELINE_COMPLETION=0
+    d_pred_fixtures=$(printf '%s\n' "$shape" | sed -n 's/^predecessor_fixtures=//p')
+    d_pred_runs=$(printf '%s\n' "$shape" | sed -n 's/^predecessor_runs=//p')
+    d_pred_warmup=$(printf '%s\n' "$shape" | sed -n 's/^predecessor_warmup=//p')
+    PRED_SENSITIVITY=$(printf '%s\n' "$shape" | sed -n 's/^predecessor_sensitivity_dropped_frames=//p')
+    PRED_SHA_PIN=$(printf '%s\n' "$shape" | sed -n 's/^predecessor_app_sha256=//p')
     HOST_LOAD_MAX=$(printf '%s\n' "$shape" | sed -n 's/^host_quiet_load_max=//p')
     HOST_CPU_MAX=$(printf '%s\n' "$shape" | sed -n 's/^host_process_cpu_max=//p')
     [ -n "$HOST_WAIT" ] || HOST_WAIT=$(printf '%s\n' "$shape" | sed -n 's/^host_wait_s=//p')
@@ -696,11 +823,39 @@ main() {
         case " $CANDIDATE_ARGS " in *" -rendererStats "*) ;; *) die "--candidate-args must keep -rendererStats (renderer proof) unless --pilot" ;; esac
     fi
 
+    # PREDECESSOR: a design that declares the paired D/C block enforces it on
+    # every gate run; a design that declares none takes no --app-d.
+    if [ -n "$d_pred_fixtures" ]; then
+        PRED_FIXTURES="$d_pred_fixtures"
+        [ -n "$PRED_RUNS" ] || PRED_RUNS="$d_pred_runs"
+        [ -n "$PRED_WARMUP" ] || PRED_WARMUP="$d_pred_warmup"
+        case "$PRED_RUNS" in ''|*[!0-9]*) die "--predecessor-runs must be a positive integer" ;; esac
+        case "$PRED_WARMUP" in ''|*[!0-9]*) die "--predecessor-warmup must be a non-negative integer" ;; esac
+        [ "$PRED_RUNS" -ge 1 ] || die "--predecessor-runs must be >= 1"
+        if [ -n "$PRED_FIXTURES_OPT" ]; then
+            [ "$PILOT" -eq 1 ] || die "--predecessor-fixtures is pilot-only: design $DESIGN runs D/C on exactly \"$d_pred_fixtures\""
+            local pf
+            for pf in $PRED_FIXTURES_OPT; do
+                case " $d_pred_fixtures " in *" $pf "*) ;; *) die "--predecessor-fixtures: $pf is not one of design $DESIGN's \"$d_pred_fixtures\"" ;; esac
+            done
+            PRED_FIXTURES="$PRED_FIXTURES_OPT"
+        fi
+        if [ "$PILOT" -eq 0 ]; then
+            [ -n "$APP_D" ] || die "--app-d <ADFReader.app> is required: design $DESIGN enforces the paired predecessor supplement (D = the previous stage's final build, TextKit 2 ON, against C on \"$d_pred_fixtures\"); omit only with --pilot"
+            [ "$PRED_RUNS" -ge "$d_pred_runs" ] || die "--predecessor-runs $PRED_RUNS: design $DESIGN needs >= $d_pred_runs D/C pairs (fewer: --pilot)"
+            [ "$PRED_WARMUP" -ge "$d_pred_warmup" ] || die "--predecessor-warmup $PRED_WARMUP: design $DESIGN needs >= $d_pred_warmup discarded D/C warm-up(s) per fixture and arm (fewer: --pilot)"
+        fi
+    else
+        [ -z "$APP_D" ] || die "--app-d: design $DESIGN declares no predecessor supplement"
+        [ -z "$PRED_RUNS$PRED_WARMUP$PRED_FIXTURES_OPT" ] || die "--predecessor-runs/--predecessor-warmup/--predecessor-fixtures: design $DESIGN declares no predecessor supplement"
+    fi
+
     # Deadlines: a fixture whose default is still TIMEOUT_UNFROZEN has no
     # frozen deadline. No gate runs it; a pilot runs it only with an explicit
     # --trial-timeout-for (the pilot is what the frozen value comes from).
-    local f tf
-    for f in $FIXTURES; do
+    local f tf timeout_fixtures="$FIXTURES"
+    [ -z "$APP_D" ] || timeout_fixtures="$FIXTURES $PRED_FIXTURES"
+    for f in $timeout_fixtures; do
         if [ "$(lookup "$f" "$DEFAULT_TIMEOUTS")" = "$TIMEOUT_UNFROZEN" ]; then
             [ "$PILOT" -eq 1 ] || die "$f has no frozen trial timeout (DEFAULT_TIMEOUTS $f=$TIMEOUT_UNFROZEN in Scripts/perf-gate.sh): run its pilot, then commit $f=<1.5 x the pilot's longest scroll + 30 s> (python3 -I Scripts/perf_summarize.py <pilot>/trials.csv --pilot --suggest-timeouts); --trial-timeout-for cannot stand in for it in a gate run"
             [ -n "$(lookup "$f" "$TIMEOUTS_FOR")" ] || die "--pilot: $f has no frozen trial timeout yet; pass --trial-timeout-for \"$f=<s>\" with a generous deadline (e.g. 900)"
@@ -726,6 +881,9 @@ print(json.dumps({m: [f for f in keep if f in v] for m, v in gated.items()}, sor
             [ "$PILOT" -eq 1 ] || die "--app-b <ADFReader.app> is required: B (switch OFF) is gated (omit only with --pilot)"
         elif [ "$DRY_RUN" -eq 0 ]; then
             [ -d "$APP_B" ] || die "--app-b: not a directory: $APP_B"
+        fi
+        if [ -n "$APP_D" ] && [ "$DRY_RUN" -eq 0 ]; then
+            [ -d "$APP_D" ] || die "--app-d: not a directory: $APP_D"
         fi
         if [ "$DESIGN" = "full" ]; then
             if [ -z "$CALIBRATION" ] && [ "$PILOT" -eq 0 ]; then
@@ -771,8 +929,8 @@ print(json.dumps({m: [f for f in keep if f in v] for m, v in gated.items()}, sor
     fi
     mkdir -p "$OUT/logs" "$OUT/samples"
     OUT=$(cd "$OUT" && pwd)
-    if [ "$DRY_RUN" -eq 0 ] && [ -s "$OUT/trials.csv" ]; then
-        die "$OUT/trials.csv already exists; use a fresh --out (runs are never appended)"
+    if [ "$DRY_RUN" -eq 0 ] && { [ -s "$OUT/trials.csv" ] || [ -s "$OUT/$PRED_CSV_NAME" ]; }; then
+        die "$OUT/trials.csv or $OUT/$PRED_CSV_NAME already exists; use a fresh --out (runs are never appended)"
     fi
     [ -n "$LEDGER" ] || LEDGER="$(dirname "$OUT")/perf-ledger.jsonl"
 
@@ -783,7 +941,23 @@ print(json.dumps({m: [f for f in keep if f in v] for m, v in gated.items()}, sor
     if [ "$MODE" = "gate" ] && [ "$SHA_A" = "$SHA_C" ]; then
         log "WARNING: app-a and app-c have the same binary sha256"
     fi
+    # PREDECESSOR: D is pinned and is neither the candidate nor the reference.
+    if [ -n "$PRED_SHA_PIN" ] && [ "$SHA_A" = "$PRED_SHA_PIN" ]; then
+        die "--app-a is the design's pinned predecessor binary ($PRED_SHA_PIN): D never substitutes for A"
+    fi
+    if [ -n "$APP_D" ]; then
+        SHA_D=$(sha256_of_app "$APP_D")
+        if [ "$SHA_D" != "dry-run-no-binary" ]; then
+            [ "$SHA_D" != "$SHA_C" ] || die "--app-d and --app-c are the same binary ($SHA_D): D must be the previous stage's final build, not the candidate"
+            [ "$SHA_D" != "$SHA_A" ] || die "--app-d and --app-a are the same binary ($SHA_D): D never substitutes for A"
+            if [ -n "$PRED_SHA_PIN" ] && [ "$SHA_D" != "$PRED_SHA_PIN" ]; then
+                [ "$PILOT" -eq 1 ] || die "--app-d sha256 $SHA_D is not design $DESIGN's pinned predecessor $PRED_SHA_PIN: pass that build, or change the pin in a reviewed commit before any candidate timing"
+                log "WARNING: --app-d sha256 $SHA_D is not design $DESIGN's pinned predecessor $PRED_SHA_PIN: this pilot's supplement will be INVALID"
+            fi
+        fi
+    fi
     fixture_preflight
+    predecessor_preflight
 
     if [ "$DRY_RUN" -eq 1 ]; then
         HOST_START_JSON=$(python3 -I "$TRIAL_PY" host --top-samples 2)
@@ -819,6 +993,10 @@ print(json.dumps({m: [f for f in keep if f in v] for m, v in gated.items()}, sor
             echo "A app=$APP_A sha256=$SHA_A"
             [ -z "$APP_C" ] || echo "C app=$APP_C sha256=$SHA_C"
             [ -z "$APP_B" ] || echo "B app=$APP_B sha256=$SHA_B"
+            if [ -n "$APP_D" ]; then
+                echo "D app=$APP_D sha256=$SHA_D (predecessor block: fixtures=$PRED_FIXTURES pairs=$PRED_RUNS warmup=$PRED_WARMUP pinned=${PRED_SHA_PIN:-none})"
+                printf '%s' "$PRED_FIXTURE_SHAS" | sed 's/^/predecessor_fixture_sha256 /'
+            fi
             [ -z "$CALIBRATION" ] || echo "calibration=$CALIBRATION"
         } > "$OUT/env.txt"
     fi
@@ -846,6 +1024,36 @@ print(json.dumps({m: [f for f in keep if f in v] for m, v in gated.items()}, sor
         done
         run=$(( run + 1 ))
     done
+
+    # PREDECESSOR: the paired D vs C block, after the A/B/C trials, in the
+    # same device session: warm-ups, then interleaved balanced pairs.
+    if [ -n "$APP_D" ]; then
+        local pred="$OUT/$PRED_CSV_NAME" pred_warm="$OUT/$PRED_WARMUP_CSV_NAME"
+        STEM_PREFIX="pred-"
+        w=1
+        while [ "$w" -le "$PRED_WARMUP" ]; do
+            for fixture in $PRED_FIXTURES; do
+                [ "$DRY_RUN" -eq 1 ] || log "predecessor warm-up $w/$PRED_WARMUP fixture=$fixture"
+                i=0
+                for arm in $(pred_order "$w"); do
+                    i=$(( i + 1 )); run_trial 0 "$fixture" "$arm" "$pred_warm" "$i"
+                done
+            done
+            w=$(( w + 1 ))
+        done
+        run=1
+        while [ "$run" -le "$PRED_RUNS" ]; do
+            for fixture in $PRED_FIXTURES; do
+                [ "$DRY_RUN" -eq 1 ] || log "predecessor pair $run/$PRED_RUNS fixture=$fixture order: $(pred_order "$run")"
+                i=0
+                for arm in $(pred_order "$run"); do
+                    i=$(( i + 1 )); run_trial "$run" "$fixture" "$arm" "$pred" "$i"
+                done
+            done
+            run=$(( run + 1 ))
+        done
+        STEM_PREFIX=""
+    fi
     [ "$DRY_RUN" -eq 0 ] || exit 0
 
     log "trials done: $trials"

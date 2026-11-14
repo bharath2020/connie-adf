@@ -52,12 +52,18 @@ LOG LINES CONSUMED (contract with Demo/ADFReader)
     RENDERER_STATS renderer=<swiftui|textkit2> tk2Live=<n> tk2Layouts=<n>
         tk2Draws=<n> tk2NativeDraws=<n> tk1BackedRows=<n> tk1BackedDraws=<n>
         eligibleRoots=<n> fallbackRoots=<n> textFallbackRoots=<n>
-        linkRoots=<n> [tk2ListLive=<n> eligibleTextLeaves=<n>
-        linkedTextLeaves=<n> fallbackTextLeaves=<n> listLeaderLeaves=<n>
-        listTrailingLeaves=<n>] [other k=v...]
+        linkRoots=<n> [tk2ListLive=<n> tk2Conversions=<n>
+        eligibleTextLeaves=<n> linkedTextLeaves=<n> fallbackTextLeaves=<n>
+        listLeaderLeaves=<n> listTrailingLeaves=<n>] [tk2CodeLive=<n>
+        tk2CodeDraws=<n> eligibleCodeRoots=<n> fallbackCodeRoots=<n>
+        codeAdmitted=<n> codeGated=<n>] [other k=v...]
         (printed at READY and again with SCROLL_METRICS; the last one wins
         for the counters, the first one is kept as renderer_ready,
-        tk2_live_ready and tk2_list_live_ready; Demo/ADFReader/RendererStats.swift).
+        tk2_live_ready, tk2_list_live_ready and tk2_code_live_ready;
+        Demo/ADFReader/RendererStats.swift). The bracketed groups are the
+        lists stage (PR 2) and the code-block stage (PR 3): a build that does
+        not print a key (main prints no RENDERER_STATS at all; PR 2's build
+        prints no code keys) leaves its column empty, never 0.
         The log key of every counter column lives in STATS_FIELDS (and
         READY_STATS_FIELDS) only: a renamed key is a one-line change there.
 """
@@ -90,7 +96,9 @@ CSV_COLUMNS = DRIVER_COLUMN_LIST + [
     "tk2_native_draws", "tk1_backed_rows", "tk1_backed_draws",
     "eligible_roots", "fallback_roots", "text_fallback_roots", "link_roots",
     "tk2_list_live_ready", "tk2_list_live", "eligible_text_leaves", "linked_text_leaves",
-    "fallback_text_leaves", "list_leader_leaves", "list_trailing_leaves", "renderer_stats_extra",
+    "fallback_text_leaves", "list_leader_leaves", "list_trailing_leaves",
+    "tk2_conversions", "tk2_code_live_ready", "tk2_code_live", "tk2_code_draws",
+    "eligible_code_roots", "fallback_code_roots", "code_admitted", "code_gated", "renderer_stats_extra",
     "rss_ready_kb", "rss_peak_kb", "footprint_ready_kb", "footprint_peak_kb",
     "memory_samples", "footprint_samples", "app_cpu_median_pct", "app_cpu_max_pct",
     "rss_interval_ms_median", "rss_interval_ms_max",
@@ -119,11 +127,28 @@ STATS_FIELDS = {
     "fallback_text_leaves": "fallbackTextLeaves",
     "list_leader_leaves": "listLeaderLeaves",
     "list_trailing_leaves": "listTrailingLeaves",
+    # Prepared-text conversions the rows performed since launch (printed
+    # since PR 2): a work counter, reported as a structural diagnostic.
+    "tk2_conversions": "tk2Conversions",
+    # Code-block stage (PR 3): live TextKit 2 rows whose owner is a top-level
+    # code block and the draws in which TextKit 2 drew code glyphs natively
+    # (the code-native proof); the static code coverage (eligible + fallback
+    # = the top-level code blocks); and the code roots the view-time gate
+    # admitted / kept on SwiftUI at the run's actual environment (font,
+    # scale, size category, layout direction), which the static walk cannot
+    # establish.
+    "tk2_code_live": "tk2CodeLive",
+    "tk2_code_draws": "tk2CodeDraws",
+    "eligible_code_roots": "eligibleCodeRoots",
+    "fallback_code_roots": "fallbackCodeRoots",
+    "code_admitted": "codeAdmitted",
+    "code_gated": "codeGated",
 }
 # Columns also taken from the FIRST line (printed at READY): ready column ->
 # the STATS_FIELDS column whose log key it reads.
 READY_STATS_FIELDS = {
     "tk2_list_live_ready": "tk2_list_live",
+    "tk2_code_live_ready": "tk2_code_live",
 }
 DRIVER_COLUMNS = set(DRIVER_COLUMN_LIST) | {"log", "samples"}
 
@@ -520,7 +545,8 @@ def cmd_parse(args: argparse.Namespace) -> int:
           f"firstChunk={row['first_chunk_ms']}ms blocks={row['blocks']} frames={row['frames']} "
           f"dropped={row['dropped_frames']} ({row['dropped_rate_pct']}%) hitch={row['hitch_ms_per_s']} "
           f"completed={row['completed'] or '-'} renderer={row['renderer'] or '-'} "
-          f"tk2Layouts={row['tk2_layouts'] or '-'} rss_ready={row['rss_ready_kb']}kB "
+          f"tk2Layouts={row['tk2_layouts'] or '-'} tk2CodeLive={row['tk2_code_live_ready'] or '-'}/"
+          f"{row['tk2_code_live'] or '-'} rss_ready={row['rss_ready_kb']}kB "
           f"rss_peak(sampled)={row['rss_peak_kb']}kB fp_peak={row['footprint_peak_kb']}kB "
           f"samples={row['memory_samples']}/{row['footprint_samples']}")
     return 0
