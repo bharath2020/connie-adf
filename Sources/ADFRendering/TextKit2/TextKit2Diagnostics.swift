@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import ADFPreparation
 
 /// A read-only snapshot of the TextKit 2 renderer's counters — the proof of
@@ -10,10 +11,10 @@ import ADFPreparation
 /// a link is laid out and drawn by its own TextKit 1 stack, as `Text` lays
 /// out linked text: such rows and their draws are counted apart
 /// (`textKit1Backed…`) and never as native TextKit 2 draws. `liveRowCount`,
-/// `liveListRowCount` and `textKit1BackedRowCount` count row views
-/// currently alive (back to zero once a switch to `.swiftUI` has released
-/// them); the others are cumulative since launch. Always zero on platforms
-/// without UIKit.
+/// `liveListRowCount`, `liveCodeRowCount` and `textKit1BackedRowCount`
+/// count row views currently alive (back to zero once a switch to
+/// `.swiftUI` has released them); the others are cumulative since launch.
+/// Always zero on platforms without UIKit.
 public struct ADFTextKit2Stats: Sendable, Hashable {
     /// TextKit 2 row views currently alive.
     public var liveRowCount: Int
@@ -40,11 +41,20 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
     /// first gets its text and one per later text or layout-input change,
     /// never for an appearance flip.
     public var conversionCount: Int
+    /// Of `liveRowCount`: rows drawing a code block's code text (the
+    /// code-native proof: a paragraph or list row drawing natively proves
+    /// nothing about code).
+    public var liveCodeRowCount: Int
+    /// Of `nativeDrawCount`: the native draw passes of rows drawing code,
+    /// counted where TextKit 2 drew the fragments. A live code row that has
+    /// not drawn yet does not count.
+    public var codeNativeDrawCount: Int
 
     public init(
         liveRowCount: Int, layoutCount: Int, drawCount: Int, nativeDrawCount: Int = 0,
         textKit1BackedRowCount: Int = 0, textKit1BackedDrawCount: Int = 0,
-        liveListRowCount: Int = 0, conversionCount: Int = 0
+        liveListRowCount: Int = 0, conversionCount: Int = 0,
+        liveCodeRowCount: Int = 0, codeNativeDrawCount: Int = 0
     ) {
         self.liveRowCount = liveRowCount
         self.layoutCount = layoutCount
@@ -54,6 +64,8 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
         self.textKit1BackedDrawCount = textKit1BackedDrawCount
         self.liveListRowCount = liveListRowCount
         self.conversionCount = conversionCount
+        self.liveCodeRowCount = liveCodeRowCount
+        self.codeNativeDrawCount = codeNativeDrawCount
     }
 }
 
@@ -74,11 +86,26 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
 /// `eligibleTextLeaves + fallbackTextLeaves == eligibleRoots +
 /// textFallbackRoots + listLeaderLeaves + listTrailingLeaves`.
 ///
+/// The text leaves are that established prose and list set, not all text
+/// TextKit 2 may draw: code is counted apart, below.
+///
 /// **Roots (root richText, legacy)**: `eligibleRoots`, `fallbackRoots`,
 /// `textFallbackRoots` and `linkRoots` keep their PR 1 meaning, top-level
 /// blocks only. `fallbackRoots` is every top-level block that is not an
-/// eligible paragraph or heading, top-level lists included. It is not a
-/// count of blocks drawn wholly by SwiftUI; use the leaf counts for that.
+/// eligible paragraph or heading, top-level lists and code blocks
+/// included. It is not a count of blocks drawn wholly by SwiftUI; use the
+/// leaf and code counts for that.
+///
+/// **Code roots**: `eligibleCodeRoots` and `fallbackCodeRoots` split the
+/// top-level code blocks by the content verdict alone
+/// (`eligibleCodeRoots + fallbackCodeRoots ==` the top-level code blocks).
+/// Code is never in `eligibleRoots`, `eligibleTextLeaves` or
+/// `fallbackTextLeaves`. Code inside a list item or a container is out of
+/// scope and not counted. Whether an eligible code block is really drawn by
+/// TextKit 2 also depends on where it is drawn (layout direction, and the
+/// canvas bound at the text size, weight and display scale), which these
+/// static counts assume favourable: `ADFTextRenderer.textKit2CodeAdmission`
+/// measures that at an explicit environment.
 public struct ADFTextKit2Coverage: Sendable, Hashable {
     /// Top-level paragraphs and headings TextKit 2 draws (root richText,
     /// legacy).
@@ -106,11 +133,20 @@ public struct ADFTextKit2Coverage: Sendable, Hashable {
     /// Text leaves that are a list row's direct paragraphs and headings,
     /// eligible or not.
     public var listTrailingLeaves: Int
+    /// Top-level code blocks whose code text TextKit 2 may draw, by
+    /// content: non-empty, in a monospaced theme font spec, printable ASCII
+    /// and line feeds only (and, before iOS 26, not ending in two or more
+    /// line feeds).
+    public var eligibleCodeRoots: Int
+    /// Top-level code blocks whose code stays on SwiftUI for a content
+    /// reason.
+    public var fallbackCodeRoots: Int
 
     public init(
         eligibleRoots: Int, fallbackRoots: Int, textFallbackRoots: Int = 0, linkRoots: Int = 0,
         eligibleTextLeaves: Int = 0, linkedTextLeaves: Int = 0, fallbackTextLeaves: Int = 0,
-        listLeaderLeaves: Int = 0, listTrailingLeaves: Int = 0
+        listLeaderLeaves: Int = 0, listTrailingLeaves: Int = 0,
+        eligibleCodeRoots: Int = 0, fallbackCodeRoots: Int = 0
     ) {
         self.eligibleRoots = eligibleRoots
         self.fallbackRoots = fallbackRoots
@@ -121,6 +157,8 @@ public struct ADFTextKit2Coverage: Sendable, Hashable {
         self.fallbackTextLeaves = fallbackTextLeaves
         self.listLeaderLeaves = listLeaderLeaves
         self.listTrailingLeaves = listTrailingLeaves
+        self.eligibleCodeRoots = eligibleCodeRoots
+        self.fallbackCodeRoots = fallbackCodeRoots
     }
 }
 
@@ -143,7 +181,8 @@ extension ADFTextRenderer {
 
     /// Classifies a document's text (`ADFDocumentModel.blocks`) by whether
     /// the TextKit 2 renderer draws it: its text leaves in the renderer's
-    /// scope, and its top-level blocks (see `ADFTextKit2Coverage`).
+    /// scope, its top-level blocks and its top-level code blocks (see
+    /// `ADFTextKit2Coverage`).
     public static func textKit2Coverage(of blocks: [RenderBlock]) -> ADFTextKit2Coverage {
         var coverage = ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 0)
         TextKit2Scope.forEachLeaf(in: blocks) { leaf in
@@ -152,6 +191,15 @@ extension ADFTextRenderer {
             case .root: break
             case .listLeader: coverage.listLeaderLeaves += 1
             case .listTrailing: coverage.listTrailingLeaves += 1
+            case .codeRoot:
+                // Code has its own two counts and joins no text-leaf or
+                // root total: those keep meaning the prose and list set.
+                if case .eligible = leaf.verdict {
+                    coverage.eligibleCodeRoots += 1
+                } else {
+                    coverage.fallbackCodeRoots += 1
+                }
+                return
             }
             switch leaf.verdict {
             case .eligible(let text):
@@ -169,6 +217,46 @@ extension ADFTextRenderer {
         }
         coverage.fallbackRoots = blocks.count - coverage.eligibleRoots
         return coverage
+    }
+
+    /// Measures, at an explicit environment, how many of a document's
+    /// content-eligible top-level code blocks the TextKit 2 renderer would
+    /// really draw there (`admittedCodeRoots`) and how many a view-time
+    /// rule keeps on SwiftUI (`gatedCodeRoots`): right-to-left layout, or
+    /// no admitted canvas bound at this text size, legibility weight and
+    /// display scale. `admittedCodeRoots + gatedCodeRoots ==
+    /// ADFTextKit2Coverage.eligibleCodeRoots`.
+    ///
+    /// It applies the rule the code views apply, to the same prepared text,
+    /// so pass the environment the document is drawn in (the size after any
+    /// `dynamicTypeSize` override). It still does not know an active search
+    /// or inherited `Text` styling, which keep a block on SwiftUI too. On
+    /// platforms without UIKit nothing is drawn by TextKit 2, so every
+    /// eligible block counts as gated.
+    @MainActor
+    public static func textKit2CodeAdmission(
+        of blocks: [RenderBlock],
+        dynamicTypeSize: DynamicTypeSize,
+        legibilityWeight: LegibilityWeight?,
+        displayScale: CGFloat,
+        layoutDirection: LayoutDirection
+    ) -> (admittedCodeRoots: Int, gatedCodeRoots: Int) {
+        var admitted = 0
+        var gated = 0
+        TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+            guard leaf.position == .codeRoot, case .eligible(let text) = leaf.verdict else { return }
+            #if canImport(UIKit)
+            let gate = TextKit2Scope.codeGate(
+                text, sizeCategory: dynamicTypeSize.uiContentSizeCategory, legibilityWeight: legibilityWeight,
+                displayScale: displayScale, layoutDirection: layoutDirection
+            )
+            if gate == nil { admitted += 1 } else { gated += 1 }
+            #else
+            _ = text
+            gated += 1
+            #endif
+        }
+        return (admitted, gated)
     }
 }
 
@@ -200,6 +288,27 @@ enum TextKit2Eligibility {
         /// text column) before iOS 26, where list rows miss `Text`'s
         /// placement (`listsMatchText`).
         case osGatedList
+        /// Non-empty code that is not one plain prepared run: no
+        /// `ADFCodeShape` over all of it (text assembled outside
+        /// `DocumentPreparer`), more than one run, or a link or baseline
+        /// offset on it. The code rules read the shape instead of scanning
+        /// the text, and the single natural layout and the canvas bound
+        /// assume one plain run, so this fails closed.
+        case unshapedCode
+        /// Code whose font spec is not monospaced: no fixed advance, so no
+        /// conservative width bound.
+        case proportionalCode
+        /// Code with a horizontal tab: its width depends on its column.
+        case codeTabs
+        /// Code with a line break other than LF: CR (so CRLF too), VT, FF,
+        /// NEL, U+2028 or U+2029.
+        case codeLineBreaks
+        /// Code with a scalar above U+007F (and no tab or other line
+        /// break): a wider glyph or a fallback font can draw it.
+        case codeNonASCII
+        /// Code with another control character (U+0000 to U+001F but tab
+        /// and the line breaks, or U+007F).
+        case codeControls
     }
 
     enum Verdict: Sendable {
@@ -214,6 +323,70 @@ enum TextKit2Eligibility {
     static func describableText(_ segments: [InlineSegment], owner: TextKit2OwnerKind = .root) -> AttributedString? {
         if case .eligible(let text) = verdict(segments, owner: owner) { return text }
         return nil
+    }
+
+    /// The prepared attributed text TextKit 2 draws for `owner`, or `nil`
+    /// when it falls back (`verdict(_:owner:)` for attributed text): what
+    /// `TextEngineLeaf` asks for text it is handed as one string (a code
+    /// block's code), without building a segment array.
+    static func describableText(_ text: AttributedString, owner: TextKit2OwnerKind) -> AttributedString? {
+        if case .eligible(let text) = verdict(text, owner: owner) { return text }
+        return nil
+    }
+
+    /// The engine verdict for prepared attributed text drawn for `owner`.
+    /// Code (`.code`) is judged by the code rules (`codeVerdict`), never by
+    /// a list rule or the list OS gate; any other owner's text is judged as
+    /// the same text in one segment would be.
+    static func verdict(_ text: AttributedString, owner: TextKit2OwnerKind) -> Verdict {
+        switch owner {
+        case .code: return codeVerdict(text)
+        case .root, .list: return verdict([.text(text)], owner: owner)
+        }
+    }
+
+    /// The engine verdict for a code block's code text, by content. The
+    /// view (`CodeBlockView`, through `TextEngineLeaf`) and the coverage
+    /// walk (`TextKit2Scope.Leaf.verdict`) both decide through it; where
+    /// the block is drawn is the code gate's (`TextKit2Scope.codeGate`).
+    ///
+    /// Constant time: it reads the first run's attributes and the prepared
+    /// `ADFCodeShape`, and never scans the characters (a view body runs it
+    /// on every evaluation). In order:
+    /// 1. an empty string, which has no run to carry a shape: `.empty`;
+    /// 2. not one run with a shape over all of it: `.unshapedCode`;
+    /// 3. newlines only: `.empty`, as for any text;
+    /// 4. no font spec (the theme's code font is a raw `Font`):
+    ///    `.undescribable`;
+    /// 5. a font spec that is not monospaced: `.proportionalCode`;
+    /// 6. a link or a baseline offset on the run: `.unshapedCode`;
+    /// 7. outside printable ASCII and LF: `.codeTabs`, else
+    ///    `.codeLineBreaks`, else `.codeNonASCII`, else `.codeControls`;
+    /// 8. two or more trailing line feeds before iOS 26: `.trailingBreaks`,
+    ///    as for any text.
+    ///
+    /// Steps 5 and 7 are the admitted cohort of the canvas bound
+    /// (`TextKit2Scope.codeCanvasEstimate`): only there is a conservative
+    /// bound proven. The string is never modified.
+    static func codeVerdict(_ text: AttributedString) -> Verdict {
+        guard let run = text.runs.first else { return .fallback(.empty) }
+        guard run.range.upperBound == text.endIndex, let shape = run.adfCodeShape else {
+            return .fallback(.unshapedCode)
+        }
+        if shape.isAllNewlines { return .fallback(.empty) }
+        guard let fontSpec = run.adfFontSpec else { return .fallback(.undescribable) }
+        guard fontSpec.monospaced else { return .fallback(.proportionalCode) }
+        guard run.link == nil, run.baselineOffset == nil else { return .fallback(.unshapedCode) }
+        guard shape.isPrintableASCIIAndLF else {
+            if shape.hasTabs { return .fallback(.codeTabs) }
+            if shape.hasOtherLineBreaks { return .fallback(.codeLineBreaks) }
+            if shape.hasNonASCII { return .fallback(.codeNonASCII) }
+            return .fallback(.codeControls)
+        }
+        if !trailingBreaksMatchText, shape.trailingNewlineCount >= 2 {
+            return .fallback(.trailingBreaks)
+        }
+        return .eligible(text)
     }
 
     /// The engine verdict for text drawn for `owner` (top-level or list
@@ -280,6 +453,8 @@ final class TextKit2Diagnostics {
     private(set) var textKit1BackedDrawCount = 0
     private(set) var liveListRowCount = 0
     private(set) var conversionCount = 0
+    private(set) var liveCodeRowCount = 0
+    private(set) var codeNativeDrawCount = 0
     /// The rebuild control's leaves (`View.adfRebuildControl`).
     private(set) var rebuildControlLiveRows = 0
     private(set) var rebuildControlAppearances = 0
@@ -289,7 +464,8 @@ final class TextKit2Diagnostics {
             liveRowCount: liveRowCount, layoutCount: layoutCount,
             drawCount: drawCount, nativeDrawCount: nativeDrawCount,
             textKit1BackedRowCount: textKit1BackedRowCount, textKit1BackedDrawCount: textKit1BackedDrawCount,
-            liveListRowCount: liveListRowCount, conversionCount: conversionCount
+            liveListRowCount: liveListRowCount, conversionCount: conversionCount,
+            liveCodeRowCount: liveCodeRowCount, codeNativeDrawCount: codeNativeDrawCount
         )
     }
 
@@ -297,10 +473,10 @@ final class TextKit2Diagnostics {
         liveRowCount += 1
     }
 
-    func rowDestroyed(textKit1Backed: Bool = false, listText: Bool = false) {
+    func rowDestroyed(textKit1Backed: Bool = false, ownerKind: TextKit2OwnerKind = .root) {
         liveRowCount -= 1
         if textKit1Backed { textKit1BackedRowCount -= 1 }
-        if listText { liveListRowCount -= 1 }
+        count(ownerKind, by: -1)
     }
 
     /// A live row started (`true`) or stopped being laid out and drawn by
@@ -309,10 +485,21 @@ final class TextKit2Diagnostics {
         textKit1BackedRowCount += textKit1Backed ? 1 : -1
     }
 
-    /// A live row started (`true`) or stopped drawing list text
-    /// (`TextKit2OwnerKind`).
-    func row(listText: Bool) {
-        liveListRowCount += listText ? 1 : -1
+    /// A live row's owner kind changed (`TextKit2OwnerKind`): it leaves
+    /// the old kind's live count and joins the new one's. A new row is
+    /// `.root`, which has no count of its own.
+    func row(ownerKind new: TextKit2OwnerKind, was old: TextKit2OwnerKind) {
+        count(old, by: -1)
+        count(new, by: 1)
+    }
+
+    /// Exhaustive, so a new owner kind must decide its own live count.
+    private func count(_ kind: TextKit2OwnerKind, by delta: Int) {
+        switch kind {
+        case .root: break
+        case .list: liveListRowCount += delta
+        case .code: liveCodeRowCount += delta
+        }
     }
 
     /// A row converted its prepared text into the string it lays out.
@@ -325,11 +512,14 @@ final class TextKit2Diagnostics {
     }
 
     /// A draw pass; `native`: TextKit 2 drew at least one layout fragment;
-    /// `textKit1`: the row's TextKit 1 stack drew it.
-    func didDraw(native: Bool, textKit1: Bool = false) {
+    /// `textKit1`: the row's TextKit 1 stack drew it; `code`: the row
+    /// draws a code block's code (`TextKit2OwnerKind.code`), so a native
+    /// pass is also a code-native one.
+    func didDraw(native: Bool, textKit1: Bool = false, code: Bool = false) {
         drawCount += 1
         if native { nativeDrawCount += 1 }
         if textKit1 { textKit1BackedDrawCount += 1 }
+        if native, code { codeNativeDrawCount += 1 }
     }
 
     /// A rebuild-control leaf appeared (`true`) or disappeared.

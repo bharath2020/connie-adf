@@ -12,6 +12,12 @@ import ADFPreparation
 /// (its colours are dynamic, resolved when the row draws), so the scheme
 /// is the row's paint input, applied apart
 /// (`TextKit2RowView.apply(_:colorScheme:ownerID:)`).
+///
+/// `layoutPolicy` says whether the text wraps at the proposed width
+/// (`.wrapping`, the default: paragraphs, headings, list text) or is laid
+/// out once at its natural width and never wraps (`.natural`: code, see
+/// `TextKit2OwnerKind.layoutPolicy`). It is part of the key, so changing
+/// it rebuilds the row's text and lays it out again.
 struct TextKit2RenderInputs: Hashable {
     var text: AttributedString
     var alignment: ADFAlignment?
@@ -20,6 +26,7 @@ struct TextKit2RenderInputs: Hashable {
     var layoutDirection: LayoutDirection
     var displayScale: CGFloat
     var legibilityWeight: LegibilityWeight?
+    var layoutPolicy: TextKit2LayoutPolicy
 
     init(
         text: AttributedString,
@@ -28,7 +35,8 @@ struct TextKit2RenderInputs: Hashable {
         sizeCategory: UIContentSizeCategory = .large,
         layoutDirection: LayoutDirection = .leftToRight,
         displayScale: CGFloat = 3,
-        legibilityWeight: LegibilityWeight? = nil
+        legibilityWeight: LegibilityWeight? = nil,
+        layoutPolicy: TextKit2LayoutPolicy = .wrapping
     ) {
         self.text = text
         self.alignment = alignment
@@ -37,6 +45,7 @@ struct TextKit2RenderInputs: Hashable {
         self.layoutDirection = layoutDirection
         self.displayScale = displayScale
         self.legibilityWeight = legibilityWeight
+        self.layoutPolicy = layoutPolicy
     }
 }
 
@@ -117,7 +126,16 @@ enum TextKit2TextBuilder {
         }
 
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = nsAlignment(inputs.alignment, layoutDirection: inputs.layoutDirection)
+        // Text that never wraps (`.natural`) is laid out in the row's
+        // unbounded container, where only left-aligned lines start at the
+        // row's own edge: a right-aligned or centred line would sit against
+        // the far end of that container. So its lines are always left
+        // aligned, whatever the style or layout direction asks; the break
+        // mode below never acts on it, because no line reaches the
+        // container's width (`TextKit2RowView.layoutResult`).
+        paragraph.alignment = inputs.layoutPolicy == .natural
+            ? .left
+            : nsAlignment(inputs.alignment, layoutDirection: inputs.layoutDirection)
         paragraph.baseWritingDirection = .natural
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.lineBreakStrategy = lineBreakStrategy
