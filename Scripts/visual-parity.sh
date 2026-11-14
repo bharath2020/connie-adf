@@ -9,6 +9,8 @@
 #       --app <branch ADFReader.app> [--out <dir>]
 #       [--fixture <name>[@<f1>,<f2>...]]... [--appearances "light dark"]
 #       [--list-fixture <name>[:<min markers>]]... [--allow-other-booted]
+#       [--code-capture <declaration>]... [--no-code-captures]
+#       [--require-owner-proof]
 #       [--size-steps "0 3"] [--arms "A A2 B C"] [--content-size large]
 #       [--settle 3] [--scroll-wait 2] [--ready-timeout 90]
 #       [--mask x0,y0,x1,y1]... [--top-band 330] [--bottom-band 102]
@@ -45,6 +47,37 @@
 #   List captures (pairs of a --list-fixture): INVALID with fewer than
 #   <min markers> marker crops (default 3), FAIL on low-contrast fill
 #   differences (decision row backgrounds) the tolerant rule cannot see.
+#   Every pair, every kind: code boxes (visual_diff.py "CODE BOXES"): each
+#   code block's grey box is found in the reference screenshot; its header
+#   strip (badge, Copy button) and its outline must not differ by one pixel
+#   at channel threshold 0, where A–A' is exactly stable (else the pair is
+#   INVALID, never loosened); the candidate must hold the same box; the
+#   code text must stay within the kind's crop limit with every code line
+#   displaced 0 px horizontally and vertically.
+#
+# CODE CAPTURES (--code-capture, repeatable; added to the default set, a
+#   declaration for the same position and step replaces the default one;
+#   --no-code-captures drops the defaults)
+#     <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...][;land=<block id>]
+#   declares what a position shows, per size step when #s<step> is given
+#   (nothing is inferred from the screenshot or the stats):
+#     positive  the code owners marked tk2 are drawn by TextKit 2 on arm C
+#               (owners marked swiftui beside them stay on SwiftUI);
+#     fallback  every named owner stays on SwiftUI on arm C too (over the
+#               canvas budget, outside the admitted cohort, nested code). A
+#               fallback capture never counts as native coverage.
+#   <owner> is the code block's RenderBlock id (0.<n> at top level); land=
+#   is the id of the block the position scrolls to. Each pair of a declared
+#   capture is INVALID - not PASS - without a code box (and, when positive,
+#   a code text crop), and without its engine proof, read from the arm's
+#   launch log AFTER the app's `SCROLL_LANDED ... block=<id>` line (the
+#   RENDERER_STATS line at READY predates the jump): arm C renderer=textkit2
+#   with tk2CodeLive > 0 and tk2CodeDraws > 0 when positive; arm B
+#   renderer=swiftui with both 0; and, when the app prints `TK2_CODE_ROWS
+#   owners=<id>:<native draws>,...`, each tk2 owner listed with draws > 0
+#   and each swiftui owner absent (--require-owner-proof makes that line
+#   mandatory; without it a fallback capture is provable only when
+#   tk2CodeLive = 0). --no-renderer-stats drops the proof with the flag.
 #
 # CAPTURE PROCEDURE (identical for every arm)
 #   terminate + uninstall + install the arm's .app (no persisted renderer key
@@ -60,7 +93,12 @@
 #   the same timeline) plus --settle (default 3 s), `simctl io screenshot`,
 #   terminate. A reference built from a commit that predates the re-jump
 #   needs it patched into Demo/ADFReader/ReaderView.swift, or arm A lands
-#   nondeterministically.
+#   nondeterministically. Arms B and C of a declared code capture also wait
+#   (up to 15 s more, normally not at all) for the app's `SCROLL_LANDED`
+#   line, printed about 2.6 s after READY with the RENDERER_STATS and
+#   TK2_CODE_ROWS lines the code proof reads: the screenshot is never taken
+#   before the log describes it. A build that never prints the line is
+#   captured anyway and its code pairs score INVALID.
 #
 # DEFAULTS
 #   fixtures   kitchen-sink@0,0.5 (H1, every-mark paragraph, centered and
@@ -99,6 +137,29 @@
 #                @0.761  block 456: deep in the document — task list,
 #                        decision lists (backgrounds, atoms, links),
 #                        nested bullets (its first row is under the band)
+#              plus the code positions (PR 3; the constants and their
+#              arithmetic are below, "Code captures"). A code position
+#              lands on the block ABOVE the code it is about, so the code
+#              box clears the --exact-mask band:
+#              kitchen-sink (38 blocks)
+#                @0.275  block 10: the bullet list; the ordered list and
+#                        the code block 0.12 (breakout wide) follow
+#              code-parity (34 blocks)
+#                @0      block 0: CP-S1, plain code CP-01…CP-05
+#                @0.19   block 6: CP-S2, breakout wide and full-width
+#                @0.28   block 9: CP-S3, blank lines, trailing newlines
+#                @0.515  block 17: CP-S4, the 300-column line (SwiftUI at
+#                        3x), then the block just under the canvas budget
+#                        (TextKit 2 at step 0, SwiftUI at step 3)
+#                @0.66   block 22: CP-S5, tabs, emoji/CJK, combining marks,
+#                        RTL, "" and "\n" (all SwiftUI: expected fallback)
+#                @0.87   block 29: CP-S6, nested code (SwiftUI; the document
+#                        end clamps the scroll)
+#              code-dense (600 blocks, code only)
+#                @0      block 0 (its header under the band), blocks 1, 2
+#                @0.5    block 300 (its header under the band), then 301
+#                        and on
+#   code captures  one declaration per code position (CODE_CAPTURES_DEFAULT)
 #   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
 #              replaces the set; pairs of other fixtures are not list pairs)
 #   masks      --top-band 330 (status bar + inline nav bar/toolbar, where the
@@ -121,7 +182,9 @@
 #   manifest.tsv     one row per capture: arm, fixture, position, appearance,
 #                    size step, content size, app path + sha256, installed
 #                    sha256, argv, device, runtime, locale, READY and
-#                    RENDERER_STATS lines, png sha256, time
+#                    RENDERER_STATS lines, png sha256, time, status, and the
+#                    SCROLL_LANDED line with the RENDERER_STATS and
+#                    TK2_CODE_ROWS lines printed after it (the code proof)
 #   env.txt          host, Xcode, device, settings, git head of this checkout
 #   scores.csv, scores.json, summary.md, *.sbs.png, crops/   (visual_diff.py)
 #
@@ -159,6 +222,7 @@ CONTENT_SIZE="large"
 SETTLE_SECONDS=3
 SCROLL_WAIT_SECONDS=2
 READY_TIMEOUT=90
+LANDED_WAIT_SECONDS=15   # extra wait for SCROLL_LANDED on a declared code capture
 MASKS=()
 TOP_BAND=330
 BOTTOM_BAND=102
@@ -178,8 +242,80 @@ DRY_RUN=0
 ALLOW_OTHER_BOOTED=0
 LIST_FIXTURES=()
 LIST_FIXTURES_DEFAULT=("lists-parity:3" "list-dense:3" "list-tall:3")
+
+# ---- Code captures (PR 3) ----------------------------------------------------
+# A position lands blocks[Int(position × blocks)] with its top under the
+# toolbar. A code position names the block ABOVE the code it is about (a
+# section heading or a list), never the code block itself: a box whose top
+# is under the toolbar has its header strip inside the --exact-mask band
+# (rows 330–460, the toolbar capsules' shadows), where nothing can be
+# compared at threshold 0, and visual_diff.py does not score such a box.
+#
+# TEAM LEAD: confirm every fraction, land= block and owner below against
+# the final fixtures' READY block counts and the generator's summary before
+# the gate run. The run checks the landing too: the app's SCROLL_LANDED line
+# must name the land= block, or the pair is INVALID.
+#
+# kitchen-sink: 37 top-level nodes prepare to 38 blocks. The code block is
+# node 12 = block id 0.12 = blocks[12]: nodes 0–11 (headings, paragraphs,
+# a quote, two lists) prepare to exactly one block each, so the 38th block
+# comes from a later node. 0.275 × 38 = 10.45 → blocks[10], the bullet list
+# two blocks above the code block (blocks[11] is a two-item ordered list),
+# which puts the code box about a third of a screen below the band. 0.275
+# lands blocks[10] for 37 and 39 blocks as well. To land ON the code block
+# instead: 0.33 (12.54 of 38) — its header strip is then under the band and
+# the capture can only be INVALID.
+KITCHEN_SINK_CODE_POSITION="0.275"
+KITCHEN_SINK_CODE_LAND="0.10"
+KITCHEN_SINK_CODE_OWNER="0.12"
+# code-parity: 34 top-level nodes, one block each (Tools/make-fixtures.swift,
+# "Fixture 10": block id = 0.<node index>). One position per CP-S heading:
+#   CP-S1 blocks[0]  → 0        CP-S2 blocks[6]  → 0.19  (6.46 of 34)
+#   CP-S3 blocks[9]  → 0.28  (9.52)    CP-S4 blocks[17] → 0.515 (17.51)
+#   CP-S5 blocks[22] → 0.66  (22.44)   CP-S6 blocks[29] → 0.87  (29.58)
+CODE_PARITY_POSITIONS="0,0.19,0.28,0.515,0.66,0.87"
+# code-dense: 600 code blocks and nothing else (block id 0.<i>, first line
+# "// CD-<iii>"). Block 0 and block 300 land with their header strip under
+# the band: they are live, drawn rows (named as owners) but not scored as
+# boxes; the boxes scored are the blocks below them. Blocks 0–2 are pinned
+# by the generator to 3–8 lines of at most 40 columns. Blocks 300 (5 x 28)
+# and 301 (10 x 65) are predicted admitted at steps 0 and 3 by the
+# generator's Python port (fixture notes, section 6; neither is in the
+# "kept over budget" list). TEAM LEAD: confirm 300 and 301 against the
+# generator log; when a named owner is gated the pair is INVALID and says
+# which owner has no live TextKit 2 row.
+CODE_DENSE_POSITIONS="0,0.5"
+CODE_CAPTURES_DEFAULT=(
+    "kitchen-sink@$KITCHEN_SINK_CODE_POSITION=positive;$KITCHEN_SINK_CODE_OWNER=tk2;land=$KITCHEN_SINK_CODE_LAND"
+    # CP-S1: CP-01 (one line) and CP-02 (eight lines), plain ASCII.
+    "code-parity@0=positive;0.1=tk2,0.2=tk2;land=0.0"
+    # CP-S2: CP-06 breakout wide, CP-07 breakout full-width.
+    "code-parity@0.19=positive;0.7=tk2,0.8=tk2;land=0.6"
+    # CP-S3: CP-08 and CP-09, blank lines in the middle (LF only: admitted).
+    "code-parity@0.28=positive;0.10=tk2,0.11=tk2;land=0.9"
+    # CP-S4: CP-15, one 300-column line, is over 8,192 px wide at 3x
+    # (SwiftUI); CP-16 is the block just under the canvas budget: TextKit 2
+    # at step 0, over the budget and on SwiftUI from step 1; CP-17 below it
+    # is over the budget at every size (off screen at step 3).
+    "code-parity@0.515=positive;0.18=swiftui,0.19=tk2,0.20=swiftui;land=0.17"
+    "code-parity@0.515#s3=fallback;0.18=swiftui,0.19=swiftui;land=0.17"
+    # CP-S5: tabs (CP-19) and non-ASCII (CP-20, CP-21, CP-22) are outside
+    # the admitted cohort.
+    "code-parity@0.66=fallback;0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22"
+    # CP-S6: nested code stays on SwiftUI (CP-25 in a bullet item, CP-26 in
+    # a panel; CP-27 is in a collapsed expand and not on screen).
+    "code-parity@0.87=fallback;0.30.0.1=swiftui,0.31.1=swiftui;land=0.29"
+    "code-dense@0=positive;0.0=tk2,0.1=tk2,0.2=tk2;land=0.0"
+    "code-dense@0.5=positive;0.300=tk2,0.301=tk2;land=0.300"
+)
+CODE_CAPTURES=()
+CODE_CAPTURES_EXPLICIT=()
+NO_CODE_CAPTURES=0
+REQUIRE_OWNER_PROOF=0
 DEFAULT_FIXTURE_SPECS=("kitchen-sink@0,0.5" "stress-5k@0,0.5"
-    "lists-parity@0,0.119,0.214,0.357,0.405,0.452,0.548,0.643" "list-dense@0.761")
+    "lists-parity@0,0.119,0.214,0.357,0.405,0.452,0.548,0.643" "list-dense@0.761"
+    "kitchen-sink@$KITCHEN_SINK_CODE_POSITION" "code-parity@$CODE_PARITY_POSITIONS"
+    "code-dense@$CODE_DENSE_POSITIONS")
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 log() { printf '[visual-parity] %s\n' "$*" >&2; }
@@ -218,6 +354,9 @@ while [[ $# -gt 0 ]]; do
         --keep-booted) KEEP_BOOTED=1; shift ;;
         --allow-other-booted) ALLOW_OTHER_BOOTED=1; shift ;;
         --list-fixture) need_value "$@"; LIST_FIXTURES+=("$2"); shift 2 ;;
+        --code-capture) need_value "$@"; CODE_CAPTURES_EXPLICIT+=("$2"); shift 2 ;;
+        --no-code-captures) NO_CODE_CAPTURES=1; shift ;;
+        --require-owner-proof) REQUIRE_OWNER_PROOF=1; shift ;;
         --skip-capture) SKIP_CAPTURE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -229,6 +368,20 @@ done
 [[ ${#LIST_FIXTURES[@]} -gt 0 ]] || LIST_FIXTURES=("${LIST_FIXTURES_DEFAULT[@]}")
 for rule in "${LIST_FIXTURES[@]}"; do
     [[ "$rule" =~ ^[A-Za-z0-9_.-]+(:[0-9]+)?$ ]] || die "--list-fixture '$rule': want <name>[:<min markers>]"
+done
+# Code captures: the defaults (unless --no-code-captures), then the explicit
+# ones; code_rule_for reads the list from the end, so a later declaration
+# for the same position and step wins.
+[[ $NO_CODE_CAPTURES -eq 1 ]] || CODE_CAPTURES=("${CODE_CAPTURES_DEFAULT[@]}")
+for decl in ${CODE_CAPTURES_EXPLICIT[@]+"${CODE_CAPTURES_EXPLICIT[@]}"}; do CODE_CAPTURES+=("$decl"); done
+CODE_CAPTURE_RE='^[A-Za-z0-9_.-]+@(0|1|0?[.][0-9]+|1[.]0*)(#s-?[0-9]+)?=(positive|fallback);[0-9.]+=(tk2|swiftui)(,[0-9.]+=(tk2|swiftui))*(;land=[0-9.]+)?$'
+for decl in ${CODE_CAPTURES[@]+"${CODE_CAPTURES[@]}"}; do
+    [[ "$decl" =~ $CODE_CAPTURE_RE ]] ||
+        die "--code-capture '$decl': want <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...][;land=<block id>]"
+    case "$decl" in
+        *"=positive;"*) [[ "$decl" == *=tk2* ]] || die "--code-capture '$decl': a positive capture needs an owner marked tk2" ;;
+        *) [[ "$decl" != *=tk2* ]] || die "--code-capture '$decl': a fallback capture cannot mark an owner tk2" ;;
+    esac
 done
 for arm in $ARMS; do
     case "$arm" in A|A2|B|C) ;; *) die "--arms: unknown arm '$arm' (A A2 B C)" ;; esac
@@ -300,11 +453,43 @@ for fixture_pos in "${POSITIONS[@]}"; do
 done
 [[ ${#PLAN[@]} -gt 0 ]] || die "empty capture plan (check --appearances / --size-steps)"
 
+# code_rule_for <fixture> <position> <step>: "<class>\t<owners[;land=…]>" of
+# the code capture declared for that configuration, or nothing. A
+# declaration with #s<step> beats one without; among equals the last wins.
+code_rule_for() {
+    local fixture="$1" pos="$2" step="$3" index decl key value general=""
+    index=${#CODE_CAPTURES[@]}
+    while (( index > 0 )); do
+        index=$(( index - 1 ))
+        decl="${CODE_CAPTURES[$index]}"
+        key="${decl%%=*}"
+        value="${decl#*=}"
+        if [[ "$key" == "$fixture@$pos#s$step" ]]; then
+            printf '%s\t%s\n' "${value%%;*}" "${value#*;}"
+            return 0
+        fi
+        [[ -n "$general" || "$key" != "$fixture@$pos" ]] || general="$value"
+    done
+    [[ -z "$general" ]] || printf '%s\t%s\n' "${general%%;*}" "${general#*;}"
+}
+
+# An explicit declaration that matches no planned position is a typo.
+for decl in ${CODE_CAPTURES_EXPLICIT[@]+"${CODE_CAPTURES_EXPLICIT[@]}"}; do
+    key="${decl%%=*}"
+    planned=0
+    for fixture_pos in "${POSITIONS[@]}"; do
+        IFS=$'\t' read -r fixture pos <<<"$fixture_pos"
+        [[ "${key%%#*}" != "$fixture@$pos" ]] || planned=1
+    done
+    [[ $planned -eq 1 ]] || die "--code-capture '$decl': no --fixture position ${key%%#*} in this run"
+done
+
 DIFF_ARGS=(--top-band "$TOP_BAND" --bottom-band "$BOTTOM_BAND" --threshold "$THRESHOLD"
     --max-noise-pct "$MAX_NOISE_PCT" --max-exact-pct "$MAX_EXACT_PCT"
     --max-raw-pct "$MAX_RAW_PCT" --max-crop-pct "$MAX_CROP_PCT" --max-offset-px "$MAX_OFFSET_PX")
 for mask in ${MASKS[@]+"${MASKS[@]}"}; do DIFF_ARGS+=(--mask "$mask"); done
 for mask in ${EXACT_MASKS[@]+"${EXACT_MASKS[@]}"}; do DIFF_ARGS+=(--exact-mask "$mask"); done
+[[ $REQUIRE_OWNER_PROOF -eq 0 ]] || DIFF_ARGS+=(--require-owner-proof)
 # List captures: pair names are <fixture>-p<position>-…, so the prefix
 # "<fixture>-p" names exactly that fixture's pairs.
 for rule in "${LIST_FIXTURES[@]}"; do
@@ -314,18 +499,39 @@ for rule in "${LIST_FIXTURES[@]}"; do
     DIFF_ARGS+=(--list-pair "$list_name-p:$list_min")
 done
 
-# pair_args <require-files:0|1>: the --pair arguments for every configuration.
+# The engine a pair's candidate arm ran, for the code proof: none for the
+# reference build (it prints no stats) and under --no-renderer-stats.
+arm_engine() {
+    [[ $RENDERER_STATS -eq 1 ]] || { echo none; return 0; }
+    case "$1" in B) echo swiftui ;; C) echo textkit2 ;; *) echo none ;; esac
+}
+
+# pair_args <require-files:0|1>: the --pair arguments for every configuration,
+# and the --code-capture declaration of each pair of a code capture.
 PAIR_ARGS=()
+CODE_ARGS=()
+PAIR_COUNT=0
 build_pairs() {
-    local require="$1" entry cfg a
+    local require="$1" entry cfg a fixture pos appearance step rule cls owners
     PAIR_ARGS=()
+    CODE_ARGS=()
+    PAIR_COUNT=0
     for entry in "${PLAN[@]}"; do
-        cfg="${entry%%$'\t'*}"
+        IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
         a="$CAPTURES/$cfg-A.png"
+        rule="$(code_rule_for "$fixture" "$pos" "$step")"
+        cls="${rule%%$'\t'*}"
+        owners="${rule#*$'\t'}"
         add_pair() {   # <kind> <suffix> <arm>
-            local cand="$CAPTURES/$cfg-$3.png"
+            local cand="$CAPTURES/$cfg-$3.png" engine log="-"
             if [[ $require -eq 0 ]] || [[ -f "$a" && -f "$cand" ]]; then
                 PAIR_ARGS+=(--pair "$1" "$cfg-$2" "$a" "$cand")
+                PAIR_COUNT=$(( PAIR_COUNT + 1 ))
+                if [[ -n "$rule" ]]; then
+                    engine="$(arm_engine "$3")"
+                    [[ "$engine" == "none" ]] || log="$CAPTURES/$cfg-$3.log"
+                    CODE_ARGS+=(--code-capture "$cfg-$2" "$cls" "$owners" "$engine" "$log")
+                fi
             fi
         }
         if has_arm A2; then add_pair noise AA A2; fi
@@ -352,10 +558,20 @@ if [[ $DRY_RUN -eq 1 ]]; then
             done
         done
     fi
+    echo "code captures (configuration: class; owners; landing block):"
+    declared=0
+    for entry in "${PLAN[@]}"; do
+        IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
+        rule="$(code_rule_for "$fixture" "$pos" "$step")"
+        [[ -n "$rule" ]] || continue
+        declared=$(( declared + 1 ))
+        echo "  $cfg: ${rule%%$'\t'*}; ${rule#*$'\t'}"
+    done
+    [[ $declared -gt 0 ]] || echo "  (none)"
     build_pairs 0
     echo "score:"
     printf '  python3 -I %q --out %q' "$SCRIPT_DIR/visual_diff.py" "$OUT"
-    printf ' %q' "${DIFF_ARGS[@]}" "${PAIR_ARGS[@]}"
+    printf ' %q' "${DIFF_ARGS[@]}" "${PAIR_ARGS[@]}" ${CODE_ARGS[@]+"${CODE_ARGS[@]}"}
     echo
     exit 0
 fi
@@ -428,12 +644,20 @@ image_size() {
 # First line of $2 starting with marker $1 (PTY \r stripped), or "".
 marker_line() { tr -d '\r' <"$2" | grep -m1 -E "^$1( |\$)" || true; }
 
+# First line of $2 starting with marker $1 AFTER the SCROLL_LANDED line (what
+# the app prints once the -scrollToFraction jump has landed), or "".
+landed_line() {
+    tr -d '\r' <"$2" | awk -v marker="$1" '
+        !landed { if ($1 == "SCROLL_LANDED") landed = 1; next }
+        $1 == marker { print; exit }'
+}
+
 tsv() { local IFS=$'\t'; printf '%s\n' "$*"; }
 
 # capture <cfg> <arm> <fixture> <position> <appearance> <step>
 capture() {
     local cfg="$1" arm="$2" fixture="$3" pos="$4" appearance="$5" step="$6"
-    local app png launch_log app_sha installed_sha container ready stats want
+    local app png launch_log app_sha installed_sha container ready stats want blocks
     app="$(arm_app "$arm")"
     png="$CAPTURES/$cfg-$arm.png"
     launch_log="$CAPTURES/$cfg-$arm.log"
@@ -483,6 +707,23 @@ capture() {
     ready="$(marker_line READY "$launch_log")"
     sleep "$SCROLL_WAIT_SECONDS"
     sleep "$SETTLE_SECONDS"
+    # The proof of a declared code capture is what the app prints once the
+    # jump has landed. It is there by now (about 2.6 s after READY); on a
+    # slow host, wait for it rather than capture a screen the log does not
+    # describe yet.
+    if [[ "$(arm_engine "$arm")" != "none" && -n "$(code_rule_for "$fixture" "$pos" "$step")" &&
+        -z "$(marker_line SCROLL_LANDED "$launch_log")" ]]; then
+        local landed_deadline=$(( SECONDS + LANDED_WAIT_SECONDS ))
+        while [[ -z "$(marker_line SCROLL_LANDED "$launch_log")" ]] && (( SECONDS < landed_deadline )) &&
+            kill -0 "$LAUNCH_PID" 2>/dev/null; do
+            sleep 0.2
+        done
+        if [[ -n "$(marker_line SCROLL_LANDED "$launch_log")" ]]; then
+            sleep 1   # the two lines printed with it, and the frame
+        else
+            log "$cfg-$arm: no SCROLL_LANDED line ${LANDED_WAIT_SECONDS}s after the settle: its code proof will be INVALID"
+        fi
+    fi
     if ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
         log "$cfg-$arm: app exited during settle (see $launch_log)"
         LAUNCH_PID=""
@@ -507,11 +748,21 @@ capture() {
         esac
     fi
     [[ -s "$png" ]] || problems="${problems:+$problems; }no screenshot written"
+    # A position names blocks[Int(position × blocks)]: it is the same block in
+    # every arm only while every arm reports the same READY block count.
+    blocks="$(printf '%s\n' "$ready" | tr ' ' '\n' | grep -m1 '^blocks=' || true)"
+    if [[ -z "$CFG_BLOCKS" ]]; then
+        CFG_BLOCKS="$blocks"
+    elif [[ "$blocks" != "$CFG_BLOCKS" ]]; then
+        problems="${problems:+$problems; }READY ${blocks:-without blocks=} but an earlier arm of $cfg reported $CFG_BLOCKS: the position names another block"
+    fi
 
     tsv "$cfg-$arm" "$arm" "$fixture" "$pos" "$appearance" "$step" "$CONTENT_SIZE" "$app" "$app_sha" \
         "$installed_sha" "${args[*]}" "$UDID" "$DEVICE_NAME" "$DEVICE_RUNTIME" "$LOCALE" "$ready" \
         "${stats:-}" "$( [[ -s "$png" ]] && sha256 "$png" || echo missing )" \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${problems:-ok}" >>"$MANIFEST"
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${problems:-ok}" \
+        "$(marker_line SCROLL_LANDED "$launch_log")" "$(landed_line RENDERER_STATS "$launch_log")" \
+        "$(landed_line TK2_CODE_ROWS "$launch_log")" >>"$MANIFEST"
 
     if [[ -n "$problems" ]]; then
         log "$cfg-$arm: $problems"
@@ -538,6 +789,7 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
         echo "device=$UDID $DEVICE_NAME $DEVICE_RUNTIME booted_by_this_run=$BOOTED_BY_US"
         echo "other_booted=${OTHER_BOOTED:-none} allow_other_booted=$ALLOW_OTHER_BOOTED"
         echo "list_fixtures=${LIST_FIXTURES[*]}"
+        echo "code_captures=${CODE_CAPTURES[*]:-none} require_owner_proof=$REQUIRE_OWNER_PROOF"
         echo "locale=$LOCALE content_size=$CONTENT_SIZE (device had: ${ORIG_CONTENT_SIZE:-?}, appearance ${ORIG_APPEARANCE:-?})"
         echo "ref_app=$REF_APP sha256=$(sha256 "$REF_APP/ADFReader")"
         if [[ -n "$APP" && -x "$APP/ADFReader" ]]; then
@@ -552,10 +804,12 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
         echo "checkout=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo ?) dirty_paths=$(git -C "$ROOT" status --porcelain 2>/dev/null | grep -c . || true)"
     } >"$OUT/env.txt"
     tsv capture arm fixture position appearance size_step content_size app app_sha256 installed_sha256 \
-        argv udid device runtime locale ready_line renderer_stats png_sha256 captured_utc status >"$MANIFEST"
+        argv udid device runtime locale ready_line renderer_stats png_sha256 captured_utc status \
+        scroll_landed landed_renderer_stats landed_code_rows >"$MANIFEST"
 
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
+        CFG_BLOCKS=""
         for arm in $ARMS; do
             capture "$cfg" "$arm" "$fixture" "$pos" "$appearance" "$step" ||
                 CAPTURE_FAILURES=$(( CAPTURE_FAILURES + 1 ))
@@ -568,7 +822,8 @@ fi
 build_pairs 1
 [[ ${#PAIR_ARGS[@]} -gt 0 ]] || { log "nothing to compare under $CAPTURES"; exit 1; }
 DIFF_STATUS=0
-python3 -I "$SCRIPT_DIR/visual_diff.py" --out "$OUT" "${DIFF_ARGS[@]}" "${PAIR_ARGS[@]}" || DIFF_STATUS=$?
+python3 -I "$SCRIPT_DIR/visual_diff.py" --out "$OUT" "${DIFF_ARGS[@]}" "${PAIR_ARGS[@]}" \
+    ${CODE_ARGS[@]+"${CODE_ARGS[@]}"} || DIFF_STATUS=$?
 
 echo
 echo "captures:  $CAPTURES"
@@ -581,8 +836,8 @@ if (( CAPTURE_FAILURES > 0 )); then
 fi
 expected_pairs=0
 for arm in A2 B C; do has_arm "$arm" && expected_pairs=$(( expected_pairs + ${#PLAN[@]} )); done
-if (( ${#PAIR_ARGS[@]} / 5 != expected_pairs )); then
-    log "FAIL: scored $(( ${#PAIR_ARGS[@]} / 5 )) of $expected_pairs pairs (captures missing under $CAPTURES)"
+if (( PAIR_COUNT != expected_pairs )); then
+    log "FAIL: scored $PAIR_COUNT of $expected_pairs pairs (captures missing under $CAPTURES)"
     exit 1
 fi
 case "$DIFF_STATUS" in
