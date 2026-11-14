@@ -186,7 +186,11 @@ struct TextKit2ListDiagnosticsTests {
         var eligibleList: Set<String> = []
         TextKit2Scope.forEachLeaf(in: model.blocks) { leaf in
             guard case .eligible = leaf.verdict else { return }
-            if leaf.position == .root { eligibleRoots.insert(leaf.ownerID) } else { eligibleList.insert(leaf.ownerID) }
+            switch leaf.position.ownerKind {
+            case .root: eligibleRoots.insert(leaf.ownerID)
+            case .list: eligibleList.insert(leaf.ownerID)
+            case .code: break // top-level code is PR 3's; not counted here
+            }
         }
         // Before iOS 26 no list text is eligible (`TextKit2Eligibility.listsMatchText`,
         // `.osGatedList`): list text draws on SwiftUI, roots as in PR 1.

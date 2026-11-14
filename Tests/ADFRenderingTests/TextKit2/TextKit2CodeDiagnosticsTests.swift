@@ -770,6 +770,9 @@ struct TextKit2CodeDiagnosticsTests {
             #expect(diagnostics.codeNativeDrawCount - codeNative == 4)
             #expect(diagnostics.codeRowDraws.count == owners)
             #expect(diagnostics.codeRowDraws[second] == 0)
+            // The checks above count `row` as live; keep it alive past its
+            // last use so an optimised build cannot release it early.
+            withExtendedLifetime(row) {}
         }
         // Both rows are released: out of every live count and of the proof.
         #expect(diagnostics.liveRowCount == liveRows)
