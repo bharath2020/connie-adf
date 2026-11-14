@@ -2,10 +2,12 @@ import Foundation
 import Testing
 
 /// The renderer choice is set in exactly two places (Fable F4): the
-/// document row (`DocumentRow`: top-level `.richText` and `.listRows`) and
-/// the list row's trailing-block boundary (`ListRowView`). A third setter,
-/// such as a container passing it on, would leak TextKit 2 into an excluded
-/// subtree. Source scan, so it runs on every platform.
+/// document row (`DocumentRow`: top-level `.richText`, `.listRows` and
+/// `.codeBlock`) and the list row's trailing-block boundary
+/// (`ListRowView`). A third setter, such as a container passing it on,
+/// would leak TextKit 2 into an excluded subtree. A code block only reads
+/// the choice (`TextKit2CodeScopeRuleTests`). Source scan, so it runs on
+/// every platform.
 @Suite("TextKit 2 list scope: renderer setters")
 struct TextKit2RendererSetterTests {
     @Test("the renderer environment key is set in exactly two places")

@@ -222,6 +222,8 @@ struct TextKit2RowViewTests {
             "TextKit2CanvasView.swift", "TextKit1Stack.swift", "LayoutCache.swift",
         ]
         #expect(rowViewFiles.isSubset(of: files), "missing: \(rowViewFiles.subtracting(files).sorted())")
+        // So is the code gate, the one view added for code blocks.
+        #expect(files.contains("TextKit2CodeGate.swift"), "TextKit2CodeGate.swift is not among the scanned files")
         #expect(files.count >= 11)
         for file in files {
             let source = try String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8)

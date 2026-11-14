@@ -66,7 +66,9 @@ struct TextKit2FlipMemoryTests {
 
     @Test("allocation traffic and raw footprint per renderer switch (stress-5k)")
     func switchTraffic() async throws {
-        let undescribable = ADFTheme(body: .custom("Georgia", size: 17))
+        // Raw fonts for both the body and the code: no paragraph, list text
+        // or top-level code block (stress-5k has 400) is eligible under it.
+        let undescribable = ADFTheme(body: .custom("Georgia", size: 17), code: .system(size: 17, design: .monospaced))
         let sampleStacks = ProcessInfo.processInfo.environment["TK2_FLIP_MEMORY"] == "stacks"
         for (series, theme, switches) in [("textKit2", ADFTheme.default, true), ("mechanism", undescribable, true), ("idle", .default, false)] {
             let model = try await Self.model(theme: theme)

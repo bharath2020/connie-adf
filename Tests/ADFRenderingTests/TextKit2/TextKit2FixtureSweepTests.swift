@@ -106,8 +106,11 @@ struct TextKit2FixtureSweepTests {
             let doc = try await ADFParser().parse(try Self.fixtureData(document))
             let blocks = DocumentPreparer(theme: TK2Parity.theme).prepare(doc)
             var leaves: [TextKit2Scope.Leaf] = []
+            // List text only: the walk also visits top-level code blocks
+            // (`.codeRoot`: kitchen-sink 1, stress-5k 400), which are not
+            // list leaves and carry no segments to measure here.
             TextKit2Scope.forEachLeaf(in: blocks) { leaf in
-                if leaf.position != .root { leaves.append(leaf) }
+                if leaf.position.ownerKind == .list { leaves.append(leaf) }
             }
             var eligible = 0
             var measured: Set<Key> = []
