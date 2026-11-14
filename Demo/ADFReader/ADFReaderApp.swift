@@ -47,7 +47,21 @@ import UIKit
 ///   after READY and again right after `SCROLL_METRICS` — the perf gate's
 ///   proof of which engine drew (see `RendererStats`) — and, after a
 ///   `-scrollToFraction` jump, once more between `SCROLL_LANDED` and
-///   `TK2_CODE_ROWS` (above).
+///   `TK2_CODE_ROWS` (above). Since the code-block stage the line carries
+///   six code keys, after `listTrailingLeaves=` and before the optional
+///   rebuild-control keys, on both arms:
+///
+///       tk2CodeLive=<n> tk2CodeDraws=<n> eligibleCodeRoots=<n>
+///       fallbackCodeRoots=<n> codeAdmitted=<n> codeGated=<n>
+///
+///   `tk2CodeLive` counts the live TextKit 2 rows drawing a code block's
+///   code and `tk2CodeDraws` their native draw passes since launch (the
+///   code-native proof). `eligibleCodeRoots` / `fallbackCodeRoots` split
+///   the top-level code blocks by content (static). `codeAdmitted` /
+///   `codeGated` are measured: of the eligible ones, how many TextKit 2
+///   would draw, and how many a view-time rule keeps on SwiftUI, at this
+///   launch's text size, legibility weight, display scale and layout
+///   direction; the two sum to `eligibleCodeRoots`.
 /// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
 ///   streamed chunk arrives (the document is still loading) the way the
 ///   toolbar does, marked as automation's like `-textkit2` (the next launch
