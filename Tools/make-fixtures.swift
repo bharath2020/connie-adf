@@ -92,6 +92,11 @@
 //                       budget. Sized for 100–150 s of autoscroll; the
 //                       generator prints the realised histograms, the
 //                       estimate and the hand-countable totals.
+//                       `CodeDenseSpec.version` selects the lighten
+//                       ladder: 1 (the default) is this fixture; 2 and 3
+//                       are two fixed lighter versions (the tallest and
+//                       widest blocks moved down a bucket), declared
+//                       before any timing of the fixture exists.
 //   code-tall.json      a 400-line, 60-column code block (over the canvas
 //                       budget), the largest 60-column block declared
 //                       under it, and a short closing block (`-fixture
@@ -1597,6 +1602,16 @@ func smallestLineCountOverBudget(columns: Int, scale: Int) -> Int {
     return lines
 }
 
+/// The narrowest widest line declared over budget over `lineCount` lines
+/// (the width cap ends the search for any line count).
+func smallestColumnsOverBudget(lineCount: Int, scale: Int = CodeCanvasModel.displayScale) -> Int {
+    var columns = 1
+    while codeBudgetVerdict(lineCount: lineCount, maxColumns: columns, scale: scale) != .over {
+        columns += 1
+    }
+    return columns
+}
+
 // MARK: - Code fixtures: emitted-text measurement
 
 /// What the generator measured on one emitted code string, in one pass
@@ -2146,9 +2161,15 @@ func makeCodeParity() -> CodeFixture {
 // MARK: - Fixture 11: code-dense.json
 
 /// The frozen composition of code-dense. Quotas are exact (a seeded
-/// shuffle pairs them), so the line-count and drawn-width histograms are
-/// these numbers by construction.
+/// shuffle pairs them), so the line-count and drawn-width histograms of
+/// version 1 are these numbers by construction.
 enum CodeDenseSpec {
+    /// THE LIGHTEN LADDER: which version of code-dense is emitted. 1 (the
+    /// default) is the fixture as drawn. 2 and 3 are the two fixed
+    /// lightenings of `codeDenseLighten`, declared here before any timing
+    /// of the fixture exists. There is no version 4, and no other
+    /// parameter of this fixture may change once a timing has been seen.
+    static let version = 1
     static let blockCount = 600
     /// Line-count buckets and quotas: 5 % one line, 40 % 3–8, 40 % 9–20,
     /// 15 % 21–40. Uniform within a bucket.
@@ -2181,6 +2202,14 @@ struct CodeDenseSummary {
     /// Indices the budget rule shortened, and how many lines it cut.
     var shortenedBlocks: [Int] = []
     var shortenedLines = 0
+    /// The lighten ladder: the version emitted, how many blocks it moved
+    /// down from the tallest line bucket and from the widest width bucket,
+    /// and how many kept over-budget blocks it re-shaped (all 0 in
+    /// version 1).
+    var version = 1
+    var lightenedTall = 0
+    var lightenedWide = 0
+    var reshapedKept = 0
 }
 
 struct CodeDenseShape {
@@ -2242,6 +2271,103 @@ func codeDenseShapes(_ rng: inout LCG) -> [CodeDenseShape] {
         ))
     }
     return shapes
+}
+
+/// The blocks version 1 keeps over budget, from the drawn shapes alone:
+/// `overBudgetCount` of the shapes declared over budget, evenly spaced
+/// through them in index order. Version 1 itself decides on its emitted
+/// text, which has exactly its drawn shape, so it keeps these same blocks.
+func codeDenseKeptOverBudget(_ shapes: [CodeDenseShape]) -> [Int] {
+    var drawnOver: [Int] = []
+    for (index, shape) in shapes.enumerated() {
+        if codeBudgetVerdict(lineCount: shape.lineCount, maxColumns: shape.columns) == .over {
+            drawnOver.append(index)
+        }
+    }
+    precondition(drawnOver.count >= CodeDenseSpec.overBudgetCount,
+                 "code-dense: only \(drawnOver.count) shapes drew over budget; \(CodeDenseSpec.overBudgetCount) must be kept")
+    var kept: [Int] = []
+    for k in 0 ..< CodeDenseSpec.overBudgetCount {
+        kept.append(drawnOver[k * drawnOver.count / CodeDenseSpec.overBudgetCount])
+    }
+    return kept
+}
+
+/// THE LIGHTEN LADDER (`CodeDenseSpec.version`), fixed before any timing of
+/// the fixture exists. Version 1 changes nothing and returns nil. Versions
+/// 2 and 3 start from version 1's shapes (same seed, same draws in pass 1)
+/// and change only these, in index order, with no new draw:
+///
+///   - a block of the tallest line bucket (21–40 lines) that version 1 does
+///     not keep over budget moves down one bucket, to 9–20 lines:
+///     `9 + (lineCount − 21) % 12`. Version 2 moves every second such block
+///     (ranks 1, 3, 5, …), version 3 every one;
+///   - a block of the widest bucket (150–220 columns) that version 1 does
+///     not keep over budget moves down one bucket the same way, to 60–120
+///     columns: `60 + (columns − 150) % 61`;
+///   - version 3 only: a block version 1 keeps over budget that is in the
+///     tallest bucket gets the same line count rule and is widened, if it
+///     must be, to the narrowest width still declared over budget at its
+///     new line count. So version 3 has no block of more than 20 lines.
+///
+/// Every version keeps the blocks version 1 keeps over budget (the
+/// returned indices), 600 blocks and the `// CD-<iii>` sentinels; the
+/// budget rule then runs unchanged. Only pass 2's text differs: it is
+/// drawn for the new shapes.
+func codeDenseLighten(_ shapes: inout [CodeDenseShape], version: Int, summary: inout CodeDenseSummary) -> [Int]? {
+    precondition(version >= 1 && version <= 3, "code-dense: CodeDenseSpec.version must be 1, 2 or 3")
+    summary.version = version
+    guard version > 1 else { return nil }
+
+    let kept = codeDenseKeptOverBudget(shapes)
+    let keptSet = Set(kept)
+    let tallest = CodeDenseSpec.lineBuckets.count - 1
+    let widest = CodeDenseSpec.widthBuckets.count - 1
+    let tallFrom = CodeDenseSpec.lineBuckets[tallest].lowerBound
+    let tallTo = CodeDenseSpec.lineBuckets[tallest - 1]
+    let wideFrom = CodeDenseSpec.widthBuckets[widest].lowerBound
+    let wideTo = CodeDenseSpec.widthBuckets[widest - 1]
+    var tallRank = 0
+    var wideRank = 0
+    for index in 0 ..< shapes.count {
+        let shape = shapes[index]
+        var lineBucket = shape.lineBucket
+        var widthBucket = shape.widthBucket
+        var lineCount = shape.lineCount
+        var columns = shape.columns
+        if keptSet.contains(index) {
+            // Kept over budget: only version 3 touches it, and only when
+            // it is in the tallest bucket. Its width bucket label stays.
+            if version == 3 && shape.lineBucket == tallest {
+                lineCount = tallTo.lowerBound + (shape.lineCount - tallFrom) % tallTo.count
+                lineBucket = tallest - 1
+                columns = max(shape.columns, smallestColumnsOverBudget(lineCount: lineCount))
+                summary.reshapedKept += 1
+            }
+        } else {
+            if shape.lineBucket == tallest {
+                if version == 3 || tallRank % 2 == 1 {
+                    lineCount = tallTo.lowerBound + (shape.lineCount - tallFrom) % tallTo.count
+                    lineBucket = tallest - 1
+                    summary.lightenedTall += 1
+                }
+                tallRank += 1
+            }
+            if shape.widthBucket == widest {
+                if version == 3 || wideRank % 2 == 1 {
+                    columns = wideTo.lowerBound + (shape.columns - wideFrom) % wideTo.count
+                    widthBucket = widest - 1
+                    summary.lightenedWide += 1
+                }
+                wideRank += 1
+            }
+        }
+        shapes[index] = CodeDenseShape(
+            lineBucket: lineBucket, widthBucket: widthBucket,
+            lineCount: lineCount, columns: columns
+        )
+    }
+    return kept
 }
 
 /// Pass 2: the lines of block `index`. Line 0 starts with `// CD-<iii>`
@@ -2322,10 +2448,14 @@ func codeDenseBreakout(index: Int) -> String? {
 /// shapes, then text, then the budget rule — which keeps
 /// `CodeDenseSpec.overBudgetCount` of the blocks drawn over budget (evenly
 /// spaced through them, in index order) and shortens every other block
-/// that is not declared under budget.
+/// that is not declared under budget. Between the first two passes the
+/// lighten ladder (`codeDenseLighten`) re-shapes some blocks in versions 2
+/// and 3; in version 1 it does nothing.
 func makeCodeDense(summary: inout CodeDenseSummary) -> CodeFixture {
     var rng = LCG(seed: 0x5EED_C600)
-    let shapes = codeDenseShapes(&rng)
+    var shapes = codeDenseShapes(&rng)
+    // nil in version 1; in versions 2 and 3 the blocks version 1 keeps.
+    let ladderKept = codeDenseLighten(&shapes, version: CodeDenseSpec.version, summary: &summary)
 
     var blockLines: [[String]] = []
     blockLines.reserveCapacity(shapes.count)
@@ -2354,8 +2484,14 @@ func makeCodeDense(summary: inout CodeDenseSummary) -> CodeFixture {
     precondition(drawnOver.count >= CodeDenseSpec.overBudgetCount,
                  "code-dense: only \(drawnOver.count) blocks drew over budget; \(CodeDenseSpec.overBudgetCount) must be kept")
     var keptOver = Set<Int>()
-    for k in 0 ..< CodeDenseSpec.overBudgetCount {
-        keptOver.insert(drawnOver[k * drawnOver.count / CodeDenseSpec.overBudgetCount])
+    if let ladderKept {
+        // Versions 2 and 3: the same blocks as version 1, whatever else
+        // still draws over budget after the lightening.
+        keptOver = Set(ladderKept)
+    } else {
+        for k in 0 ..< CodeDenseSpec.overBudgetCount {
+            keptOver.insert(drawnOver[k * drawnOver.count / CodeDenseSpec.overBudgetCount])
+        }
     }
     precondition(keptOver.count == CodeDenseSpec.overBudgetCount, "code-dense: kept over-budget blocks must be distinct")
     summary.keptOver = keptOver.sorted()
@@ -2675,10 +2811,16 @@ func printCodeDenseSummary(_ fixture: CodeFixture, _ summary: CodeDenseSummary) 
         let counts = row.map { String($0) }.joined(separator: "/")
         joint.append("\(name) lines: \(counts)")
     }
+    // Blocks per drawn width bucket: the quotas in version 1, the ladder's
+    // counts in versions 2 and 3.
     var widthQuotas: [String] = []
-    for (bucket, quota) in CodeDenseSpec.widthQuotas.enumerated() {
-        let name = codeRangeName(CodeDenseSpec.widthBuckets[bucket])
-        widthQuotas.append("\(name)=\(quota)")
+    for (bucket, range) in CodeDenseSpec.widthBuckets.enumerated() {
+        let name = codeRangeName(range)
+        var drawn = 0
+        for row in summary.drawnJoint {
+            drawn += row[bucket]
+        }
+        widthQuotas.append("\(name)=\(drawn)")
     }
     var firstScreen: [String] = []
     for record in records.prefix(CodeDenseSpec.firstScreenBlocks) {
@@ -2703,10 +2845,11 @@ func printCodeDenseSummary(_ fixture: CodeFixture, _ summary: CodeDenseSummary) 
     let firstScreenLine = firstScreen.joined(separator: ", ")
 
     print("code-dense summary (emitted text measured by the generator, not preparer output):")
+    print("  lighten ladder: version \(summary.version) of 3 (CodeDenseSpec.version); moved down a bucket: \(summary.lightenedTall) of the tallest, \(summary.lightenedWide) of the widest; kept blocks re-shaped: \(summary.reshapedKept)")
     print("  blocks: \(blockCount), all top-level code blocks; lines: \(totalLines), mean \(meanLines); UTF-16 units: \(totalUnits)")
     print("  autoscroll estimate: sum(19 x lines + 28) = \(points) pt = \(seconds) s at 1,200 pt/s (\(legSeconds) s of scroll legs: the last block is only a target)")
     print("  line counts (LF + 1): \(lineHistogram)")
-    print("  widths drawn (quotas; widest line in columns): \(widthQuotaLine)")
+    print("  widths drawn (blocks per bucket before the budget rule; widest line in columns): \(widthQuotaLine)")
     print("  widths emitted (true widest line, after the budget rule): \(widthHistogram)")
     print("  drawn pairs, by width bucket in that order: \(jointLine)")
     print("  budget rule: drawn over=\(summary.drawnOver) marginal=\(summary.drawnMarginal); kept over=\(summary.keptOver.count); shortened blocks=\(summary.shortenedBlocks.count) (lines cut=\(summary.shortenedLines))")
