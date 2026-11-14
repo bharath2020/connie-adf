@@ -419,7 +419,7 @@ Disclosed, not parity. Evidence paths are under PR 2's task data directory.
 - **Text of hard breaks only stays on SwiftUI, root text included** (1ec8120, §6.4). It is now `.fallback(.empty)` for root and list text alike; in PR 1 a root paragraph of hard breaks only was a TK2 row.
 - **iOS 18.5: root text in narrow columns (PR 1 residual).** Mixed and Hebrew root paragraphs filling a 223.3 / 255.7 / 310.7 pt column: in 12 of 144 checks `Text` reports a width 1 px wider than TK2 (wider than the proposal), and in 2 (Hebrew, AX3, 255.7 pt) TK2 is 1 px taller. Root text keeps PR 1's behaviour there. Evidence: `<data>/phase5/g2-rtl-root-probe-ios18.log`.
 - **iOS 27.0 harness limit.** The switch test cannot scroll back to the top on iOS 27.0 (navigation-bar geometry; `RendererSwitchUITests`, "could not scroll back to the top"). Not a renderer result: final videos are recorded on iOS 26.3. Evidence: `<data>/videos/shakedown/switch.log`, `<data>/p4-uitests/run-notes.md`.
-- **Baseline stalls.** lists-parity past LP-S5 hits the lazy-stack livelock of issue #8 (at the table inside list `0.10` and the root table `0.16`); main shows it too. Lifecycle tests L1 and L3b at lists-parity's LP-S5 list (`0.10`, fraction 0.452) stall on main's build as well. No list UI test scrolls or parks past LP-S4. Evidence: `<data>/lifecycle/ab-stall/`, `<data>/p4-uitests/run-notes.md`.
+- **Baseline stalls.** lists-parity past LP-S5 hits the lazy-stack livelock of issue #8 (at the table inside list `0.10` and the root table `0.16`); main shows it too. Lifecycle tests L1 and L3b at lists-parity's LP-S5 list (`0.10`, fraction 0.452) stall on main's build as well, and so does test 4 on kitchen-sink after the TextKit 2 pick (main 7/10, the candidate 9/10, p = 0.29: not measurably worse); the final lifecycle gate leaves the three out (§8.3). No list UI test scrolls or parks past LP-S4. Evidence: `<data>/lifecycle/ab-stall/`, `<data>/lifecycle/ab-hang-20261114/`, `<data>/p4-uitests/run-notes.md`.
 
 ---
 
@@ -658,7 +658,28 @@ The autoscroll gate alone provably misses livelocks. Also run, in **both** arms:
 - **L5a / L5b** test 5/6's fling, Home/lock/switcher ×5 and 60 s soak on list-dense in each arm, with list-owned TK2 rows after the thrash.
 - **L6** test 7's rule-B twenty flips on list-dense (every root a list): the control and TK2 show the same ON count, list leaders and text included, and Fable F14 holds after each TK2 series.
 
-A no-switch control drift over 2 px is PR 1's known lifecycle flake (Fable F16; test 1 failed once on 14 px and passed on rerun): it is recorded as `failure_class` and rerun, never re-tuned. Durations: ~43 min for tests 1–8 and ~56 min for the list tests, plus the build. <!-- TODO(team-lead): lifecycle result (run path, per-test verdicts) -->
+A no-switch control drift over 2 px is PR 1's known lifecycle flake (Fable F16; test 1 failed once on 14 px and passed on rerun): it is recorded as `failure_class` and rerun, never re-tuned. Durations: ~43 min for tests 1–8 and ~56 min for the list tests, plus the build.
+
+**PR 2 result** at the final head 0910835 (app sources identical to the freeze a76736f), rerun 2 of the final gate (`<data>/lifecycle/run-final2.sh`): 2026-11-14 11:08–12:59Z, a fresh Release build, iPhone 17 Pro iOS 26.3, alone (no other simulator booted; 1-min load 2.39 at the start). It runs 16 of the 19 tests: **15 PASS, test2 FAIL**. test2 is a control-arm flake by F16: TextKit 2 drifted 88 px, as in every earlier run, but the SwiftUI arm drifted 74 px instead of its usual 88, so the excess was 14 px (> 2.01). The test sets no `failure_class` for this shape, so the classification is a recorded call; test2 is rerun once, alone, on the same build, limits unchanged: the rerun (2026-11-14 22:45Z, `<data>/lifecycle/final-0910835-r2-test2/`) **PASSES** with both arms at 88 px, excess 0 px. The final lifecycle result is 16 of 16 PASS after one F16 rerun.
+
+| test | verdict | figures |
+|---|---|---|
+| 1 collapse round trip (stress-5k) | PASS | round trip 0.25 px (control 0.47 px); switch ON 0.09 px |
+| 2 rotation round trip (kitchen-sink) | **FAIL**, then PASS on its F16 rerun | rerun 2: TK2 88 px, SwiftUI 74 px, excess 14 px; F16 rerun: both 88 px, excess 0 px |
+| 3 switch during streaming load (stress-5k) | PASS | switch at 100 of 5,000 blocks |
+| 5 / 6 fling, thrash ×5, 60 s soak (stress-5k) | PASS / PASS | CPU at the first sample after the fling 0 / 0.3 %, after the thrash 0 / 0 % (1.46–1.48 s); soak CPU 0 %, growth −112 / −80 KB |
+| 7 twenty flips (stress-5k) | PASS | medians control +17,048 KB, TK2 +16,696 KB: excess −352 KB; 46 rows after every ON, 0 after every OFF |
+| 8 launch flags (kitchen-sink) | PASS | 3 of 3 steps |
+| L1b five round trips (list-dense) | PASS | under 0.001 px per switch and net; F14: 74 list-owned of 77 live TK2 rows, 0 root-owned |
+| L2 collapse round trip, both directions | PASS | 0 px both ways (control 0 px); switches 0.31 px |
+| L3a rotation and size 0→3→0 (list-dense) | PASS | TK2 excess −0.05 px on every leg; CPU settled at 1.46–1.48 s |
+| L3c state across switch, rotation and size (list-dense) | PASS | search, expands, tasks and list rows kept at 6 of 6 steps |
+| L4a switch during streaming list load | PASS | switch at 50 of 600 blocks; the last root's rows are TK2 rows |
+| L4b colliding IDs | PASS | 9 shared owners; no stale or foreign text |
+| L5a / L5b fling, thrash, soak (list-dense) | PASS / PASS | fling CPU 0.8 / 0.1 %, thrash 0.1 / 0 %; soak CPU 0 %, growth −144 / −48 KB; L5b keeps 75 list-owned TK2 rows |
+| L6 twenty flips (list-dense) | PASS | medians control +19,424 KB, TK2 +16,952 KB: excess −2,472 KB; TK2 live 76 = 73 on screen + 3 unshown |
+
+test4, L1 and L3b are not in rerun 2: they are issue #8's lazy-stack hang, the same on main (main-vs-candidate A/B on the gate's binary: L1 and L3b hang in 2 of 2 runs in both arms; test4 main 7/10, candidate 9/10, one-sided Fisher p = 0.29). Evidence: `<data>/lifecycle/final-0910835-r2/` (`lifecycle.md`, `results.jsonl`), `<data>/lifecycle/ab-hang-20261114/` (`report.md`, `test4-extension.md`).
 
 ### 8.4 End-to-end video — `Scripts/e2e-video.sh`
 
@@ -670,7 +691,8 @@ Records one named UI test (`--test`, nothing else accepted) and writes a provena
 - `--allow-other-booted` is for a provisional shakedown on a shared host only: the other devices are recorded in the log and the provenance; a final video is recorded without it.
 - One isolated `build-for-testing` (Release, unsigned), then `test-without-building` with the exact generated `.xctestrun` and an explicit `--udid` (a device is created only on request, and only a device this run booted is shut down).
 - The switch test requires the expected digest (fails when it is absent), reads the **app-observed** sha256 off the About sheet, asserts `tk2-row:<id>` / `tk2-live-rows` in both directions, and checks scroll preservation (stable element |ΔY| ≤ 2 px per switch, five round trips). After the scroll-to-top under TextKit 2 the H1's settled top (three reads 1 s apart within 0.01 pt) must be within 2 px of the SwiftUI arm's; the final switch back to SwiftUI happens with a TextKit 2 heading on screen. Since PR 2, OFF is checked in two steps (§6.7, unshown cached rows): no `tk2-row` element is on screen right after the switch, and after the TextKit 2 scroll path has been retraced on SwiftUI, the live count and the list-text count are 0.
-- Final videos are recorded on iOS 26.3: the switch test's scroll-to-top fails on iOS 27.0's navigation-bar geometry (§6.7). <!-- TODO(team-lead): final video paths, provenance and negative-control result -->
+- Final videos are recorded on iOS 26.3: the switch test's scroll-to-top fails on iOS 27.0's navigation-bar geometry (§6.7).
+- **PR 2 result** (`<data>/videos/final-0910835-r2/`, 2026-11-14 22:46–23:01Z, iPhone 17 Pro iOS 26.3, no other simulator booted, head 0910835 with app sources identical to the freeze a76736f): one fresh Release build, app sha256 `217bc922…9fb2`, equal as built, installed and app-observed in every run. `switch.mp4` PASS (test 291 s, video 298 s); `lists.mp4` PASS (test 499 s, video 505 s); the negative control with a deliberately wrong digest fails the switch test on the checksum assertion as required. A first attempt (`final-0910835/`) never started its test runner (XCTest's AX-loaded timeout on a freshly created simulator); no test ran, so the retry is not a rerun of a failure.
 - The build pins its source: the commit and clean/dirty state are read before `xcodegen generate` and again after the build (a change aborts), and `e2e-build-manifest.txt` records them with the sha256 of the app, the UI-test bundle binary and the `.xctestrun`. `--skip-build` requires that manifest and re-verifies every digest; the source is checked again at the end.
 - Recording starts before the test launches and stops only after the named test's `passed` line. The recorder must stay alive throughout, and the video must cover the test (duration + 2 s ≥ recorder-ready → result), or the run fails. The manifest records the build command, commit and clean/dirty state, sha256 of the built, companion and installed binaries and of each bundled fixture, the observed digest, the test result and xcresult path, the simulator and Xcode versions, and the video's sha256 and duration. A run with a deliberately wrong digest must fail.
 - Videos go in the task's data directory and the PR description, never in the repo.
