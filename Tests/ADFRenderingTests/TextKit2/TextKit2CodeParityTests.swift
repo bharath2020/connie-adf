@@ -614,7 +614,9 @@ enum TK2CodeParity {
     /// Records every proposal its one subview is sized and placed at, and
     /// passes each through unchanged.
     struct ProposalProbe: Layout {
-        let record: (String, ProposedViewSize, CGSize) -> Void
+        /// Not `@Sendable`: it appends to a local of the main-actor test that
+        /// makes it, and SwiftUI calls a layout on the main thread only.
+        nonisolated(unsafe) let record: (String, ProposedViewSize, CGSize) -> Void
 
         func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
             let size = subviews[0].sizeThatFits(proposal)
