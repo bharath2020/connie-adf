@@ -101,6 +101,12 @@
 //                       budget), the largest 60-column block declared
 //                       under it, and a short closing block (`-fixture
 //                       code-tall`; an ungated pilot like list-tall).
+//                       Then a heading `CT-SEQ` and a bounded near-limit
+//                       sequence: eight consecutive blocks, each just
+//                       under the budget, from narrow and tall to wide
+//                       and short (`// CT-SEQ-1` … `// CT-SEQ-8`), to
+//                       read how many near-limit canvases are live at
+//                       once. 12 top-level nodes.
 //
 // The three code fixtures size and declare every "over budget" / "just
 // under budget" block through `codeBudgetVerdict`, which reads only the
@@ -1485,8 +1491,8 @@ func makeListsLinks() -> [String: Any] {
 /// budget" block of code-parity, code-dense and code-tall is sized and
 /// declared through `codeBudgetVerdict`, which reads nothing else. A change
 /// moves fixture bytes (code-parity CP-16 and CP-17, code-dense's shortened
-/// and kept blocks, code-tall's CT-NEAR), so settle the values before the
-/// fixtures are frozen.
+/// and kept blocks, code-tall's CT-NEAR and CT-SEQ blocks), so settle the
+/// values before the fixtures are frozen.
 enum CodeCanvasModel {
     /// Advance of one code glyph, in 1/1000 pt. 17 pt SF Mono: every
     /// printable ASCII glyph advances 1266/2048 em = 10.509 pt; rounded up.
@@ -2542,15 +2548,40 @@ enum CodeTallSpec {
     static let columns = 60
     /// CT-TALL: over the height limit and the byte budget at any scale.
     static let tallLineCount = 400
+
+    /// One block of the near-limit sequence: the dimension that is given.
+    /// The other one is the largest that is still declared under budget.
+    enum SequenceShape {
+        /// That many columns, and as many lines as stay under budget.
+        case columns(Int)
+        /// That many lines, and as wide as stays under budget.
+        case lines(Int)
+    }
+
+    /// CT-SEQ-1 … CT-SEQ-8, in this order: from narrow and tall to wide and
+    /// short, so the last four fit on one screen together where the
+    /// autoscroll ends. No width is under 40 columns (the header line must
+    /// fit).
+    static let sequence: [SequenceShape] = [
+        .columns(40), .columns(50), .columns(64), .columns(80),
+        .lines(18), .lines(13), .lines(9), .lines(6),
+    ]
 }
 
-/// Three top-level code blocks and nothing else:
+/// Eleven top-level code blocks and one heading:
 ///   0.0 CT-TALL  400 lines × 60 columns, over budget (SwiftUI in both
 ///                arms). Every 50th line is a `// CT-L<iii>` marker.
 ///   0.1 CT-NEAR  60 columns × the most lines declared under budget: the
 ///                largest eligible canvas of the default configuration.
-///   0.2 CT-END   a short closing block, so the autoscroll's last leg
-///                crosses CT-NEAR.
+///   0.2 CT-END   a short block after it, so an autoscroll leg crosses all
+///                of CT-NEAR.
+///   0.3          heading `CT-SEQ …`
+///   0.4 … 0.11   CT-SEQ-1 … CT-SEQ-8, the bounded near-limit sequence:
+///                eight consecutive blocks, each just under the canvas
+///                budget (`CodeTallSpec.sequence`), to read how many
+///                near-limit canvases are live at once. Appended after the
+///                first three blocks, so their ids and text do not depend
+///                on it.
 func makeCodeTall() -> CodeFixture {
     var rng = LCG(seed: 0x5EED_C400)
     let columns = CodeTallSpec.columns
@@ -2599,6 +2630,34 @@ func makeCodeTall() -> CodeFixture {
     code("CT-NEAR", "the most lines declared under budget at \(columns) columns", nearText, expect: .under)
 
     code("CT-END", "short closing block", "// CT-END closing block\nlet done = true", expect: .under)
+
+    // The near-limit sequence. Drawn after everything above, from the same
+    // random stream, so the three blocks above are the same with or
+    // without it.
+    blocks.append(headingNode(level: 2, "CT-SEQ near-limit sequence: eight blocks just under the canvas budget"))
+    for (offset, entry) in CodeTallSpec.sequence.enumerated() {
+        let seqLines: Int
+        let seqColumns: Int
+        switch entry {
+        case .columns(let count):
+            seqColumns = count
+            seqLines = largestLineCountUnderBudget(columns: count)
+        case .lines(let count):
+            seqLines = count
+            seqColumns = largestColumnsUnderBudget(lineCount: count)
+        }
+        let label = "CT-SEQ-\(offset + 1)"
+        // Just under: one more line, or one more column, is no longer
+        // declared under budget.
+        precondition(codeBudgetVerdict(lineCount: seqLines + 1, maxColumns: seqColumns) != .under
+                         || codeBudgetVerdict(lineCount: seqLines, maxColumns: seqColumns + 1) != .under,
+                     "code-tall \(label): \(seqLines) lines x \(seqColumns) columns is not at the edge of the budget")
+        let seqText = generatedCodeBlock(
+            &rng, header: "// \(label) \(seqLines) lines x \(seqColumns) columns",
+            lineCount: seqLines, columns: seqColumns, minColumns: 20
+        )
+        code(label, "near-limit sequence: \(seqLines) lines x \(seqColumns) columns, just under budget", seqText, expect: .under)
+    }
     return CodeFixture(document: doc(blocks), records: records)
 }
 
