@@ -6,8 +6,8 @@ import SwiftUI
 /// the active text renderer and how many TextKit 2 rows are alive (the
 /// renderer proof: > 0 while TextKit 2 draws rows on screen, 0 after a
 /// switch back to SwiftUI), of which how many are TextKit 1-backed (linked
-/// text, laid out and drawn by a TextKit 1 stack inside the row) and how
-/// many draw list text, and under
+/// text, laid out and drawn by a TextKit 1 stack inside the row), how
+/// many draw list text and how many draw a code block's code, and under
 /// `-rebuildControlPicks` the memory control's live rows, and under
 /// `-interactionProbe` the task dispatches and URL opens it recorded
 /// (`InteractionProbe`). The checksum lets a screen recording be
@@ -29,6 +29,10 @@ struct BuildInfoView: View {
     /// trailing text) — the proof that lists, not only root paragraphs,
     /// are on the TextKit 2 engine.
     @State private var liveTextKit2ListRows: Int?
+    /// Live TextKit 2 rows drawing a code block's code text: the proof
+    /// that code, not only paragraphs and lists, is on the TextKit 2
+    /// engine.
+    @State private var liveTextKit2CodeRows: Int?
     @State private var rebuildControlRows: Int?
     /// `InteractionProbe` figures, read when the sheet is built and on each
     /// poll (they change only while the sheet is closed).
@@ -62,6 +66,11 @@ struct BuildInfoView: View {
                     Text(liveTextKit2ListRows.map(String.init) ?? "…")
                         .monospacedDigit()
                         .accessibilityIdentifier("tk2-list-live-rows")
+                }
+                Section("Of Which Code Text") {
+                    Text(liveTextKit2CodeRows.map(String.init) ?? "…")
+                        .monospacedDigit()
+                        .accessibilityIdentifier("tk2-code-live-rows")
                 }
                 if RebuildControl.configured {
                     Section("Rebuild-Control Rows (SwiftUI)") {
@@ -116,6 +125,7 @@ struct BuildInfoView: View {
                     liveTextKit2Rows = stats.liveRowCount
                     liveTextKit1BackedRows = stats.textKit1BackedRowCount
                     liveTextKit2ListRows = stats.liveListRowCount
+                    liveTextKit2CodeRows = stats.liveCodeRowCount
                     rebuildControlRows = ADFTextRenderer.rebuildControlRows.live
                     probeTaskDispatches = InteractionProbe.taskDispatches
                     probeLastTask = InteractionProbe.lastTask

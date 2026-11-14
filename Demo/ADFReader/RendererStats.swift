@@ -1,4 +1,6 @@
 import Foundation
+import SwiftUI
+import UIKit
 import ADFPreparation
 @_spi(ADFDiagnostics) import ADFRendering
 
@@ -12,6 +14,8 @@ import ADFPreparation
 ///         textFallbackRoots=<n> linkRoots=<n> tk2ListLive=<n>
 ///         tk2Conversions=<n> eligibleTextLeaves=<n> linkedTextLeaves=<n>
 ///         fallbackTextLeaves=<n> listLeaderLeaves=<n> listTrailingLeaves=<n>
+///         tk2CodeLive=<n> tk2CodeDraws=<n> eligibleCodeRoots=<n>
+///         fallbackCodeRoots=<n> codeAdmitted=<n> codeGated=<n>
 ///         [rebuildControlRows=<n> rebuildControlAppeared=<n>]
 ///
 /// `renderer` is the persisted switch at print time; `tk2Live` counts live
@@ -21,7 +25,10 @@ import ADFPreparation
 /// a TextKit 1 stack lays out and draws inside the TK2 row (live / since
 /// launch). `tk2ListLive` counts the live rows drawing list text (the
 /// list-native proof), `tk2Conversions` the prepared-text conversions rows
-/// performed since launch.
+/// performed since launch. `tk2CodeLive` counts the live rows drawing a
+/// code block's code and `tk2CodeDraws` the native draw passes of such rows
+/// since launch (the code-native proof: a paragraph or list row drawing
+/// natively proves nothing about code).
 ///
 /// Coverage of `model.blocks` (`ADFTextKit2Coverage`, static): the root
 /// richText, legacy keys `eligibleRoots`/`fallbackRoots`/
@@ -32,17 +39,71 @@ import ADFPreparation
 /// headings, list leaders, list rows' direct paragraphs and headings):
 /// `eligibleTextLeaves` (root and list) with `linkedTextLeaves` of them
 /// TextKit 1-backed, `fallbackTextLeaves` on SwiftUI, and the list leader /
-/// trailing leaf counts. The bracketed keys appear only under
+/// trailing leaf counts. The leaf keys are the prose and list set: code is
+/// counted apart. `eligibleCodeRoots`/`fallbackCodeRoots` split the
+/// top-level code blocks by content (static, like the keys above).
+/// `codeAdmitted`/`codeGated` are measured, not static: of the eligible
+/// code roots, how many TextKit 2 would really draw at this run's text
+/// size, legibility weight, display scale and layout direction, and how
+/// many a view-time rule keeps on SwiftUI there (right-to-left layout, or
+/// a canvas over the admission caps); `codeAdmitted + codeGated ==
+/// eligibleCodeRoots` (`ADFTextRenderer.textKit2CodeAdmission`). The
+/// bracketed keys appear only under
 /// `-rebuildControlPicks` (`RebuildControl`). Parsed by
 /// `Scripts/perf_trial.py` (one line at READY, one after `SCROLL_METRICS`).
 @MainActor
 enum RendererStats {
-    static func print(blocks: [RenderBlock]) {
+    /// The environment the reader draws a document in, for the measured
+    /// code counts.
+    struct TextEnvironment {
+        var dynamicTypeSize: DynamicTypeSize
+        var legibilityWeight: LegibilityWeight?
+        var displayScale: CGFloat
+        var layoutDirection: LayoutDirection
+    }
+
+    /// The reader's environment as this launch sets it up, for a caller
+    /// that has no view environment at hand (`AutoScroller`): the window's
+    /// traits, with the system text size moved by the reader's text-size
+    /// step the way `ReaderView` moves it (`-fontSizeStep` when given, else
+    /// the step persisted for the launch's `-fixture`). It follows
+    /// `ReaderView.load()`; a step changed in the text-size control after
+    /// loading under `-fontSizeStep`, which is never persisted, is not
+    /// seen.
+    static func launchEnvironment() -> TextEnvironment {
+        let traits = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.traitCollection }
+            .first ?? UITraitCollection.current
+        let options = LaunchOptions()
+        let persisted = options.fixtureName.map { FontSizeStore().step(for: "fixture:\($0)") } ?? 0
+        let system = DynamicTypeSize(traits.preferredContentSizeCategory) ?? .large
+        let legibility: LegibilityWeight?
+        switch traits.legibilityWeight {
+        case .bold: legibility = .bold
+        case .regular: legibility = .regular
+        default: legibility = nil
+        }
+        return TextEnvironment(
+            dynamicTypeSize: system.shifted(by: options.fontSizeStep ?? persisted),
+            legibilityWeight: legibility,
+            displayScale: traits.displayScale > 0 ? traits.displayScale : 1,
+            layoutDirection: traits.layoutDirection == .rightToLeft ? .rightToLeft : .leftToRight
+        )
+    }
+
+    /// `environment`: the environment the document is drawn in, when the
+    /// caller has it; `nil` uses `launchEnvironment()`.
+    static func print(blocks: [RenderBlock], environment: TextEnvironment? = nil) {
         let renderer: ADFTextRenderer =
             UserDefaults.standard.bool(forKey: RendererPreference.key) ? .textKit2 : .swiftUI
         let stats = ADFTextRenderer.textKit2Stats
         let coverage = ADFTextRenderer.textKit2Coverage(of: blocks)
-        Swift.print(
+        let environment = environment ?? launchEnvironment()
+        let code = ADFTextRenderer.textKit2CodeAdmission(
+            of: blocks, dynamicTypeSize: environment.dynamicTypeSize, legibilityWeight: environment.legibilityWeight,
+            displayScale: environment.displayScale, layoutDirection: environment.layoutDirection
+        )
+        var line =
             "RENDERER_STATS renderer=\(renderer.rawValue) tk2Live=\(stats.liveRowCount) "
                 + "tk2Layouts=\(stats.layoutCount) tk2Draws=\(stats.drawCount) "
                 + "tk2NativeDraws=\(stats.nativeDrawCount) tk1BackedRows=\(stats.textKit1BackedRowCount) "
@@ -53,11 +114,16 @@ enum RendererStats {
                 + "eligibleTextLeaves=\(coverage.eligibleTextLeaves) linkedTextLeaves=\(coverage.linkedTextLeaves) "
                 + "fallbackTextLeaves=\(coverage.fallbackTextLeaves) listLeaderLeaves=\(coverage.listLeaderLeaves) "
                 + "listTrailingLeaves=\(coverage.listTrailingLeaves)"
-                + (RebuildControl.configured
-                    ? " rebuildControlRows=\(ADFTextRenderer.rebuildControlRows.live) "
-                        + "rebuildControlAppeared=\(ADFTextRenderer.rebuildControlRows.appeared)"
-                    : "")
-        )
+        // Appended keys, each statement on its own: one long chain of
+        // interpolated literals is slow to type-check.
+        line += " tk2CodeLive=\(stats.liveCodeRowCount) tk2CodeDraws=\(stats.codeNativeDrawCount)"
+        line += " eligibleCodeRoots=\(coverage.eligibleCodeRoots) fallbackCodeRoots=\(coverage.fallbackCodeRoots)"
+        line += " codeAdmitted=\(code.admittedCodeRoots) codeGated=\(code.gatedCodeRoots)"
+        if RebuildControl.configured {
+            line += " rebuildControlRows=\(ADFTextRenderer.rebuildControlRows.live)"
+            line += " rebuildControlAppeared=\(ADFTextRenderer.rebuildControlRows.appeared)"
+        }
+        Swift.print(line)
         fflush(stdout)
     }
 }
