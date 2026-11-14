@@ -285,12 +285,12 @@ struct TextKit2CodeCoverageTests {
     func codeTallPins() async throws {
         // Predictions: fixture-notes section 7.
         try await Self.check("code-tall", TK2CodeNewFixturePins(
-            blocks: Self.toFill,              // TODO(lead): top-level nodes of code-tall.json (predicted 3)
-            codeBlocks: Self.toFill,          // TODO(lead): top-level codeBlock nodes (predicted 3)
-            eligible: Self.toFill,            // TODO(lead): eligibleCodeRoots (predicted 3)
-            eligibleBeforeIOS26: Self.toFill, // TODO(lead): the same before iOS 26 (predicted 3)
-            admittedAt3x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 3x (predicted 2: the 400-line block is over the height cap)
-            admittedAt2x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 2x (predicted 2: over the height cap at any scale)
+            blocks: Self.toFill,              // TODO(lead): top-level nodes of code-tall.json (predicted 12: 11 code blocks and the CT-SEQ heading)
+            codeBlocks: Self.toFill,          // TODO(lead): top-level codeBlock nodes (predicted 11: CT-TALL, CT-NEAR, CT-END, CT-SEQ-1 to CT-SEQ-8)
+            eligible: Self.toFill,            // TODO(lead): eligibleCodeRoots (predicted 11)
+            eligibleBeforeIOS26: Self.toFill, // TODO(lead): the same before iOS 26 (predicted 11: no block ends in a line feed)
+            admittedAt3x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 3x (predicted 10: CT-TALL, the 400-line block, is over the height cap)
+            admittedAt2x: Self.toFill,        // TODO(lead): codeAdmitted at Large on 2x (predicted 10: CT-TALL is over the height cap at any scale)
             nestedCode: Self.toFill           // TODO(lead): nested code blocks (predicted 0)
         ))
     }
