@@ -51,6 +51,20 @@ import ADFPreparation
 /// bracketed keys appear only under
 /// `-rebuildControlPicks` (`RebuildControl`). Parsed by
 /// `Scripts/perf_trial.py` (one line at READY, one after `SCROLL_METRICS`).
+///
+/// After a `-scrollToFraction` jump the reader prints the line once more,
+/// between two others (`ReaderView.scrollToFraction`), for
+/// `Scripts/visual_diff.py`:
+///
+///     SCROLL_LANDED fixture=<name> fraction=<f> index=<i> block=<id> blocks=<n>
+///     RENDERER_STATS …
+///     TK2_CODE_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+///
+/// `SCROLL_LANDED` names the block the jump went to (`block=`, the
+/// `RenderBlock.id` at `index=` of `blocks=`: the jump's target, not a
+/// measured position) and is printed with or without `-rendererStats`; the
+/// other two only with it. `TK2_CODE_ROWS` is the per-owner code proof
+/// (`printCodeRows`): a total cannot say which block drew.
 @MainActor
 enum RendererStats {
     /// The environment the reader draws a document in, for the measured
@@ -89,6 +103,30 @@ enum RendererStats {
             displayScale: traits.displayScale > 0 ? traits.displayScale : 1,
             layoutDirection: traits.layoutDirection == .rightToLeft ? .rightToLeft : .leftToRight
         )
+    }
+
+    /// The `TK2_CODE_ROWS` line: every live TextKit 2 row drawing a code
+    /// block's code, by owner (`ADFTextRenderer.textKit2CodeRowDraws`).
+    ///
+    ///     TK2_CODE_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+    ///     TK2_CODE_ROWS live=0 owners=-
+    ///
+    /// `<id>` is the code block's `RenderBlock.id` (a node path: no space,
+    /// comma or colon) and `<draws>` the native TextKit 2 draw passes its
+    /// live row has dispatched: above zero, TextKit 2 itself drew that
+    /// block's code; zero, the row is alive but has not drawn. A block
+    /// whose code is on SwiftUI is absent. Owners are sorted by id (numbers
+    /// in it by value), `live=` counts them, and `owners=-` means no live
+    /// code row, as with the switch off.
+    static func printCodeRows() {
+        let rows = ADFTextRenderer.textKit2CodeRowDraws
+        let owners = rows.keys.sorted { first, second in
+            let order = first.compare(second, options: .numeric)
+            return order == .orderedSame ? first < second : order == .orderedAscending
+        }
+        let list = owners.isEmpty ? "-" : owners.map { "\($0):\(rows[$0] ?? 0)" }.joined(separator: ",")
+        Swift.print("TK2_CODE_ROWS live=\(owners.count) owners=\(list)")
+        fflush(stdout)
     }
 
     /// `environment`: the environment the document is drawn in, when the

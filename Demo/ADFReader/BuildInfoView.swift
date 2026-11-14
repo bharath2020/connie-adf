@@ -67,11 +67,6 @@ struct BuildInfoView: View {
                         .monospacedDigit()
                         .accessibilityIdentifier("tk2-list-live-rows")
                 }
-                Section("Of Which Code Text") {
-                    Text(liveTextKit2CodeRows.map(String.init) ?? "…")
-                        .monospacedDigit()
-                        .accessibilityIdentifier("tk2-code-live-rows")
-                }
                 if RebuildControl.configured {
                     Section("Rebuild-Control Rows (SwiftUI)") {
                         Text(rebuildControlRows.map(String.init) ?? "…")
@@ -99,6 +94,15 @@ struct BuildInfoView: View {
                     Text("Executable SHA-256")
                 } footer: {
                     Text(BuildIdentity.executableDescription)
+                }
+                // Below the checksum, not beside the other row counts: a row
+                // of this list is in the accessibility tree only while it is
+                // on screen, and UI tests read the rows above without
+                // scrolling, so a section added above them would move them.
+                Section("Live TextKit 2 Rows Drawing Code") {
+                    Text(liveTextKit2CodeRows.map(String.init) ?? "…")
+                        .monospacedDigit()
+                        .accessibilityIdentifier("tk2-code-live-rows")
                 }
                 if InteractionProbe.enabled {
                     interactionProbeSection

@@ -68,13 +68,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     private(set) var isTextKit1Backed = false
     /// Whose text the row draws, set by the representable. The row counts
     /// itself by it (`TextKit2Diagnostics.liveListRowCount`,
-    /// `liveCodeRowCount`, `codeNativeDrawCount`); the layout policy the
-    /// kind implies arrives in `inputs`
+    /// `liveCodeRowCount`, `codeNativeDrawCount`, and for code the
+    /// per-owner proof `codeRowDraws`, with `ownerID`); the layout policy
+    /// the kind implies arrives in `inputs`
     /// (`TextKit2RenderInputs.layoutPolicy`), never from here.
     var ownerKind: TextKit2OwnerKind = .root {
         didSet {
             guard ownerKind != oldValue else { return }
-            TextKit2Diagnostics.shared.row(ownerKind: ownerKind, was: oldValue)
+            TextKit2Diagnostics.shared.row(ownerKind: ownerKind, was: oldValue, ownerID: ownerID)
         }
     }
     /// Width the layout manager is currently laid out at (`-1`: none).
@@ -131,12 +132,13 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     deinit {
         let backed = isTextKit1Backed
         let kind = ownerKind
+        let owner = ownerID
         // UIKit releases views on the main thread; hop there if a caller
         // ever drops the last reference elsewhere.
         if Thread.isMainThread {
-            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind) }
+            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
         } else {
-            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind) }
+            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
         }
     }
 
@@ -149,6 +151,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// or laying out its text (`applyColorScheme`).
     func apply(_ newInputs: TextKit2RenderInputs, colorScheme: ColorScheme = .light, ownerID newOwnerID: String? = nil) {
         if newOwnerID != ownerID {
+            TextKit2Diagnostics.shared.row(ownerID: newOwnerID, was: ownerID, ownerKind: ownerKind)
             ownerID = newOwnerID
             accessibilityIdentifier = newOwnerID.map { "tk2-row:\($0)" }
         }
@@ -659,7 +662,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             return true
         }
         context.restoreGState()
-        TextKit2Diagnostics.shared.didDraw(native: fragments > 0, code: ownerKind == .code)
+        TextKit2Diagnostics.shared.didDraw(native: fragments > 0, code: ownerKind == .code, ownerID: ownerID)
     }
 
     /// Text containing a link, drawn as SwiftUI draws it: SwiftUI renders

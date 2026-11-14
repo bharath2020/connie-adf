@@ -169,6 +169,23 @@ extension ADFTextRenderer {
         TextKit2Diagnostics.shared.snapshot
     }
 
+    /// The live TextKit 2 rows drawing a code block's code, by owner
+    /// (`RenderBlock.id`): for each, the native draw passes its live row
+    /// has dispatched since that row came alive. The per-owner proof
+    /// behind `ADFTextKit2Stats.codeNativeDrawCount`: a count above zero
+    /// says TextKit 2 itself drew that block's code, which a total cannot
+    /// say for one block. A live row that has not drawn yet is listed with
+    /// zero; a block whose code is on SwiftUI is absent; an entry goes when
+    /// its row is released, so the snapshot never holds more owners than
+    /// there are live code rows (`liveCodeRowCount`). A row without an
+    /// owner id (a preview) is not listed. A count says the row drew, not
+    /// that it is on screen now. Always empty on platforms without UIKit.
+    @_spi(ADFDiagnostics)
+    @MainActor
+    public static var textKit2CodeRowDraws: [String: Int] {
+        TextKit2Diagnostics.shared.codeRowDraws
+    }
+
     /// Leaves currently rendered by the rebuild control
     /// (`View.adfRebuildControl`; on screen or held by the lazy stack), and
     /// how many have appeared since launch — the proof that a control switch
@@ -455,6 +472,21 @@ final class TextKit2Diagnostics {
     private(set) var conversionCount = 0
     private(set) var liveCodeRowCount = 0
     private(set) var codeNativeDrawCount = 0
+    /// One owner's live code rows (`codeRows`).
+    private struct CodeRowProof {
+        /// Live rows drawing this owner's code: one, or two for a moment
+        /// while a row is replaced (and across documents that share ids).
+        var rows = 0
+        /// Native draw passes those rows dispatched since the first of
+        /// them came alive.
+        var nativeDraws = 0
+    }
+
+    /// The per-owner code proof: live rows of kind `.code` by owner id.
+    /// An owner is here exactly while such a row carries its id (joined
+    /// and left where `liveCodeRowCount` moves, or where a code row's id
+    /// changes), so it never holds more owners than `liveCodeRowCount`.
+    private var codeRows: [String: CodeRowProof] = [:]
     /// The rebuild control's leaves (`View.adfRebuildControl`).
     private(set) var rebuildControlLiveRows = 0
     private(set) var rebuildControlAppearances = 0
@@ -469,14 +501,21 @@ final class TextKit2Diagnostics {
         )
     }
 
+    /// Native draw passes of the live code rows, by owner id (`codeRows`).
+    var codeRowDraws: [String: Int] {
+        codeRows.mapValues(\.nativeDraws)
+    }
+
     func rowCreated() {
         liveRowCount += 1
     }
 
-    func rowDestroyed(textKit1Backed: Bool = false, ownerKind: TextKit2OwnerKind = .root) {
+    /// `ownerID`: the row's owner, which a code row leaves the per-owner
+    /// proof by.
+    func rowDestroyed(textKit1Backed: Bool = false, ownerKind: TextKit2OwnerKind = .root, ownerID: String? = nil) {
         liveRowCount -= 1
         if textKit1Backed { textKit1BackedRowCount -= 1 }
-        count(ownerKind, by: -1)
+        count(ownerKind, by: -1, ownerID: ownerID)
     }
 
     /// A live row started (`true`) or stopped being laid out and drawn by
@@ -487,19 +526,44 @@ final class TextKit2Diagnostics {
 
     /// A live row's owner kind changed (`TextKit2OwnerKind`): it leaves
     /// the old kind's live count and joins the new one's. A new row is
-    /// `.root`, which has no count of its own.
-    func row(ownerKind new: TextKit2OwnerKind, was old: TextKit2OwnerKind) {
-        count(old, by: -1)
-        count(new, by: 1)
+    /// `.root`, which has no count of its own. `ownerID`: the row's owner
+    /// at that moment (`nil` until it is first given one).
+    func row(ownerKind new: TextKit2OwnerKind, was old: TextKit2OwnerKind, ownerID: String? = nil) {
+        count(old, by: -1, ownerID: ownerID)
+        count(new, by: 1, ownerID: ownerID)
+    }
+
+    /// A live row's owner id changed, its kind staying `ownerKind`: a code
+    /// row moves in the per-owner proof (its draws so far stay with the old
+    /// id, and go with it). Other kinds keep no per-owner record.
+    func row(ownerID new: String?, was old: String?, ownerKind: TextKit2OwnerKind) {
+        switch ownerKind {
+        case .root, .list: break
+        case .code:
+            codeRow(old, by: -1)
+            codeRow(new, by: 1)
+        }
     }
 
     /// Exhaustive, so a new owner kind must decide its own live count.
-    private func count(_ kind: TextKit2OwnerKind, by delta: Int) {
+    private func count(_ kind: TextKit2OwnerKind, by delta: Int, ownerID: String?) {
         switch kind {
         case .root: break
         case .list: liveListRowCount += delta
-        case .code: liveCodeRowCount += delta
+        case .code:
+            liveCodeRowCount += delta
+            codeRow(ownerID, by: delta)
         }
+    }
+
+    /// A code row joined (`1`) or left (`-1`) `ownerID`'s entry of the
+    /// per-owner proof; the entry goes with its last row. A row without an
+    /// owner id has no entry.
+    private func codeRow(_ ownerID: String?, by delta: Int) {
+        guard let ownerID else { return }
+        var proof = codeRows[ownerID] ?? CodeRowProof()
+        proof.rows += delta
+        codeRows[ownerID] = proof.rows > 0 ? proof : nil
     }
 
     /// A row converted its prepared text into the string it lays out.
@@ -514,12 +578,16 @@ final class TextKit2Diagnostics {
     /// A draw pass; `native`: TextKit 2 drew at least one layout fragment;
     /// `textKit1`: the row's TextKit 1 stack drew it; `code`: the row
     /// draws a code block's code (`TextKit2OwnerKind.code`), so a native
-    /// pass is also a code-native one.
-    func didDraw(native: Bool, textKit1: Bool = false, code: Bool = false) {
+    /// pass is also a code-native one, counted for the row's `ownerID` too
+    /// (the per-owner proof, `codeRows`).
+    func didDraw(native: Bool, textKit1: Bool = false, code: Bool = false, ownerID: String? = nil) {
         drawCount += 1
         if native { nativeDrawCount += 1 }
         if textKit1 { textKit1BackedDrawCount += 1 }
-        if native, code { codeNativeDrawCount += 1 }
+        if native, code {
+            codeNativeDrawCount += 1
+            if let ownerID { codeRows[ownerID]?.nativeDraws += 1 }
+        }
     }
 
     /// A rebuild-control leaf appeared (`true`) or disappeared.
