@@ -100,6 +100,16 @@ extension AttributeScopes {
             public typealias Value = ADFFontSpec
             public static let name = "adf.fontSpec"
         }
+
+        /// The shape of a code block's text (see `ADFCodeShape`), over the
+        /// whole of a non-empty prepared code string. Package-internal: a
+        /// host neither reads nor writes it.
+        package let adfCodeShape: CodeShapeAttribute
+
+        package enum CodeShapeAttribute: AttributedStringKey, Sendable {
+            package typealias Value = ADFCodeShape
+            package static let name = "adf.codeShape"
+        }
     }
 
     public var adf: ADFAttributes.Type { ADFAttributes.self }
