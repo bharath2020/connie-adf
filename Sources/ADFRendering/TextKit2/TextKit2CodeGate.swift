@@ -53,7 +53,10 @@ extension TextKit2Scope {
     /// the TextKit 2 row may draw it: the layout direction first, then the
     /// canvas bound. `text` is a code string the content verdict found
     /// eligible; the rule is a pure function of it and these four
-    /// environment values, the same ones the row's render inputs take.
+    /// environment values, the same ones the row's render inputs take. A
+    /// later metric input (a new environment value the font or layout
+    /// depends on) goes into this gate and into `TextKit2RenderInputs` in
+    /// the same change, or the gate admits a canvas the row then outgrows.
     @MainActor
     static func codeGate(
         _ text: AttributedString, sizeCategory: UIContentSizeCategory, legibilityWeight: LegibilityWeight?,
@@ -159,10 +162,14 @@ enum TextKit2CodeMetrics {
     ///   font's ascent or descent, which the bound's ink reserve
     ///   (`TextKit2Scope.codeCanvasInkReserveLines`) would not cover.
     ///
-    /// The advance is the widest of the glyphs' nominal advances and the
-    /// mean advance of the same characters typeset as one line, so a
-    /// tracking the typesetter adds for the size is included; a narrower
-    /// typeset line never lowers it.
+    /// The advance is the widest nominal advance plus any per-glyph excess
+    /// of the same characters typeset as one line over their nominal mean,
+    /// so a tracking the typesetter adds for the size is added on top of
+    /// the widest glyph (a line of the widest glyphs is covered even when
+    /// the pitch spread and the tracking are both nonzero); a narrower
+    /// typeset line never lowers it. Pair kerning is assumed not to widen
+    /// a monospaced line: the measure-first experiments (`CODE_E2`) check
+    /// `actual ≤ bound` on the real typeset rows.
     static func metrics(
         for spec: ADFFontSpec, category: UIContentSizeCategory, legibilityWeight: LegibilityWeight? = nil
     ) -> TextKit2Scope.CodeFontMetrics? {
@@ -185,17 +192,20 @@ enum TextKit2CodeMetrics {
         _ = CTFontGetAdvancesForGlyphs(coreTextFont, .horizontal, glyphs, &advances, count)
         var widest: CGFloat = 0
         var narrowest = CGFloat.greatestFiniteMagnitude
+        var nominalTotal: CGFloat = 0
         for advance in advances {
             widest = max(widest, advance.width)
             narrowest = min(narrowest, advance.width)
+            nominalTotal += advance.width
         }
         guard widest.isFinite, narrowest > 0, widest - narrowest <= fixedPitchTolerance else { return nil }
 
         let sample = NSAttributedString(string: String(decoding: printableASCII, as: UTF16.self), attributes: [.font: font])
         let line = CTLineCreateWithAttributedString(sample as CFAttributedString)
         let typeset = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) / CGFloat(count)
-        guard typeset.isFinite else { return nil }
-        let advance = max(widest, typeset)
+        let nominalMean = nominalTotal / CGFloat(count)
+        guard typeset.isFinite, nominalMean.isFinite else { return nil }
+        let advance = widest + max(0, typeset - nominalMean)
 
         let lineHeight = font.ascender - font.descender + max(font.leading, 0)
         guard lineHeight.isFinite, lineHeight > 0 else { return nil }
