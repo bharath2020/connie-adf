@@ -104,7 +104,7 @@ for cfg in kitchen-sink-p0 kitchen-sink-p0.5 stress-5k-p0 stress-5k-p0.5 lists-p
 done
 # The PR 3 positions, in both appearances and at both sizes.
 for cfg in kitchen-sink-p0.275 code-parity-p0 code-parity-p0.19 code-parity-p0.28 code-parity-p0.515 \
-    code-parity-p0.66 code-parity-p0.87 code-dense-p0 code-dense-p0.5; do
+    code-parity-p0.66 code-parity-p0.78 code-dense-p0 code-dense-p0.5; do
     found=0
     for variant in light-s0 light-s3 dark-s0 dark-s3; do
         if grep -qxF -- "$cfg-$variant-AC" "$OUT.pairs"; then found=$(( found + 1 )); fi
@@ -126,8 +126,8 @@ expect_has "CP-S4 at step 3 is declared fallback (#s3 beats the step-less declar
     "code-parity-p0.515-light-s3-AC|fallback|0.18=swiftui,0.19=swiftui;land=0.17|textkit2|"
 expect_has "CP-S5 (tabs, non-ASCII) is expected fallback" "$OUT.decl" \
     "code-parity-p0.66-dark-s0-AC|fallback|0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22|textkit2|"
-expect_has "CP-S6 (nested code) is expected fallback with nested owner ids" "$OUT.decl" \
-    "code-parity-p0.87-light-s0-AC|fallback|0.30.0.1=swiftui,0.31.1=swiftui;land=0.29|textkit2|"
+expect_has "CP-S6 (nested code, landed on CP-22 above the end clamp) is expected fallback with nested owner ids" "$OUT.decl" \
+    "code-parity-p0.78-light-s0-AC|fallback|0.26=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26|textkit2|"
 expect_has "code-dense@0.5 is positive on blocks 300 and 301" "$OUT.decl" \
     "code-dense-p0.5-light-s3-AC|positive|0.300=tk2,0.301=tk2;land=0.300|textkit2|"
 expect_has "code-dense@0 is positive on the three pinned blocks" "$OUT.decl" \
@@ -158,9 +158,9 @@ pairs = {line.strip() for line in open(sys.argv[3])}
 rules = diff.parse_code_captures(items, pairs)
 native = sum(1 for rule in rules.values() for _, engine in rule.owners if engine == "tk2")
 print(len(rules), sum(1 for rule in rules.values() if rule.cls == "positive"), native,
-      rules["code-parity-p0.87-light-s0-AC"].land, rules["code-parity-p0.87-light-s0-AC"].owners[0][0])
+      rules["code-parity-p0.78-light-s0-AC"].land, rules["code-parity-p0.78-light-s0-AC"].owners[0][0])
 ' "$SCRIPTS/visual_diff.py" "$OUT.decl" "$OUT.pairs"
-expect_eq "visual_diff.py parses every emitted declaration" "$STATUS $(cat "$WORK/vp-parse.out")" "0 108 78 150 0.29 0.30.0.1"
+expect_eq "visual_diff.py parses every emitted declaration" "$STATUS $(cat "$WORK/vp-parse.out")" "0 108 78 150 0.26 0.26"
 
 parity vp-nostats --no-renderer-stats
 declarations vp-nostats

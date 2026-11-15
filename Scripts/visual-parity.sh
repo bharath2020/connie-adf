@@ -153,8 +153,10 @@
 #                        (TextKit 2 at step 0, SwiftUI at step 3)
 #                @0.66   block 22: CP-S5, tabs, emoji/CJK, combining marks,
 #                        RTL, "" and "\n" (all SwiftUI: expected fallback)
-#                @0.87   block 29: CP-S6, nested code (SwiftUI; the document
-#                        end clamps the scroll)
+#                @0.78   block 26: CP-22 (its header under the band), CP-23,
+#                        CP-24, then CP-S6, nested code (all SwiftUI;
+#                        lands three blocks above CP-S6 because the
+#                        document end clamps a landing on CP-S6 itself)
 #              code-dense (600 blocks, code only)
 #                @0      block 0 (its header under the band), blocks 1, 2
 #                @0.5    block 300 (its header under the band), then 301
@@ -250,6 +252,8 @@ LIST_FIXTURES_DEFAULT=("lists-parity:3" "list-dense:3" "list-tall:3")
 # is under the toolbar has its header strip inside the --exact-mask band
 # (rows 330–460, the toolbar capsules' shadows), where nothing can be
 # compared at threshold 0, and visual_diff.py does not score such a box.
+# (code-parity@0.78 lands on CP-22 itself: CP-22 is not what it is about;
+# the nested code of CP-S6 below it is.)
 #
 # TEAM LEAD: confirm every fraction, land= block and owner below against
 # the final fixtures' READY block counts and the generator's summary before
@@ -272,8 +276,17 @@ KITCHEN_SINK_CODE_OWNER="0.12"
 # "Fixture 10": block id = 0.<node index>). One position per CP-S heading:
 #   CP-S1 blocks[0]  → 0        CP-S2 blocks[6]  → 0.19  (6.46 of 34)
 #   CP-S3 blocks[9]  → 0.28  (9.52)    CP-S4 blocks[17] → 0.515 (17.51)
-#   CP-S5 blocks[22] → 0.66  (22.44)   CP-S6 blocks[29] → 0.87  (29.58)
-CODE_PARITY_POSITIONS="0,0.19,0.28,0.515,0.66,0.87"
+#   CP-S5 blocks[22] → 0.66  (22.44)   CP-S6: blocks[26] → 0.78 (26.52)
+# CP-S6 is the end of the document. Landing on its heading (blocks[29],
+# 0.87) is end-clamped: the scroll stops about 867 px short at step 0 and
+# 339 px at step 3, and the clamped offset differed by 1-2 px between
+# launches of the same build (smoke 8fb1e14: A against A' -2 px at step 3).
+# blocks[26] (CP-22) is 943 px above blocks[29] at step 0, so 0.78 lands
+# unclamped with about 76 px (25 pt) to spare; at step 3 the margin is
+# about 800 px. CP-25 (list) and CP-26 (panel) stay on screen. If 0.78 is
+# ever end-clamped (A-A' shows a uniform offset), use 0.75 (blocks[25],
+# CP-21, about 400 px to spare at step 0).
+CODE_PARITY_POSITIONS="0,0.19,0.28,0.515,0.66,0.78"
 # code-dense: 600 code blocks and nothing else (block id 0.<i>, first line
 # "// CD-<iii>"). Block 0 and block 300 land with their header strip under
 # the band: they are live, drawn rows (named as owners) but not scored as
@@ -303,8 +316,9 @@ CODE_CAPTURES_DEFAULT=(
     # the admitted cohort.
     "code-parity@0.66=fallback;0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22"
     # CP-S6: nested code stays on SwiftUI (CP-25 in a bullet item, CP-26 in
-    # a panel; CP-27 is in a collapsed expand and not on screen).
-    "code-parity@0.87=fallback;0.30.0.1=swiftui,0.31.1=swiftui;land=0.29"
+    # a panel; CP-27 is in a collapsed expand and not on screen). The
+    # landing block CP-22 (non-ASCII) is outside the admitted cohort.
+    "code-parity@0.78=fallback;0.26=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26"
     "code-dense@0=positive;0.0=tk2,0.1=tk2,0.2=tk2;land=0.0"
     "code-dense@0.5=positive;0.300=tk2,0.301=tk2;land=0.300"
 )
