@@ -217,9 +217,16 @@ private struct CodeUIDriver {
             .matching(identifier: ReaderDriver.Identifier.textKit2RowPrefix + owner).firstMatch
     }
 
+    /// How long a `tk2-row` may take to appear or leave the tree after an
+    /// engine change (a switch, a search highlight, a clear). On a loaded
+    /// host one accessibility query took 4 to 5 s, so a 5 s window held a
+    /// single evaluation and failed with the row already in its new state.
+    /// A wait returns as soon as the state is reached.
+    static let engineTimeout: TimeInterval = 30
+
     /// Whether `block`'s code is drawn by a TextKit 2 row with its own
     /// owner and its own text.
-    func isTextKit2(_ block: CodeUIBlock, timeout: TimeInterval = 5) -> Bool {
+    func isTextKit2(_ block: CodeUIBlock, timeout: TimeInterval = CodeUIDriver.engineTimeout) -> Bool {
         let row = textKit2Row(owner: block.owner)
         return row.waitForExistence(timeout: timeout) && row.label.hasPrefix(block.prefix)
     }
@@ -427,11 +434,15 @@ private struct CodeUIDriver {
     }
 
     /// Dismisses an edit menu (and the selection behind it) by tapping the
-    /// navigation bar's middle, up to three times.
+    /// navigation bar's leading part (the title, or the empty bar before
+    /// it), up to three times. Not the bar's middle: that is the renderer
+    /// menu control, and on iOS 18.5 the tap that closes the edit menu also
+    /// reaches it and opens the renderer menu, so the next `chooseRenderer`
+    /// tap closed that menu instead of opening it.
     func dismissEditMenu(leaving baseline: Int = 0) {
         var taps = 0
         while editMenuCopyItems.count > baseline, taps < 3 {
-            app.navigationBars.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            app.navigationBars.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
             pause(0.6)
             taps += 1
         }
@@ -822,7 +833,8 @@ final class CodeRendererUITests: XCTestCase {
 
             let counter = driver.search(block.name)
             XCTAssertTrue(counter.hasPrefix("1 /"), "\(arm): \(block.name): counter \(counter)")
-            XCTAssertTrue(reader.waitForDisappearance(of: driver.textKit2Row(owner: block.owner), timeout: 5),
+            XCTAssertTrue(reader.waitForDisappearance(of: driver.textKit2Row(owner: block.owner),
+                                                      timeout: CodeUIDriver.engineTimeout),
                           "\(arm): the highlighted block \(block.owner) is still a TextKit 2 row")
             XCTAssertTrue(text.exists, "\(arm): the matched block is not in the tree")
             for neighbour in neighbours where driver.isPartlyShown(driver.text(neighbour)) {
@@ -1399,7 +1411,8 @@ final class CodeRendererUITests: XCTestCase {
             XCTAssertTrue(driver.isTextKit2(block), "\(block.name) is not a TextKit 2 row before the search")
             let counter = driver.search(block.name)
             XCTAssertTrue(counter.hasPrefix("1 /"), "\(block.name): counter \(counter)")
-            XCTAssertTrue(reader.waitForDisappearance(of: driver.textKit2Row(owner: block.owner), timeout: 5),
+            XCTAssertTrue(reader.waitForDisappearance(of: driver.textKit2Row(owner: block.owner),
+                                                      timeout: CodeUIDriver.engineTimeout),
                           "the highlighted block is still a TextKit 2 row")
             XCTAssertTrue(text.exists, "the matched block is not in the tree")
             let above = CodeUIParity.cp02
@@ -1437,7 +1450,7 @@ final class CodeRendererUITests: XCTestCase {
             codeUIAttach(app, "07a-before-switching-back")
             reader.chooseRenderer(textKit2: false)
             pause()
-            XCTAssertTrue(reader.waitForDisappearance(of: reader.anyTextKit2Row, timeout: 5),
+            XCTAssertTrue(reader.waitForDisappearance(of: reader.anyTextKit2Row, timeout: CodeUIDriver.engineTimeout),
                           "a TextKit 2 row is still on screen")
             // Recorded, not asserted: rows the lazy stack built before
             // showing them keep their engine until it comes back to them.
