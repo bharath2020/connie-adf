@@ -13,7 +13,7 @@ USAGE
         [--list-pair NAME_PREFIX[:MIN_MARKERS]]...
         [--fill-threshold 6] [--fill-ink-radius 4] [--max-fill-pct 0.01]
         [--code-capture NAME CLASS OWNERS ENGINE LOG]...
-        [--require-owner-proof] [--code-min-boxes 1] [--code-search 4]
+        [--code-min-boxes 1] [--code-search 4]
         [--code-fill auto|R,G,B] [--code-fill-tolerance 1] [--pixel-scale 0]
 
     Driven by Scripts/visual-parity.sh; runs standalone on any two PNGs.
@@ -156,30 +156,74 @@ CODE CAPTURES (--code-capture NAME CLASS OWNERS ENGINE LOG, repeatable)
     Declares the pair NAME a code capture; nothing is inferred.
       CLASS    positive  the capture shows code TextKit 2 should draw
                fallback  every code block it names stays on SwiftUI
-      OWNERS   <owner>=<tk2|swiftui>[,...][;land=<block id>]: the code
+      OWNERS   <owner>=<tk2|swiftui>[,...];land=<block id>: the code
                owners (RenderBlock ids) the capture names and the engine
                each is expected on; positive needs a tk2 owner, fallback
-               none. land= is the block the position scrolls to.
+               none. land= (required) is the block the position scrolls to.
       ENGINE   what the pair's candidate ran: textkit2 (arm C), swiftui
-               (arm B) or none (a build that prints no stats: no proof).
+               (arm B) or none (the reference build, which prints nothing:
+               valid only on a noise pair, A-A').
       LOG      the candidate's launch log (- with ENGINE none).
     A code capture is INVALID - not PASS - when
       - it has fewer than --code-min-boxes code boxes, or it is positive
         and no box has code ink in both images;
+      - ENGINE is none on an exact or tolerant pair: a candidate run
+        without -rendererStats has no engine proof and cannot PASS;
       - its engine proof fails. The proof is read from LOG after the line
         `SCROLL_LANDED ... block=<id>` (stats printed at READY predate the
         -scrollToFraction jump and prove nothing about the position): the
-        next `RENDERER_STATS` line must name ENGINE; textkit2 + positive
-        needs tk2CodeLive > 0 and tk2CodeDraws > 0, swiftui needs both 0.
-        When the app also prints `TK2_CODE_ROWS owners=<id>:<native
-        draws>,...` (- for none) the proof is owner-level: each tk2 owner
-        must be listed with draws > 0 and each swiftui owner must be
-        absent. Without that line the proof is counters-level: a fallback
-        capture then passes only with tk2CodeLive = 0, and swiftui owners
-        of a positive capture are reported as not individually proven.
-        --require-owner-proof makes a missing TK2_CODE_ROWS line INVALID.
-    An expected-fallback capture never counts as native coverage: the
-    summary counts positive and fallback captures apart.
+        block must be land= (the jump's target); the next `RENDERER_STATS`
+        line must name ENGINE; textkit2 + positive needs tk2CodeLive > 0
+        and tk2CodeDraws > 0, swiftui needs both 0; and the next
+        `TK2_CODE_ROWS owners=<id>:<native draws>,...` line (- for none;
+        always required) must list each tk2 owner with draws > 0 and no
+        swiftui owner. That line says a row drew, not that it is on
+        screen, so
+      - its capture-time geometry fails. visual-parity.sh posts the app's
+        capture-geometry hook right before and right after the screenshot;
+        each post prints one line (Demo/ADFReader/RendererStats.swift):
+          CAPTURE_GEOMETRY seq=<n> scale=<s> screen=<w>x<h> window=<rect>
+              visibleRows=<id>[,...]|-|unavailable
+              rows=<owner>|<root|list|code>|<frame>|<visible|->|<draws|->[;...]|-
+        (points, rectangles x0,y0,x1,y1 in window coordinates; frame is
+        where the row can draw, its bounds and canvas; visible is that
+        frame clipped by the scroll views and the window). Points are
+        converted to pixels at the line's scale: inner pixels (wholly
+        inside, for containment) and outer pixels grown by 1 (every pixel
+        it touches, for exclusion), so both errors fall on the strict
+        side. Each scored code box is attributed on the candidate's code
+        ink below its header strip: no TextKit 2 code row's frame over the
+        box -> swiftui (the fallback Text and the TextKit 2 row are
+        exclusive for one block); one row, shown, holding every code-ink
+        pixel within 1 px of its visible frame -> tk2:<owner>; anything
+        else (two rows, a hidden or clipped row, ink outside the row) ->
+        mixed. The rules (G1-G9):
+        G1 (B, C) seq=1 and seq=2 present after SCROLL_LANDED, well formed,
+           no error=, no seq=3, equal (draws aside: the screen did not
+           change across the screenshot); screen x scale equals the image
+           size; the window is the whole screen;
+        G2 (C) no box mixed;
+        G3 (C, positive) every tk2 owner owns a box (tk2:<owner>) and its
+           row has drawn natively (draws > 0 before the screenshot);
+           otherwise the note says why: no row in the window, its row is
+           clipped off screen, on screen but over no scored box, no draw;
+        G4 (C) no box tk2:<owner> for an owner declared swiftui; for an
+           undeclared owner INVALID on a fallback capture, information on
+           a positive one (never coverage);
+        G5 (C, fallback) every box with code ink is swiftui (G2 and G4);
+        G6 (C) an owner declared swiftui has no row in the window at all;
+        G7 (B, C) the landing is measured: visibleRows (the top-level rows
+           the reader reports >= 95 % in the viewport) is available and
+           holds land=, and no top-level block 0.<k> with k < land - 1
+           (one short block of slack under the translucent bar); on C a
+           TextKit 2 row of the land= block is shown below the top band;
+        G8 (B, C, fallback) a named owner, or its top-level block for a
+           nested id (0.30 for 0.30.0.1), is in visibleRows;
+        G9 (B) no TextKit 2 row of any kind in the window.
+      --require-owner-proof is accepted and changes nothing (always on).
+    An expected-fallback capture never counts as native coverage, and a
+    positive capture counts only when it PASSes (so with G3): the summary
+    counts positive and fallback captures apart.
 
 EMPTY CONTENT
     A pair with zero text crops (no ink in either unmasked viewport) is
@@ -204,6 +248,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -277,6 +322,8 @@ class CodeCrop:
     cand_ink: bool
     verdict: str            # PASS | FAIL | UNSTABLE | UNMEASURED | INVALID
     notes: str = ""
+    owner: str = ""         # capture-time attribution: swiftui | tk2:<owner> | mixed | covered:<owners> | ""
+    owner_px: int = 0       # candidate code-ink pixels inside that owner's visible frame
 
 
 @dataclass
@@ -284,7 +331,7 @@ class CodeRule:
     """A --code-capture declaration for one pair."""
     cls: str                # "positive" | "fallback"
     owners: list[tuple[str, str]]   # (owner id, "tk2" | "swiftui")
-    land: str               # expected landing block id ("" = not checked)
+    land: str               # expected landing block id (required)
     engine: str             # "textkit2" | "swiftui" | "none"
     log: str
 
@@ -326,6 +373,7 @@ class Score:
     chrome_px: int = 0
     code_class: str = ""
     code_proof: str = ""
+    code_geometry: str = ""
     crop_details: list[Crop] = field(default_factory=list)
     marker_details: list[MarkerCrop] = field(default_factory=list)
     code_details: list[CodeCrop] = field(default_factory=list)
@@ -712,20 +760,26 @@ def parse_code_rows(value: str | None) -> dict[str, int] | None:
     return rows
 
 
-def evaluate_code_proof(rule: CodeRule, require_owner: bool) -> tuple[list[str], str]:
-    """(problems, summary) of a code capture's engine proof, read from the
-    candidate's launch log after the SCROLL_LANDED line."""
-    if rule.engine == "none":
-        return [], "not required (this build prints no stats)"
+def read_proof_log(rule: CodeRule) -> tuple[list[str] | None, int, list[str]]:
+    """(lines, index of the SCROLL_LANDED line, problems) of a code
+    capture's candidate launch log, read once for the engine proof and the
+    capture-time geometry."""
     lines = log_lines(rule.log)
     if lines is None:
-        return [f"launch log unreadable: {rule.log}"], "absent"
+        return None, -1, [f"launch log unreadable: {rule.log}"]
     landed_at = marker_index(lines, "SCROLL_LANDED")
     if landed_at < 0:
-        return ["no SCROLL_LANDED line (stats printed at READY predate the -scrollToFraction jump)"], "absent"
+        return lines, -1, ["no SCROLL_LANDED line (stats printed at READY predate the -scrollToFraction jump)"]
+    return lines, landed_at, []
+
+
+def evaluate_code_proof(rule: CodeRule, lines: list[str], landed_at: int) -> tuple[list[str], str]:
+    """(problems, summary) of a code capture's engine proof, read from the
+    candidate's launch log after the SCROLL_LANDED line (`landed_at`). The
+    TK2_CODE_ROWS line is required: totals cannot say which block drew."""
     problems = []
     landed = key_values(lines[landed_at])
-    if rule.land and landed.get("block") != rule.land:
+    if landed.get("block") != rule.land:
         problems.append(f"landed on block {landed.get('block', '?')}, declared {rule.land}")
     stats_at = marker_index(lines, "RENDERER_STATS", landed_at + 1)
     if stats_at < 0:
@@ -737,15 +791,13 @@ def evaluate_code_proof(rule: CodeRule, require_owner: bool) -> tuple[list[str],
     if len(counters) < 2:
         return problems + ["RENDERER_STATS has no tk2CodeLive / tk2CodeDraws (a build without the code keys)"], "absent"
     live, draws = counters["tk2CodeLive"], counters["tk2CodeDraws"]
-    rows = None
     rows_at = marker_index(lines, "TK2_CODE_ROWS", landed_at + 1)
-    if rows_at >= 0:
-        rows = parse_code_rows(key_values(lines[rows_at]).get("owners"))
-        if rows is None:
-            return problems + [f"malformed TK2_CODE_ROWS line: '{lines[rows_at]}'"], "absent"
-    elif require_owner:
-        problems.append("no TK2_CODE_ROWS line after SCROLL_LANDED (--require-owner-proof)")
-    summary = f"{'owner-level' if rows is not None else 'counters only'}: tk2CodeLive={live} tk2CodeDraws={draws}"
+    if rows_at < 0:
+        return problems + ["no TK2_CODE_ROWS line after SCROLL_LANDED (the owner-level proof is required)"], "absent"
+    rows = parse_code_rows(key_values(lines[rows_at]).get("owners"))
+    if rows is None:
+        return problems + [f"malformed TK2_CODE_ROWS line: '{lines[rows_at]}'"], "absent"
+    summary = f"owner-level: tk2CodeLive={live} tk2CodeDraws={draws}"
     if rows:
         summary += " rows " + ",".join(f"{owner}:{count}" for owner, count in sorted(rows.items()))
 
@@ -756,27 +808,337 @@ def evaluate_code_proof(rule: CodeRule, require_owner: bool) -> tuple[list[str],
             problems.append(f"SwiftUI arm lists live TextKit 2 code rows ({','.join(sorted(rows))})")
         return problems, summary
 
-    tk2 = [owner for owner, engine in rule.owners if engine == "tk2"]
-    swiftui = [owner for owner, engine in rule.owners if engine == "swiftui"]
     if rule.cls == "positive" and (live <= 0 or draws <= 0):
         problems.append(f"declared positive, but tk2CodeLive={live} tk2CodeDraws={draws}: no TextKit 2 code row drew")
-    if rows is not None:
-        for owner in tk2:
-            if owner not in rows:
-                problems.append(f"owner {owner} has no live TextKit 2 code row (declared tk2)")
-            elif rows[owner] <= 0:
-                problems.append(f"owner {owner} is a live TextKit 2 code row with no native draw")
-        for owner in swiftui:
-            if owner in rows:
-                problems.append(f"owner {owner} is drawn by TextKit 2 (declared swiftui)")
-    elif rule.cls == "positive":
-        if 0 < live < len(tk2):
-            problems.append(f"tk2CodeLive={live} < the {len(tk2)} owners declared tk2")
-        if swiftui:
-            summary += f"; {','.join(swiftui)} not individually proven on SwiftUI"
-    elif live > 0:
-        problems.append(f"fallback not provable from counters (tk2CodeLive={live}): the app must print TK2_CODE_ROWS")
+    for owner, engine in rule.owners:
+        if engine == "tk2" and owner not in rows:
+            problems.append(f"owner {owner} has no live TextKit 2 code row (declared tk2)")
+        elif engine == "tk2" and rows[owner] <= 0:
+            problems.append(f"owner {owner} is a live TextKit 2 code row with no native draw")
+        elif engine == "swiftui" and owner in rows:
+            problems.append(f"owner {owner} is drawn by TextKit 2 (declared swiftui)")
     return problems, summary
+
+
+# ---- capture-time geometry (docstring "CODE CAPTURES", G1-G9) ----------------
+
+Rect = tuple[float, float, float, float]
+GEOMETRY_KINDS = ("root", "list", "code")
+GEOMETRY_SLACK_PX = 0.01   # 4-decimal points times 3 can land 0.0003 px off an integer
+WINDOW_SLACK_PT = 0.01
+
+
+@dataclass
+class GeometryRow:
+    """One TextKit 2 row of a CAPTURE_GEOMETRY line (points, window coordinates)."""
+    owner: str
+    kind: str               # root | list | code
+    frame: Rect             # where the row can draw: its bounds and canvas
+    visible: Rect | None    # frame clipped by its scroll views and the window; None: not shown
+    draws: int | None       # native draws, code rows only
+
+
+@dataclass
+class CaptureGeometry:
+    seq: int
+    scale: float
+    screen: tuple[float, float]
+    window: Rect
+    visible_rows: list[str] | None   # None: "unavailable" (no visibility feed before iOS 18)
+    rows: list[GeometryRow]
+
+    def stable_key(self) -> tuple:
+        """What must not change across the screenshot (draws may)."""
+        return (self.scale, self.screen, self.window, tuple(self.visible_rows or ()), self.visible_rows is None,
+                tuple((r.owner, r.kind, r.frame, r.visible) for r in self.rows))
+
+
+def parse_rect(text: str) -> Rect | None:
+    try:
+        x0, y0, x1, y1 = (float(v) for v in text.split(","))
+    except ValueError:
+        return None
+    return (x0, y0, x1, y1) if x1 >= x0 and y1 >= y0 else None
+
+
+def parse_geometry(line: str) -> CaptureGeometry | str:
+    """A CAPTURE_GEOMETRY line, or why it is malformed (a str)."""
+    values = key_values(line)
+    if "error" in values:
+        return f"error={values['error']}"
+    seq, scale = values.get("seq", ""), values.get("scale", "")
+    if not seq.isdigit():
+        return f"bad seq '{seq}'"
+    try:
+        scale_value = float(scale)
+        width, _, height = values.get("screen", "").partition("x")
+        screen = (float(width), float(height))
+    except ValueError:
+        return f"bad scale '{scale}' or screen '{values.get('screen', '')}'"
+    if scale_value <= 0 or screen[0] <= 0 or screen[1] <= 0:
+        return f"bad scale '{scale}' or screen '{values.get('screen', '')}'"
+    window = parse_rect(values.get("window", ""))
+    if window is None:
+        return f"bad window '{values.get('window', '')}'"
+    visible_text = values.get("visibleRows")
+    if not visible_text:
+        return "no visibleRows="
+    visible_rows = None if visible_text == "unavailable" else [] if visible_text == "-" else visible_text.split(",")
+    rows_text = values.get("rows")
+    if not rows_text:
+        return "no rows="
+    rows: list[GeometryRow] = []
+    for item in [] if rows_text == "-" else rows_text.split(";"):
+        parts = item.split("|")
+        if len(parts) != 5 or not parts[0] or parts[1] not in GEOMETRY_KINDS:
+            return f"bad row '{item}'"
+        frame = parse_rect(parts[2])
+        visible = None if parts[3] == "-" else parse_rect(parts[3])
+        if frame is None or (parts[3] != "-" and visible is None):
+            return f"bad row rectangle in '{item}'"
+        if parts[1] == "code" and not parts[4].isdigit():
+            return f"code row without its draws: '{item}'"
+        if parts[1] != "code" and parts[4] != "-":
+            return f"draws on a {parts[1]} row: '{item}'"
+        rows.append(GeometryRow(parts[0], parts[1], frame, visible, int(parts[4]) if parts[1] == "code" else None))
+    return CaptureGeometry(int(seq), scale_value, screen, window, visible_rows, rows)
+
+
+def geometry_bracket(lines: list[str], landed_at: int) -> tuple[CaptureGeometry | None, CaptureGeometry | None,
+                                                                list[str]]:
+    """(seq=1, seq=2, problems): the CAPTURE_GEOMETRY lines visual-parity.sh
+    asks for right before and right after its screenshot (G1, protocol part)."""
+    problems: list[str] = []
+    found: dict[int, CaptureGeometry] = {}
+    early = sum(1 for line in lines[:landed_at] if line.startswith("CAPTURE_GEOMETRY"))
+    if early:
+        problems.append(f"{early} CAPTURE_GEOMETRY line(s) before SCROLL_LANDED: the bracket must follow the landing")
+    for line in lines[landed_at + 1:]:
+        if not line.startswith("CAPTURE_GEOMETRY"):
+            continue
+        parsed = parse_geometry(line)
+        if isinstance(parsed, str):
+            seq = key_values(line).get("seq", "?")
+            problems.append(f"CAPTURE_GEOMETRY seq={seq}: {parsed}")
+            continue
+        if parsed.seq in found:
+            problems.append(f"CAPTURE_GEOMETRY seq={parsed.seq} printed twice")
+        elif parsed.seq not in (1, 2):
+            problems.append(f"CAPTURE_GEOMETRY seq={parsed.seq}: the driver posts exactly twice (before and after)")
+        found.setdefault(parsed.seq, parsed)
+    before, after = found.get(1), found.get(2)
+    errored = {key_values(line).get("seq") for line in lines[landed_at + 1:]
+               if line.startswith("CAPTURE_GEOMETRY") and isinstance(parse_geometry(line), str)}
+    if before is None and "1" not in errored:
+        problems.append("no CAPTURE_GEOMETRY seq=1 (the screen right before the screenshot)")
+    if after is None and "2" not in errored:
+        problems.append("no CAPTURE_GEOMETRY seq=2 (the screen right after the screenshot)")
+    if before is not None and after is not None and before.stable_key() != after.stable_key():
+        changed = [label for label, a, b in (
+            ("scale/screen/window", (before.scale, before.screen, before.window), (after.scale, after.screen, after.window)),
+            ("visibleRows", before.visible_rows, after.visible_rows),
+            ("rows", [(r.owner, r.kind, r.frame, r.visible) for r in before.rows],
+             [(r.owner, r.kind, r.frame, r.visible) for r in after.rows])) if a != b]
+        problems.append(f"geometry changed across the screenshot ({', '.join(changed)}): seq=1 and seq=2 differ")
+    return before, after, problems
+
+
+def px_inner(r: Rect, s: float) -> tuple[int, int, int, int]:
+    """The pixels wholly inside r (points at scale s): x0,y0,x1,y1, exclusive."""
+    slack = GEOMETRY_SLACK_PX
+    return (math.ceil(r[0] * s - slack), math.ceil(r[1] * s - slack),
+            math.floor(r[2] * s + slack), math.floor(r[3] * s + slack))
+
+
+def px_outer(r: Rect, s: float) -> tuple[int, int, int, int]:
+    """Every pixel r touches (points at scale s)."""
+    slack = GEOMETRY_SLACK_PX
+    return (math.floor(r[0] * s + slack), math.floor(r[1] * s + slack),
+            math.ceil(r[2] * s - slack), math.ceil(r[3] * s - slack))
+
+
+def grow(r: tuple[int, int, int, int], d: int) -> tuple[int, int, int, int]:
+    return (r[0] - d, r[1] - d, r[2] + d, r[3] + d)
+
+
+def clamp(r: tuple[int, int, int, int], width: int, height: int) -> tuple[int, int, int, int]:
+    x0, y0 = min(max(r[0], 0), width), min(max(r[1], 0), height)
+    return (x0, y0, max(min(r[2], width), x0), max(min(r[3], height), y0))
+
+
+def overlaps(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def rect_mask(shape: tuple[int, int], rect: tuple[int, int, int, int], origin: tuple[int, int]) -> np.ndarray:
+    """True inside `rect` (image pixels) for an array of `shape` whose (0, 0)
+    is image pixel `origin` (x, y)."""
+    mask = np.zeros(shape, dtype=bool)
+    x0, y0 = rect[0] - origin[0], rect[1] - origin[1]
+    x1, y1 = rect[2] - origin[0], rect[3] - origin[1]
+    mask[max(y0, 0):max(min(y1, shape[0]), 0), max(x0, 0):max(min(x1, shape[1]), 0)] = True
+    return mask
+
+
+def top_level(owner: str) -> str:
+    """The top-level block of a node-path id: 0.30 for 0.30.0.1."""
+    parts = owner.split(".")
+    return ".".join(parts[:2]) if len(parts) > 2 else owner
+
+
+def root_index(block: str) -> int | None:
+    """k of a top-level id 0.<k>, else None."""
+    head, sep, tail = block.partition(".")
+    return int(tail) if head == "0" and sep and tail.isdigit() else None
+
+
+def attribute_code_boxes(geometry: CaptureGeometry, code_crops: list[CodeCrop], cand_ink: np.ndarray) -> None:
+    """Sets each code crop's owner (docstring "CODE CAPTURES"): which
+    TextKit 2 code row, if any, drew its code ink in the candidate."""
+    height, width = cand_ink.shape
+    s = geometry.scale
+    code_rows = [r for r in geometry.rows if r.kind == "code"]
+    for c in code_crops:
+        bx0, by0, bx1, by1 = (int(v) for v in c.box.split(","))
+        split = int(c.header_box.split(",")[3])
+        over = [r for r in code_rows if overlaps(clamp(grow(px_outer(r.frame, s), 1), width, height), (bx0, by0, bx1, by1))]
+        if not (c.text_box and c.cand_ink):   # an empty block, or text under the bottom band
+            c.owner = ("covered:" + ",".join(r.owner for r in over)) if over else ""
+            continue
+        if not over:
+            c.owner = "swiftui"
+            continue
+        if len(over) > 1 or over[0].visible is None:
+            c.owner = "mixed"
+            continue
+        row = over[0]
+        ink = cand_ink[split:by1, bx0:bx1]
+        inner = clamp(px_inner(row.visible, s), width, height)
+        inside = rect_mask(ink.shape, inner, (bx0, split))
+        allowed = rect_mask(ink.shape, clamp(grow(px_inner(row.visible, s), 1), width, height), (bx0, split))
+        c.owner_px = int((ink & inside).sum())
+        outside = int((ink & ~allowed).sum())
+        c.owner = f"tk2:{row.owner}" if c.owner_px > 0 and outside == 0 else "mixed"
+        if c.owner == "mixed":
+            c.notes = "; ".join(filter(None, [c.notes, f"{outside} px of code ink outside owner {row.owner}'s "
+                                                       f"on-screen frame ({c.owner_px} px inside)"]))
+
+
+def evaluate_code_geometry(rule: CodeRule, lines: list[str], landed_at: int, code_crops: list[CodeCrop],
+                           cand_ink: np.ndarray, image_size: tuple[int, int], box_scale: int,
+                           top_band: int) -> tuple[list[str], str]:
+    """(problems, summary) of a code capture's capture-time geometry
+    (docstring "CODE CAPTURES", G1-G9). Sets each code crop's owner."""
+    before, _, problems = geometry_bracket(lines, landed_at)
+    if before is None or problems:
+        return problems, "absent"
+    geo = before
+    image_w, image_h = image_size
+    want_w, want_h = round(geo.screen[0] * geo.scale), round(geo.screen[1] * geo.scale)
+    if (want_w, want_h) != (image_w, image_h):
+        return [f"geometry is {geo.screen[0]:g}x{geo.screen[1]:g} pt at {geo.scale:g}x, "
+                f"the image is {image_w}x{image_h} px"], "absent"
+    full = (0.0, 0.0, geo.screen[0], geo.screen[1])
+    if any(abs(a - b) > WINDOW_SLACK_PT for a, b in zip(geo.window, full)):
+        return [f"the window {','.join(f'{v:g}' for v in geo.window)} is not the whole screen "
+                f"{geo.screen[0]:g}x{geo.screen[1]:g} pt"], "absent"
+    summary: list[str] = []
+    if box_scale != round(geo.scale):
+        summary.append(f"box detection at {box_scale}x, geometry at {geo.scale:g}x")
+    native = rule.engine == "textkit2"
+    if native:
+        attribute_code_boxes(geo, code_crops, cand_ink)
+    else:
+        for c in code_crops:
+            c.owner = "swiftui" if c.text_box and c.cand_ink else ""
+
+    # G7: the measured landing.
+    visible = geo.visible_rows
+    if visible is None:
+        problems.append("visibleRows unavailable (no visibility feed before iOS 18): the landing cannot be measured")
+    else:
+        if rule.land not in visible:
+            problems.append(f"land block {rule.land} is not fully visible at the screenshot "
+                            f"(visibleRows {','.join(visible) or '-'})")
+        land_k = root_index(rule.land)
+        above = [block for block in visible
+                 if land_k is not None and (k := root_index(block)) is not None and k < land_k - 1]
+        if above:
+            problems.append(f"block(s) {','.join(above)} above the land block {rule.land} fully visible: "
+                            "the position landed higher than declared")
+        tops = sorted((root_index(block), block) for block in visible if root_index(block) is not None)
+        summary.append(f"land {rule.land} " + ("measured" if not problems else "NOT measured")
+                       + f" (topmost {tops[0][1] if tops else '-'})")
+    if native:
+        for row in (r for r in geo.rows if r.owner == rule.land):
+            if row.visible is None:
+                problems.append(f"the land block {rule.land}'s TextKit 2 row is not on screen")
+            elif row.visible[1] * geo.scale < top_band - 1:
+                problems.append(f"the land block {rule.land}'s TextKit 2 row starts at "
+                                f"{row.visible[1] * geo.scale:.1f} px, under the top band ({top_band} px)")
+
+    if rule.engine == "swiftui":
+        # G9: the SwiftUI arm has no TextKit 2 row at all.
+        if geo.rows:
+            problems.append("SwiftUI arm has TextKit 2 rows in the window: "
+                            + ",".join(f"{r.owner}|{r.kind}" for r in geo.rows))
+        summary.append("rows none" if not geo.rows else "rows present")
+    else:
+        declared = dict(rule.owners)
+        rows_by_owner: dict[str, list[GeometryRow]] = {}
+        for row in geo.rows:
+            rows_by_owner.setdefault(row.owner, []).append(row)
+        owned: dict[str, int] = {}
+        mixed_under: set[str] = set()
+        for c in code_crops:
+            summary.append(f"k{c.index:02d} {c.owner or '-'}" + (f" ({c.owner_px} px)" if c.owner.startswith("tk2:") else ""))
+            if c.owner == "mixed":   # G2
+                over = [r.owner for r in geo.rows if r.kind == "code" and overlaps(
+                    clamp(grow(px_outer(r.frame, geo.scale), 1), image_w, image_h),
+                    tuple(int(v) for v in c.box.split(",")))]
+                mixed_under.update(over)
+                if len(over) > 1:
+                    problems.append(f"code box {c.index}: two TextKit 2 rows over one box ({','.join(over)})")
+                elif over and next(r for r in geo.rows if r.owner == over[0] and r.kind == "code").visible is None:
+                    problems.append(f"code box {c.index}: owner {over[0]}'s row over it is hidden or clipped off screen")
+                else:
+                    problems.append(f"code box {c.index}: code ink outside owner {','.join(over)}'s on-screen frame")
+            elif c.owner.startswith("tk2:"):   # G4
+                owner = c.owner[4:]
+                owned[owner] = owned.get(owner, 0) + c.owner_px
+                if declared.get(owner) == "swiftui":
+                    problems.append(f"code box {c.index} is drawn by TextKit 2 row {owner} (declared swiftui)")
+                elif owner not in declared and rule.cls == "fallback":
+                    problems.append(f"code box {c.index} is drawn by TextKit 2 row {owner} (a fallback capture)")
+                elif owner not in declared:
+                    summary.append(f"undeclared native owner {owner} (not coverage)")
+            elif c.owner.startswith("covered:"):
+                summary.append(f"k{c.index:02d}: a TextKit 2 row over a box without code ink")
+        for owner, engine in rule.owners:
+            rows = rows_by_owner.get(owner, [])
+            code = [r for r in rows if r.kind == "code"]
+            if engine == "tk2":   # G3
+                if not code:
+                    problems.append(f"owner {owner}: no TextKit 2 code row in the window at the screenshot")
+                elif all(r.visible is None for r in code):
+                    problems.append(f"owner {owner}: its row is clipped off screen (or hidden) at the screenshot")
+                elif owner not in owned and owner in mixed_under:
+                    problems.append(f"owner {owner}: the code box under its row is mixed (above)")
+                elif owner not in owned:
+                    problems.append(f"owner {owner}: on screen but over no scored code box")
+                elif max(r.draws or 0 for r in code) <= 0:
+                    problems.append(f"owner {owner}: its row has 0 native draws before the screenshot")
+            elif rows:   # G6
+                problems.append(f"owner {owner} (declared swiftui) has a TextKit 2 row in the window "
+                                f"({'on screen' if any(r.visible for r in rows) else 'off screen'})")
+    if rule.cls == "fallback" and visible is not None:   # G8
+        present = [owner for owner, _ in rule.owners if owner in visible or top_level(owner) in visible]
+        if not present:
+            problems.append(f"no declared owner is visibly present (visibleRows {','.join(visible) or '-'}; "
+                            f"owners {','.join(owner for owner, _ in rule.owners)})")
+        else:
+            summary.append("present " + ",".join(present))
+    return problems, "; ".join(summary)
 
 
 def parse_code_captures(items: list[list[str]], pair_names: set[str]) -> dict[str, CodeRule]:
@@ -816,6 +1178,8 @@ def parse_code_captures(items: list[list[str]], pair_names: set[str]) -> dict[st
             raise InputError(f"{where}: a positive capture needs an owner declared tk2")
         if cls == "fallback" and native:
             raise InputError(f"{where}: a fallback capture cannot declare {','.join(native)} tk2")
+        if not land:
+            raise InputError(f"{where}: needs ;land=<block id> (the landing is measured)")
         rules[name] = CodeRule(cls, owners, land, engine, log)
     return rules
 
@@ -1025,6 +1389,7 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
                stable_path: str | None = None) -> Score:
     ref = load_rgb(ref_path)
     cand = load_rgb(cand_path)
+    cand_shape = cand.shape   # the candidate as captured: what its CAPTURE_GEOMETRY describes
     notes: list[str] = []
     size_match = ref.shape == cand.shape
     if not size_match:
@@ -1247,14 +1612,31 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
     unscorable = [c for c in code_crops if c.verdict == "INVALID"]
     if unscorable:
         unproven.append(f"{len(unscorable)} code box(es) with a crop that has no scorable pixel")
-    code_proof = ""
+    code_proof = code_geometry = ""
     if code_rule is not None:
         if len(code_crops) < args.code_min_boxes:
             unproven.append(f"code capture with {len(code_crops)} code box(es) < {args.code_min_boxes} required")
         if code_rule.cls == "positive" and not any(c.text_box and c.ref_ink and c.cand_ink for c in code_crops):
             unproven.append("positive code capture without a code text crop")
-        proof_problems, code_proof = evaluate_code_proof(code_rule, args.require_owner_proof)
-        unproven += [f"engine proof: {problem}" for problem in proof_problems]
+        if code_rule.engine == "none":
+            if kind == "noise":
+                code_proof = code_geometry = "not required (reference build: A-A')"
+            else:
+                code_proof = code_geometry = "absent"
+                unproven.append("engine proof: candidate arm ran without -rendererStats; a declared code capture "
+                                "cannot PASS without engine proof")
+        else:
+            lines, landed_at, log_problems = read_proof_log(code_rule)
+            if log_problems:
+                code_proof = code_geometry = "absent"
+                unproven += [f"engine proof: {problem}" for problem in log_problems]
+            else:
+                proof_problems, code_proof = evaluate_code_proof(code_rule, lines, landed_at)
+                unproven += [f"engine proof: {problem}" for problem in proof_problems]
+                geometry_problems, code_geometry = evaluate_code_geometry(
+                    code_rule, lines, landed_at, code_crops, cand_ink, (cand_shape[1], cand_shape[0]),
+                    args.pixel_scale or max(1, round(width / 400)), args.top_band)
+                unproven += [f"geometry: {problem}" for problem in geometry_problems]
     if unproven:
         notes += unproven
         if verdict != "FAIL":
@@ -1300,7 +1682,7 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
                  max_code_shift=max((max(abs(c.dx), abs(c.dy)) for c in code_crops), default=0),
                  chrome_px=sum(c.header_px + c.outline_px for c in code_crops),
                  code_class=code_rule.cls if code_rule is not None else "",
-                 code_proof=code_proof,
+                 code_proof=code_proof, code_geometry=code_geometry,
                  crop_details=crops, marker_details=markers, code_details=code_crops)
 
 
@@ -1310,7 +1692,7 @@ CSV_FIELDS = ["kind", "name", "verdict", "viewport_pct", "viewport_pct_aa", "vie
               "marker_crops", "failing_marker_crops", "max_position_delta", "list_pair",
               "fill_px", "fill_pct", "fill_bbox",
               "code_boxes", "failing_code_boxes", "code_text_crops", "max_code_shift", "chrome_px",
-              "code_class", "code_proof", "masked_pct", "size_match",
+              "code_class", "code_proof", "code_geometry", "masked_pct", "size_match",
               "width", "height", "ref", "cand", "notes"]
 
 
@@ -1336,20 +1718,22 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         "code_search": args.code_search, "code_min_boxes": args.code_min_boxes,
         "code_fill": list(args.code_fill) if args.code_fill else "auto",
         "code_fill_tolerance": args.code_fill_tolerance, "pixel_scale": args.pixel_scale or "auto",
-        "require_owner_proof": args.require_owner_proof,
+        "require_owner_proof": True,   # always on (the flag is accepted for old command lines)
         "code_captures": {name: {"class": rule.cls, "owners": [f"{owner}={engine}" for owner, engine in rule.owners],
                                  "land": rule.land, "engine": rule.engine, "log": rule.log}
                           for name, rule in args.code_rules.items()},
     }
     failed = [s for s in scores if s.verdict != "PASS"]
-    # Native coverage: positive code captures whose candidate ran TextKit 2.
-    # Expected-fallback captures are counted apart and never as coverage.
+    # Native coverage: positive code captures whose candidate ran TextKit 2,
+    # counted only when they PASS, which needs each tk2 owner's row to own a
+    # scored code box at the screenshot (G3). Expected-fallback captures are
+    # counted apart and never as coverage.
     on_textkit2 = [s for s in scores if s.name in args.code_rules and args.code_rules[s.name].engine == "textkit2"]
     positive = [s for s in on_textkit2 if s.code_class == "positive"]
     fallback = [s for s in on_textkit2 if s.code_class == "fallback"]
     coverage = {
         "positive_pairs": len(positive), "positive_pass": sum(1 for s in positive if s.verdict == "PASS"),
-        "positive_owner_level": sum(1 for s in positive if s.code_proof.startswith("owner-level")),
+        "positive_geometry": sum(1 for s in positive if s.verdict == "PASS"),
         "fallback_pairs": len(fallback), "fallback_pass": sum(1 for s in fallback if s.verdict == "PASS"),
     }
     payload = {"overall": "FAIL" if failed else "PASS", "settings": settings, "code_coverage": coverage,
@@ -1373,13 +1757,14 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         f"kind's crop limit with every line displaced <= {args.max_offset_px}px in x and in y (2-D search "
         f"±{args.code_search}px) and its ink centroid <= {args.max_position_px}px. "
         f"Code captures ({len(args.code_rules)} declared): >= {args.code_min_boxes} code box(es), a code text "
-        f"crop when positive, and the engine proof after SCROLL_LANDED"
-        f"{' (owner-level required)' if args.require_owner_proof else ''}.",
+        f"crop when positive, the owner-level engine proof after SCROLL_LANDED, and the capture-time geometry "
+        f"(CAPTURE_GEOMETRY before and after the screenshot: each tk2 owner's on-screen row holds a scored box's "
+        f"code ink, no TextKit 2 code row over a fallback capture's boxes, the landing measured).",
         "",
         "| kind | pair | verdict | viewport % (px) | viewport % (aa) | crops (fail) | max crop % | "
         "max \\|offset\\| px | last px | markers (fail) | max \\|pos Δ\\| px | fill px | "
-        "code boxes (fail) | code class: proof | notes |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        "code boxes (fail) | code class: proof | code geometry | notes |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for s in scores:
         fill_cell = f"{s.fill_px}" + ("" if s.list_pair else " (info)")
@@ -1389,7 +1774,8 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
                      f"{s.last_offset:+d} | {s.marker_crops} ({s.failing_marker_crops}) | "
                      f"{s.max_position_delta:.2f} | {fill_cell} | "
                      f"{s.code_boxes} ({s.failing_code_boxes}) | "
-                     f"{(s.code_class + ': ' + s.code_proof) if s.code_class else ''} | {s.notes} |")
+                     f"{(s.code_class + ': ' + s.code_proof) if s.code_class else ''} | {s.code_geometry} | "
+                     f"{s.notes} |")
     bad_crops = [(s, c) for s in scores for c in s.crop_details if c.verdict != "PASS"]
     if bad_crops:
         lines += ["", "## Failing crops", "",
@@ -1410,18 +1796,19 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
     bad_code = [(s, c) for s in scores for c in s.code_details if c.verdict != "PASS"]
     if bad_code:
         lines += ["", "## Failing code boxes", "",
-                  "| pair | box | verdict | rect | geometry | header px (A–A′) | outline px (A–A′) | text % | "
-                  "lines | shift x,y px | centroid Δx,Δy | notes |",
-                  "|---|---:|---|---|---|---:|---:|---:|---:|---|---|---|"]
+                  "| pair | box | verdict | owner | rect | geometry | header px (A–A′) | outline px (A–A′) | "
+                  "text % | lines | shift x,y px | centroid Δx,Δy | notes |",
+                  "|---|---:|---|---|---|---|---:|---:|---:|---:|---|---|---|"]
         for s, c in bad_code:
-            lines.append(f"| {s.name} | {c.index} | {c.verdict} | {c.box} | {c.geometry} | "
+            lines.append(f"| {s.name} | {c.index} | {c.verdict} | {c.owner or '-'} | {c.box} | {c.geometry} | "
                          f"{c.header_px} ({'n/a' if c.stable_header_px < 0 else c.stable_header_px}) | "
                          f"{c.outline_px} ({'n/a' if c.stable_outline_px < 0 else c.stable_outline_px}) | "
                          f"{c.text_pct:.3f} | {c.lines} | {c.dx:+d},{c.dy:+d} | "
                          f"{c.centroid_dx:+.2f},{c.centroid_dy:+.2f} | {c.notes} |")
     if args.code_rules:
         lines += ["", f"Code coverage (candidate on TextKit 2): {coverage['positive_pass']}/{coverage['positive_pairs']} "
-                  f"positive code captures PASS ({coverage['positive_owner_level']} with owner-level proof); "
+                  f"positive code captures PASS (each with its owners' rows holding scored code pixels at the "
+                  f"screenshot); "
                   f"{coverage['fallback_pass']}/{coverage['fallback_pairs']} expected-fallback captures PASS "
                   "(a fallback capture is never native coverage)."
                   + ("" if coverage["positive_pairs"] else " **No positive native code coverage in this run.**")]
@@ -1462,10 +1849,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--code-capture", nargs=5, action="append", default=[],
                         metavar=("NAME", "CLASS", "OWNERS", "ENGINE", "LOG"),
                         help="declare pair NAME a code capture: CLASS positive | fallback; OWNERS "
-                             "<owner>=<tk2|swiftui>[,...][;land=<block id>]; ENGINE textkit2 | swiftui | none; "
-                             "LOG the candidate's launch log (- with none)")
+                             "<owner>=<tk2|swiftui>[,...];land=<block id>; ENGINE textkit2 | swiftui | none "
+                             "(noise pairs only); LOG the candidate's launch log (- with none)")
     parser.add_argument("--require-owner-proof", action="store_true",
-                        help="a code capture's proof needs the TK2_CODE_ROWS line (default: counters when absent)")
+                        help="accepted for old command lines; the owner-level proof (TK2_CODE_ROWS) and the "
+                             "capture-time geometry are always required")
     parser.add_argument("--code-min-boxes", type=int, default=1, help="code boxes a code capture must show")
     parser.add_argument("--code-search", type=int, default=4, help="code line shift search range in px, both axes")
     parser.add_argument("--code-fill", default="auto", metavar="auto|R,G,B",
@@ -1527,7 +1915,8 @@ def main(argv: list[str]) -> int:
               f"max|offset| {s.max_abs_offset}px  markers {s.marker_crops} fail {s.failing_marker_crops}  "
               f"max|pos| {s.max_position_delta:.2f}px  fill {s.fill_px} px  "
               f"code boxes {s.code_boxes} fail {s.failing_code_boxes}"
-              f"{'  ' + s.code_class + ' [' + s.code_proof + ']' if s.code_class else ''}  {s.notes}")
+              f"{'  ' + s.code_class + ' [' + s.code_proof + '] {' + s.code_geometry + '}' if s.code_class else ''}"
+              f"  {s.notes}")
     print(f"wrote {out_dir / 'scores.csv'}, {out_dir / 'scores.json'} and {out_dir / 'summary.md'}")
     return 1 if any(s.verdict != "PASS" for s in scores) else 0
 
