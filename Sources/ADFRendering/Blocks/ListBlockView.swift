@@ -136,6 +136,7 @@ struct ListRowView: View {
         switch row.marker {
         case .bullet(let depth):
             Text(Self.bulletGlyph(depth: depth))
+                .scaleEffect(Self.bulletScale, anchor: Self.bulletAnchor(depth: depth))
                 .accessibilityHidden(true)
         case .ordered(let text):
             Text(text)
@@ -153,6 +154,25 @@ struct ListRowView: View {
             Color.clear
                 .frame(width: 1, height: 1)
                 .accessibilityHidden(true)
+        }
+    }
+
+    /// How much larger than the body text's own glyph a bullet draws. The
+    /// glyph keeps the body font (so it follows Dynamic Type) and is scaled
+    /// when drawn, not laid out: the marker column, the first-baseline
+    /// alignment and the row's height stay those of an unscaled glyph.
+    static let bulletScale: CGFloat = 1.3
+
+    /// The point a bullet grows about: the centre of its glyph, so it stays
+    /// centred on the first line of the item's text and in the same column.
+    /// Each glyph's centre sits a different way down its line box (▪ comes
+    /// from a fallback font); measured on iOS 27 at Large and AX3, these
+    /// keep the centre within a pixel of the unscaled glyph's.
+    static func bulletAnchor(depth: Int) -> UnitPoint {
+        switch max(depth, 0) % 3 {
+        case 0: return UnitPoint(x: 0.5, y: 0.57)
+        case 1: return UnitPoint(x: 0.5, y: 0.55)
+        default: return UnitPoint(x: 0.5, y: 0.51)
         }
     }
 
