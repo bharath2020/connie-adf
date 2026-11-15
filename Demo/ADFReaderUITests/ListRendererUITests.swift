@@ -951,6 +951,71 @@ final class ListRendererUITests: XCTestCase {
         driver.reader.chooseRenderer(textKit2: false)
     }
 
+    /// A task checkbox's tap band reaches past the drawn glyph: a tap just
+    /// left of the glyph, one in the gap before the text, and one just below
+    /// the glyph of a wrapped task each toggle that task exactly once. A tap
+    /// on the leader's first letters, beside the band, dispatches nothing.
+    /// SwiftUI, then TextKit 2, in one launch.
+    func testTaskTapOutsideGlyphTogglesAndTextBesideItDoesNot() throws {
+        let driver = ListUIDriver(fixture: ListUIParity.fixture, extra: ["-scrollToFraction", ListUIParity.tasksFraction])
+        driver.reader.waitForRenderer("SwiftUI")
+        XCTAssertTrue(driver.waitUntilShown(driver.element(ListUIParity.taskA), timeout: 15), "the task list is not in view")
+        let probes: [(task: ListUIRow, place: String, point: (CGRect) -> CGPoint)] = [
+            (ListUIParity.taskA, "left of the glyph", { CGPoint(x: $0.minX - 5, y: $0.midY) }),
+            (ListUIParity.taskA, "in the gap before the text", { CGPoint(x: $0.maxX + 4, y: $0.midY) }),
+            (ListUIParity.taskD, "below the glyph of a wrapped task", { CGPoint(x: $0.midX, y: $0.maxY + 8) }),
+        ]
+
+        for textKit2 in [false, true] {
+            let arm = textKit2 ? "TextKit 2" : "SwiftUI"
+            if textKit2 {
+                driver.reader.chooseRenderer(textKit2: true)
+                driver.pause(1.5)
+            }
+            for probe in probes {
+                try listUIStep("\(arm): tap \(probe.place) of \(probe.task.owner)") {
+                    let leader = driver.element(probe.task)
+                    XCTAssertTrue(driver.waitUntilShown(leader), "\(probe.task.text) is not in view")
+                    let box = try XCTUnwrap(driver.taskBox(leader: leader), "no checkbox on \(probe.task.text)")
+                    let point = probe.point(box.frame)
+                    XCTAssertFalse(box.frame.contains(point), "\(arm): the probe point is on the glyph")
+                    XCTAssertLessThan(point.x, leader.frame.minX, "\(arm): the probe point is on the text")
+                    let wasDone = box.label == "Completed task"
+                    let others = driver.taskStates(ListUIParity.tasks.filter { $0.owner != probe.task.owner })
+                    let before = try XCTUnwrap(driver.readProbe())
+                    driver.tap(at: point)
+                    driver.pause(1.5)
+                    let after = try XCTUnwrap(driver.readProbe())
+                    listUIExpectDispatch(from: before, to: after, id: probe.task.owner, isDone: !wasDone,
+                        "\(arm) \(probe.task.owner) \(probe.place)")
+                    XCTAssertEqual(driver.taskBox(leader: leader)?.label, wasDone ? "Task" : "Completed task",
+                                   "\(arm): a tap \(probe.place) did not flip \(probe.task.owner)")
+                    XCTAssertEqual(driver.taskStates(ListUIParity.tasks.filter { $0.owner != probe.task.owner }), others,
+                                   "\(arm): a tap \(probe.place) changed another task")
+                    // Restore on the glyph itself.
+                    try XCTUnwrap(driver.taskBox(leader: leader), "checkbox of \(probe.task.owner) vanished").tap()
+                    driver.pause(1.5)
+                    let restored = try XCTUnwrap(driver.readProbe())
+                    listUIExpectDispatch(from: after, to: restored, id: probe.task.owner, isDone: wasDone,
+                        "\(arm) \(probe.task.owner) restore")
+                }
+            }
+            try listUIStep("\(arm): a tap on the text beside the band dispatches nothing") {
+                let leader = driver.element(ListUIParity.taskA)
+                XCTAssertTrue(driver.waitUntilShown(leader), "\(ListUIParity.taskA.text) is not in view")
+                let box = try XCTUnwrap(driver.taskBox(leader: leader), "no checkbox on \(ListUIParity.taskA.text)")
+                let states = driver.taskStates(ListUIParity.tasks)
+                let before = try XCTUnwrap(driver.readProbe())
+                driver.tap(at: CGPoint(x: leader.frame.minX + 4, y: box.frame.midY))
+                driver.pause(1.5)
+                let after = try XCTUnwrap(driver.readProbe())
+                listUIExpectNothing(from: before, to: after, "\(arm) text tap beside the band")
+                XCTAssertEqual(driver.taskStates(ListUIParity.tasks), states, "\(arm): a text tap beside the band changed a checkbox")
+            }
+        }
+        driver.reader.chooseRenderer(textKit2: false)
+    }
+
     /// A toggled nested task keeps its state — and every other task its own,
     /// in the same order — across a switch ON, a scroll to the end and back,
     /// a rotation round trip, a Text Size change and a switch OFF; none of

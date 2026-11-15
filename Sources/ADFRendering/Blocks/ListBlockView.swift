@@ -10,12 +10,18 @@ struct ListBlockView: View {
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: theme.spacing * 0.75) {
+        VStack(alignment: .leading, spacing: Self.rowSpacing(theme: theme)) {
             ForEach(rows, id: \.id) { row in
                 ListRowView(row: row)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The vertical gap between two rows. A task checkbox's tap band
+    /// (`TaskHitArea`) reaches half of it above and below its row.
+    nonisolated static func rowSpacing(theme: ADFTheme) -> CGFloat {
+        theme.spacing * 0.75
     }
 }
 
@@ -44,6 +50,9 @@ struct ListRowView: View {
     /// Marker column width, scaled with Dynamic Type so glyphs stay aligned
     /// with the text they annotate.
     @ScaledMetric(relativeTo: .body) private var markerWidth: CGFloat = 28
+    /// Whether a touch is down on the task checkbox's tap band, so the glyph
+    /// shows the pressed dimming its own button would.
+    @State private var isTaskPressed = false
 
     var body: some View {
         let keepsRenderer = TextKit2Scope.listDirectionKeepsRenderer(layoutDirection) && TextKit2Scope.rowKeepsRenderer(row)
@@ -66,6 +75,7 @@ struct ListRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .environment(\.adfTextOwnerKind, .list)
         }
+        .overlay(alignment: .topLeading) { taskHitArea }
         .padding(.leading, CGFloat(row.depth) * (markerWidth + theme.spacing))
         .padding(isDecision ? theme.spacing : 0)
         .background {
@@ -105,6 +115,22 @@ struct ListRowView: View {
         return TextKit2Scope.listTextFits(textColumnWidth.map { $0 - RichTextBlockView.indentationPadding(style, theme: theme) })
     }
 
+    /// A task row's enlarged checkbox tap target, over the marker column and
+    /// the gap after it (never the text column). Draws nothing.
+    @ViewBuilder
+    private var taskHitArea: some View {
+        if case .task(let id, let done) = row.marker {
+            TaskHitAreaView(
+                id: id,
+                adfDone: done,
+                columnWidth: markerWidth + theme.spacing,
+                leadingOutset: TaskHitArea.leadingOutset(markerWidth: markerWidth, spacing: theme.spacing),
+                verticalOutset: TaskHitArea.verticalOutset(rowSpacing: ListBlockView.rowSpacing(theme: theme)),
+                isPressed: $isTaskPressed
+            )
+        }
+    }
+
     @ViewBuilder
     private var markerView: some View {
         switch row.marker {
@@ -115,7 +141,7 @@ struct ListRowView: View {
             Text(text)
                 .monospacedDigit()
         case .task(let id, let done):
-            TaskMarkerView(id: id, adfDone: done)
+            TaskMarkerView(id: id, adfDone: done, isPressed: isTaskPressed)
         case .decision:
             // Decision glyph; the row itself gets the tinted container.
             Text(Image(systemName: "diamond"))
@@ -142,10 +168,14 @@ struct ListRowView: View {
 }
 
 /// Task checkbox. Shows `adfTaskStates[id] ?? adfDone`; toggles via the host
-/// handler when present, read-only otherwise. Only the glyph is tappable.
+/// handler when present, read-only otherwise. The glyph's button is the
+/// accessibility element (VoiceOver activates it); touches land on the row's
+/// larger `TaskHitAreaView`, which sits over the glyph and reports its
+/// press as `isPressed`.
 private struct TaskMarkerView: View {
     let id: String
     let adfDone: Bool
+    let isPressed: Bool
     @Environment(\.adfInteractionHandler) private var handler
     @Environment(\.adfTaskStates) private var taskStates
 
@@ -157,7 +187,9 @@ private struct TaskMarkerView: View {
             Button {
                 handler(.taskToggled(id: id, isDone: !isDone))
             } label: {
-                Text(glyph).foregroundStyle(isDone ? Color.accentColor : Color.secondary)
+                Text(glyph)
+                    .foregroundStyle(isDone ? Color.accentColor : Color.secondary)
+                    .opacity(isPressed ? TaskHitArea.pressedOpacity : 1)
             }
             .buttonStyle(.plain)
             .contentShape(Rectangle())
@@ -168,5 +200,95 @@ private struct TaskMarkerView: View {
                 .foregroundStyle(isDone ? Color.accentColor : Color.secondary)
                 .accessibilityLabel(isDone ? "Completed task" : "Task")
         }
+    }
+}
+
+/// Geometry of a task checkbox's tap band. The glyph is about 20 pt square,
+/// well under Apple's 44 × 44 pt minimum, so the band grows the target
+/// without moving or resizing anything drawn:
+///
+/// - Across: the marker column plus the gap before the text, and up to one
+///   `spacing` further toward the leading edge (into the depth indent, or
+///   the document margin at depth 0) until the band is 44 pt wide. It never
+///   reaches the text column, so text selection and links keep their taps.
+/// - Down: the row's height plus half the row gap above and below, capped
+///   at 44 pt. Neighbouring rows' bands meet in the middle of the gap and
+///   never overlap, so a dense single-line task list gets bands as tall as
+///   its row pitch, and a wrapped task gets the full 44 pt.
+enum TaskHitArea {
+    /// Apple's minimum comfortable touch target side.
+    static let minimumSide: CGFloat = 44
+
+    /// The glyph's opacity while its tap band is pressed.
+    static let pressedOpacity: Double = 0.4
+
+    /// How far the band reaches toward the leading edge past the marker
+    /// column: what a 44 pt width still needs, at most one `spacing`.
+    static func leadingOutset(markerWidth: CGFloat, spacing: CGFloat) -> CGFloat {
+        min(max(minimumSide - markerWidth - spacing, 0), spacing)
+    }
+
+    /// How far the band reaches above and below its row: half the gap
+    /// between rows, so neighbouring bands abut without overlapping.
+    static func verticalOutset(rowSpacing: CGFloat) -> CGFloat {
+        rowSpacing / 2
+    }
+
+    /// The band's height for a row of `rowHeight`.
+    static func height(rowHeight: CGFloat, verticalOutset: CGFloat) -> CGFloat {
+        min(rowHeight + 2 * verticalOutset, minimumSide)
+    }
+}
+
+/// The task checkbox's tap band (`TaskHitArea`): a clear button laid over
+/// the row's top-leading corner. Its frame is the marker column plus the
+/// gap; negative padding lets the clear label overhang that frame by the
+/// outsets, so layout and drawing are unchanged. While a touch is down it
+/// sets `isPressed`, which dims the glyph. Hidden from accessibility —
+/// `TaskMarkerView`'s glyph stays the element VoiceOver reads and activates.
+private struct TaskHitAreaView: View {
+    let id: String
+    let adfDone: Bool
+    /// The marker column plus the gap before the text.
+    let columnWidth: CGFloat
+    let leadingOutset: CGFloat
+    let verticalOutset: CGFloat
+    @Binding var isPressed: Bool
+    @Environment(\.adfInteractionHandler) private var handler
+    @Environment(\.adfTaskStates) private var taskStates
+
+    private var isDone: Bool { taskStates[id] ?? adfDone }
+
+    var body: some View {
+        if let handler {
+            Button {
+                handler(.taskToggled(id: id, isDone: !isDone))
+            } label: {
+                // Proposed the row's height plus both outsets (the negative
+                // vertical padding below), capped at the 44 pt maximum —
+                // `TaskHitArea.height(rowHeight:verticalOutset:)`.
+                Color.clear
+                    .frame(width: columnWidth + leadingOutset)
+                    .frame(maxHeight: TaskHitArea.minimumSide)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(TaskHitAreaButtonStyle(isPressed: $isPressed))
+            .accessibilityHidden(true)
+            .padding(.leading, -leadingOutset)
+            .padding(.vertical, -verticalOutset)
+        }
+    }
+}
+
+/// The tap band's button style: draws the clear label as is and mirrors the
+/// press into `isPressed`.
+private struct TaskHitAreaButtonStyle: ButtonStyle {
+    @Binding var isPressed: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { _, pressed in
+                isPressed = pressed
+            }
     }
 }
