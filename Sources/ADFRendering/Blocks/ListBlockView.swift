@@ -162,11 +162,23 @@ struct ListRowView: View {
         }
     }
 
-    /// A bullet's diameter (the square's side) as a fraction of the body
-    /// text's capital height. Measured from the size the captain asked for
-    /// (a Slack message on iPhone: dots 17.8 px across by their ink area,
-    /// beside 37 px capitals); the system font's own • is about 0.28.
-    static let bulletDiameterToCapHeight: CGFloat = 0.48
+    /// A round bullet's (• ◦) diameter as a fraction of the body text's
+    /// capital height. The captain's reference picture (a Slack message on
+    /// iPhone: dots 17.8 px across by their ink area, beside 37 px
+    /// capitals) measures 0.48; the captain then asked for the round
+    /// bullets a little bigger again. The system font's own • is about 0.28.
+    static let roundBulletDiameterToCapHeight: CGFloat = 0.55
+
+    /// The square bullet's (▪) side as a fraction of the body text's capital
+    /// height: the reference picture's 0.48, which the captain kept when
+    /// the round bullets grew.
+    static let squareBulletSideToCapHeight: CGFloat = 0.48
+
+    /// A nesting level's bullet size as a fraction of the capital height:
+    /// round for • and ◦, square for ▪.
+    static func bulletSideToCapHeight(depth: Int) -> CGFloat {
+        bulletGlyph(depth: depth) == "▪" ? squareBulletSideToCapHeight : roundBulletDiameterToCapHeight
+    }
 
     /// Bullet glyph per bullet-list nesting level (ordered-list ancestors
     /// don't count): • ◦ ▪ cycling every three levels. `BulletMarkerView`
@@ -181,8 +193,9 @@ struct ListRowView: View {
 }
 
 /// A bullet marker: a filled dot (•), a ring (◦) or a flat square (▪),
-/// each `ListRowView.bulletDiameterToCapHeight` of the body text's capital
-/// height across, in the text colour.
+/// `ListRowView.bulletSideToCapHeight(depth:)` of the body text's capital
+/// height across (the round marks a little larger than the square), in the
+/// text colour.
 ///
 /// The marks are shapes sized from the body font's metrics at the current
 /// Dynamic Type size, not glyphs: the system font's • is smaller than the
@@ -198,7 +211,7 @@ struct BulletMarkerView: View {
 
     var body: some View {
         let metrics = BulletMetrics.body(size: dynamicTypeSize, bold: legibilityWeight == .bold)
-        let side = metrics.capHeight * ListRowView.bulletDiameterToCapHeight
+        let side = metrics.capHeight * ListRowView.bulletSideToCapHeight(depth: depth)
         Text(ListRowView.bulletGlyph(depth: 0))
             .hidden()
             .overlay(alignment: Alignment(horizontal: .center, vertical: .firstTextBaseline)) {
@@ -227,8 +240,8 @@ enum BulletMetrics {
         var dotMidY: CGFloat
     }
 
-    /// The ring's (◦) stroke as a fraction of its diameter: the system
-    /// font's ◦ proportion.
+    /// The ring's (◦) stroke as a fraction of its diameter: a thin
+    /// outline (the system font's own ◦ is heavier, about a third).
     static let ringWidthToDiameter: CGFloat = 0.12
 
     private struct Key: Hashable {

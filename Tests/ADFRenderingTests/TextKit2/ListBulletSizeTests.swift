@@ -9,10 +9,9 @@ import ADFPreparation
 /// Bullet markers at every nesting depth, under both text engines, measured
 /// from rendered pixels against the item text beside them:
 ///
-/// - Size: each mark (• dot, ◦ ring, ▪ square) is
-///   `ListRowView.bulletDiameterToCapHeight` (0.48) of the text's capital
-///   height across, the proportion the captain asked for, and all three
-///   share that footprint.
+/// - Size: the round marks (• dot, ◦ ring) are 0.55 of the text's
+///   capital height across and share that footprint; the ▪ square is 0.48,
+///   the proportions the captain asked for.
 /// - Position: the mark is centred where the body font's own • is centred
 ///   on the first line of text, in the marker column, and the row keeps the
 ///   height it had with the glyph.
@@ -121,13 +120,13 @@ struct ListBulletSizeTests {
         abs(p.r - c.0) <= 24 && abs(p.g - c.1) <= 24 && abs(p.b - c.2) <= 24
     }
 
-    @Test("A bullet is 0.48 of the capital height; only the third level is a square")
+    @Test("Round bullets are 0.55 of the capital height, the square 0.48; only the third level is a square")
     func proportions() {
-        #expect(ListRowView.bulletDiameterToCapHeight == 0.48)
+        #expect((0..<6).map(ListRowView.bulletSideToCapHeight) == [0.55, 0.55, 0.48, 0.55, 0.55, 0.48])
         #expect((0..<6).map(ListRowView.bulletGlyph) == ["•", "◦", "▪", "•", "◦", "▪"])
     }
 
-    @Test("Every depth's mark is 0.48 of the capital height, centred like the font's dot, flat and in the text colour, on both engines")
+    @Test("Every depth's mark is its share of the capital height, centred like the font's dot, flat and in the text colour, on both engines")
     func bulletMarks() async throws {
         let rows = try await Self.rows()
         try #require(rows.count == 3)
@@ -150,9 +149,9 @@ struct ListBulletSizeTests {
                     let glyphRow = Self.reference(row, glyph: ListRowView.bulletGlyph(depth: row.depth), leader: leader, env: env)
                     let glyphHeight = Parity.measure(glyphRow, width: width).size.height
                     #expect(abs(rendered.height - glyphHeight) <= Parity.tolerance, "\(label): row height \(rendered.height), with the glyph \(glyphHeight)")
-                    // 0.48 of the capital height, within two pixels (a
+                    // Its share of the capital height, within two pixels (a
                     // round mark's ends cover less than half a pixel).
-                    let expected = Double(drawn.capHeight) * Double(ListRowView.bulletDiameterToCapHeight)
+                    let expected = Double(drawn.capHeight) * Double(ListRowView.bulletSideToCapHeight(depth: row.depth))
                     #expect(abs(Double(drawn.width) - expected) <= 2, "\(label): mark \(drawn.width) px wide, capitals \(drawn.capHeight) px")
                     #expect(abs(Double(drawn.height) - expected) <= 2, "\(label): mark \(drawn.height) px tall, capitals \(drawn.capHeight) px")
                     // Centred where the font's own • is centred.
@@ -182,12 +181,12 @@ struct ListBulletSizeTests {
                     footprints.append(drawn)
                     print("bullet mark \(label): \(drawn.width)×\(drawn.height) px, capitals \(drawn.capHeight) px, glyph dot \(dot.width)×\(dot.height) px")
                 }
-                // One footprint for all three marks (a square's ends reach
-                // a pixel further than a circle's at half coverage).
-                for mark in footprints.dropFirst() {
-                    #expect(abs(mark.width - footprints[0].width) <= 2 && abs(mark.height - footprints[0].height) <= 2,
-                            "\(env) \(arm): footprints \(footprints.map { "\($0.width)×\($0.height)" })")
-                }
+                // The dot and ring share one footprint; the square is
+                // smaller (summed across both sides: one side can round to
+                // the circle's at half coverage).
+                let sizes = "\(env) \(arm): footprints \(footprints.map { "\($0.width)×\($0.height)" })"
+                #expect(abs(footprints[1].width - footprints[0].width) <= 1 && abs(footprints[1].height - footprints[0].height) <= 1, "\(sizes)")
+                #expect(footprints[2].width + footprints[2].height < footprints[0].width + footprints[0].height, "\(sizes)")
             }
         }
     }
