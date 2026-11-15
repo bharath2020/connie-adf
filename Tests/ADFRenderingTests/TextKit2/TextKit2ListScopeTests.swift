@@ -6,7 +6,7 @@ import Testing
 /// `.codeBlock`) and the list row's trailing-block boundary
 /// (`ListRowView`). A third setter, such as a container passing it on,
 /// would leak TextKit 2 into an excluded subtree. A code block only reads
-/// the choice (`TextKit2CodeScopeRuleTests`). Source scan, so it runs on
+/// the choice (`TextKit2CodeScopeTests`, UIKit only). Source scan, so it runs on
 /// every platform.
 @Suite("TextKit 2 list scope: renderer setters")
 struct TextKit2RendererSetterTests {
