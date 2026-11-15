@@ -190,8 +190,7 @@ struct ListRowView: View {
 /// large glossy square). A hidden • lays the marker out, so the column,
 /// first-baseline alignment and row height are the glyph's, and each mark
 /// is centred where that glyph's dot is centred: `midY` above the baseline,
-/// on the first line of the item's text. The ring's stroke keeps the
-/// font's ◦ proportion, so it reads at text weight.
+/// on the first line of the item's text.
 struct BulletMarkerView: View {
     let depth: Int
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -203,7 +202,7 @@ struct BulletMarkerView: View {
         Text(ListRowView.bulletGlyph(depth: 0))
             .hidden()
             .overlay(alignment: Alignment(horizontal: .center, vertical: .firstTextBaseline)) {
-                mark(side: side, ringWidth: side * metrics.ringWidthToDiameter)
+                mark(side: side, ringWidth: side * BulletMetrics.ringWidthToDiameter)
                     .frame(width: side, height: side)
                     .alignmentGuide(.firstTextBaseline) { $0.height / 2 + metrics.dotMidY }
             }
@@ -220,15 +219,17 @@ struct BulletMarkerView: View {
 }
 
 /// The body text style's metrics a bullet is drawn from, at a Dynamic Type
-/// size: its capital height, how far its dot's (•) centre sits above the
-/// baseline, and its ring's (◦) stroke as a fraction of the ring's
-/// diameter. A marker inherits the body text style.
+/// size: its capital height and how far its dot's (•) centre sits above
+/// the baseline. A marker inherits the body text style.
 enum BulletMetrics {
     struct Metrics: Equatable {
         var capHeight: CGFloat
         var dotMidY: CGFloat
-        var ringWidthToDiameter: CGFloat
     }
+
+    /// The ring's (◦) stroke as a fraction of its diameter: the system
+    /// font's ◦ proportion.
+    static let ringWidthToDiameter: CGFloat = 0.12
 
     private struct Key: Hashable {
         var size: DynamicTypeSize
@@ -258,44 +259,15 @@ enum BulletMetrics {
 
     static func measure(_ font: CTFont) -> Metrics {
         let capHeight = CTFontGetCapHeight(font)
-        // Without the glyphs: the system font's proportions.
-        var metrics = Metrics(capHeight: capHeight, dotMidY: capHeight * 0.4, ringWidthToDiameter: 0.12)
+        // Without the glyph: the system font's proportion.
+        var metrics = Metrics(capHeight: capHeight, dotMidY: capHeight * 0.4)
         if let dot = glyph(0x2022, in: font) {
             var bounds = CGRect.zero
             var glyph = dot
             CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyph, &bounds, 1)
             metrics.dotMidY = bounds.midY
         }
-        // The ring's outline is two circles; their widths give the stroke.
-        if let ring = glyph(0x25E6, in: font), let path = CTFontCreatePathForGlyph(font, ring, nil) {
-            let widths = subpathBounds(path).map(\.width).sorted()
-            if widths.count == 2, let outer = widths.last, let inner = widths.first, outer > 0 {
-                metrics.ringWidthToDiameter = (outer - inner) / 2 / outer
-            }
-        }
         return metrics
-    }
-
-    /// The bounds of each closed outline of a glyph path.
-    private static func subpathBounds(_ path: CGPath) -> [CGRect] {
-        var bounds: [CGRect] = []
-        var current = CGMutablePath()
-        path.applyWithBlock { element in
-            let points = element.pointee.points
-            switch element.pointee.type {
-            case .moveToPoint:
-                if !current.isEmpty { bounds.append(current.boundingBoxOfPath) }
-                current = CGMutablePath()
-                current.move(to: points[0])
-            case .addLineToPoint: current.addLine(to: points[0])
-            case .addQuadCurveToPoint: current.addQuadCurve(to: points[1], control: points[0])
-            case .addCurveToPoint: current.addCurve(to: points[2], control1: points[0], control2: points[1])
-            case .closeSubpath: current.closeSubpath()
-            @unknown default: break
-            }
-        }
-        if !current.isEmpty { bounds.append(current.boundingBoxOfPath) }
-        return bounds
     }
 
     private static func glyph(_ character: UniChar, in font: CTFont) -> CGGlyph? {
