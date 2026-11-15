@@ -4,6 +4,7 @@ import ADFPreparation
 /// Tinted rounded container with a leading icon; palette resolved from the
 /// panel type (info/note/tip/success/warning/error/custom) in preparation.
 struct PanelBlockView: View {
+    let id: String
     let palette: PanelPalette
     let blocks: [RenderBlock]
 
@@ -26,5 +27,6 @@ struct PanelBlockView: View {
         }
         .padding(theme.spacing * 1.5)
         .background(RoundedRectangle(cornerRadius: theme.containerCornerRadius).fill(palette.background))
+        .adfSelectionComponent(id: id, cornerRadius: theme.containerCornerRadius)
     }
 }

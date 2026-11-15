@@ -91,6 +91,7 @@ struct ExpandBlockView: View {
             RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                 .strokeBorder(Color.gray.opacity(isNested ? 0.2 : 0.3))
         )
+        .adfSelectionComponent(id: id, cornerRadius: theme.containerCornerRadius)
     }
 
     /// Flattens the body nodes off-main on first open; the result is cached

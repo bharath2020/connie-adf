@@ -46,6 +46,7 @@ struct CodeBlockView: View {
                     let paint = highlightPaint
                     TextKit2RowView(
                         segments: [.text(code)],
+                        ownerID: ownerID,
                         spans: paint.spans,
                         currentSpans: paint.currentSpans,
                         dimCurrent: flashDimmed,
@@ -68,6 +69,7 @@ struct CodeBlockView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: theme.containerCornerRadius).fill(Color.gray.opacity(0.1)))
+        .adfSelectionComponent(id: ownerID, cornerRadius: theme.containerCornerRadius)
         .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
     }
 

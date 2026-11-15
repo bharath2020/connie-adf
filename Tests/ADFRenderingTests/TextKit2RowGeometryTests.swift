@@ -72,6 +72,21 @@ struct TextKit2RowGeometryTests {
         #expect(offset == 0)
     }
 
+    @Test func closestOffsetClampsPointsOutsideTheLineInsteadOfOverflowing() {
+        let view = makeRow()
+        let length = (paragraph as NSString).length
+
+        let left = view.closestUTF16Offset(to: CGPoint(x: -10_000, y: 0))
+        let right = view.closestUTF16Offset(to: CGPoint(x: 10_000, y: 0))
+
+        #expect(left == 0)
+        #expect(right != nil)
+        if let right {
+            #expect((0...length).contains(right))
+            #expect(right > 0)
+        }
+    }
+
     @Test func caretRectAtDocumentEndIsNeverNull() {
         let view = makeRow()
         let length = (paragraph as NSString).length

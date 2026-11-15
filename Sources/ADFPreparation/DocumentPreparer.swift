@@ -117,6 +117,7 @@ struct BlockPreparer: Sendable {
             var code = AttributedString(text)
             code[AttributeScopes.SwiftUIAttributes.FontAttribute.self] = theme.code
             code[FontSpecAttribute.self] = FontSpec(monospaced: true)
+            code[ADFSourceMarksAttribute.self] = [ADFMark]()
             return [RenderBlock(
                 id: node.id,
                 kind: .codeBlock(language: language, code: code),

@@ -5,6 +5,7 @@ import ADFPreparation
 /// percentages, collapsing to a vertical stack at compact horizontal size
 /// class (iOS) or accessibility Dynamic Type sizes.
 struct LayoutColumnsView: View {
+    let id: String
     let columns: [PreparedColumn]
 
     @Environment(\.adfTheme) private var theme
@@ -14,20 +15,23 @@ struct LayoutColumnsView: View {
     #endif
 
     var body: some View {
-        if isCollapsed {
-            VStack(alignment: .leading, spacing: theme.spacing * 2) {
-                ForEach(columns, id: \.id) { column in
-                    LayoutColumnContentView(column: column)
+        Group {
+            if isCollapsed {
+                VStack(alignment: .leading, spacing: theme.spacing * 2) {
+                    ForEach(columns, id: \.id) { column in
+                        LayoutColumnContentView(column: column)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            ProportionalColumnsLayout(fractions: fractions, spacing: theme.spacing * 2) {
-                ForEach(columns, id: \.id) { column in
-                    LayoutColumnContentView(column: column)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ProportionalColumnsLayout(fractions: fractions, spacing: theme.spacing * 2) {
+                    ForEach(columns, id: \.id) { column in
+                        LayoutColumnContentView(column: column)
+                    }
                 }
             }
         }
+        .adfSelectionComponent(id: id, cornerRadius: theme.containerCornerRadius)
     }
 
     private var isCollapsed: Bool {
@@ -62,6 +66,10 @@ struct LayoutColumnContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .adfSelectionComponent(
+            id: column.id,
+            cornerRadius: theme.containerCornerRadius
+        )
     }
 }
 

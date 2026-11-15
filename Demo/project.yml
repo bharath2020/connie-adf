@@ -70,5 +70,19 @@ targets:
           CODE_SIGN_IDENTITY: iPhone Distribution
           PROVISIONING_PROFILE_SPECIFIER: ADFReader App Store
     scheme:
-      testTargets: []
+      testTargets:
+        - ADFReaderUITests
       gatherCoverageData: false
+  ADFReaderUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ADFReaderUITests
+    dependencies:
+      - target: ADFReader
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.connie.adfreader.uitests
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete

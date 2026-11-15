@@ -21,6 +21,9 @@ public struct SearchTextUnit: Sendable, Hashable {
     /// Ordered, gap-free composition map from `plainText` Character offsets
     /// back to segments/atoms.
     public let parts: [Part]
+    /// Rich-copy semantics. Nil for synthetic/test units and unsupported
+    /// plugin atoms; plain-text Copy remains available in either case.
+    public let clipboard: ADFClipboardMetadata?
 
     public struct Part: Sendable, Hashable {
         public enum Source: Sendable, Hashable {
@@ -46,13 +49,15 @@ public struct SearchTextUnit: Sendable, Hashable {
         topLevelBlockID: String,
         expandAncestorIDs: [String],
         plainText: String,
-        parts: [Part]
+        parts: [Part],
+        clipboard: ADFClipboardMetadata? = nil
     ) {
         self.ownerID = ownerID
         self.topLevelBlockID = topLevelBlockID
         self.expandAncestorIDs = expandAncestorIDs
         self.plainText = plainText
         self.parts = parts
+        self.clipboard = clipboard
     }
 }
 

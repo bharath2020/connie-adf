@@ -14,9 +14,9 @@ struct BlockView: View {
         case .codeBlock(let language, let code):
             CodeBlockView(language: language, code: code, ownerID: block.id)
         case .panel(let palette, let blocks):
-            PanelBlockView(palette: palette, blocks: blocks)
+            PanelBlockView(id: block.id, palette: palette, blocks: blocks)
         case .quote(let blocks):
-            QuoteBlockView(blocks: blocks)
+            QuoteBlockView(id: block.id, blocks: blocks)
         case .divider:
             Divider()
         case .unknown(let typeName):
@@ -40,11 +40,11 @@ struct BlockView: View {
         case .expand(let title, let bodyNodes, let isNested):
             ExpandBlockView(id: block.id, title: title, bodyNodes: bodyNodes, isNested: isNested)
         case .layoutColumns(let columns):
-            LayoutColumnsView(columns: columns)
+            LayoutColumnsView(id: block.id, columns: columns)
         case .card(let url, let title, let isEmbed):
             CardBlockView(url: url, title: title, isEmbed: isEmbed)
         case .extensionPlaceholder(let title, let body):
-            ExtensionPlaceholderBlockView(title: title, blocks: body)
+            ExtensionPlaceholderBlockView(id: block.id, title: title, blocks: body)
         case .custom(let custom):
             CustomBlockView(block: custom, ownerID: block.id)
         }

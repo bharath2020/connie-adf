@@ -115,20 +115,34 @@ public struct ADFTheme: Sendable, Hashable {
     public func panelPalette(_ type: ADFPanelType, colorHex: String?) -> PanelPalette {
         switch type {
         case .info:
-            return PanelPalette(background: Color.blue.opacity(0.12), accent: .blue, iconSystemName: "info.circle.fill")
+            return PanelPalette(
+                background: Color.blue.opacity(0.12), accent: .blue,
+                iconSystemName: "info.circle.fill", panelType: type, colorHex: colorHex)
         case .note:
-            return PanelPalette(background: Color.purple.opacity(0.12), accent: .purple, iconSystemName: "note.text")
+            return PanelPalette(
+                background: Color.purple.opacity(0.12), accent: .purple,
+                iconSystemName: "note.text", panelType: type, colorHex: colorHex)
         case .tip:
-            return PanelPalette(background: Color.teal.opacity(0.12), accent: .teal, iconSystemName: "lightbulb.fill")
+            return PanelPalette(
+                background: Color.teal.opacity(0.12), accent: .teal,
+                iconSystemName: "lightbulb.fill", panelType: type, colorHex: colorHex)
         case .success:
-            return PanelPalette(background: Color.green.opacity(0.12), accent: .green, iconSystemName: "checkmark.circle.fill")
+            return PanelPalette(
+                background: Color.green.opacity(0.12), accent: .green,
+                iconSystemName: "checkmark.circle.fill", panelType: type, colorHex: colorHex)
         case .warning:
-            return PanelPalette(background: Color.yellow.opacity(0.16), accent: .yellow, iconSystemName: "exclamationmark.triangle.fill")
+            return PanelPalette(
+                background: Color.yellow.opacity(0.16), accent: .yellow,
+                iconSystemName: "exclamationmark.triangle.fill", panelType: type, colorHex: colorHex)
         case .error:
-            return PanelPalette(background: Color.red.opacity(0.12), accent: .red, iconSystemName: "xmark.octagon.fill")
+            return PanelPalette(
+                background: Color.red.opacity(0.12), accent: .red,
+                iconSystemName: "xmark.octagon.fill", panelType: type, colorHex: colorHex)
         case .custom:
             let accent = colorHex.flatMap(Color.init(adfHex:)) ?? .gray
-            return PanelPalette(background: accent.opacity(0.12), accent: accent, iconSystemName: "star.fill")
+            return PanelPalette(
+                background: accent.opacity(0.12), accent: accent,
+                iconSystemName: "star.fill", panelType: type, colorHex: colorHex)
         }
     }
 }
@@ -138,11 +152,23 @@ public struct PanelPalette: Sendable, Hashable {
     public let background: Color
     public let accent: Color
     public let iconSystemName: String
+    /// Retained for rich clipboard reconstruction; rendering continues to use
+    /// only the resolved palette above.
+    public let panelType: ADFPanelType
+    public let colorHex: String?
 
-    public init(background: Color, accent: Color, iconSystemName: String) {
+    public init(
+        background: Color,
+        accent: Color,
+        iconSystemName: String,
+        panelType: ADFPanelType = .info,
+        colorHex: String? = nil
+    ) {
         self.background = background
         self.accent = accent
         self.iconSystemName = iconSystemName
+        self.panelType = panelType
+        self.colorHex = colorHex
     }
 }
 

@@ -1,7 +1,23 @@
 #if os(iOS)
 import UIKit
+import UniformTypeIdentifiers
 import Observation
 import ADFPreparation
+
+/// Owns endpoint movement and edge autoscroll. UIKit's private selection
+/// recognizer can draw our custom `UITextInput` handles but does not reliably
+/// update a virtual, multi-view text range. This recognizer wins only when its
+/// delegate confirms the touch began in an endpoint halo; all other document
+/// pans fail it before recognition.
+private final class SelectionHandleDragRecognizer: UIPanGestureRecognizer {
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
+        false
+    }
+}
 
 /// Read-only selection engine for the TextKit 2 arm — **v3, session-scoped
 /// overlay** (spec §7, phase 4; Tasks 16b/17/18/19).
@@ -46,6 +62,12 @@ final class SelectionController: NSObject {
     /// is wired to the text model's document order in `rebuildTextModel`.
     let geometryRegistry = RowGeometryRegistry()
 
+    /// Live semantic container surfaces. SwiftUI registers weak anchor views;
+    /// the selection overlay reads them only while painting a live selection.
+    /// This stays separate from `geometryRegistry`: text rects and component
+    /// outlines have different lifetimes and one component can own many rows.
+    let componentGeometryRegistry = SelectionComponentGeometryRegistry()
+
     private weak var container: UIView?
     private weak var scrollView: UIScrollView?
     private var attached = false
@@ -64,10 +86,9 @@ final class SelectionController: NSObject {
 
     private var longPress: UILongPressGestureRecognizer?
     private var tapClear: UITapGestureRecognizer?
-    /// Passive observer of handle-drag touch-moves on the overlay: it never
-    /// steals touches (`cancelsTouchesInView = false`, simultaneous with the
-    /// `UITextInteraction` drag) — its only job is to feed the touch's
-    /// Y-in-viewport to `autoscroller` on `.changed` and stop it on end.
+    /// Endpoint drag recognizer on the overlay. It begins only inside a native
+    /// handle's 44-point halo, updates the virtual range directly, and feeds
+    /// touch Y to the edge autoscroller.
     private var autoscrollPan: UIPanGestureRecognizer?
 
     /// Drag-past-edge autoscroll (Task 20). Constructed in `attach` once the
@@ -85,6 +106,16 @@ final class SelectionController: NSObject {
     /// True from session start until teardown. Gates the recognizers on the
     /// gesture path without reading the observed `model.selectionSessionActive`.
     private var sessionActive = false
+
+    /// The initiating long press starts on the idle content container, before
+    /// the overlay participates in hit-testing. UIKit's native text
+    /// interaction therefore cannot inherit that same touch when the user
+    /// keeps holding and drags. Track that one gesture explicitly and extend
+    /// its tokenizer seed through the overlay's ordinary range-write path.
+    private var longPressDragActive = false
+    private var longPressDragWindowPoint: CGPoint?
+    private var handleDragActive = false
+    private var handleDragWindowPoint: CGPoint?
 
     /// The document's shared table h-scroll registry (Task 22 geometry
     /// staleness). Wired by `ScrollViewIntrospector` from the environment's
@@ -115,11 +146,19 @@ final class SelectionController: NSObject {
     init(model: ADFDocumentModel) {
         self.model = model
         self.geometrySource = RowGeometrySource(registry: geometryRegistry)
-        self.overlay = SelectionOverlayView(model: model, geometrySource: geometrySource)
-        self.editMenu = UIEditMenuInteraction(delegate: nil)
+        let overlay = SelectionOverlayView(
+            model: model,
+            geometrySource: geometrySource,
+            componentGeometryRegistry: componentGeometryRegistry
+        )
+        self.overlay = overlay
+        self.editMenu = UIEditMenuInteraction(delegate: overlay)
         super.init()
         overlay.addInteraction(editMenu)
         overlay.onResign = { [weak self] in self?.endSession() }
+        model.selection.setFragmentProvider { [weak overlay] in
+            overlay?.selectionFragment()
+        }
         geometrySource.referenceView = overlay
         // Collapsed-height corrections on row re-entry (Task 22): ANY live
         // row (re)materializing can mean a formerly-interpolated rect was
@@ -128,6 +167,10 @@ final class SelectionController: NSObject {
         // registry already, so this never adds a scroll-path read of its
         // own; the `sessionActive` check keeps idle cost to that one guard.
         geometryRegistry.onRegister = { [weak self] _ in
+            guard let self, self.sessionActive else { return }
+            self.selectionGeometryDidGoStale()
+        }
+        componentGeometryRegistry.onGeometryChange = { [weak self] in
             guard let self, self.sessionActive else { return }
             self.selectionGeometryDidGoStale()
         }
@@ -175,6 +218,7 @@ final class SelectionController: NSObject {
         overlay.frame = container.bounds
         overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(overlay)
+        overlay.installSelectionRangeProbe(in: container.window ?? container)
 
         let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         lp.cancelsTouchesInView = false
@@ -213,17 +257,48 @@ final class SelectionController: NSObject {
         let scroller = SelectionAutoscroller(scrollView: scrollView)
         scroller.topRowProvider = { [weak self] _ in self?.topLevelBlockIDAtViewportTop() }
         scroller.onScrollStep = { [weak self] rowID in
-            guard let rowID, let self else { return }
-            self.model?.anchors.topRow = rowID
+            guard let self else { return }
+            if let rowID {
+                self.model?.anchors.topRow = rowID
+            }
+            // During the initiating long-press drag, the finger is stationary
+            // in window space while autoscroll moves document content beneath
+            // it. Re-resolve that stable point after every scroll step so the
+            // endpoint continues growing without requiring another touch-move.
+            if self.longPressDragActive,
+               let windowPoint = self.longPressDragWindowPoint,
+               let window = self.overlay.window,
+               let container = self.container {
+                let containerPoint = container.convert(windowPoint, from: window)
+                self.overlay.extendLongPressSelection(
+                    toContainerPoint: containerPoint
+                )
+            }
+            if self.handleDragActive,
+               let windowPoint = self.handleDragWindowPoint,
+               let window = self.overlay.window,
+               let container = self.container {
+                let containerPoint = container.convert(windowPoint, from: window)
+                self.overlay.updateHandleDrag(toContainerPoint: containerPoint)
+            }
         }
         autoscroller = scroller
 
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleAutoscrollPan(_:)))
+        let pan = SelectionHandleDragRecognizer(
+            target: self,
+            action: #selector(handleAutoscrollPan(_:))
+        )
         pan.cancelsTouchesInView = false
         pan.delaysTouchesBegan = false
         pan.delaysTouchesEnded = false
         pan.delegate = self
-        overlay.addGestureRecognizer(pan)
+        // UIKit hosts the visible endpoint knobs in a managed window-level
+        // view. A pan installed only on `overlay` never sees a touch whose
+        // hit view is that knob. Window installation observes the same touch;
+        // `gestureRecognizerShouldBegin` still rejects everything outside the
+        // active endpoint halo, so document and navigation gestures are
+        // unaffected.
+        (container.window ?? container).addGestureRecognizer(pan)
         autoscrollPan = pan
     }
 
@@ -335,57 +410,89 @@ final class SelectionController: NSObject {
     // MARK: - Session lifecycle
 
     @objc private func handleLongPress(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began, let container, let model else { return }
+        guard let container else { return }
         let point = g.location(in: container)
 
-        // Long-press DURING a live session → restart a fresh word session at
-        // the press point (spec §7 "long-press-inside-selection → new word
-        // session"). We re-seed only — the overlay stays first responder and
-        // the session stays active — so a press inside the current selection
-        // reselects the word under the finger rather than being swallowed by
-        // the interaction's own long-press. `tk2Row(at:)` can't be used here
-        // (the enabled overlay is frontmost and hit-tests to itself over the
-        // selection); `beginSession` resolves geometry via the registry, not
-        // hit-testing, and returns `false` on a miss without disturbing the
-        // existing selection.
-        if sessionActive {
-            if overlay.beginSession(atContainerPoint: point), overlay.selectedTextRange != nil {
-                presentMenu(near: point)
+        switch g.state {
+        case .began:
+            longPressDragActive = false
+            longPressDragWindowPoint = nil
+
+            // Long-press DURING a live session → restart a fresh word session
+            // at the press point. Endpoint touches are excluded by the gesture
+            // delegate below so UIKit's native handle recognizer owns them.
+            // `tk2Row(at:)` cannot be used here because the enabled overlay is
+            // frontmost; the resolver uses the live row registry directly.
+            if sessionActive {
+                if overlay.beginSession(atContainerPoint: point),
+                   overlay.selectedTextRange != nil {
+                    longPressDragActive = true
+                    longPressDragWindowPoint = overlay.window.map { g.location(in: $0) }
+                    editMenu.dismissMenu()
+                }
+                return
             }
-            return
+
+            guard let model, tk2Row(at: point) != nil else { return }
+
+            // Rebuild the corpus model from the CURRENT index: the
+            // introspector attaches before streaming indexing finishes, so
+            // the attach-time model can be empty/stale. Cheap and off the
+            // scroll path (session start only).
+            rebuildTextModel()
+
+            overlay.frame = container.bounds
+            container.bringSubviewToFront(overlay)
+            overlay.isUserInteractionEnabled = true
+
+            // The active session only commits once a seed resolves. A miss
+            // undoes the tentative interaction enablement.
+            guard overlay.beginSession(atContainerPoint: point) else {
+                overlay.isUserInteractionEnabled = false
+                return
+            }
+
+            sessionActive = true
+            longPressDragActive = true
+            longPressDragWindowPoint = overlay.window.map { g.location(in: $0) }
+            // The ONE observed flip at session start (first non-empty
+            // selection).
+            model.setSelectionSessionActive(true)
+            observeExpandedBlocksIfActive()
+            // Match native text selection: reveal the edit menu after the
+            // initiating gesture ends, not underneath the finger while it may
+            // still become a drag.
+            editMenu.dismissMenu()
+
+        case .changed:
+            guard sessionActive, longPressDragActive else { return }
+            longPressDragWindowPoint = overlay.window.map { g.location(in: $0) }
+            overlay.extendLongPressSelection(toContainerPoint: point)
+            updateAutoscroll(atContainerPoint: point)
+
+        case .ended:
+            guard longPressDragActive else { return }
+            longPressDragActive = false
+            longPressDragWindowPoint = nil
+            autoscroller?.stop()
+            overlay.finishLongPressSelection()
+            scheduleMenuPresentation(near: point)
+
+        case .cancelled, .failed:
+            longPressDragActive = false
+            longPressDragWindowPoint = nil
+            autoscroller?.stop()
+            overlay.finishLongPressSelection()
+
+        default:
+            break
         }
-
-        guard tk2Row(at: point) != nil else { return }
-
-        // Rebuild the corpus model from the CURRENT index: the introspector
-        // attaches before streaming indexing finishes, so the attach-time model
-        // can be empty/stale. Cheap and off the scroll path (session start only).
-        rebuildTextModel()
-
-        overlay.frame = container.bounds
-        container.bringSubviewToFront(overlay)
-        overlay.isUserInteractionEnabled = true
-
-        // `sessionActive` / `selectionSessionActive` / the presented menu only
-        // commit once a seed offset actually resolves — a seed miss undoes the
-        // tentative "enable interaction" instead of leaving an
-        // interaction-enabled empty session behind (review fix round 1, minor #3).
-        guard overlay.beginSession(atContainerPoint: point) else {
-            overlay.isUserInteractionEnabled = false
-            return
-        }
-
-        sessionActive = true
-        // The ONE observed flip at session start (first non-empty selection).
-        model.setSelectionSessionActive(true)
-        observeExpandedBlocksIfActive()
-        presentMenu(near: point)
     }
 
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
         guard sessionActive, let container else { return }
         let point = g.location(in: container)
-        if overlay.selectionContains(point) { return }
+        if overlay.selectionHitRegionContains(point) { return }
         endSession()
     }
 
@@ -406,8 +513,14 @@ final class SelectionController: NSObject {
     private func endSession() {
         guard sessionActive else { return }
         sessionActive = false
+        longPressDragActive = false
+        longPressDragWindowPoint = nil
+        handleDragActive = false
+        handleDragWindowPoint = nil
         autoscroller?.stop()
         editMenu.dismissMenu()
+        overlay.finishLongPressSelection()
+        overlay.finishHandleDrag()
         overlay.clearSelection()
         if overlay.isFirstResponder { _ = overlay.resignFirstResponder() }
         overlay.isUserInteractionEnabled = false
@@ -425,27 +538,72 @@ final class SelectionController: NSObject {
         editMenu.presentEditMenu(with: config)
     }
 
+    /// Defers until UIKit has committed the native handle/long-press range
+    /// write for this touch. Presenting synchronously on gesture end can query
+    /// the previous endpoint geometry and put the menu back over a handle.
+    private func scheduleMenuPresentation(near point: CGPoint) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.sessionActive else { return }
+            self.presentMenu(near: point)
+        }
+    }
+
     // MARK: - Autoscroll
 
     /// Feeds the autoscroller the touch's Y-in-viewport during a native handle
     /// drag. `.began`/`.changed` engage/adjust the ramp; end/cancel tears the
     /// display link down. Passive — it never affects the drag it observes.
     @objc private func handleAutoscrollPan(_ g: UIPanGestureRecognizer) {
-        guard sessionActive, let scrollView, let autoscroller else { return }
+        guard sessionActive, let autoscroller else { return }
+        let point = g.location(in: overlay)
         switch g.state {
-        case .began, .changed:
-            // `location(in: scrollView)` is in content coordinates (bounds
-            // origin == contentOffset); subtracting the offset yields a
-            // viewport Y that stays stable under a stationary finger as the
-            // content autoscrolls beneath it.
-            let contentY = g.location(in: scrollView).y
-            let viewportY = contentY - scrollView.contentOffset.y
-            autoscroller.update(touchYInBounds: viewportY, viewportHeight: scrollView.bounds.height)
+        case .began:
+            // Resolve the touch-down point (the pan begins only after a few
+            // points of motion) so a fast initial move still grabs the handle.
+            let translation = g.translation(in: overlay)
+            let touchDown = CGPoint(
+                x: point.x - translation.x,
+                y: point.y - translation.y
+            )
+            handleDragActive = overlay.beginHandleDrag(
+                atContainerPoint: touchDown
+            )
+            guard handleDragActive else { return }
+            handleDragWindowPoint = overlay.window.map { g.location(in: $0) }
+            editMenu.dismissMenu()
+            overlay.updateHandleDrag(toContainerPoint: point)
+            updateAutoscroll(atContainerPoint: point)
+        case .changed:
+            guard handleDragActive else { return }
+            handleDragWindowPoint = overlay.window.map { g.location(in: $0) }
+            overlay.updateHandleDrag(toContainerPoint: point)
+            updateAutoscroll(atContainerPoint: point)
         case .ended, .cancelled, .failed:
+            let didDragHandle = handleDragActive
+            handleDragActive = false
+            handleDragWindowPoint = nil
             autoscroller.stop()
+            overlay.finishHandleDrag()
+            if g.state == .ended, didDragHandle {
+                scheduleMenuPresentation(near: point)
+            }
         default:
             break
         }
+    }
+
+    /// Converts a content-space touch into the document scroll view's visible
+    /// bounds and feeds the edge ramp. The overlay and content container share
+    /// bounds, so this works for both the initiating container long press and
+    /// later native handle drags on the overlay.
+    private func updateAutoscroll(atContainerPoint point: CGPoint) {
+        guard let container, let scrollView, let autoscroller else { return }
+        let pointInScrollView = container.convert(point, to: scrollView)
+        let viewportY = pointInScrollView.y - scrollView.contentOffset.y
+        autoscroller.update(
+            touchYInBounds: viewportY,
+            viewportHeight: scrollView.bounds.height
+        )
     }
 
     /// The top-level block ID whose row currently sits at the viewport top —
@@ -489,15 +647,48 @@ final class SelectionController: NSObject {
 }
 
 extension SelectionController: UIGestureRecognizerDelegate {
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === autoscrollPan,
+              let pan = gestureRecognizer as? UIPanGestureRecognizer
+        else {
+            return true
+        }
+        let point = pan.location(in: overlay)
+        let translation = pan.translation(in: overlay)
+        let touchDown = CGPoint(
+            x: point.x - translation.x,
+            y: point.y - translation.y
+        )
+        let shouldBegin = sessionActive
+            && overlay.selectionEndpointHitRegionContains(touchDown)
+        return shouldBegin
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
-    ) -> Bool { true }
+    ) -> Bool {
+        // Endpoint movement has one owner. Allowing UIKit's private recognizer
+        // simultaneously lets it write its stale pre-drag range after our
+        // virtual-document update.
+        gestureRecognizer !== autoscrollPan && other !== autoscrollPan
+    }
 
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldReceive touch: UITouch
     ) -> Bool {
+        // Once selection is live, endpoint affordances belong exclusively to
+        // UIKit's `UITextInteraction`. Letting the ancestor long press track
+        // those touches makes a deliberate hold on a handle re-seed a word
+        // after 0.5s, exactly when the user expects to begin dragging it.
+        if gestureRecognizer === longPress, sessionActive {
+            let point = touch.location(in: overlay)
+            if overlay.selectionEndpointHitRegionContains(point) {
+                return false
+            }
+        }
+
         // Tap-to-clear fires only during a session, and NOT when the touch
         // hit-tests into an interactive descendant — a `UIControl` (checkbox /
         // button facade) or a NESTED `UIScrollView` (code/table horizontal
@@ -566,7 +757,31 @@ final class RowGeometrySource: SelectionGeometrySource {
                   content.segmentUTF16Starts.indices.contains(segIndex) else { return [] }
             nsRange = NSRange(location: content.segmentUTF16Starts[segIndex], length: 1)
         }
-        return row.selectionRects(forUTF16: nsRange).map { row.convert($0, to: reference) }
+        let converted = row.selectionRects(forUTF16: nsRange).map { row.convert($0, to: reference) }
+        return SelectionRectClipper.clip(
+            converted,
+            through: clippingAncestorRects(for: row, in: reference)
+        )
+    }
+
+    /// Selection is drawn by a sibling overlay, so UIKit does not inherit the
+    /// row's ancestor clipping automatically. Reapply every real clipping
+    /// boundary in overlay coordinates. This is generic across horizontal
+    /// code/table scrollers and any future container implemented with a
+    /// clipping UIKit/SwiftUI viewport.
+    private func clippingAncestorRects(
+        for row: TextKit2RowUIView,
+        in reference: UIView
+    ) -> [CGRect] {
+        var result = [reference.bounds]
+        var ancestor = row.superview
+        while let view = ancestor {
+            if view.clipsToBounds {
+                result.append(view.convert(view.bounds, to: reference))
+            }
+            ancestor = view.superview
+        }
+        return result
     }
 
     func caretRect(ownerID: String, anchor: SelectionTextModel.CaretAnchor) -> CGRect? {
@@ -660,14 +875,37 @@ final class ADFSelectionRect: UITextSelectionRect {
 
 // MARK: - The selection surface
 
+private struct ResolvedComponentSelection {
+    let rect: CGRect
+    let clippingRect: CGRect
+    let cornerRadius: CGFloat
+}
+
 /// The transparent selection surface: a `UIView` that is also the read-only
 /// `UITextInput`. Arithmetic delegates to `SelectionTextModel` in UTF-16;
 /// geometry to `SelectionGeometryResolver` over live TK2 layouts. Selection
 /// state lives in `model.selection` (non-observed).
-final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInteractionDelegate {
+@MainActor
+final class SelectionOverlayView:
+    UIView,
+    UITextInput,
+    UITextSelectionDisplayInteractionDelegate,
+    @MainActor UIEditMenuInteractionDelegate
+{
     private weak var model: ADFDocumentModel?
     private let geometrySource: SelectionGeometrySource
+    private let componentGeometryRegistry: SelectionComponentGeometryRegistry
     private let interaction = UITextInteraction(for: .nonEditable)
+    /// Small, viewport-clipped layers — never one drawable surface as tall as
+    /// the document. The overlay itself can exceed 500k points in stress-5k;
+    /// giving it (or a full-size child) a backing store makes Core Animation
+    /// attempt a multi-million-pixel bitmap even while selection is idle.
+    private var componentHighlightLayers: [CAShapeLayer] = []
+    private var longPressSeedRange: Range<Int>?
+    private var handleDragFixedOffset: Int?
+    private let selectionRangeProbeEnabled =
+        ProcessInfo.processInfo.arguments.contains("-selectionUITestProbe")
+    private let selectionRangeProbe = UILabel()
 
     /// The real corpus text model, set by the controller on attach/rebuild.
     var textModel = SelectionTextModel.build(orderedItems: [])
@@ -682,12 +920,30 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     /// Ends the session when this view resigns first responder from ANY path.
     var onResign: (() -> Void)?
 
-    init(model: ADFDocumentModel, geometrySource: SelectionGeometrySource) {
+    init(
+        model: ADFDocumentModel,
+        geometrySource: SelectionGeometrySource,
+        componentGeometryRegistry: SelectionComponentGeometryRegistry
+    ) {
         self.model = model
         self.geometrySource = geometrySource
+        self.componentGeometryRegistry = componentGeometryRegistry
         super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
+        // Nonvisual UI-test probe. Selection gestures need an observable
+        // result without reading another process's pasteboard, which triggers
+        // iOS's paste-permission alert. It is exposed only while selection is
+        // active and only when the UI-test launch environment requests it.
+        if selectionRangeProbeEnabled {
+            selectionRangeProbe.isAccessibilityElement = true
+            selectionRangeProbe.accessibilityIdentifier = "adf-selection-range"
+            selectionRangeProbe.accessibilityLabel = "Selection range"
+            selectionRangeProbe.accessibilityValue = "none"
+            selectionRangeProbe.isUserInteractionEnabled = false
+            selectionRangeProbe.backgroundColor = .clear
+            selectionRangeProbe.frame = CGRect(x: 1, y: 100, width: 1, height: 1)
+        }
         interaction.textInput = self
         addInteraction(interaction)
         let display = UITextSelectionDisplayInteraction(textInput: self, delegate: self)
@@ -696,6 +952,21 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         selectionDisplay = display
     }
     required init?(coder: NSCoder) { fatalError("unused") }
+
+    func installSelectionRangeProbe(in container: UIView) {
+        guard selectionRangeProbeEnabled else { return }
+        container.addSubview(selectionRangeProbe)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateComponentHighlights()
+    }
+
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        updateComponentHighlightColors()
+    }
 
     // MARK: Geometry resolver + visibility
 
@@ -730,12 +1001,79 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         inputDelegate?.selectionWillChange(self)
         let seedPosition = SelectionTextPosition(seed)
         let word = wordRange(around: seedPosition) ?? fallbackRange(around: seed)
+        longPressSeedRange = word.range
         writeSelection(word.range)
         inputDelegate?.selectionDidChange(self)
         selectionDisplay?.isActivated = true
         selectionDisplay?.setNeedsSelectionUpdate()
         selectionDisplay?.layoutManagedSubviews()
         return true
+    }
+
+    /// Extends the word selected at long-press recognition while the same
+    /// initiating touch remains down. That touch began on the idle content
+    /// container, so UIKit's overlay-hosted native interaction cannot adopt
+    /// it mid-stream; this method supplies the missing continuation.
+    func extendLongPressSelection(toContainerPoint point: CGPoint) {
+        guard let seed = longPressSeedRange,
+              let offset = resolver.closestGlobalOffset(toContainerPoint: point)
+        else { return }
+        let extended = SelectionDragRange.extending(seed, toward: offset)
+        guard extended != currentRange else { return }
+        inputDelegate?.selectionWillChange(self)
+        writeSelection(extended)
+        inputDelegate?.selectionDidChange(self)
+        selectionDisplay?.layoutManagedSubviews()
+    }
+
+    func finishLongPressSelection() {
+        longPressSeedRange = nil
+    }
+
+    /// Captures which native endpoint the pan began on and fixes the opposite
+    /// UTF-16 offset for the duration of the drag. Returns `false` for pans
+    /// that start in selected text but not on either handle.
+    func beginHandleDrag(atContainerPoint point: CGPoint) -> Bool {
+        guard let range = currentRange else { return false }
+        let grab: CGFloat = 44
+        let candidates = endpointCandidates().compactMap {
+            candidate -> (isStart: Bool, distance: CGFloat)? in
+            let dx = candidate.point.x - point.x
+            let dy = candidate.point.y - point.y
+            let distance = dx * dx + dy * dy
+            return distance <= grab * grab
+                ? (candidate.isStart, distance)
+                : nil
+        }
+        guard let nearest = candidates.min(by: { $0.distance < $1.distance })
+        else {
+            return false
+        }
+        handleDragFixedOffset = nearest.isStart
+            ? range.upperBound
+            : range.lowerBound
+        return true
+    }
+
+    func updateHandleDrag(toContainerPoint point: CGPoint) {
+        guard let fixedOffset = handleDragFixedOffset,
+              let current = currentRange,
+              let offset = resolver.closestGlobalOffset(toContainerPoint: point)
+        else { return }
+        let moved = SelectionDragRange.movingEndpoint(
+            fixedOffset: fixedOffset,
+            toward: offset,
+            preserving: current
+        )
+        guard moved != current else { return }
+        inputDelegate?.selectionWillChange(self)
+        writeSelection(moved)
+        inputDelegate?.selectionDidChange(self)
+        selectionDisplay?.layoutManagedSubviews()
+    }
+
+    func finishHandleDrag() {
+        handleDragFixedOffset = nil
     }
 
     /// The tokenizer's enclosing word at a position, tried in both storage
@@ -764,14 +1102,20 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     }
 
     func clearSelection() {
+        longPressSeedRange = nil
+        handleDragFixedOffset = nil
         let hadSelection = model?.selection.utf16Range != nil
         if hadSelection {
             inputDelegate?.selectionWillChange(self)
             model?.selection.utf16Range = nil
             inputDelegate?.selectionDidChange(self)
         }
+        if selectionRangeProbeEnabled {
+            selectionRangeProbe.accessibilityValue = "none"
+        }
         selectionDisplay?.isActivated = false
         selectionDisplay?.setNeedsSelectionUpdate()
+        updateComponentHighlights()
     }
 
     // MARK: Task 22 — mid-gesture cancel / geometry staleness
@@ -799,6 +1143,7 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     func nudgeSelectionDisplay() {
         selectionDisplay?.setNeedsSelectionUpdate()
         selectionDisplay?.layoutManagedSubviews()
+        updateComponentHighlights()
     }
 
     /// Re-queries selection rects/carets from UIKit WITHOUT touching the
@@ -822,6 +1167,49 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     func selectionContains(_ point: CGPoint) -> Bool {
         guard let range = currentRange else { return false }
         return resolver.selectionRects(forUTF16: range).contains { $0.rect.contains(point) }
+    }
+
+    /// The native endpoint views are visually small but conventionally offer
+    /// a roughly finger-sized hit target. The overlay must accept that whole
+    /// halo or the touch falls through to the document before
+    /// `UITextInteraction` can see it.
+    func selectionHitRegionContains(_ point: CGPoint) -> Bool {
+        guard let range = currentRange else { return false }
+        let grab: CGFloat = 44
+        return resolver.selectionRects(forUTF16: range).contains {
+            $0.rect.insetBy(dx: -grab, dy: -grab).contains(point)
+        }
+    }
+
+    /// Endpoint-only variant used to keep the controller's ancestor
+    /// long-press recognizer from competing with native handle drags.
+    func selectionEndpointHitRegionContains(_ point: CGPoint) -> Bool {
+        let grab: CGFloat = 44
+        return endpointCandidates().contains { candidate in
+            let dx = candidate.point.x - point.x
+            let dy = candidate.point.y - point.y
+            return dx * dx + dy * dy <= grab * grab
+        }
+    }
+
+    private func endpointCandidates() -> [(isStart: Bool, point: CGPoint)] {
+        guard let range = currentRange else { return [] }
+        return resolver.selectionRects(forUTF16: range).flatMap { resolved in
+            var candidates: [(isStart: Bool, point: CGPoint)] = []
+            if resolved.containsStart {
+                candidates.append((
+                    true,
+                    CGPoint(x: resolved.rect.minX, y: resolved.rect.minY)
+                ))
+            }
+            if resolved.containsEnd {
+                candidates.append((
+                    false,
+                    CGPoint(x: resolved.rect.maxX, y: resolved.rect.maxY)
+                ))
+            }
+            return candidates
+        }
     }
 
     // MARK: Selection state (the non-observed model box)
@@ -856,12 +1244,145 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         let snapped = resolver.snapIngestedRange(range)
         guard !snapped.isEmpty else {
             model.selection.utf16Range = nil
+            if selectionRangeProbeEnabled {
+                selectionRangeProbe.accessibilityValue = "none"
+            }
             selectionDisplay?.setNeedsSelectionUpdate()
+            updateComponentHighlights()
             return
         }
         model.selection.utf16Range = snapped
         model.selection.epoch = model.documentEpoch // Task 22: the real document epoch
+        if selectionRangeProbeEnabled {
+            selectionRangeProbe.accessibilityValue =
+                "\(snapped.lowerBound)..<\(snapped.upperBound)"
+            let rect = resolver.selectionRects(forUTF16: snapped).first?.rect
+                ?? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+            if let probeContainer = selectionRangeProbe.superview {
+                selectionRangeProbe.frame = convert(rect, to: probeContainer)
+            }
+        }
         selectionDisplay?.setNeedsSelectionUpdate()
+        updateComponentHighlights()
+    }
+
+    /// Resolves semantic full-coverage IDs through live component anchors.
+    /// Called only on selection writes/geometry refreshes/layout, never from
+    /// SwiftUI row bodies or the document's scroll-position observation.
+    private func updateComponentHighlights() {
+        guard let range = currentRange, !range.isEmpty else {
+            applyComponentHighlights([])
+            return
+        }
+        let selectedIDs = textModel.fullySelectedComponentIDs(
+            inUTF16: range,
+            isVisible: { [weak self] in self?.isUnitVisible($0) ?? true }
+        )
+        guard !selectedIDs.isEmpty else {
+            applyComponentHighlights([])
+            return
+        }
+
+        let liveEntries = componentGeometryRegistry.liveEntries(for: selectedIDs)
+        let selections: [ResolvedComponentSelection] = liveEntries
+            .compactMap { entry -> ResolvedComponentSelection? in
+                let view = entry.view
+                guard view.window != nil else {
+                    return nil
+                }
+                let componentRect = view.convert(view.bounds, to: self)
+                guard !componentRect.isEmpty, !componentRect.isNull else {
+                    return nil
+                }
+                var clippingRect = bounds
+                var ancestor = view.superview
+                while let current = ancestor {
+                    if current.clipsToBounds {
+                        clippingRect = clippingRect.intersection(
+                            current.convert(current.bounds, to: self)
+                        )
+                    }
+                    ancestor = current.superview
+                }
+                guard !clippingRect.isEmpty, !clippingRect.isNull else {
+                    return nil
+                }
+                switch entry.shape {
+                case .roundedRectangle(let cornerRadius):
+                    return ResolvedComponentSelection(
+                        rect: componentRect,
+                        clippingRect: clippingRect,
+                        cornerRadius: cornerRadius
+                    )
+                }
+            }
+        applyComponentHighlights(selections)
+    }
+
+    /// Paints the "whole component" cue underneath UIKit's native glyph
+    /// selection and handles. Each shape layer is bounded to the component's
+    /// currently visible viewport intersection, so even a 5k-row document
+    /// allocates only a few screen-sized layers during an active selection
+    /// and no drawable backing store while idle.
+    private func applyComponentHighlights(
+        _ unsortedSelections: [ResolvedComponentSelection]
+    ) {
+        let selections = unsortedSelections
+            .compactMap { selection -> (selection: ResolvedComponentSelection, visibleRect: CGRect)? in
+                let visibleRect = selection.rect.intersection(selection.clippingRect)
+                guard !visibleRect.isEmpty, !visibleRect.isNull else { return nil }
+                return (selection, visibleRect)
+            }
+            .sorted {
+                $0.selection.rect.width * $0.selection.rect.height
+                    < $1.selection.rect.width * $1.selection.rect.height
+            }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        while componentHighlightLayers.count < selections.count {
+            let highlightLayer = CAShapeLayer()
+            highlightLayer.masksToBounds = true
+            layer.insertSublayer(highlightLayer, at: 0)
+            componentHighlightLayers.append(highlightLayer)
+        }
+        while componentHighlightLayers.count > selections.count {
+            componentHighlightLayers.removeLast().removeFromSuperlayer()
+        }
+
+        for (index, resolved) in selections.enumerated() {
+            let highlightLayer = componentHighlightLayers[index]
+            let selection = resolved.selection
+            let visibleRect = resolved.visibleRect
+            let componentRectInLayer = selection.rect.offsetBy(
+                dx: -visibleRect.minX,
+                dy: -visibleRect.minY
+            )
+            let strokeInset: CGFloat = 1
+            let pathRect = componentRectInLayer.insetBy(
+                dx: strokeInset,
+                dy: strokeInset
+            )
+
+            highlightLayer.frame = visibleRect
+            highlightLayer.contentsScale = traitCollection.displayScale
+            highlightLayer.path = UIBezierPath(
+                roundedRect: pathRect,
+                cornerRadius: max(0, selection.cornerRadius - strokeInset)
+            ).cgPath
+            highlightLayer.lineWidth = strokeInset * 2
+        }
+        updateComponentHighlightColors()
+        CATransaction.commit()
+    }
+
+    private func updateComponentHighlightColors() {
+        let fill = tintColor.withAlphaComponent(0.075).cgColor
+        let stroke = tintColor.withAlphaComponent(0.82).cgColor
+        for highlightLayer in componentHighlightLayers {
+            highlightLayer.fillColor = fill
+            highlightLayer.strokeColor = stroke
+        }
     }
 
     // MARK: UITextInput (read-only)
@@ -890,6 +1411,7 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
             } else {
                 model?.selection.utf16Range = nil
                 selectionDisplay?.setNeedsSelectionUpdate()
+                updateComponentHighlights()
             }
         }
     }
@@ -974,11 +1496,40 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     /// rects, expanded by a handle-grab margin); every other point falls through
     /// to the content beneath so the scroll view's pan wins.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        guard let range = currentRange else { return false }
-        let grab: CGFloat = 28
-        return resolver.selectionRects(forUTF16: range).contains {
-            $0.rect.insetBy(dx: -grab, dy: -grab).contains(point)
+        selectionHitRegionContains(point)
+    }
+
+    // MARK: Edit-menu placement
+
+    /// Gives `UIEditMenuInteraction` the selected line's real target rectangle
+    /// plus enough vertical clearance for both endpoint knobs. With only a
+    /// source point UIKit treats the target as zero-sized; in the kitchen-sink
+    /// code row that put the menu's bottom at y=704 for a selection beginning
+    /// at y=710, directly covering the upper handle.
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        targetRectFor configuration: UIEditMenuConfiguration
+    ) -> CGRect {
+        guard let range = currentRange else { return .null }
+        let rects = resolver.selectionRects(forUTF16: range)
+            .map(\.rect)
+            .filter { !$0.isNull && !$0.isEmpty }
+        guard let nearest = rects.min(by: {
+            squaredDistance(from: configuration.sourcePoint, to: $0)
+                < squaredDistance(from: configuration.sourcePoint, to: $1)
+        }) else {
+            return .null
         }
+
+        // Horizontal padding clears the endpoint knob; larger vertical
+        // padding accounts for its stem and leaves a comfortable re-grab gap.
+        return nearest.insetBy(dx: -16, dy: -52)
+    }
+
+    private func squaredDistance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let dx = max(max(rect.minX - point.x, 0), point.x - rect.maxX)
+        let dy = max(max(rect.minY - point.y, 0), point.y - rect.maxY)
+        return dx * dx + dy * dy
     }
 
     // MARK: Responder / editing
@@ -1004,10 +1555,10 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
         }
         return super.canPerformAction(action, withSender: sender)
     }
-    /// Writes the document-order corpus slice for the current selection to the
-    /// general pasteboard. The text is byte-identical to the search corpus
-    /// (`SelectionTextModel.text(inUTF16:isVisible:)`): `"\n"`-joined between
-    /// visible units, hidden expand units excluded by `isUnitVisible`.
+    /// Writes three representations for the current selection in one
+    /// pasteboard item: byte-exact plain text, semantic HTML, and a version-1
+    /// ADF document fragment. Plain-text consumers keep the original behavior;
+    /// rich editors can retain inline marks and component structure.
     ///
     /// **Invariant — Copy inherits atom text from the corpus.** There is no
     /// atom-specific formatting here: an atom's `InlineComposer.fallbackText`
@@ -1016,9 +1567,23 @@ final class SelectionOverlayView: UIView, UITextInput, UITextSelectionDisplayInt
     /// reproduces its fallback text verbatim — whole-or-nothing, because the
     /// endpoint snapping guarantees a range never bisects an atom.
     override func copy(_ sender: Any?) {
-        guard let range = currentRange, !range.isEmpty,
-              let text = text(in: SelectionTextRange(range)) else { return }
-        UIPasteboard.general.string = text
+        guard let payload = selectionFragment() else { return }
+        UIPasteboard.general.setItems([[
+            UTType.utf8PlainText.identifier: payload.plainText,
+            UTType.html.identifier: payload.html,
+            ADFSelectionFragment.pasteboardType: payload.adf,
+        ]])
+    }
+
+    /// Shared by Copy and `SelectionState.fragment` ("Add selected"). Building
+    /// the payload is intentionally on-demand, never on per-touch range writes.
+    func selectionFragment() -> ADFSelectionFragment? {
+        guard let range = currentRange, !range.isEmpty else { return nil }
+        return ADFSelectionFragment(
+            model: textModel,
+            range: range,
+            isVisible: { [weak self] in self?.isUnitVisible($0) ?? true }
+        )
     }
     override func selectAll(_ sender: Any?) {
         let total = textModel.totalUTF16Length

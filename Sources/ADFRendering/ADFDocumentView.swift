@@ -69,6 +69,17 @@ public struct ADFDocumentView: View {
         #endif
     }
 
+    /// Selection-only semantic component surfaces (panels, code blocks,
+    /// tables, and other containers). Like row geometry, this registry is
+    /// plain reference storage and never drives SwiftUI observation.
+    private var selectionComponentGeometryRegistry: SelectionComponentGeometryRegistry? {
+        #if os(iOS)
+        selectionController?.componentGeometryRegistry
+        #else
+        nil
+        #endif
+    }
+
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -212,6 +223,10 @@ public struct ADFDocumentView: View {
         .environment(\.adfMentionContent, mentionContent)
         .environment(\.adfDocumentSearch, model.search)
         .environment(\.adfRowGeometryRegistry, rowGeometryRegistry)
+        .environment(
+            \.adfSelectionComponentGeometryRegistry,
+            selectionComponentGeometryRegistry
+        )
         .overlay { statusOverlay }
     }
 

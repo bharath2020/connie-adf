@@ -23,19 +23,23 @@ struct TableSliceView: View {
     let isHeaderSlice: Bool
 
     @Environment(\.adfTableScrollSync) private var scrollSync
+    @Environment(\.adfTheme) private var theme
 
     var body: some View {
-        if #available(iOS 18.0, macOS 15.0, *), let scrollSync {
-            SynchronizedTableSlice(
-                tableID: tableID,
-                layout: layout,
-                rows: rows,
-                isHeaderSlice: isHeaderSlice,
-                scrollSync: scrollSync
-            )
-        } else {
-            TableSliceScrollView(layout: layout, rows: rows, isHeaderSlice: isHeaderSlice)
+        Group {
+            if #available(iOS 18.0, macOS 15.0, *), let scrollSync {
+                SynchronizedTableSlice(
+                    tableID: tableID,
+                    layout: layout,
+                    rows: rows,
+                    isHeaderSlice: isHeaderSlice,
+                    scrollSync: scrollSync
+                )
+            } else {
+                TableSliceScrollView(layout: layout, rows: rows, isHeaderSlice: isHeaderSlice)
+            }
         }
+        .adfSelectionComponent(id: tableID, cornerRadius: theme.containerCornerRadius)
     }
 }
 
@@ -336,6 +340,7 @@ struct TableCellView: View {
             .fontWeight(cell.isHeader ? .semibold : nil)
             .padding(theme.spacing)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            .adfSelectionComponent(id: cell.id, cornerRadius: 0)
     }
 
     /// Most cells hold exactly one block (a paragraph); rendering it without

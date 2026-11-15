@@ -3,6 +3,7 @@ import ADFPreparation
 
 /// Blockquote: leading accent bar plus inset children.
 struct QuoteBlockView: View {
+    let id: String
     let blocks: [RenderBlock]
 
     @Environment(\.adfTheme) private var theme
@@ -23,5 +24,6 @@ struct QuoteBlockView: View {
                 .fill(Color.secondary.opacity(0.35))
                 .frame(width: barWidth)
         }
+        .adfSelectionComponent(id: id, cornerRadius: theme.containerCornerRadius)
     }
 }

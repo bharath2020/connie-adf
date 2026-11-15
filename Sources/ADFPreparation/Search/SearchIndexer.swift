@@ -23,7 +23,13 @@ public struct SearchIndexer: Sendable {
     public func units(for blocks: [RenderBlock]) -> [SearchTextUnit] {
         var result: [SearchTextUnit] = []
         for block in blocks {
-            collect(block, topLevelBlockID: block.id, expandAncestorIDs: [], into: &result)
+            collect(
+                block,
+                topLevelBlockID: block.id,
+                expandAncestorIDs: [],
+                clipboardContainers: [],
+                into: &result
+            )
         }
         return result
     }
@@ -32,67 +38,121 @@ public struct SearchIndexer: Sendable {
         _ block: RenderBlock,
         topLevelBlockID: String,
         expandAncestorIDs: [String],
+        clipboardContainers: [ADFClipboardMetadata.Container],
         into result: inout [SearchTextUnit]
     ) {
         switch block.kind {
-        case .richText(let segments, _):
+        case .richText(let segments, let style):
             appendUnit(ownerID: block.id, segments: segments,
+                       clipboardBlock: .richText(style),
+                       clipboardContainers: clipboardContainers,
                        topLevelBlockID: topLevelBlockID,
                        expandAncestorIDs: expandAncestorIDs, into: &result)
-        case .codeBlock(_, let code):
-            appendUnit(ownerID: block.id, segments: [.text(code)],
+        case .codeBlock(let language, let code):
+            let segments: [InlineSegment] = [.text(code)]
+            appendUnit(ownerID: block.id, segments: segments,
+                       clipboardBlock: .codeBlock(language: language),
+                       clipboardContainers: clipboardContainers,
                        topLevelBlockID: topLevelBlockID,
                        expandAncestorIDs: expandAncestorIDs, into: &result)
         case .listRows(let rows):
             for row in rows {
                 appendUnit(ownerID: row.id, segments: row.segments,
+                           clipboardBlock: .listRow(marker: row.marker, depth: row.depth),
+                           clipboardContainers: clipboardContainers,
                            topLevelBlockID: topLevelBlockID,
                            expandAncestorIDs: expandAncestorIDs, into: &result)
                 for trailing in row.trailingBlocks {
                     collect(trailing, topLevelBlockID: topLevelBlockID,
-                            expandAncestorIDs: expandAncestorIDs, into: &result)
+                            expandAncestorIDs: expandAncestorIDs,
+                            clipboardContainers: clipboardContainers,
+                            into: &result)
                 }
             }
         case .media(let media):
             appendCaption(media, topLevelBlockID: topLevelBlockID,
-                          expandAncestorIDs: expandAncestorIDs, into: &result)
+                          expandAncestorIDs: expandAncestorIDs,
+                          clipboardContainers: clipboardContainers,
+                          into: &result)
         case .mediaStrip(let items):
             for media in items {
                 appendCaption(media, topLevelBlockID: topLevelBlockID,
-                              expandAncestorIDs: expandAncestorIDs, into: &result)
+                              expandAncestorIDs: expandAncestorIDs,
+                              clipboardContainers: clipboardContainers,
+                              into: &result)
             }
-        case .panel(_, let children):
+        case .panel(let palette, let children):
+            let containers = clipboardContainers + [
+                .panel(
+                    id: block.id,
+                    type: palette.panelType,
+                    colorHex: palette.colorHex
+                )
+            ]
             for child in children {
                 collect(child, topLevelBlockID: topLevelBlockID,
-                        expandAncestorIDs: expandAncestorIDs, into: &result)
+                        expandAncestorIDs: expandAncestorIDs,
+                        clipboardContainers: containers,
+                        into: &result)
             }
         case .quote(let children):
+            let containers = clipboardContainers + [.quote(id: block.id)]
             for child in children {
                 collect(child, topLevelBlockID: topLevelBlockID,
-                        expandAncestorIDs: expandAncestorIDs, into: &result)
+                        expandAncestorIDs: expandAncestorIDs,
+                        clipboardContainers: containers,
+                        into: &result)
             }
-        case .extensionPlaceholder(_, let body):
+        case .extensionPlaceholder(let title, let body):
+            let containers = clipboardContainers + [
+                .extensionContainer(id: block.id, title: title)
+            ]
             for child in body {
                 collect(child, topLevelBlockID: topLevelBlockID,
-                        expandAncestorIDs: expandAncestorIDs, into: &result)
+                        expandAncestorIDs: expandAncestorIDs,
+                        clipboardContainers: containers,
+                        into: &result)
             }
         case .layoutColumns(let columns):
+            let sectionContainers = clipboardContainers + [.layoutSection(id: block.id)]
             for column in columns {
+                let containers = sectionContainers + [
+                    .layoutColumn(id: column.id, widthPercent: column.widthPercent)
+                ]
                 for child in column.blocks {
                     collect(child, topLevelBlockID: topLevelBlockID,
-                            expandAncestorIDs: expandAncestorIDs, into: &result)
+                            expandAncestorIDs: expandAncestorIDs,
+                            clipboardContainers: containers,
+                            into: &result)
                 }
             }
-        case .tableSlice(_, let rows, _):
+        case .tableSlice(let layout, let rows, _):
+            let tableID = String(block.id.prefix(while: { $0 != "#" }))
+            let tableContainers = clipboardContainers + [
+                .table(id: tableID, hasNumberColumn: layout.hasNumberColumn)
+            ]
             for row in rows {
+                let rowContainers = tableContainers + [.tableRow(id: row.id)]
                 for cell in row.cells {
+                    let containers = rowContainers + [
+                        .tableCell(
+                            id: cell.id,
+                            colspan: cell.colspan,
+                            rowspan: cell.rowspan,
+                            backgroundHex: cell.backgroundHex,
+                            valign: cell.valign,
+                            isHeader: cell.isHeader
+                        )
+                    ]
                     for child in cell.blocks {
                         collect(child, topLevelBlockID: topLevelBlockID,
-                                expandAncestorIDs: expandAncestorIDs, into: &result)
+                                expandAncestorIDs: expandAncestorIDs,
+                                clipboardContainers: containers,
+                                into: &result)
                     }
                 }
             }
-        case .expand(_, let bodyNodes, _):
+        case .expand(let title, let bodyNodes, let isNested):
             // Prepare the body EXACTLY as ExpandBlockView does on first
             // expansion (same synthetic wrapper, same theme), so inner block
             // IDs and segment shapes match what the expanded view renders.
@@ -101,9 +161,14 @@ public struct SearchIndexer: Sendable {
             let bodyBlocks = DocumentPreparer(theme: theme, customPreparers: customPreparers)
                 .prepare(document)
             let chain = expandAncestorIDs + [block.id]
+            let containers = clipboardContainers + [
+                .expand(id: block.id, title: title, isNested: isNested)
+            ]
             for child in bodyBlocks {
                 collect(child, topLevelBlockID: topLevelBlockID,
-                        expandAncestorIDs: chain, into: &result)
+                        expandAncestorIDs: chain,
+                        clipboardContainers: containers,
+                        into: &result)
             }
         case .custom(let custom):
             appendCustomUnit(custom, ownerID: block.id,
@@ -141,10 +206,13 @@ public struct SearchIndexer: Sendable {
         _ media: PreparedMedia,
         topLevelBlockID: String,
         expandAncestorIDs: [String],
+        clipboardContainers: [ADFClipboardMetadata.Container],
         into result: inout [SearchTextUnit]
     ) {
         guard let caption = media.caption else { return }
         appendUnit(ownerID: media.id, segments: caption,
+                   clipboardBlock: .caption,
+                   clipboardContainers: clipboardContainers,
                    topLevelBlockID: topLevelBlockID,
                    expandAncestorIDs: expandAncestorIDs, into: &result)
     }
@@ -154,6 +222,8 @@ public struct SearchIndexer: Sendable {
     private func appendUnit(
         ownerID: String,
         segments: [InlineSegment],
+        clipboardBlock: ADFClipboardMetadata.Block,
+        clipboardContainers: [ADFClipboardMetadata.Container],
         topLevelBlockID: String,
         expandAncestorIDs: [String],
         into result: inout [SearchTextUnit]
@@ -184,7 +254,12 @@ public struct SearchIndexer: Sendable {
             topLevelBlockID: topLevelBlockID,
             expandAncestorIDs: expandAncestorIDs,
             plainText: plain,
-            parts: parts
+            parts: parts,
+            clipboard: ADFClipboardMetadata(
+                block: clipboardBlock,
+                segments: segments,
+                containers: clipboardContainers
+            )
         ))
     }
 }

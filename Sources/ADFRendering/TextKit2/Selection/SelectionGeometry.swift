@@ -12,6 +12,61 @@ struct ResolvedSelectionRect: Equatable {
     var containsEnd: Bool
 }
 
+/// Clips live glyph geometry through the visible bounds of every enclosing
+/// component viewport. TextKit reports rects in the row's unbounded layout
+/// space (notably for horizontally scrolling code/table content); the
+/// selection overlay sits above those containers and would otherwise paint
+/// outside their bounds.
+///
+/// Kept platform-agnostic so the intersection contract is unit-testable on
+/// macOS. Rounded component chrome still contains ordinary glyph rects; this
+/// function handles the material correctness boundary: no selection fragment
+/// may cross a clipping ancestor.
+struct SelectionRectClipper {
+    static func clip(_ rects: [CGRect], through clipRects: [CGRect]) -> [CGRect] {
+        rects.compactMap { original in
+            var clipped = original
+            for clip in clipRects {
+                clipped = clipped.intersection(clip)
+                if clipped.isNull || clipped.isEmpty { return nil }
+            }
+            return clipped.width > 0 && clipped.height > 0 ? clipped : nil
+        }
+    }
+}
+
+/// Range growth for the initiating long-press drag. The tokenizer's seed word
+/// remains selected while the finger is inside it; moving past either edge
+/// fixes the opposite seed edge and extends toward the finger.
+///
+/// Kept platform-agnostic so the interaction contract is testable without
+/// UIKit: the iOS controller supplies the live, snapped offset from its
+/// geometry resolver, then writes this range through the normal atom/grapheme
+/// ingestion path.
+struct SelectionDragRange {
+    static func extending(_ seed: Range<Int>, toward offset: Int) -> Range<Int> {
+        if offset < seed.lowerBound {
+            return offset..<seed.upperBound
+        }
+        if offset > seed.upperBound {
+            return seed.lowerBound..<offset
+        }
+        return seed
+    }
+
+    /// Moves one endpoint around a fixed opposite endpoint. Crossing the fixed
+    /// point naturally swaps which visual handle is the start/end; landing
+    /// exactly on it preserves the previous non-empty range.
+    static func movingEndpoint(
+        fixedOffset: Int,
+        toward offset: Int,
+        preserving current: Range<Int>
+    ) -> Range<Int> {
+        guard offset != fixedOffset else { return current }
+        return min(offset, fixedOffset)..<max(offset, fixedOffset)
+    }
+}
+
 /// The geometry the selection resolver depends on, abstracted so the offset
 /// arithmetic, per-owner rect splitting, and collapsed-row interpolation are
 /// exercised on macOS with an injected fixed-rect stub (spec §8; Task 19 Step

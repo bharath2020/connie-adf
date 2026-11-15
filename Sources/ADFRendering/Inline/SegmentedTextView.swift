@@ -40,14 +40,6 @@ struct SegmentedTextView: View {
     /// content the legacy arm's `MentionAtomView` would, in a native popover
     /// anchored to the pill. `nil` renders mentions read-only there too.
     @Environment(\.adfMentionContent) private var mentionContent
-    #if os(iOS)
-    /// Per-document row-geometry registry (Task 17), threaded into the TK2
-    /// row so it can self-register for on-demand selection queries. `nil`
-    /// outside a document or with selection unwired — registration then never
-    /// runs (`TextKit2RowUIView.registerIfNeeded`/`didMoveToWindow` both
-    /// guard on `ownerID`, which is `nil` too in that case).
-    @Environment(\.adfRowGeometryRegistry) private var rowGeometryRegistry
-    #endif
     /// Live Dynamic Type size, used to resolve the TK2 row's first-line
     /// baseline (font ascent) for enclosing `.firstTextBaseline` stacks.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -63,6 +55,10 @@ struct SegmentedTextView: View {
             #if os(iOS)
             if tk2Eligible {
                 let paint = highlightPaint
+                let firstBaseline = TextKit2RowView.firstBaseline(
+                    of: segments,
+                    categoryRawValue: UIContentSizeCategory(dynamicTypeSize).rawValue
+                )
                 // Task 10: the TK2 arm now takes the FULL raw segment array
                 // (text chunks + atoms), not a single merged text run. With
                 // atoms present the preparer word-chunks the text
@@ -76,7 +72,6 @@ struct SegmentedTextView: View {
                     segments: segments,
                     blockAlignment: blockAlignment,
                     ownerID: ownerID,
-                    registry: rowGeometryRegistry,
                     spans: paint.spans,
                     currentSpans: paint.currentSpans,
                     dimCurrent: flashDimmed,
@@ -89,11 +84,7 @@ struct SegmentedTextView: View {
                     mentionContent: mentionContent,
                     openURL: { url in openURL(url) }
                 )
-                .alignmentGuide(.firstTextBaseline) { _ in
-                    TextKit2RowView.firstBaseline(
-                        of: segments,
-                        categoryRawValue: UIContentSizeCategory(dynamicTypeSize).rawValue)
-                }
+                .alignmentGuide(.firstTextBaseline) { _ in firstBaseline }
             } else {
                 legacyBody
             }

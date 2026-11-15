@@ -17,7 +17,21 @@ import Foundation
 public final class SelectionState {
     public var utf16Range: Range<Int>?
     public var epoch: UInt64 = 0
+    private var fragmentProvider: (() -> ADFSelectionFragment?)?
     public init() {}
+
+    /// Rich content for the current selection, prepared only when a host asks
+    /// for it. This is the reusable "Add selected" / comment path; the
+    /// built-in Copy action consumes the same value.
+    public var fragment: ADFSelectionFragment? {
+        fragmentProvider?()
+    }
+
+    /// Installed by the one attached iOS selection controller. Internal so a
+    /// host cannot replace the document selection's semantic source.
+    func setFragmentProvider(_ provider: @escaping () -> ADFSelectionFragment?) {
+        fragmentProvider = provider
+    }
 
     /// The pure epoch-guard/clamp core (Task 22): epoch mismatch → `nil` (the
     /// range belongs to a document generation that no longer exists); same

@@ -82,6 +82,7 @@ struct CardBlockView: View {
 /// puzzle-piece icon + extension name, with a bodied extension's children
 /// rendered below (§7).
 struct ExtensionPlaceholderBlockView: View {
+    let id: String
     let title: String
     let blocks: [RenderBlock]
 
@@ -115,6 +116,7 @@ struct ExtensionPlaceholderBlockView: View {
                     style: StrokeStyle(lineWidth: 1, dash: [4, 3])
                 )
         )
+        .adfSelectionComponent(id: id, cornerRadius: theme.containerCornerRadius)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Extension: \(title)")
     }

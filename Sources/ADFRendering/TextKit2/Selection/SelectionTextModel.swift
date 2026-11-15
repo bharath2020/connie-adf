@@ -27,6 +27,11 @@ public struct SelectionTextModel: Sendable {
         public let expandAncestorIDs: [String]
         public let plainText: String
         public let parts: [SearchTextUnit.Part]
+        public let clipboard: ADFClipboardMetadata?
+        /// Semantic ADF surfaces that enclose this unit. A code block includes
+        /// its own owner ID; nested content includes every container ID from
+        /// outermost to innermost.
+        public let selectionComponentIDs: [String]
         public let utf16Length: Int
     }
 
@@ -60,6 +65,10 @@ public struct SelectionTextModel: Sendable {
     /// Per unit, per part (same order as `Unit.parts`): that part's global
     /// UTF-16 range — the geometry `partSlices` intersects against.
     private let unitPartGlobalRanges: [[Range<Int>]]
+    /// Semantic component ID → member unit indices. Built once so a handle
+    /// drag only inspects candidate components touched by the range instead
+    /// of scanning the whole document.
+    private let componentUnitIndices: [String: [Int]]
 
     private init(
         units: [Unit],
@@ -67,7 +76,8 @@ public struct SelectionTextModel: Sendable {
         totalUTF16Length: Int,
         ownerOrder: [String: Int],
         atomRangesGlobal: [Range<Int>],
-        unitPartGlobalRanges: [[Range<Int>]]
+        unitPartGlobalRanges: [[Range<Int>]],
+        componentUnitIndices: [String: [Int]]
     ) {
         self.units = units
         self.unitUTF16Starts = unitUTF16Starts
@@ -75,6 +85,7 @@ public struct SelectionTextModel: Sendable {
         self.ownerOrder = ownerOrder
         self.atomRangesGlobal = atomRangesGlobal
         self.unitPartGlobalRanges = unitPartGlobalRanges
+        self.componentUnitIndices = componentUnitIndices
     }
 
     // MARK: - Build
@@ -90,6 +101,7 @@ public struct SelectionTextModel: Sendable {
         var ownerOrder: [String: Int] = [:]
         var atomRangesGlobal: [Range<Int>] = []
         var unitPartGlobalRanges: [[Range<Int>]] = []
+        var componentUnitIndices: [String: [Int]] = [:]
 
         var cursor = 0
         for item in orderedItems {
@@ -114,14 +126,21 @@ public struct SelectionTextModel: Sendable {
                 unitPartGlobalRanges.append(partRanges)
 
                 let utf16Length = searchUnit.plainText.utf16.count
+                let selectionComponentIDs = Self.selectionComponentIDs(for: searchUnit)
+                let unitIndex = units.count
                 units.append(Unit(
                     ownerID: searchUnit.ownerID,
                     topLevelBlockID: searchUnit.topLevelBlockID,
                     expandAncestorIDs: searchUnit.expandAncestorIDs,
                     plainText: searchUnit.plainText,
                     parts: searchUnit.parts,
+                    clipboard: searchUnit.clipboard,
+                    selectionComponentIDs: selectionComponentIDs,
                     utf16Length: utf16Length
                 ))
+                for componentID in Set(selectionComponentIDs) {
+                    componentUnitIndices[componentID, default: []].append(unitIndex)
+                }
                 cursor += utf16Length
             }
         }
@@ -134,8 +153,87 @@ public struct SelectionTextModel: Sendable {
             totalUTF16Length: cursor,
             ownerOrder: ownerOrder,
             atomRangesGlobal: atomRangesGlobal,
-            unitPartGlobalRanges: unitPartGlobalRanges
+            unitPartGlobalRanges: unitPartGlobalRanges,
+            componentUnitIndices: componentUnitIndices
         )
+    }
+
+    /// Semantic components whose complete *visible* selectable content is
+    /// covered by `range`. Partial first/last units keep the ordinary
+    /// glyph-only selection; a component becomes eligible only when every
+    /// visible member unit is fully contained.
+    public func fullySelectedComponentIDs(
+        inUTF16 range: Range<Int>,
+        isVisible: (Unit) -> Bool
+    ) -> Set<String> {
+        let lower = max(0, min(range.lowerBound, totalUTF16Length))
+        let upper = max(lower, min(range.upperBound, totalUTF16Length))
+        let clamped = lower..<upper
+        guard !clamped.isEmpty,
+              let lowerLocation = locate(utf16: lower),
+              let upperLocation = locate(utf16: max(lower, upper - 1)) else {
+            return []
+        }
+
+        var candidates = Set<String>()
+        let first = min(lowerLocation.unit, upperLocation.unit)
+        let last = max(lowerLocation.unit, upperLocation.unit)
+        for unitIndex in first...last {
+            let unitStart = unitUTF16Starts[unitIndex]
+            let unitRange = unitStart..<(unitStart + units[unitIndex].utf16Length)
+            guard unitRange.overlaps(clamped), isVisible(units[unitIndex]) else {
+                continue
+            }
+            candidates.formUnion(units[unitIndex].selectionComponentIDs)
+        }
+
+        var result = Set<String>()
+        for componentID in candidates {
+            guard let memberIndices = componentUnitIndices[componentID] else {
+                continue
+            }
+            var hasVisibleMember = false
+            var isComplete = true
+            for unitIndex in memberIndices {
+                let unit = units[unitIndex]
+                guard isVisible(unit) else { continue }
+                hasVisibleMember = true
+                let unitStart = unitUTF16Starts[unitIndex]
+                let unitEnd = unitStart + unit.utf16Length
+                if clamped.lowerBound > unitStart || clamped.upperBound < unitEnd {
+                    isComplete = false
+                    break
+                }
+            }
+            if hasVisibleMember, isComplete {
+                result.insert(componentID)
+            }
+        }
+        return result
+    }
+
+    private static func selectionComponentIDs(
+        for unit: SearchTextUnit
+    ) -> [String] {
+        guard let clipboard = unit.clipboard else { return [] }
+        var ids = clipboard.containers.map { container -> String in
+            switch container {
+            case .panel(let id, _, _),
+                 .quote(let id),
+                 .table(let id, _),
+                 .tableRow(let id),
+                 .tableCell(let id, _, _, _, _, _),
+                 .expand(let id, _, _),
+                 .layoutSection(let id),
+                 .layoutColumn(let id, _),
+                 .extensionContainer(let id, _):
+                return id
+            }
+        }
+        if case .codeBlock = clipboard.block {
+            ids.append(unit.ownerID)
+        }
+        return ids
     }
 
     // MARK: - Offset arithmetic

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import ADFModel
 
 /// Semantic, size-independent description of a run's font — the dual-scope
 /// twin of the SwiftUI `Font` baked by `InlineComposer`. Resolved to a
@@ -31,11 +32,24 @@ public enum FontSpecAttribute: CodableAttributedStringKey {
     public static let name = "com.connie.adf.fontSpec"
 }
 
+/// Exact source ADF marks for a prepared attributed run.
+///
+/// Rendering still reads the resolved SwiftUI/Foundation attributes above;
+/// this parallel source spine exists for lossless rich clipboard export.
+/// Keeping it on the already-prepared run avoids reconstructing ADF marks
+/// from colors/fonts at Copy time (which would be lossy: an annotation and
+/// an underline intentionally render alike, for example).
+public enum ADFSourceMarksAttribute: AttributedStringKey {
+    public typealias Value = [ADFMark]
+    public static let name = "com.connie.adf.sourceMarks"
+}
+
 public extension AttributeScopes {
     /// ADF's attribute scope: the dual-scope font spec plus the SwiftUI and
     /// Foundation scopes the composer already writes.
     struct ADFAttributes: AttributeScope {
         public let fontSpec: FontSpecAttribute
+        public let sourceMarks: ADFSourceMarksAttribute
         public let swiftUI: SwiftUIAttributes
         public let foundation: FoundationAttributes
     }

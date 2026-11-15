@@ -175,6 +175,7 @@ public struct InlineComposer: Sendable {
 
     private func attributedRun(_ string: String, marks: [ADFMark], baseFont: Font, baseSpec: FontSpec) -> AttributedString {
         var run = AttributedString(string)
+        run[ADFSourceMarksAttribute.self] = marks
 
         var bold = false
         var italic = false

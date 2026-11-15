@@ -1,14 +1,23 @@
 import Foundation
+import SwiftUI
 import Testing
+import ADFModel
 import ADFPreparation
 @testable import ADFRendering
 
 @Suite("SelectionTextModel")
 struct SelectionTextModelTests {
-    private func textUnit(owner: String, top: String, _ text: String, expands: [String] = []) -> SearchTextUnit {
+    private func textUnit(
+        owner: String,
+        top: String,
+        _ text: String,
+        expands: [String] = [],
+        clipboard: ADFClipboardMetadata? = nil
+    ) -> SearchTextUnit {
         SearchTextUnit(ownerID: owner, topLevelBlockID: top, expandAncestorIDs: expands,
                        plainText: text,
-                       parts: [.init(source: .textSegment(index: 0), range: 0..<text.count)])
+                       parts: [.init(source: .textSegment(index: 0), range: 0..<text.count)],
+                       clipboard: clipboard)
     }
     private func item(_ id: String, _ units: [SearchTextUnit]) -> SearchIndexedItem {
         SearchIndexedItem(id: id, topLevelBlockID: id, units: units)
@@ -52,6 +61,135 @@ struct SelectionTextModelTests {
         // e0 closed → its unit contributes nothing; endpoints snap across it.
         let copied = m.text(inUTF16: 0..<m.totalUTF16Length, isVisible: { !$0.expandAncestorIDs.contains("e0") })
         #expect(copied == "open\ntail")
+    }
+
+    @Test func codeBlockRequiresItsWholeUnitForComponentSelection() {
+        let metadata = ADFClipboardMetadata(
+            block: .codeBlock(language: "swift"),
+            segments: [.text(AttributedString("let x = 1"))],
+            containers: []
+        )
+        let m = SelectionTextModel.build(orderedItems: [
+            item("code", [
+                textUnit(
+                    owner: "code",
+                    top: "code",
+                    "let x = 1",
+                    clipboard: metadata
+                )
+            ])
+        ])
+
+        #expect(
+            m.fullySelectedComponentIDs(
+                inUTF16: 0..<m.totalUTF16Length,
+                isVisible: { _ in true }
+            ) == ["code"]
+        )
+        #expect(
+            m.fullySelectedComponentIDs(
+                inUTF16: 0..<(m.totalUTF16Length - 1),
+                isVisible: { _ in true }
+            ).isEmpty
+        )
+    }
+
+    @Test func panelRequiresEveryVisibleMemberUnit() {
+        let style = TextBlockStyle(
+            font: .body,
+            isHeading: false,
+            headingLevel: nil,
+            alignment: nil,
+            indentation: 0,
+            breakout: nil
+        )
+        let panel: ADFClipboardMetadata.Container = .panel(
+            id: "panel",
+            type: .info,
+            colorHex: nil
+        )
+        func metadata(_ text: String) -> ADFClipboardMetadata {
+            ADFClipboardMetadata(
+                block: .richText(style),
+                segments: [.text(AttributedString(text))],
+                containers: [panel]
+            )
+        }
+        let m = SelectionTextModel.build(orderedItems: [
+            item("panel", [
+                textUnit(
+                    owner: "first",
+                    top: "panel",
+                    "alpha",
+                    clipboard: metadata("alpha")
+                ),
+                textUnit(
+                    owner: "second",
+                    top: "panel",
+                    "bravo",
+                    clipboard: metadata("bravo")
+                ),
+            ])
+        ])
+
+        let secondEnd = m.totalUTF16Length
+        #expect(
+            m.fullySelectedComponentIDs(
+                inUTF16: 0..<secondEnd,
+                isVisible: { _ in true }
+            ) == ["panel"]
+        )
+        #expect(
+            m.fullySelectedComponentIDs(
+                inUTF16: 0..<(secondEnd - 1),
+                isVisible: { _ in true }
+            ).isEmpty
+        )
+    }
+
+    @Test func hiddenMembersDoNotBlockVisibleComponentCompletion() {
+        let style = TextBlockStyle(
+            font: .body,
+            isHeading: false,
+            headingLevel: nil,
+            alignment: nil,
+            indentation: 0,
+            breakout: nil
+        )
+        let panel: ADFClipboardMetadata.Container = .panel(
+            id: "panel",
+            type: .note,
+            colorHex: nil
+        )
+        let metadata = ADFClipboardMetadata(
+            block: .richText(style),
+            segments: [.text(AttributedString("text"))],
+            containers: [panel]
+        )
+        let m = SelectionTextModel.build(orderedItems: [
+            item("panel", [
+                textUnit(
+                    owner: "visible",
+                    top: "panel",
+                    "open",
+                    clipboard: metadata
+                ),
+                textUnit(
+                    owner: "hidden",
+                    top: "panel",
+                    "closed",
+                    expands: ["expand"],
+                    clipboard: metadata
+                ),
+            ])
+        ])
+
+        #expect(
+            m.fullySelectedComponentIDs(
+                inUTF16: 0..<4,
+                isVisible: { !$0.expandAncestorIDs.contains("expand") }
+            ) == ["panel"]
+        )
     }
 
     @Test func atomRangeSnapsToNearerEdge() {

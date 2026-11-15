@@ -75,6 +75,11 @@ struct SearchIndexerTests {
         #expect(unit.plainText == "let x = 1")
         #expect(unit.ownerID == blocks[0].id)
         #expect(unit.parts == [SearchTextUnit.Part(source: .textSegment(index: 0), range: 0..<9)])
+        guard case .codeBlock(let language)? = unit.clipboard?.block else {
+            Issue.record("expected code-block clipboard metadata"); return
+        }
+        #expect(language == "swift")
+        #expect(unit.clipboard?.containers.isEmpty == true)
     }
 
     @Test("list rows yield one unit per row, owned by the row ID")
@@ -121,6 +126,15 @@ struct SearchIndexerTests {
         // The owner is the INNER paragraph block (what the view keys on),
         // not the container.
         #expect(units[0].ownerID != blocks[0].id)
+        guard case .panel(let id, let type, _)? = units[0].clipboard?.containers.first else {
+            Issue.record("expected panel clipboard container"); return
+        }
+        #expect(id == blocks[0].id)
+        #expect(type == .info)
+        guard case .quote(let quoteID)? = units[1].clipboard?.containers.first else {
+            Issue.record("expected quote clipboard container"); return
+        }
+        #expect(quoteID == blocks[1].id)
     }
 
     @Test("table cell text maps to the enclosing slice for scrolling")
@@ -143,6 +157,14 @@ struct SearchIndexerTests {
         #expect(units[0].topLevelBlockID.hasSuffix("#header"))
         #expect(units[1].topLevelBlockID == blocks[1].id)
         #expect(units[1].topLevelBlockID.hasSuffix("#rows0"))
+        #expect(units.allSatisfy { $0.clipboard?.containers.count == 3 })
+        guard case .table(_, _)? = units[0].clipboard?.containers.first,
+              case .tableRow(_)? = units[0].clipboard?.containers.dropFirst().first,
+              case .tableCell(_, _, _, _, _, let isHeader)? =
+                units[0].clipboard?.containers.last else {
+            Issue.record("expected table → row → cell clipboard path"); return
+        }
+        #expect(isHeader)
     }
 
     @Test("layout columns and extension bodies recurse")

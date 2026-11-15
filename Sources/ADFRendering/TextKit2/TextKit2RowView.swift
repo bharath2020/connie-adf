@@ -14,12 +14,11 @@ struct TextKit2RowView: UIViewRepresentable {
     /// the same key `SegmentedTextView.ownerID` already uses for search
     /// highlighting. `nil` opts the row out of registration entirely
     /// (previews, chrome), same as search.
-    var ownerID: String? = nil
-    /// The document's row-geometry registry, threaded down from
-    /// `ADFDocumentView` via `SegmentedTextView`. `nil` outside a document
-    /// (previews) or when selection isn't wired — registration is then a
-    /// no-op.
-    var registry: RowGeometryRegistry? = nil
+    /// Intentionally has no default: every call site must explicitly decide
+    /// whether this row participates in document selection. This prevents a
+    /// future text-bearing container from silently taking the collapsed-row
+    /// interpolation fallback (the code-block spill bug).
+    var ownerID: String?
 
     /// Search-highlight paint values, read by the caller behind the same
     /// zero-work gate the SwiftUI arm uses (`search.isActive`) — empty when
@@ -65,12 +64,17 @@ struct TextKit2RowView: UIViewRepresentable {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.displayScale) private var displayScale
+    /// Registry injection lives at the text-surface choke point, not at each
+    /// container call site. Any owned row therefore uses the same registration
+    /// path whether it is plain text, inside a panel/table, or horizontally
+    /// scrolling inside a code component.
+    @Environment(\.adfRowGeometryRegistry) private var rowGeometryRegistry
 
     func makeUIView(context: Context) -> TextKit2RowUIView { TextKit2RowUIView() }
 
     func updateUIView(_ view: TextKit2RowUIView, context: Context) {
         view.ownerID = ownerID
-        view.registry = registry
+        view.registry = rowGeometryRegistry
         view.registerIfNeeded()
         view.mentionContent = mentionContent
         view.openURL = openURL
@@ -476,11 +480,28 @@ final class TextKit2RowUIView: UIView {
             for line in fragment.textLineFragments {
                 let lineRect = line.typographicBounds
                 guard local.y >= lineRect.minY, local.y < lineRect.maxY || line === fragment.textLineFragments.last else { continue }
-                let charInLine = line.characterIndex(for: CGPoint(x: local.x, y: lineRect.midY))
+                // `characterIndex(for:)` is defined only for points INSIDE
+                // the line fragment. Selection drags intentionally ask for
+                // the nearest offset even when the finger sits well past a
+                // short line's left/right edge; passing that raw X can return
+                // `NSNotFound` (`Int.max`). Adding it to `fragmentStart`
+                // overflowed and crashed the app on long-press.
+                let hitX = min(
+                    max(local.x, lineRect.minX),
+                    max(lineRect.minX, lineRect.maxX.nextDown)
+                )
+                let charInLine = line.characterIndex(
+                    for: CGPoint(x: hitX, y: lineRect.midY)
+                )
+                guard charInLine != NSNotFound, charInLine >= 0 else {
+                    return true
+                }
                 let fragmentStart = layout.contentStorage.offset(
                     from: layout.contentStorage.documentRange.location,
                     to: fragment.rangeInElement.location)
-                result = fragmentStart + charInLine
+                let (rowOffset, overflow) = fragmentStart.addingReportingOverflow(charInLine)
+                guard !overflow else { return true }
+                result = rowOffset
                 return false
             }
             return true

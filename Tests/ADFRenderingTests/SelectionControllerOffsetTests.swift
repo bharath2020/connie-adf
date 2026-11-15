@@ -56,6 +56,56 @@ struct SelectionControllerOffsetTests {
         SelectionGeometryResolver(model: model, source: source, isVisible: { _ in true })
     }
 
+    // MARK: Initiating long-press drag
+
+    @Test func longPressDragKeepsSeedWordUntilFingerLeavesIt() {
+        let seed = 10..<18
+
+        #expect(SelectionDragRange.extending(seed, toward: 10) == seed)
+        #expect(SelectionDragRange.extending(seed, toward: 14) == seed)
+        #expect(SelectionDragRange.extending(seed, toward: 18) == seed)
+    }
+
+    @Test func longPressDragExtendsFromTheOppositeSeedEdge() {
+        let seed = 10..<18
+
+        #expect(SelectionDragRange.extending(seed, toward: 3) == 3..<18)
+        #expect(SelectionDragRange.extending(seed, toward: 27) == 10..<27)
+    }
+
+    @Test func handleDragKeepsOppositeEndpointFixedAndCanCrossIt() {
+        let current = 10..<18
+
+        #expect(
+            SelectionDragRange.movingEndpoint(
+                fixedOffset: 10,
+                toward: 27,
+                preserving: current
+            ) == 10..<27
+        )
+        #expect(
+            SelectionDragRange.movingEndpoint(
+                fixedOffset: 18,
+                toward: 3,
+                preserving: current
+            ) == 3..<18
+        )
+        #expect(
+            SelectionDragRange.movingEndpoint(
+                fixedOffset: 10,
+                toward: 4,
+                preserving: current
+            ) == 4..<10
+        )
+        #expect(
+            SelectionDragRange.movingEndpoint(
+                fixedOffset: 10,
+                toward: 10,
+                preserving: current
+            ) == current
+        )
+    }
+
     // MARK: The spec's named regression — word-select past a non-BMP scalar
 
     @Test func wordSelectAfterNonBMPScalarStaysAligned() {

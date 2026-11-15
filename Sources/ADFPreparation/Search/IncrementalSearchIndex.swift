@@ -21,7 +21,8 @@ public struct SearchIndexedItem: Sendable, Hashable, Identifiable {
                     topLevelBlockID: resolvedTopLevelID,
                     expandAncestorIDs: unit.expandAncestorIDs,
                     plainText: unit.plainText,
-                    parts: unit.parts
+                    parts: unit.parts,
+                    clipboard: unit.clipboard
                 )
             }
         }
