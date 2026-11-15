@@ -10,12 +10,18 @@ struct ListBlockView: View {
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: theme.spacing * 0.75) {
+        VStack(alignment: .leading, spacing: Self.rowSpacing(theme: theme)) {
             ForEach(rows, id: \.id) { row in
                 ListRowView(row: row)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The vertical gap between two rows. A task checkbox's tap band
+    /// (`TaskHitArea`) reaches half of it above and below its row.
+    nonisolated static func rowSpacing(theme: ADFTheme) -> CGFloat {
+        theme.spacing * 0.75
     }
 }
 
@@ -66,6 +72,7 @@ struct ListRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .environment(\.adfTextOwnerKind, .list)
         }
+        .overlay(alignment: .topLeading) { taskHitArea }
         .padding(.leading, CGFloat(row.depth) * (markerWidth + theme.spacing))
         .padding(isDecision ? theme.spacing : 0)
         .background {
@@ -105,6 +112,21 @@ struct ListRowView: View {
         return TextKit2Scope.listTextFits(textColumnWidth.map { $0 - RichTextBlockView.indentationPadding(style, theme: theme) })
     }
 
+    /// A task row's enlarged checkbox tap target, over the marker column and
+    /// the gap after it (never the text column). Draws nothing.
+    @ViewBuilder
+    private var taskHitArea: some View {
+        if case .task(let id, let done) = row.marker {
+            TaskHitAreaView(
+                id: id,
+                adfDone: done,
+                columnWidth: markerWidth + theme.spacing,
+                leadingOutset: TaskHitArea.leadingOutset(markerWidth: markerWidth, spacing: theme.spacing),
+                verticalOutset: TaskHitArea.verticalOutset(rowSpacing: ListBlockView.rowSpacing(theme: theme))
+            )
+        }
+    }
+
     @ViewBuilder
     private var markerView: some View {
         switch row.marker {
@@ -142,7 +164,9 @@ struct ListRowView: View {
 }
 
 /// Task checkbox. Shows `adfTaskStates[id] ?? adfDone`; toggles via the host
-/// handler when present, read-only otherwise. Only the glyph is tappable.
+/// handler when present, read-only otherwise. The glyph's button is the
+/// accessibility element (VoiceOver activates it); touches land on the row's
+/// larger `TaskHitAreaView`, which sits over the glyph.
 private struct TaskMarkerView: View {
     let id: String
     let adfDone: Bool
@@ -167,6 +191,80 @@ private struct TaskMarkerView: View {
             Text(glyph)
                 .foregroundStyle(isDone ? Color.accentColor : Color.secondary)
                 .accessibilityLabel(isDone ? "Completed task" : "Task")
+        }
+    }
+}
+
+/// Geometry of a task checkbox's tap band. The glyph is about 20 pt square,
+/// well under Apple's 44 × 44 pt minimum, so the band grows the target
+/// without moving or resizing anything drawn:
+///
+/// - Across: the marker column plus the gap before the text, and up to one
+///   `spacing` further toward the leading edge (into the depth indent, or
+///   the document margin at depth 0) until the band is 44 pt wide. It never
+///   reaches the text column, so text selection and links keep their taps.
+/// - Down: the row's height plus half the row gap above and below, capped
+///   at 44 pt. Neighbouring rows' bands meet in the middle of the gap and
+///   never overlap, so a dense single-line task list gets bands as tall as
+///   its row pitch, and a wrapped task gets the full 44 pt.
+enum TaskHitArea {
+    /// Apple's minimum comfortable touch target side.
+    static let minimumSide: CGFloat = 44
+
+    /// How far the band reaches toward the leading edge past the marker
+    /// column: what a 44 pt width still needs, at most one `spacing`.
+    static func leadingOutset(markerWidth: CGFloat, spacing: CGFloat) -> CGFloat {
+        min(max(minimumSide - markerWidth - spacing, 0), spacing)
+    }
+
+    /// How far the band reaches above and below its row: half the gap
+    /// between rows, so neighbouring bands abut without overlapping.
+    static func verticalOutset(rowSpacing: CGFloat) -> CGFloat {
+        rowSpacing / 2
+    }
+
+    /// The band's height for a row of `rowHeight`.
+    static func height(rowHeight: CGFloat, verticalOutset: CGFloat) -> CGFloat {
+        min(rowHeight + 2 * verticalOutset, minimumSide)
+    }
+}
+
+/// The task checkbox's tap band (`TaskHitArea`): a clear button laid over
+/// the row's top-leading corner. Its frame is the marker column plus the
+/// gap; negative padding lets the clear label overhang that frame by the
+/// outsets, so layout and drawing are unchanged (`adfShowsTaskHitAreas`
+/// tints it for debugging). Hidden from accessibility —
+/// `TaskMarkerView`'s glyph stays the element VoiceOver reads and activates.
+private struct TaskHitAreaView: View {
+    let id: String
+    let adfDone: Bool
+    /// The marker column plus the gap before the text.
+    let columnWidth: CGFloat
+    let leadingOutset: CGFloat
+    let verticalOutset: CGFloat
+    @Environment(\.adfInteractionHandler) private var handler
+    @Environment(\.adfTaskStates) private var taskStates
+    @Environment(\.adfShowsTaskHitAreas) private var showsBand
+
+    private var isDone: Bool { taskStates[id] ?? adfDone }
+
+    var body: some View {
+        if let handler {
+            Button {
+                handler(.taskToggled(id: id, isDone: !isDone))
+            } label: {
+                // Proposed the row's height plus both outsets (the negative
+                // vertical padding below), capped at the 44 pt maximum —
+                // `TaskHitArea.height(rowHeight:verticalOutset:)`.
+                (showsBand ? Color.red.opacity(0.3) : Color.clear)
+                    .frame(width: columnWidth + leadingOutset)
+                    .frame(maxHeight: TaskHitArea.minimumSide)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHidden(true)
+            .padding(.leading, -leadingOutset)
+            .padding(.vertical, -verticalOutset)
         }
     }
 }

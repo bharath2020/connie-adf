@@ -65,6 +65,7 @@ struct ReaderView: View {
                         mentionContent: { AnyView(ProfileCard(name: $0)) },
                         textRenderer: activeRenderer)
             .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
+            .environment(\.adfShowsTaskHitAreas, options.showTaskHitAreas)
             .adfRebuildControl(rebuildControl)
             .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
             .navigationTitle(source.title)
