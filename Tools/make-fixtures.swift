@@ -1482,11 +1482,12 @@ func makeListsLinks() -> [String: Any] {
 ///     pixelHeight = ceil(((lineCount + 2) × lineHeight + 2) × scale)
 ///     admitted when both are ≤ 8,192 and width × height × 4 ≤ 16 MiB
 ///
-/// The generator cannot link UIKit, so the two font metrics are constants
-/// read from the font file's tables (SF Mono, `SFUIMono.ttf`, the same in
-/// the iOS 18.2 to 27.1 simulator runtimes), not measured in the app: the
-/// gate measures them from the resolved font at run time
-/// (`TextKit2CodeMetrics`). The reserves and caps are copies.
+/// The generator cannot link UIKit, so the two font metrics are constants:
+/// the advance read from the font file's tables (SF Mono, `SFUIMono.ttf`,
+/// the same in the iOS 18.2 to 27.1 simulator runtimes), the line height
+/// the pitch measured in the app; the gate measures both from the resolved
+/// font at run time (`TextKit2CodeMetrics`). The reserves and caps are
+/// copies.
 /// CORRECT THEM HERE, and only here: every "over budget" and "just under
 /// budget" block of code-parity, code-dense and code-tall is sized and
 /// declared through `codeBudgetVerdict`, which reads nothing else. A change
@@ -1498,9 +1499,12 @@ enum CodeCanvasModel {
     /// printable ASCII glyph advances 1266/2048 em = 10.509 pt; rounded up.
     /// (The plan's "about 10.2 pt" is Menlo's 1233/2048 em.)
     static let advanceMilliPoints = 10_510
-    /// Height of one code line, in 1/1000 pt. 17 pt SF Mono: ascender 1950
-    /// and descender 494 of 2048, no line gap = 20.287 pt; rounded up.
-    static let lineHeightMilliPoints = 20_300
+    /// Height of one code line, in 1/1000 pt: the line pitch measured at
+    /// Large on iOS 26.3 (3x), where `Text` and the TextKit 2 row agree,
+    /// 22.0 pt. Not the font-file value (ascender 1950 and descender 494
+    /// of 2048, no line gap = 20.287 pt at 17 pt), which the run showed to
+    /// be 8 % short.
+    static let lineHeightMilliPoints = 22_000
     /// The display scale the declared verdicts are for. The summary prints
     /// the 2x verdict beside it.
     static let displayScale = 3
@@ -2925,7 +2929,7 @@ func printCodeCanvasModel() {
     let lineHeight = fixedDecimal(CodeCanvasModel.lineHeightMilliPoints, 1_000, places: 3)
     let rounding = fixedDecimal(CodeCanvasModel.roundingReserveMilliPoints, 1_000, places: 1)
     let margin = fixedDecimal(CodeCanvasModel.metricMarginPermille, 10, places: 1)
-    print("code canvas model (CodeCanvasModel: documented constants for the default configuration, not measurements):")
+    print("code canvas model (CodeCanvasModel: constants for the default configuration; advance from the font file, line height measured at Large on iOS 26.3):")
     print("  advance \(advance) pt, line height \(lineHeight) pt, scale \(CodeCanvasModel.displayScale)x; caps \(CodeCanvasModel.maximumDimensionPixels) px per dimension and \(CodeCanvasModel.maximumBytes) bytes")
     print("  bound = (ceil(cols x advance x scale) + \(CodeCanvasModel.widthReservePixels)) x ceil(((lines + \(CodeCanvasModel.inkReserveLines)) x lineHeight + \(rounding)) x scale) px, x \(CodeCanvasModel.bytesPerPixel) bytes")
     print("  under = within the caps with both metrics \(margin) % larger; over = past a cap with both \(margin) % smaller")
