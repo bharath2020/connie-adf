@@ -9,6 +9,9 @@ USAGE
         [--threshold 24] [--exact-threshold 0] [--search 100]
         [--max-noise-pct 0] [--max-exact-pct 0]
         [--max-raw-pct 0.5] [--max-crop-pct 0.5] [--max-offset-px 0]
+        [--marker-gap 27] [--marker-max-width 180] [--max-position-px 0.5]
+        [--list-pair NAME_PREFIX[:MIN_MARKERS]]...
+        [--fill-threshold 6] [--fill-ink-radius 4] [--max-fill-pct 0.01]
 
     Driven by Scripts/visual-parity.sh; runs standalone on any two PNGs.
     Requires Pillow and numpy only. No image registration: a shifted block is
@@ -60,6 +63,42 @@ METRICS (per pair)
     max_abs_offset   largest |offset| over the crops; last_offset = the last
                      crop's offset (cumulative drift shows up here)
 
+MARKER AND CONTENT CROPS (every pair)
+    A viewport or crop percentage can hide a marker that moved by a pixel (a
+    bullet is ~300 px of a 100,000 px row crop). So every text crop whose
+    first line starts with a narrow ink cluster (<= --marker-max-width px,
+    default 180) followed by an ink-free gap >= --marker-gap px (default 27:
+    the list row's 8 pt marker/content spacing at 3x plus side bearings;
+    word spaces stay under it up to Dynamic Type step 3) is split into a
+    marker crop and a content crop. Detection runs on the reference AND the
+    candidate, so a marker present in only one image is a marker crop too.
+    Per marker crop, measured in the same windows in both images:
+      marker_dx/dy    shift of the marker's ink-weighted centroid
+      content_dx/dy   shift of the content's first-line ink centroid
+                      (first line = the content rows down to the first run
+                      of >= 3 empty rows; dy is the first-baseline check)
+      relative_dy     change of (marker cy - first-line cy): the marker's
+                      position against the first baseline
+      marker/content pct  differing pixels in each box at the kind's rule
+    A marker crop PASSes when every |delta| <= --max-position-px (default
+    0.5 px: sub-pixel, so anti-aliasing passes and a 1 px move fails) and
+    both percentages are within the kind's crop limit; a marker with no ink
+    in one image FAILs. Weights are ink above the ink threshold only, so a
+    low-contrast row fill (a decision background) does not dilute them.
+
+LIST PAIRS (--list-pair NAME_PREFIX[:MIN_MARKERS], repeatable)
+    A pair whose name starts with a listed prefix is a list capture:
+    - INVALID with fewer than MIN_MARKERS (default 1) marker crops: a list
+      position that shows no markers did not land on its lists;
+    - FAIL when its fill pixels exceed --max-fill-pct (default 0.01 %).
+    Fill pixels: unmasked, outside every --exact-mask, farther than
+    --fill-ink-radius px (default 4) from ink in either image, and differing
+    by more than --fill-threshold (default 6) in any channel. That catches a
+    missing or moved low-contrast fill (the decision row background is
+    ~20 grey levels: below the tolerant threshold of 24) that the tolerant
+    pixel rule cannot see. Other pairs report fill for information only.
+    Markers and decision backgrounds are never masked by default.
+
 EMPTY CONTENT
     A pair with zero text crops (no ink in either unmasked viewport) is
     INVALID: two blank captures prove nothing about text rendering. Pass
@@ -68,6 +107,7 @@ EMPTY CONTENT
 OUTPUTS (in --out)
     <name>.sbs.png          reference | candidate | difference map
     crops/<name>-cNN.png    each failing crop: reference | candidate | diff
+    crops/<name>-mNN.png    each failing marker crop (marker + content)
     scores.csv              one row per pair
     scores.json             every pair with its crops
     summary.md              pair table + failing-crop table
@@ -112,6 +152,26 @@ class Crop:
 
 
 @dataclass
+class MarkerCrop:
+    index: int
+    block: int
+    y0: int
+    y1: int
+    marker_box: str
+    content_box: str
+    detected_in: str
+    marker_dx: float
+    marker_dy: float
+    content_dx: float
+    content_dy: float
+    relative_dy: float
+    marker_pct: float
+    content_pct: float
+    verdict: str
+    notes: str = ""
+
+
+@dataclass
 class Score:
     kind: str
     name: str
@@ -134,7 +194,15 @@ class Score:
     max_residual: float
     verdict: str
     notes: str
+    marker_crops: int = 0
+    failing_marker_crops: int = 0
+    max_position_delta: float = 0.0
+    fill_px: int = 0
+    fill_pct: float = 0.0
+    fill_bbox: str = ""
+    list_pair: bool = False
     crop_details: list[Crop] = field(default_factory=list)
+    marker_details: list[MarkerCrop] = field(default_factory=list)
 
 
 def load_rgb(path: str) -> np.ndarray:
@@ -228,6 +296,66 @@ def best_shift(ref_gray: np.ndarray, cand_gray: np.ndarray, y0: int, y1: int, se
         if mad < best_mad:
             best_s, best_mad = s, mad
     return best_s, best_mad
+
+
+def dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Square dilation by `radius` px (separable; edges do not wrap)."""
+    if radius <= 0:
+        return mask.copy()
+    height, width = mask.shape
+    padded = np.pad(mask, radius)
+    rows = np.zeros((height + 2 * radius, width), dtype=bool)
+    for dx in range(2 * radius + 1):
+        rows |= padded[:, dx: dx + width]
+    out = np.zeros((height, width), dtype=bool)
+    for dy in range(2 * radius + 1):
+        out |= rows[dy: dy + height]
+    return out
+
+
+def first_line(ink: np.ndarray, empty_rows: int = 3) -> tuple[int, int] | None:
+    """[start, end) of the first run of ink rows in `ink`, ended by
+    `empty_rows` consecutive empty rows (or the end)."""
+    rows = np.flatnonzero(ink.any(axis=1))
+    if rows.size == 0:
+        return None
+    start = end = int(rows[0])
+    for y in rows[1:]:
+        if y - end > empty_rows:
+            break
+        end = int(y)
+    return start, end + 1
+
+
+def split_marker(ink: np.ndarray, gap: int, max_width: int) -> tuple[int, int, int] | None:
+    """For one crop's ink (rows × cols, crop-relative), the (marker x0, marker
+    x1, content x0) of its first line when it starts with a narrow cluster
+    followed by an ink-free gap >= `gap`; otherwise None."""
+    line = first_line(ink)
+    if line is None:
+        return None
+    cols = np.flatnonzero(ink[line[0]: line[1]].any(axis=0))
+    if cols.size < 2:
+        return None
+    breaks = np.flatnonzero(np.diff(cols) > gap)
+    if breaks.size == 0:
+        return None
+    marker_end = int(cols[breaks[0]]) + 1
+    content_start = int(cols[breaks[0] + 1])
+    if marker_end - int(cols[0]) > max_width:
+        return None
+    return int(cols[0]), marker_end, content_start
+
+
+def ink_centroid(weight: np.ndarray, y0: int, y1: int, x0: int, x1: int) -> tuple[float, float] | None:
+    """Ink-weighted centroid (x, y) in absolute pixels of a window, or None
+    when the window holds no ink."""
+    window = weight[y0:y1, x0:x1]
+    total = float(window.sum())
+    if total <= 0:
+        return None
+    ys, xs = np.mgrid[y0:y1, x0:x1]
+    return float((xs * window).sum() / total), float((ys * window).sum() / total)
 
 
 def diff_overlay(ref: np.ndarray, diff: np.ndarray, masked: np.ndarray) -> np.ndarray:
@@ -326,6 +454,97 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
                      f"{name} crop {index}: rows {y0}-{y1} {pct:.3f}% offset {offset:+d}px {crop.notes}",
                      crop_dir / f"{name}-c{index:02d}.png")
 
+    # Marker / content crops: positions a percentage cannot see.
+    ink_floor = 40.0
+    ref_weight = np.clip(np.abs(ref_gray - background) - ink_floor, 0, None) * valid
+    cand_weight = np.clip(np.abs(cand_gray - background_level(cand_gray, valid)) - ink_floor, 0, None) * valid
+    markers: list[MarkerCrop] = []
+    pad = 6
+    row_blocks = segment_rows(union_ink)
+    for block, (y0, y1) in enumerate(row_blocks):
+        cols = np.flatnonzero(union_ink[y0:y1].any(axis=0))
+        bx0, bx1 = int(cols[0]), int(cols[-1]) + 1
+        above = row_blocks[block - 1][1] if block > 0 else 0
+        below = row_blocks[block + 1][0] if block + 1 < len(row_blocks) else height
+        splits = {}
+        for label, ink in (("ref", ref_ink), ("cand", cand_ink)):
+            found = split_marker(ink[y0:y1, bx0:bx1], args.marker_gap, args.marker_max_width)
+            if found:
+                splits[label] = tuple(v + bx0 for v in found)
+        if not splits:
+            continue
+        mx0 = min(v[0] for v in splits.values())
+        mx1 = max(v[1] for v in splits.values())
+        cx0 = min(v[2] for v in splits.values())
+        gutter_mid = (mx1 + cx0) // 2
+        wy0, wy1 = max(y0 - pad, (above + y0) // 2), min(y1 + pad, (y1 + below + 1) // 2)
+        mwx0, mwx1 = max(mx0 - pad, 0), min(mx1 + pad, gutter_mid)
+        cwx0, cwx1 = max(gutter_mid, cx0 - pad), bx1
+        notes_m: list[str] = []
+        ref_m = ink_centroid(ref_weight, wy0, wy1, mwx0, mwx1)
+        cand_m = ink_centroid(cand_weight, wy0, wy1, mwx0, mwx1)
+
+        def line_centroid(weight: np.ndarray, ink: np.ndarray) -> tuple[float, float] | None:
+            line = first_line(ink[y0:y1, cwx0:cwx1])
+            if line is None:
+                return None
+            return ink_centroid(weight, y0 + line[0], y0 + line[1], cwx0, cwx1)
+
+        ref_c = line_centroid(ref_weight, ref_ink)
+        cand_c = line_centroid(cand_weight, cand_ink)
+        big = float("inf")
+        if ref_m is None or cand_m is None:
+            notes_m.append("marker missing in " + ("candidate" if cand_m is None else "reference"))
+        if ref_c is None or cand_c is None:
+            notes_m.append("content missing in " + ("candidate" if cand_c is None else "reference"))
+        mdx = mdy = cdx = cdy = rdy = big
+        if ref_m and cand_m:
+            mdx, mdy = cand_m[0] - ref_m[0], cand_m[1] - ref_m[1]
+        if ref_c and cand_c:
+            cdx, cdy = cand_c[0] - ref_c[0], cand_c[1] - ref_c[1]
+        if ref_m and cand_m and ref_c and cand_c:
+            rdy = (cand_m[1] - cand_c[1]) - (ref_m[1] - ref_c[1])
+        # A split found in one image only is information: a gap near the
+        # threshold can flip with anti-aliasing. A real extra or missing
+        # marker fails above (empty window) or below (position, percent).
+        info = [] if set(splits) == {"ref", "cand"} else [
+            "split detected only in " + ("reference" if "ref" in splits else "candidate")]
+
+        def box_pct(x0: int, x1: int) -> float:
+            box = valid[wy0:wy1, x0:x1]
+            count = int(box.sum())
+            return float(diff[wy0:wy1, x0:x1].sum()) / count * 100.0 if count else 0.0
+
+        mpct, cpct = box_pct(mwx0, mwx1), box_pct(cwx0, cwx1)
+        deltas = [mdx, mdy, cdx, cdy, rdy]
+        ok = (all(abs(d) <= args.max_position_px for d in deltas)
+              and mpct <= crop_limit and cpct <= crop_limit and not notes_m)
+        rounded = [round(d, 3) if d != big else 9999.0 for d in deltas]
+        mc = MarkerCrop(len(markers), block, wy0, wy1, f"{mwx0},{wy0},{mwx1},{wy1}", f"{cwx0},{wy0},{cwx1},{wy1}",
+                        "+".join(sorted(splits)), *rounded, round(mpct, 4), round(cpct, 4),
+                        "PASS" if ok else "FAIL", "; ".join(notes_m + info))
+        markers.append(mc)
+        if not ok:
+            crop_dir.mkdir(parents=True, exist_ok=True)
+            py0, py1 = max(wy0 - 12, 0), min(wy1 + 12, height)
+            px0, px1 = max(mwx0 - 12, 0), min(cwx1 + 12, width)
+            overlay = diff_overlay(ref, diff, masked)
+            triptych([ref[py0:py1, px0:px1], cand[py0:py1, px0:px1], overlay[py0:py1, px0:px1]],
+                     f"{name} marker {mc.index}: marker d=({mc.marker_dx:+.2f},{mc.marker_dy:+.2f}) "
+                     f"content d=({mc.content_dx:+.2f},{mc.content_dy:+.2f}) rel {mc.relative_dy:+.2f}px {mc.notes}",
+                     crop_dir / f"{name}-m{mc.index:02d}.png")
+
+    # Fill: low-contrast differences away from ink (row backgrounds).
+    exact_only = build_mask(height, width, exact_rects, 0, 0) if exact_rects else np.zeros((height, width), dtype=bool)
+    near_ink = dilate(union_ink, args.fill_ink_radius)
+    fill = diff_mask(ref, cand, args.fill_threshold) & valid & ~exact_only & ~near_ink
+    fill_px = int(fill.sum())
+    fill_pct = fill_px / valid_count * 100.0
+    fys, fxs = np.nonzero(fill)
+    fill_bbox = f"{fxs.min()},{fys.min()},{fxs.max() + 1},{fys.max() + 1}" if fill_px else ""
+
+    list_rule = next((rule for rule in args.list_pair if name.startswith(rule[0])), None)
+
     failing = [c for c in crops if c.verdict != "PASS"]
     max_crop_pct = max((c.pct for c in crops), default=0.0)
     max_abs_offset = max((abs(c.offset) for c in crops), default=0)
@@ -344,6 +563,22 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
     if failing:
         verdict = "FAIL"
         notes.append(f"{len(failing)} crop(s) fail")
+    failing_markers = [m for m in markers if m.verdict != "PASS"]
+    if failing_markers:
+        verdict = "FAIL"
+        notes.append(f"{len(failing_markers)} marker crop(s) fail")
+    if list_rule is not None:
+        if fill_pct > args.max_fill_pct:
+            verdict = "FAIL"
+            notes.append(f"fill {fill_px} px ({fill_pct:.4f}%) > {args.max_fill_pct}%, bbox {fill_bbox}")
+        if len(markers) < list_rule[1] and verdict != "FAIL":
+            verdict = "INVALID"
+            notes.append(f"list capture with {len(markers)} marker crop(s) < {list_rule[1]} required")
+        elif len(markers) < list_rule[1]:
+            notes.append(f"list capture with {len(markers)} marker crop(s) < {list_rule[1]} required")
+    position_values = [abs(v) for m in markers
+                       for v in (m.marker_dx, m.marker_dy, m.content_dx, m.content_dy, m.relative_dy)]
+    max_position = max(position_values, default=0.0)
 
     overlay = diff_overlay(ref, diff, masked)
     draw_img = Image.fromarray(overlay)
@@ -353,21 +588,29 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
         draw.rectangle((c.x0, c.y0, c.x1 - 1, c.y1 - 1), outline=colour)
         if c.offset:
             draw.text((c.x0 + 2, c.y0), f"{c.offset:+d}", fill=colour)
+    for m in markers:
+        colour = (40, 110, 220, 255) if m.verdict == "PASS" else (220, 40, 200, 255)
+        x0, y0, x1, y1 = (int(v) for v in m.marker_box.split(","))
+        draw.rectangle((x0, y0, x1 - 1, y1 - 1), outline=colour, width=2)
     triptych([ref, cand, np.asarray(draw_img)],
              f"{kind} {name}: viewport {viewport_pct:.4f}%  max crop {max_crop_pct:.3f}%  "
-             f"max|offset| {max_abs_offset}px  {verdict}    reference | candidate | difference",
+             f"max|offset| {max_abs_offset}px  markers {len(markers)} max|pos| {max_position:.2f}px  "
+             f"{verdict}    reference | candidate | difference",
              out_dir / f"{name}.sbs.png")
 
     return Score(kind, name, ref_path, cand_path, size_match, width, height,
                  round(float(masked.mean()) * 100.0, 2), round(viewport_pct, 6), round(viewport_pct_aa, 6),
                  viewport_px, viewport_px_aa, diff_bbox,
                  len(crops), len(failing), max_crop_pct, max_abs_offset, last_offset, max_residual,
-                 verdict, "; ".join(notes), crops)
+                 verdict, "; ".join(notes), len(markers), len(failing_markers), round(max_position, 3),
+                 fill_px, round(fill_pct, 6), fill_bbox, list_rule is not None, crops, markers)
 
 
 CSV_FIELDS = ["kind", "name", "verdict", "viewport_pct", "viewport_pct_aa", "viewport_px", "viewport_px_aa",
               "diff_bbox", "crops", "failing_crops",
-              "max_crop_pct", "max_abs_offset", "last_offset", "max_residual", "masked_pct", "size_match",
+              "max_crop_pct", "max_abs_offset", "last_offset", "max_residual",
+              "marker_crops", "failing_marker_crops", "max_position_delta", "list_pair",
+              "fill_px", "fill_pct", "fill_bbox", "masked_pct", "size_match",
               "width", "height", "ref", "cand", "notes"]
 
 
@@ -384,6 +627,11 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         "threshold": args.threshold, "exact_threshold": args.exact_threshold, "search": args.search,
         "max_noise_pct": args.max_noise_pct, "max_exact_pct": args.max_exact_pct,
         "max_raw_pct": args.max_raw_pct, "max_crop_pct": args.max_crop_pct, "max_offset_px": args.max_offset_px,
+        "marker_gap": args.marker_gap, "marker_max_width": args.marker_max_width,
+        "max_position_px": args.max_position_px,
+        "list_pairs": [f"{prefix}:{count}" for prefix, count in args.list_pair],
+        "fill_threshold": args.fill_threshold, "fill_ink_radius": args.fill_ink_radius,
+        "max_fill_pct": args.max_fill_pct,
     }
     failed = [s for s in scores if s.verdict != "PASS"]
     payload = {"overall": "FAIL" if failed else "PASS", "settings": settings,
@@ -397,17 +645,23 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         f"Limits: noise ≤ {args.max_noise_pct}%, exact ≤ {args.max_exact_pct}%, tolerant viewport ≤ "
         f"{args.max_raw_pct}% and every crop ≤ {args.max_crop_pct}% with |offset| ≤ {args.max_offset_px}px. "
         f"Masks: {settings['masks'] or 'none'}; noise/exact-only masks: {settings['exact_masks'] or 'none'}; top band {args.top_band}px, bottom band {args.bottom_band}px. "
-        f"No registration; shift search ±{args.search}px is diagnostic only.",
+        f"No registration; shift search ±{args.search}px is diagnostic only. "
+        f"Marker crops: first-line cluster <= {args.marker_max_width}px then a gap >= {args.marker_gap}px; "
+        f"marker/content/relative position |Δ| <= {args.max_position_px}px. "
+        f"List pairs ({', '.join(settings['list_pairs']) or 'none'}): need their minimum marker crops and "
+        f"fill (|Δ| > {args.fill_threshold}, > {args.fill_ink_radius}px from ink) <= {args.max_fill_pct}%.",
         "",
         "| kind | pair | verdict | viewport % (px) | viewport % (aa) | crops (fail) | max crop % | "
-        "max \\|offset\\| px | last px | notes |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
+        "max \\|offset\\| px | last px | markers (fail) | max \\|pos Δ\\| px | fill px | notes |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in scores:
+        fill_cell = f"{s.fill_px}" + ("" if s.list_pair else " (info)")
         lines.append(f"| {s.kind} | {s.name} | **{s.verdict}** | {s.viewport_pct:.4f} ({s.viewport_px}) | "
                      f"{s.viewport_pct_aa:.4f} ({s.viewport_px_aa}) | "
                      f"{s.crops} ({s.failing_crops}) | {s.max_crop_pct:.3f} | {s.max_abs_offset} | "
-                     f"{s.last_offset:+d} | {s.notes} |")
+                     f"{s.last_offset:+d} | {s.marker_crops} ({s.failing_marker_crops}) | "
+                     f"{s.max_position_delta:.2f} | {fill_cell} | {s.notes} |")
     bad_crops = [(s, c) for s in scores for c in s.crop_details if c.verdict != "PASS"]
     if bad_crops:
         lines += ["", "## Failing crops", "",
@@ -416,6 +670,15 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         for s, c in bad_crops:
             lines.append(f"| {s.name} | {c.index} | {c.y0}–{c.y1} | {c.x0}–{c.x1} | {c.pct:.3f} | "
                          f"{c.offset:+d} | {c.residual:.2f} | {c.notes} |")
+    bad_markers = [(s, m) for s in scores for m in s.marker_details if m.verdict != "PASS"]
+    if bad_markers:
+        lines += ["", "## Failing marker crops", "",
+                  "| pair | marker | rows | marker Δx,Δy | content Δx,Δy | relative Δy | marker % | content % | notes |",
+                  "|---|---:|---|---|---|---:|---:|---:|---|"]
+        for s, m in bad_markers:
+            lines.append(f"| {s.name} | {m.index} | {m.y0}–{m.y1} | {m.marker_dx:+.2f},{m.marker_dy:+.2f} | "
+                         f"{m.content_dx:+.2f},{m.content_dy:+.2f} | {m.relative_dy:+.2f} | {m.marker_pct:.3f} | "
+                         f"{m.content_pct:.3f} | {m.notes} |")
     lines += ["", f"**{payload['overall']}** — {len(scores) - len(failed)}/{len(scores)} pairs within limits.", ""]
     (out_dir / "summary.md").write_text("\n".join(lines))
 
@@ -440,6 +703,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--max-offset-px", type=int, default=0)
     parser.add_argument("--allow-empty", action="store_true",
                         help="a pair with no text crops may PASS (default: INVALID)")
+    parser.add_argument("--marker-gap", type=int, default=27,
+                        help="min ink-free gap (px) between a first-line marker cluster and its content")
+    parser.add_argument("--marker-max-width", type=int, default=180, help="max marker cluster width (px)")
+    parser.add_argument("--max-position-px", type=float, default=0.5,
+                        help="max |shift| of marker / first-line centroids and of their relative position")
+    parser.add_argument("--list-pair", action="append", default=[], metavar="NAME_PREFIX[:MIN_MARKERS]",
+                        help="pairs named with this prefix need MIN_MARKERS marker crops (default 1) and pass the fill check")
+    parser.add_argument("--fill-threshold", type=int, default=6, help="fill pixel rule: per-channel |Δ| above this")
+    parser.add_argument("--fill-ink-radius", type=int, default=4, help="fill ignores pixels this close to ink")
+    parser.add_argument("--max-fill-pct", type=float, default=0.01, help="list pairs: max fill %% of the viewport")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exit_:
@@ -453,6 +726,13 @@ def main(argv: list[str]) -> int:
             load_rgb(cand)
         if args.top_band < 0 or args.bottom_band < 0:
             raise InputError("bands must be >= 0")
+        rules = []
+        for item in args.list_pair:
+            prefix, _, count = item.partition(":")
+            if not prefix or (count and not count.isdigit()):
+                raise InputError(f"bad --list-pair '{item}' (want NAME_PREFIX[:MIN_MARKERS])")
+            rules.append((prefix, int(count) if count else 1))
+        args.list_pair = rules
         rects = [parse_mask(m) for m in args.mask]
         exact_rects = [parse_mask(m) for m in args.exact_mask]
         out_dir = Path(args.out)
@@ -467,7 +747,8 @@ def main(argv: list[str]) -> int:
         print(f"{s.verdict}  {s.kind:8s} {s.name}: viewport {s.viewport_pct:.4f}% / {s.viewport_px} px "
               f"(aa {s.viewport_pct_aa:.4f}% / {s.viewport_px_aa} px)  "
               f"crops {s.crops} fail {s.failing_crops}  max crop {s.max_crop_pct:.3f}%  "
-              f"max|offset| {s.max_abs_offset}px  {s.notes}")
+              f"max|offset| {s.max_abs_offset}px  markers {s.marker_crops} fail {s.failing_marker_crops}  "
+              f"max|pos| {s.max_position_delta:.2f}px  fill {s.fill_px} px  {s.notes}")
     print(f"wrote {out_dir / 'scores.csv'}, {out_dir / 'scores.json'} and {out_dir / 'summary.md'}")
     return 1 if any(s.verdict != "PASS" for s in scores) else 0
 

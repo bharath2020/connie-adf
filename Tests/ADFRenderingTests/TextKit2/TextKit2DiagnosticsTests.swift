@@ -7,11 +7,11 @@ import ADFPreparation
 @_spi(ADFDiagnostics) @testable import ADFRendering
 
 /// The renderer proof of plan §2.6, through the real document view: under
-/// `.textKit2` an eligible top-level paragraph and heading are drawn by live
-/// TextKit 2 rows (identified `tk2-row:<block id>`) that TextKit 2 itself
-/// draws; a linked paragraph gets a row its TextKit 1 stack draws, counted
-/// apart and never as a native draw; an atom-bearing paragraph, a
-/// paragraph inside a container, a list item and a media caption get no
+/// `.textKit2` an eligible top-level paragraph, heading and list item are
+/// drawn by live TextKit 2 rows (identified `tk2-row:<owner id>`) that
+/// TextKit 2 itself draws; a linked paragraph gets a row its TextKit 1
+/// stack draws, counted apart and never as a native draw; an atom-bearing
+/// paragraph, a paragraph inside a container and a media caption get no
 /// row; switching back to `.swiftUI` releases every row.
 @Suite("TextKit 2 diagnostics", .serialized)
 @MainActor
@@ -85,9 +85,18 @@ struct TextKit2DiagnosticsTests {
             }
             return false
         })
+        let listItem = try #require(blocks.lazy.compactMap { block -> PreparedListRow? in
+            if case .listRows(let rows) = block.kind { return rows.first }
+            return nil
+        }.first)
 
+        // Leaves: the three eligible roots and the list leader (from iOS 26;
+        // before it list text falls back, `TextKit2Eligibility.listsMatchText`);
+        // the atom root falls back; panel and caption text are out of scope.
+        let lists = TextKit2Eligibility.listsMatchText
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
-            eligibleRoots: 3, fallbackRoots: blocks.count - 3, textFallbackRoots: 1, linkRoots: 1
+            eligibleRoots: 3, fallbackRoots: blocks.count - 3, textFallbackRoots: 1, linkRoots: 1,
+            eligibleTextLeaves: lists ? 4 : 3, linkedTextLeaves: 1, fallbackTextLeaves: lists ? 1 : 2, listLeaderLeaves: 1, listTrailingLeaves: 0
         ))
 
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
@@ -96,11 +105,13 @@ struct TextKit2DiagnosticsTests {
         window.isHidden = false
         try await Self.settle(window)
 
-        // Every other block (atom paragraph, panel, list, caption) stays on SwiftUI.
-        #expect(Self.identifiers(in: host.view) == ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)", "tk2-row:\(linked.id)"])
+        // Every other block (atom paragraph, panel, caption) stays on SwiftUI.
+        let rootRows: Set<String> = ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)", "tk2-row:\(linked.id)"]
+        #expect(Self.identifiers(in: host.view) == (lists ? rootRows.union(["tk2-row:\(listItem.id)"]) : rootRows))
         var rows = TextKit2FallbackTests.rows(in: host.view)
-        #expect(rows.count == 3)
+        #expect(rows.count == (lists ? 4 : 3))
         #expect(rows.filter(\.isTextKit1Backed).map(\.ownerID) == [linked.id])
+        #expect(rows.filter { $0.ownerKind == .list }.map(\.ownerID) == (lists ? [listItem.id] : []))
         for row in rows {
             #expect(row.relayoutCount >= 1, "\(row.ownerID ?? "?") never laid out")
         }
@@ -117,7 +128,7 @@ struct TextKit2DiagnosticsTests {
         }
         let native = diagnostics.nativeDrawCount - nativeDrawsBefore
         let backed = diagnostics.textKit1BackedDrawCount - backedDrawsBefore
-        #expect(native == 2, "native draws: \(native)")
+        #expect(native == (lists ? 3 : 2), "native draws: \(native)")
         #expect(backed == 1, "TextKit 1 draws: \(backed)")
         // Every draw is one or the other, never both.
         #expect(diagnostics.drawCount - drawsBefore == native + backed)
@@ -129,12 +140,14 @@ struct TextKit2DiagnosticsTests {
             #expect(row.window == nil, "\(row.ownerID ?? "?") still on screen")
         }
         // SwiftUI let go of them: dropping this test's references releases
-        // all three rows now, and the live counters drop with them.
+        // all of them now, and the live counters drop with them.
         let live = diagnostics.liveRowCount
         let backedRows = diagnostics.textKit1BackedRowCount
+        let listRows = diagnostics.liveListRowCount
         rows.removeAll()
-        #expect(live - diagnostics.liveRowCount == 3, "rows released: \(live - diagnostics.liveRowCount)")
+        #expect(live - diagnostics.liveRowCount == (lists ? 4 : 3), "rows released: \(live - diagnostics.liveRowCount)")
         #expect(backedRows - diagnostics.textKit1BackedRowCount == 1)
+        #expect(listRows - diagnostics.liveListRowCount == (lists ? 1 : 0))
 
         window.isHidden = true
         window.rootViewController = nil
@@ -157,15 +170,18 @@ struct TextKit2DiagnosticsTests {
             window.rootViewController = nil
         }
 
-        // Each switch to `.textKit2` under the control rebuilds the three
-        // eligible leaves (paragraph, heading, linked paragraph) as `Text`.
+        // Each switch to `.textKit2` under the control rebuilds the four
+        // eligible leaves (paragraph, heading, linked paragraph, list
+        // leader; before iOS 26 the list leader is not eligible,
+        // `TextKit2Eligibility.listsMatchText`) as `Text`.
         // (Other suites' rows can come and go across a suspension: only
         // this window's rows and the control's own counters are checked.)
+        let leaves = TextKit2Eligibility.listsMatchText ? 4 : 3
         for round in 1...2 {
             host.rootView = document(.textKit2, control: true)
             try await Self.settle(window)
-            #expect(ADFTextRenderer.rebuildControlRows.live - before.live == 3, "round \(round)")
-            #expect(ADFTextRenderer.rebuildControlRows.appeared - before.appeared == 3 * round, "round \(round)")
+            #expect(ADFTextRenderer.rebuildControlRows.live - before.live == leaves, "round \(round)")
+            #expect(ADFTextRenderer.rebuildControlRows.appeared - before.appeared == leaves * round, "round \(round)")
             #expect(Self.identifiers(in: host.view).isEmpty, "no TextKit 2 row under the control")
             host.rootView = document(.swiftUI, control: true)
             try await Self.settle(window)
@@ -175,7 +191,7 @@ struct TextKit2DiagnosticsTests {
         // Without the control the same switch builds TextKit 2 rows.
         host.rootView = document(.textKit2, control: false)
         try await Self.settle(window)
-        #expect(Self.identifiers(in: host.view).count == 3)
+        #expect(Self.identifiers(in: host.view).count == leaves)
         #expect(ADFTextRenderer.rebuildControlRows.live == before.live)
         host.rootView = document(.swiftUI, control: false)
         try await Self.settle(window)
@@ -193,10 +209,10 @@ struct TextKit2DiagnosticsTests {
             return
         }
         #expect(TextKit2Eligibility.describableText(segments) == nil)
-        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 1, textFallbackRoots: 1))
+        #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 1, textFallbackRoots: 1, fallbackTextLeaves: 1))
         // The default (spec-first) theme stays eligible.
         let defaultBlocks = DocumentPreparer(theme: .default).prepare(doc)
-        #expect(ADFTextRenderer.textKit2Coverage(of: defaultBlocks) == ADFTextKit2Coverage(eligibleRoots: 1, fallbackRoots: 0))
+        #expect(ADFTextRenderer.textKit2Coverage(of: defaultBlocks) == ADFTextKit2Coverage(eligibleRoots: 1, fallbackRoots: 0, eligibleTextLeaves: 1))
     }
 }
 #endif

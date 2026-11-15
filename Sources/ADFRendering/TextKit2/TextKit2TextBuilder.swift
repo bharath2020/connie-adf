@@ -4,10 +4,14 @@ import UIKit
 import ADFModel
 import ADFPreparation
 
-/// Everything a TextKit 2 row's layout and drawing depend on, resolved from
+/// Everything a TextKit 2 row's text and layout depend on, resolved from
 /// the prepared block and the SwiftUI environment. `Hashable` so the row
-/// re-applies only when something actually changed, and so a measurement is
-/// a pure function of (inputs, width) — the cache key of §2.8.
+/// rebuilds only when something actually changed, and so a measurement is
+/// a pure function of (inputs, width) — the cache key of §2.8. The colour
+/// scheme is not among them: the built string is the same in both schemes
+/// (its colours are dynamic, resolved when the row draws), so the scheme
+/// is the row's paint input, applied apart
+/// (`TextKit2RowView.apply(_:colorScheme:ownerID:)`).
 struct TextKit2RenderInputs: Hashable {
     var text: AttributedString
     var alignment: ADFAlignment?
@@ -16,7 +20,6 @@ struct TextKit2RenderInputs: Hashable {
     var layoutDirection: LayoutDirection
     var displayScale: CGFloat
     var legibilityWeight: LegibilityWeight?
-    var colorScheme: ColorScheme
 
     init(
         text: AttributedString,
@@ -25,8 +28,7 @@ struct TextKit2RenderInputs: Hashable {
         sizeCategory: UIContentSizeCategory = .large,
         layoutDirection: LayoutDirection = .leftToRight,
         displayScale: CGFloat = 3,
-        legibilityWeight: LegibilityWeight? = nil,
-        colorScheme: ColorScheme = .light
+        legibilityWeight: LegibilityWeight? = nil
     ) {
         self.text = text
         self.alignment = alignment
@@ -35,7 +37,6 @@ struct TextKit2RenderInputs: Hashable {
         self.layoutDirection = layoutDirection
         self.displayScale = displayScale
         self.legibilityWeight = legibilityWeight
-        self.colorScheme = colorScheme
     }
 }
 

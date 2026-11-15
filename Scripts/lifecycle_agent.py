@@ -217,15 +217,20 @@ def report(args: argparse.Namespace) -> int:
         with open(args.results, encoding="utf-8") as fh:
             entries = [json.loads(l) for l in fh if l.strip()]
     meta = dict(m.split("=", 1) for m in (args.meta or []) if "=" in m)
-    lines = ["# Lifecycle checks (plan §3, items 2–6)", ""]
+    lines = ["# Lifecycle checks (plan §3, items 2–6; PR 2 lists: Astra §6, Fable F14/F16)", ""]
     for k, v in meta.items():
         lines.append(f"- {k}: {v}")
     lines += ["", "| check | verdict | figures |", "|---|---|---|"]
-    skip = {"check", "pass", "recorded_utc"}
+    skip = {"check", "pass", "recorded_utc", "failure_class"}
     for e in entries:
         figures = "; ".join(f"{k}={json.dumps(v) if isinstance(v, (list, dict)) else v}"
                             for k, v in sorted(e.items()) if k not in skip)
-        lines.append(f"| {e.get('check')} | {'PASS' if e.get('pass') else '**FAIL**'} | {figures[:900]} |")
+        verdict = "PASS" if e.get("pass") else "**FAIL**"
+        # A failure the test classified (Fable F16: a no-switch control
+        # drift, the known lifecycle flake) says so next to the verdict.
+        if not e.get("pass") and e.get("failure_class"):
+            verdict += f" ({e['failure_class']})"
+        lines.append(f"| {e.get('check')} | {verdict} | {figures[:2000]} |")
     if not entries:
         lines.append("| (no results recorded) | **FAIL** | |")
     lines.append("")

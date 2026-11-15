@@ -8,6 +8,7 @@
 #   Scripts/visual-parity.sh --udid <UDID> --ref-app <main ADFReader.app>
 #       --app <branch ADFReader.app> [--out <dir>]
 #       [--fixture <name>[@<f1>,<f2>...]]... [--appearances "light dark"]
+#       [--list-fixture <name>[:<min markers>]]... [--allow-other-booted]
 #       [--size-steps "0 3"] [--arms "A A2 B C"] [--content-size large]
 #       [--settle 3] [--scroll-wait 2] [--ready-timeout 90]
 #       [--mask x0,y0,x1,y1]... [--top-band 330] [--bottom-band 102]
@@ -25,6 +26,9 @@
 #   renderer=swiftui|textkit2 …` matching the arm (proof of which renderer
 #   ran; --no-renderer-stats drops the flag and the check).
 #   Every arm gets `-fixture <f> -scrollToFraction <pos> -fontSizeStep <n>`.
+#   Arms are .app directories: --ref-app for A/A2 (main, or "main +
+#   fixtures" when a fixture is newer than main), --app for B/C (required
+#   only when B or C runs; an A–A' run needs --ref-app alone).
 #
 # PAIRS SCORED (Scripts/visual_diff.py kinds)
 #   <cfg>-AA  noise     A vs A2: viewport % must be <= --max-noise-pct (0)
@@ -33,6 +37,14 @@
 #                       text-block crop <= --max-crop-pct (0.5) with vertical
 #                       offset <= --max-offset-px (0)
 #   <cfg> = <fixture>-p<position>-<appearance>-s<step>
+#   Every pair, every kind: marker/content crops (visual_diff.py "MARKER AND
+#   CONTENT CROPS"): each text row that starts with a marker is split into
+#   a marker crop and a content crop, and the marker centroid, the content's
+#   first-line centroid and their relative position must match within
+#   0.5 px — a one-pixel marker move cannot hide inside a percentage.
+#   List captures (pairs of a --list-fixture): INVALID with fewer than
+#   <min markers> marker crops (default 3), FAIL on low-contrast fill
+#   differences (decision row backgrounds) the tolerant rule cannot see.
 #
 # CAPTURE PROCEDURE (identical for every arm)
 #   terminate + uninstall + install the arm's .app (no persisted renderer key
@@ -52,7 +64,43 @@
 #
 # DEFAULTS
 #   fixtures   kitchen-sink@0,0.5 (H1, every-mark paragraph, centered and
-#              indented text, H2–H6; then later blocks) and stress-5k@0,0.5
+#              indented text, H2–H6; then later blocks) and stress-5k@0,0.5,
+#              plus the list positions (block = Int(position × blocks); the
+#              block's top lands under the toolbar unless the document end
+#              clamps the scroll, and READY block counts are a gate
+#              invariant, so a position names the same block in every arm —
+#              no sentinel search needed). lists-parity positions land on
+#              the section heading above a list, so the list's first marker
+#              sits below the --exact-mask band (rows 330–460), which noise
+#              and exact pairs do not score:
+#              lists-parity (21 blocks)
+#                @0      block 0: S1 heading, nesting chain depth 0–4 with
+#                        • ◦ ▪ and 1. a. markers, same-type bullet chain
+#                @0.119  block 2: S2 heading, ordered starts, 9→10, y z aa,
+#                        viii ix x, 99→100; then S3 and the task list
+#                @0.214  block 4: S3 heading, tasks done/undone/nested/
+#                        empty, atom and linked tasks, decisions (row
+#                        background, status atom, link, hard break)
+#                @0.357  block 7: S4 heading, wrapping leader, marks, link,
+#                        hard breaks, Unicode, RTL, atom leaders
+#                @0.405  block 8: the same list from its top (its first
+#                        line is under the band), reaching the mention/
+#                        status/date/emoji atoms, empty leader and the
+#                        code-block first child at step 0
+#                @0.452  block 9: S5 heading, multi-paragraph item, nested
+#                        → continuation → nested → continuation + heading,
+#                        embedded code/panel/quote/expand/table
+#                @0.548  block 11: S6 heading, trailing lists (sync block,
+#                        malformed item), S7, lists in panel/quote/table
+#                @0.643  block 13: S7 heading, lists in a panel, quote,
+#                        table cells, collapsed expand, layout columns,
+#                        LP-END (end-clamped at step 0)
+#              list-dense (600 blocks)
+#                @0.761  block 456: deep in the document — task list,
+#                        decision lists (backgrounds, atoms, links),
+#                        nested bullets (its first row is under the band)
+#   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
+#              replaces the set; pairs of other fixtures are not list pairs)
 #   masks      --top-band 330 (status bar + inline nav bar/toolbar, where the
 #              renderer label lives) and --bottom-band 102 (home indicator),
 #              in pixels of an iPhone 17 Pro screenshot (1206x2622, 3x). When
@@ -78,8 +126,10 @@
 #   scores.csv, scores.json, summary.md, *.sbs.png, crops/   (visual_diff.py)
 #
 # DEVICE  --udid is required for capture. The script never creates a
-#   simulator, refuses to run while a different device is booted, and shuts
-#   down only a device it booted itself (never with --keep-booted). It
+#   simulator, refuses to run while a different device is booted (unless
+#   --allow-other-booted: captures do not depend on other devices, and env.txt
+#   records which were booted), and shuts down only a device it booted
+#   itself (never with --keep-booted). It
 #   restores the device's appearance and content size, and clears the status
 #   bar override, on exit.
 #   --skip-capture re-scores existing captures in --out (no simulator).
@@ -125,6 +175,11 @@ RENDERER_STATS=1
 KEEP_BOOTED=0
 SKIP_CAPTURE=0
 DRY_RUN=0
+ALLOW_OTHER_BOOTED=0
+LIST_FIXTURES=()
+LIST_FIXTURES_DEFAULT=("lists-parity:3" "list-dense:3" "list-tall:3")
+DEFAULT_FIXTURE_SPECS=("kitchen-sink@0,0.5" "stress-5k@0,0.5"
+    "lists-parity@0,0.119,0.214,0.357,0.405,0.452,0.548,0.643" "list-dense@0.761")
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 log() { printf '[visual-parity] %s\n' "$*" >&2; }
@@ -161,6 +216,8 @@ while [[ $# -gt 0 ]]; do
         --max-offset-px) need_value "$@"; MAX_OFFSET_PX="$2"; shift 2 ;;
         --no-renderer-stats) RENDERER_STATS=0; shift ;;
         --keep-booted) KEEP_BOOTED=1; shift ;;
+        --allow-other-booted) ALLOW_OTHER_BOOTED=1; shift ;;
+        --list-fixture) need_value "$@"; LIST_FIXTURES+=("$2"); shift 2 ;;
         --skip-capture) SKIP_CAPTURE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -168,7 +225,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ ${#FIXTURE_SPECS[@]} -gt 0 ]] || FIXTURE_SPECS=("kitchen-sink@0,0.5" "stress-5k@0,0.5")
+[[ ${#FIXTURE_SPECS[@]} -gt 0 ]] || FIXTURE_SPECS=("${DEFAULT_FIXTURE_SPECS[@]}")
+[[ ${#LIST_FIXTURES[@]} -gt 0 ]] || LIST_FIXTURES=("${LIST_FIXTURES_DEFAULT[@]}")
+for rule in "${LIST_FIXTURES[@]}"; do
+    [[ "$rule" =~ ^[A-Za-z0-9_.-]+(:[0-9]+)?$ ]] || die "--list-fixture '$rule': want <name>[:<min markers>]"
+done
 for arm in $ARMS; do
     case "$arm" in A|A2|B|C) ;; *) die "--arms: unknown arm '$arm' (A A2 B C)" ;; esac
 done
@@ -176,6 +237,8 @@ case " $ARMS " in *" A "*) ;; *) die "--arms must include A (the reference)" ;; 
 for number in "$SETTLE_SECONDS" "$SCROLL_WAIT_SECONDS" "$READY_TIMEOUT"; do
     [[ "$number" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "not a number of seconds: $number"
 done
+
+has_arm() { case " $ARMS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 TMP_BASE="${TMPDIR:-/tmp}"
 TMP_BASE="${TMP_BASE%/}/adfreader-parity"
@@ -187,7 +250,9 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
     [[ -n "$UDID" ]] || die "--udid is required (the script never picks or creates a simulator)"
     if [[ $DRY_RUN -eq 0 ]]; then
         [[ -n "$REF_APP" && -x "$REF_APP/ADFReader" ]] || die "--ref-app must be an ADFReader.app (got '${REF_APP:-}')"
-        [[ -n "$APP" && -x "$APP/ADFReader" ]] || die "--app must be an ADFReader.app (got '${APP:-}')"
+        if has_arm B || has_arm C; then
+            [[ -n "$APP" && -x "$APP/ADFReader" ]] || die "--app must be an ADFReader.app (got '${APP:-}')"
+        fi
     fi
 fi
 
@@ -222,7 +287,6 @@ arm_args() {
 
 arm_app() { case "$1" in A|A2) echo "$REF_APP" ;; *) echo "$APP" ;; esac; }
 expected_renderer() { case "$1" in B) echo swiftui ;; C) echo textkit2 ;; *) echo "" ;; esac; }
-has_arm() { case " $ARMS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 PLAN=()   # entries: "<cfg>\t<fixture>\t<position>\t<appearance>\t<step>"
 for fixture_pos in "${POSITIONS[@]}"; do
@@ -241,6 +305,14 @@ DIFF_ARGS=(--top-band "$TOP_BAND" --bottom-band "$BOTTOM_BAND" --threshold "$THR
     --max-raw-pct "$MAX_RAW_PCT" --max-crop-pct "$MAX_CROP_PCT" --max-offset-px "$MAX_OFFSET_PX")
 for mask in ${MASKS[@]+"${MASKS[@]}"}; do DIFF_ARGS+=(--mask "$mask"); done
 for mask in ${EXACT_MASKS[@]+"${EXACT_MASKS[@]}"}; do DIFF_ARGS+=(--exact-mask "$mask"); done
+# List captures: pair names are <fixture>-p<position>-…, so the prefix
+# "<fixture>-p" names exactly that fixture's pairs.
+for rule in "${LIST_FIXTURES[@]}"; do
+    list_name="${rule%%:*}"
+    list_min="1"
+    [[ "$rule" == *:* ]] && list_min="${rule#*:}"
+    DIFF_ARGS+=(--list-pair "$list_name-p:$list_min")
+done
 
 # pair_args <require-files:0|1>: the --pair arguments for every configuration.
 PAIR_ARGS=()
@@ -304,8 +376,12 @@ prepare_device() {
     [[ -n "$record" ]] || die "no simulator with udid $UDID (the script never creates devices)"
     IFS=$'\t' read -r state DEVICE_NAME DEVICE_RUNTIME <<<"$record"
     log "device: $DEVICE_NAME ($UDID) $DEVICE_RUNTIME, state $state"
-    other="$(sim_other_booted "$UDID" | head -n 1)"
-    [[ -z "$other" ]] || die "another simulator is already booted ($other); shut it down first"
+    OTHER_BOOTED="$(sim_other_booted "$UDID" | tr '\n' ' ')"
+    other="${OTHER_BOOTED%% *}"
+    if [[ -n "$other" && $ALLOW_OTHER_BOOTED -eq 0 ]]; then
+        die "another simulator is already booted ($other); shut it down first (or pass --allow-other-booted)"
+    fi
+    [[ -z "$other" ]] || log "other booted simulators (allowed): $OTHER_BOOTED"
     if [[ "$state" != "Booted" ]]; then
         log "booting $UDID"
         xcrun simctl boot "$UDID"
@@ -460,9 +536,15 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
         echo "host=$(hostname) macOS $(sw_vers -productVersion 2>/dev/null || echo ?) $(uname -m)"
         echo "xcode=$(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
         echo "device=$UDID $DEVICE_NAME $DEVICE_RUNTIME booted_by_this_run=$BOOTED_BY_US"
+        echo "other_booted=${OTHER_BOOTED:-none} allow_other_booted=$ALLOW_OTHER_BOOTED"
+        echo "list_fixtures=${LIST_FIXTURES[*]}"
         echo "locale=$LOCALE content_size=$CONTENT_SIZE (device had: ${ORIG_CONTENT_SIZE:-?}, appearance ${ORIG_APPEARANCE:-?})"
         echo "ref_app=$REF_APP sha256=$(sha256 "$REF_APP/ADFReader")"
-        echo "app=$APP sha256=$(sha256 "$APP/ADFReader")"
+        if [[ -n "$APP" && -x "$APP/ADFReader" ]]; then
+            echo "app=$APP sha256=$(sha256 "$APP/ADFReader")"
+        else
+            echo "app=(none: arms $ARMS use --ref-app only)"
+        fi
         echo "arms=$ARMS fixtures=${FIXTURE_SPECS[*]} appearances=$APPEARANCES size_steps=$SIZE_STEPS"
         echo "timing=ready_timeout ${READY_TIMEOUT}s, scroll_wait ${SCROLL_WAIT_SECONDS}s, settle ${SETTLE_SECONDS}s"
         echo "renderer_stats_required=$RENDERER_STATS"

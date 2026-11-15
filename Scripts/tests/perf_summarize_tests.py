@@ -31,11 +31,16 @@ perf_trial = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(perf_trial)
 
 SHA = {"A": "a" * 64, "A2": "a" * 64, "B": "b" * 64, "C": "b" * 64}
-BLOCKS = {"kitchen-sink": 38, "stress-1k": 1000, "stress-5k": 5000, "giant-table": 402}
-FRAMES = {"kitchen-sink": 166, "stress-1k": 5930, "stress-5k": 29665, "giant-table": 2429}
-ELIGIBLE = {"kitchen-sink": 10, "stress-1k": 480, "stress-5k": 2400, "giant-table": 1}
-LINKS = {"kitchen-sink": 1, "stress-1k": 101, "stress-5k": 507, "giant-table": 0}
+BLOCKS = {"kitchen-sink": 38, "stress-1k": 1000, "stress-5k": 5000, "giant-table": 402, "list-dense": 640}
+FRAMES = {"kitchen-sink": 166, "stress-1k": 5930, "stress-5k": 29665, "giant-table": 2429, "list-dense": 8400}
+ELIGIBLE = {"kitchen-sink": 10, "stress-1k": 480, "stress-5k": 2400, "giant-table": 1, "list-dense": 40}
+LINKS = {"kitchen-sink": 1, "stress-1k": 101, "stress-5k": 507, "giant-table": 0, "list-dense": 0}
+# List text leaves (leaders + trailing) per fixture, for the lists-stage
+# RENDERER_STATS fields a new build prints (stress-1k: 1,815 plain leaders).
+LIST_LEAVES = {"kitchen-sink": 8, "stress-1k": 1815, "stress-5k": 8914, "giant-table": 0, "list-dense": 3000}
+FIXTURE_SHA = {f: hashlib.sha256(f"fixture {f}".encode()).hexdigest() for f in BLOCKS}
 PR45 = ["kitchen-sink", "stress-1k", "giant-table"]
+PR2 = PR45 + ["list-dense"]
 FULL = ["kitchen-sink", "stress-5k", "giant-table"]
 ARMS = ["A", "C", "B"]
 HOST = {"load1": 2.1, "load5": 2.0, "load15": 1.9,
@@ -47,7 +52,12 @@ results: list[bool] = []
 
 
 def plan(design: str, runs: int, arms: list[str], fixtures: list[str] | None = None, mode: str = "gate",
-         cal_sha: str | None = None, **over) -> dict:
+         cal_sha: str | None = None, fixture_hashes: bool | None = None, **over) -> dict:
+    """A plan as perf-gate.sh writes it. Design pr2 (gate mode) holds A to
+    completion and records each arm's fixture sha256s, as the driver does."""
+    fixtures = fixtures or {"pr45": PR45, "pr2": PR2}.get(design, FULL)
+    if fixture_hashes is None:
+        fixture_hashes = design == "pr2"
     specs = {}
     for a in arms:
         cand = a in ("B", "C")
@@ -55,9 +65,12 @@ def plan(design: str, runs: int, arms: list[str], fixtures: list[str] | None = N
                     "required_flags": {"C": ["-textkit2", "-rendererStats"],
                                        "B": ["-rendererReset", "-rendererStats"]}.get(a, []),
                     "forbidden_flags": [] if a == "C" else (["-textkit2"] + ([] if cand else ["-rendererStats"])),
-                    "requires_completion": cand, "expected_renderer": {"C": "textkit2", "B": "swiftui"}.get(a)}
-    p = {"version": 3, "mode": mode, "design": design, "pilot": False,
-         "fixtures": fixtures or (PR45 if design == "pr45" else FULL), "runs": runs, "warmup": 1, "reference": "A",
+                    "requires_completion": cand or (a == "A" and design == "pr2" and mode == "gate"),
+                    "expected_renderer": {"C": "textkit2", "B": "swiftui"}.get(a)}
+        if fixture_hashes:
+            specs[a]["fixture_sha256"] = {f: FIXTURE_SHA[f] for f in fixtures}
+    p = {"version": 4 if fixture_hashes else 3, "mode": mode, "design": design, "pilot": False,
+         "fixtures": fixtures, "runs": runs, "warmup": 1, "reference": "A",
          "candidates": ["A2"] if mode == "calibrate" else [a for a in ("C", "B") if a in arms], "arms": specs,
          "sampler": True, "footprint": True, "expected_blocks": {}, "host_start": copy.deepcopy(HOST),
          "calibration": {"path": "x", "sha256": cal_sha} if cal_sha else None}
@@ -71,7 +84,7 @@ def row(run: int, fixture: str, arm: str, rng: random.Random, **over) -> dict:
     frames = FRAMES[fixture]
     dropped = rng.randint(0, 1) if frames >= 2000 else 0
     r.update(run=str(run), fixture=fixture, arm=arm, label=arm, app_sha256=SHA[arm], installed_sha256=SHA[arm],
-             argv=f"-fixture {fixture} -autoscroll{flags}", requires_completion="1" if arm in "BC" else "0",
+             installed_fixture_sha256=FIXTURE_SHA[fixture], argv=f"-fixture {fixture} -autoscroll{flags}", requires_completion="1" if arm in "BC" else "0",
              started_utc="2026-10-26T12:00:00Z", host_load1=f"{2 + rng.random():.2f}", host_top3="launchd=3",
              status="ok", launch_exit="0", launch_to_ready_ms=f"{600 + rng.uniform(-10, 10):.1f}",
              ready_fixture=fixture, first_chunk_ms=str(56 + rng.randint(0, 3)), blocks=str(BLOCKS[fixture]),
@@ -80,8 +93,17 @@ def row(run: int, fixture: str, arm: str, rng: random.Random, **over) -> dict:
              rss_ready_kb=str(80000 + rng.randint(-300, 300)), rss_peak_kb=str(90000 + rng.randint(-300, 300)),
              footprint_ready_kb=str(60000 + rng.randint(-300, 300)),
              footprint_peak_kb=str(70000 + rng.randint(-300, 300)), memory_samples="50", footprint_samples="10")
+    # Main >= 86abd56 prints the completion fields too (checked where the
+    # design holds A to completion: pr2).
+    r.update(start_row="0", end_row=str(BLOCKS[fixture] - 1), scroll_ms="9000", completed="1")
     if arm in ("B", "C"):
         c = arm == "C"
+        lists = LIST_LEAVES[fixture]
+        r.update(tk2_list_live_ready=("4" if lists else "0") if c else "0",
+                 tk2_list_live=("2" if lists else "0") if c else "0",
+                 eligible_text_leaves=str(ELIGIBLE[fixture] + lists * 8 // 10),
+                 linked_text_leaves=str(LINKS[fixture] + lists // 10), fallback_text_leaves=str(2 + lists // 10),
+                 list_leader_leaves=str(lists * 9 // 10), list_trailing_leaves=str(lists // 10))
         r.update(start_row="0", end_row=str(BLOCKS[fixture] - 1), scroll_ms="9000", completed="1",
                  renderer="textkit2" if c else "swiftui", renderer_ready="textkit2" if c else "swiftui",
                  tk2_live="3" if c else "0", tk2_live_ready="9" if c else "0",
@@ -492,6 +514,284 @@ check("full: C hitch ceiling breach -> FAIL",
 check("full: 5 pairs -> INCOMPLETE",
       summarize(write("full-5", plan("full", 5, ARMS, cal_sha=cal_sha), grid(5, ARMS, FULL, mutate=late)),
                 "--calibration", cal), 5, "INCOMPLETE")
+
+# ------------------------------------------------------------- design pr2
+# Lists stage (Fable F2/F7, Astra §7): pr45 + list-dense under one named
+# design, the list-native proof, A held to completion, fixture bytes pinned.
+P2 = plan("pr2", 3, ARMS)
+on_ld = lambda arm, **kv: mut(arm=arm, fixture="list-dense", set=kv)  # noqa: E731
+check("pr2 clean -> PASS (list leaf shares disclosed)", summarize(write("pr2-pass", P2, grid(3, ARMS, PR2))), 0, "PASS",
+      contains="linked_leaf_share_pct")
+check("pr45 with PR 1-era rows (no list fields, no fixture hashes) -> PASS (pr45 unchanged)",
+      summarize(write("pr45-pr1rows", P, grid(3, ARMS, PR45, mutate=lambda r: r.update(
+          {k: "" for k in ("installed_fixture_sha256", "tk2_list_live", "tk2_list_live_ready", "eligible_text_leaves",
+                           "linked_text_leaves", "fallback_text_leaves", "list_leader_leaves",
+                           "list_trailing_leaves")})))), 0, "PASS")
+
+# Omission of the list supplement.
+check("pr2 plan without list-dense -> INCOMPLETE",
+      summarize(write("pr2-nolist", plan("pr2", 3, ARMS, fixtures=PR45), grid(3, ARMS, PR45))), 5, "INCOMPLETE",
+      contains="['list-dense'] declared by design pr2 are missing")
+check("pr2 plan without list-dense on arm B -> INCOMPLETE",
+      summarize(write("pr2-nolistB", plan("pr2", 3, ARMS, fixture_arms={**{f: ARMS for f in PR45},
+                                                                         "list-dense": ["A", "C"]}),
+                      [r for r in grid(3, ARMS, PR2) if not (r["fixture"] == "list-dense" and r["arm"] == "B")])),
+      5, "INCOMPLETE", contains="list-dense: arms ['B'] missing")
+check("pr2 declares list-dense but its trials are absent -> INVALID",
+      summarize(write("pr2-norows", P2, grid(3, ARMS, PR45))), 2, "INVALID", contains="missing trial")
+check("pr2 pilot without list-dense -> PILOT (never PASS)",
+      summarize(write("pr2-pilot-nolist", plan("pr2", 2, ARMS, fixtures=PR45, pilot=True, warmup=0),
+                      grid(2, ARMS, PR45)), "--pilot"), 4, "PILOT")
+
+# Missing list-native proof / all-fallback lists (C), and B must show none.
+check("pr2 C on list-dense without tk2ListLive -> INVALID (list-native proof missing)",
+      summarize(write("pr2-c-nolistfield", P2, grid(3, ARMS, PR2, mutate=on_ld("C", tk2_list_live="",
+                                                                               tk2_list_live_ready="")))),
+      2, "INVALID", contains="list-native proof missing")
+check("pr2 C on list-dense with tk2ListLive=0 at READY and end -> INVALID (headings alone are no proof)",
+      summarize(write("pr2-c-listzero", P2, grid(3, ARMS, PR2, mutate=on_ld("C", tk2_list_live="0",
+                                                                            tk2_list_live_ready="0")))),
+      2, "INVALID", contains="no live TextKit 2 list rows")
+check("pr2 C on list-dense with tk2ListLive only at READY -> PASS",
+      summarize(write("pr2-c-listready", P2, grid(3, ARMS, PR2, mutate=on_ld("C", tk2_list_live="0")))), 0, "PASS")
+check("pr2 C on list-dense, every list leaf on SwiftUI -> INVALID (all-fallback lists)",
+      summarize(write("pr2-c-allfallback", P2, grid(3, ARMS, PR2, mutate=on_ld(
+          "C", tk2_list_live="0", tk2_list_live_ready="0", eligible_text_leaves=lambda r: r["eligible_roots"],
+          linked_text_leaves=lambda r: r["link_roots"], fallback_text_leaves="3002")))),
+      2, "INVALID", contains="all list leaves fall back to SwiftUI")
+check("pr2 C on list-dense, coverage says no eligible list leaf -> INVALID even with live rows",
+      summarize(write("pr2-c-allfallback-static", P2, grid(3, ARMS, PR2, mutate=on_ld(
+          "C", eligible_text_leaves=lambda r: r["eligible_roots"])))), 2, "INVALID",
+      contains="all list leaves fall back to SwiftUI")
+check("pr2 C on list-dense without leaf coverage -> INVALID",
+      summarize(write("pr2-c-nocoverage", P2, grid(3, ARMS, PR2, mutate=on_ld("C", eligible_text_leaves="",
+                                                                              list_leader_leaves="")))),
+      2, "INVALID", contains="list leaf coverage missing")
+check("pr2 C on list-dense with no list leaves in scope -> INVALID",
+      summarize(write("pr2-c-nolistleaves", P2, grid(3, ARMS, PR2, mutate=on_ld("C", list_leader_leaves="0",
+                                                                                list_trailing_leaves="0")))),
+      2, "INVALID", contains="no list text in scope")
+check("pr2 B on list-dense with live TextKit 2 list rows -> INVALID",
+      summarize(write("pr2-b-listlive", P2, grid(3, ARMS, PR2, mutate=on_ld("B", tk2_list_live="2")))), 2, "INVALID",
+      contains="SwiftUI arm with nonzero/missing")
+check("pr2 B on list-dense without tk2ListLive -> INVALID",
+      summarize(write("pr2-b-nolistfield", P2, grid(3, ARMS, PR2, mutate=on_ld("B", tk2_list_live="",
+                                                                               tk2_list_live_ready="")))),
+      2, "INVALID", contains="tk2_list_live")
+check("pr2 B on stress-1k reporting live list rows -> INVALID (zero wherever reported)",
+      summarize(write("pr2-b-1k-listlive", P2, grid(3, ARMS, PR2, mutate=mut(arm="B", fixture="stress-1k",
+                                                                             set={"tk2_list_live_ready": "3"})))),
+      2, "INVALID")
+check("pr2 C on stress-1k with tk2ListLive=0 -> PASS (list proof is list-dense's)",
+      summarize(write("pr2-c-1k-listzero", P2, grid(3, ARMS, PR2, mutate=mut(arm="C", fixture="stress-1k", set={
+          "tk2_list_live": "0", "tk2_list_live_ready": "0"})))), 0, "PASS")
+check("pilot of list-dense under the default design -> list proof still required (INVALID)",
+      summarize(write("pr45-pilot-ld-listzero", plan("pr45", 2, ARMS, fixtures=["list-dense"], pilot=True, warmup=0),
+                      grid(2, ARMS, ["list-dense"], mutate=on_ld("C", tk2_list_live="0", tk2_list_live_ready="0"))),
+                "--pilot"), 2, "INVALID", contains="no live TextKit 2 list rows")
+
+# Truncated traversal: a candidate that stops short FAILs (precedence 3); A,
+# held to completion by pr2, makes the run INVALID.
+check("pr2 C list-dense scroll ends before the last block -> FAIL",
+      summarize(write("pr2-c-short", P2, grid(3, ARMS, PR2, mutate=mut(arm="C", run="2", fixture="list-dense",
+                                                                       set={"end_row": "500"})))), 1, "FAIL",
+      contains="scroll ended at row 500, not the last block 639")
+check("pr2 A list-dense scroll ends before the last block -> INVALID",
+      summarize(write("pr2-a-short", P2, grid(3, ARMS, PR2, mutate=mut(arm="A", run="2", fixture="list-dense",
+                                                                       set={"end_row": "500"})))), 2, "INVALID",
+      contains="baseline_failure")
+check("pr2 A list-dense trial incomplete (completed=0) -> INVALID",
+      summarize(write("pr2-a-incomplete", P2, grid(3, ARMS, PR2, mutate=mut(arm="A", run="1", fixture="list-dense",
+                                                                            set={"status": "incomplete",
+                                                                                 "completed": "0"})))),
+      2, "INVALID", contains="baseline trial status incomplete")
+P2noA = copy.deepcopy(P2)
+P2noA["arms"]["A"]["requires_completion"] = False
+check("pr2 plan without A's completion markers -> INCOMPLETE",
+      summarize(write("pr2-a-nomarkers", P2noA, grid(3, ARMS, PR2))), 5, "INCOMPLETE",
+      contains="arm A lacks completion markers")
+check("pr45 A scroll short (A not held to completion) -> PASS (pr45 unchanged)",
+      summarize(write("pr45-a-short", P, grid(3, ARMS, PR45, mutate=mut(arm="A", run="2", fixture="stress-1k",
+                                                                        set={"end_row": "500"})))), 0, "PASS")
+
+# Gate invariant (Fable F2): READY block counts equal across arms.
+check("pr2 list-dense READY blocks 641 on B/C vs 640 on A -> INVALID",
+      summarize(write("pr2-blocks", P2, grid(3, ARMS, PR2, mutate=lambda r: r.update(blocks="641", end_row="640")
+                                             if r["fixture"] == "list-dense" and r["arm"] in "BC" else None))),
+      2, "INVALID", contains="READY block counts disagree")
+
+# Mismatched fixture bytes.
+P2hash = copy.deepcopy(P2)
+P2hash["arms"]["A"]["fixture_sha256"]["list-dense"] = "d" * 64
+check("pr2 list-dense.json differs across arms -> INVALID",
+      summarize(write("pr2-hash", P2hash, grid(3, ARMS, PR2, mutate=on_ld("A", installed_fixture_sha256="d" * 64)))),
+      2, "INVALID", contains="list-dense.json differs across arms")
+check("pr2 plan without fixture hashes -> INVALID",
+      summarize(write("pr2-nohash", plan("pr2", 3, ARMS, fixture_hashes=False), grid(3, ARMS, PR2))), 2, "INVALID",
+      contains="plan records no sha256 of list-dense.json")
+check("pr2 installed list-dense.json differs from the plan on one trial -> INVALID",
+      summarize(write("pr2-installed-hash", P2, grid(3, ARMS, PR2, mutate=mut(arm="C", run="3", fixture="list-dense",
+                                                                              set={"installed_fixture_sha256": "f" * 64})))),
+      2, "INVALID", contains="installed list-dense.json sha256")
+P45hash = plan("pr45", 3, ARMS, fixture_hashes=True)
+P45hash["arms"]["B"]["fixture_sha256"]["stress-1k"] = "d" * 64
+check("pr45 with recorded fixture hashes that differ -> INVALID (checked whenever recorded)",
+      summarize(write("pr45-hash", P45hash, grid(3, ARMS, PR45, mutate=mut(arm="B", fixture="stress-1k",
+                                                                           set={"installed_fixture_sha256": "d" * 64})))),
+      2, "INVALID", contains="stress-1k.json differs across arms")
+
+# Same thresholds as pr45.
+check("pr2 C list-dense footprint at READY +20 % -> FAIL",
+      summarize(write("pr2-fp20", P2, grid(3, ARMS, PR2, mutate=on_ld(
+          "C", footprint_ready_kb=scale("footprint_ready_kb", 1.2))))), 1, "FAIL")
+check("pr2 B list-dense dropped rate 1.2 % -> FAIL",
+      summarize(write("pr2-brate", P2, grid(3, ARMS, PR2, mutate=mut(arm="B", run="1", fixture="list-dense",
+                                                                     set={"dropped_frames": "101"})))), 1, "FAIL")
+check("pr2 C list-dense launch→READY +30 % -> PASS (no measured bound: advisory)",
+      summarize(write("pr2-ready-ld", P2, grid(3, ARMS, PR2, mutate=ready30("list-dense")))), 0, "PASS",
+      contains="no measured bound")
+bounds_ld = os.path.join(work, "bounds-ld.json")
+with open(bounds_ld, "w") as fh:
+    json.dump({"fixtures": {"list-dense": {"launch_to_ready_ms": {"p95_pct": 9.0, "p95_abs": 80.0}}}}, fh)
+check("pr2 with a merged 9 % list-dense READY bound: READY +30 % -> FAIL",
+      summarize(write("pr2-ready-ld-gated", P2, grid(3, ARMS, PR2, mutate=ready30("list-dense"))), "--bounds",
+                bounds_ld), 1, "FAIL")
+
+# Pilot, host, ledger.
+check("pr2 pilot -> PILOT (never PASS)",
+      summarize(write("pr2-pilot", plan("pr2", 2, ARMS, pilot=True, warmup=0), grid(2, ARMS, PR2)), "--pilot"),
+      4, "PILOT")
+P2h = copy.deepcopy(P2)
+P2h["host_start"]["load1"] = 6.5
+fp30_ld = on_ld("C", footprint_ready_kb=scale("footprint_ready_kb", 1.3))
+check("pr2 busy host + C list-dense memory +30 % -> FAIL-HOST-BUSY",
+      summarize(write("pr2-hostbusy", P2h, grid(3, ARMS, PR2, mutate=fp30_ld))), 6, "FAIL-HOST-BUSY")
+ledger5 = os.path.join(work, "ledger-pr2.jsonl")
+if os.path.exists(ledger5):
+    os.remove(ledger5)
+check("ledger pr2: first run FAILs", summarize(write("led2-1", P2, grid(3, ARMS, PR2, mutate=fp30_ld)),
+                                               ledger=ledger5), 1, "FAIL")
+check("ledger pr2: same candidate rerun -> REFUSED", summarize(write("led2-2", P2, grid(3, ARMS, PR2)),
+                                                               ledger=ledger5), 2, "REFUSED")
+ledger6 = os.path.join(work, "ledger-pr45-pr2.jsonl")
+if os.path.exists(ledger6):
+    os.remove(ledger6)
+check("ledger: pr45 FAILs for these binaries", summarize(write("led45-1", P, grid(3, ARMS, PR45, mutate=fp30)),
+                                                         ledger=ledger6), 1, "FAIL")
+check("ledger: ... then pr2 on the same binaries -> REFUSED (pr2 includes pr45)",
+      summarize(write("led45-2", P2, grid(3, ARMS, PR2)), ledger=ledger6), 2, "REFUSED",
+      contains="which design pr2 includes")
+ledger7 = os.path.join(work, "ledger-pr2-pr45.jsonl")
+if os.path.exists(ledger7):
+    os.remove(ledger7)
+check("ledger: pr2 FAILs on list-dense", summarize(write("led2b-1", P2, grid(3, ARMS, PR2, mutate=fp30_ld)),
+                                                   ledger=ledger7), 1, "FAIL")
+check("ledger: ... pr45 is not REFUSED by it (pr45 includes nothing; never the PR 2 gate)",
+      summarize(write("led2b-2", P, grid(3, ARMS, PR45)), ledger=ledger7), 0, "PASS")
+ledger8 = os.path.join(work, "ledger-pr2-invalid.jsonl")
+if os.path.exists(ledger8):
+    os.remove(ledger8)
+inv2 = grid(3, ARMS, PR2, mutate=mut(arm="A", run="1", fixture="list-dense", set={"hitch_ms_per_s": "15"}))
+check("ledger pr2: INVALID run", summarize(write("led2i-1", P2, inv2), ledger=ledger8), 2, "INVALID")
+check("ledger pr2: one rerun allowed", summarize(write("led2i-2", P2, inv2), ledger=ledger8), 2, "INVALID")
+check("ledger pr2: second rerun -> REFUSED", summarize(write("led2i-3", P2, grid(3, ARMS, PR2)), ledger=ledger8), 2,
+      "REFUSED")
+
+# --print-design: perf-gate.sh takes the pr2 shape from here; pr45 unchanged.
+for name, want in (("pr2", ["fixtures=kitchen-sink stress-1k giant-table list-dense",
+                            "fixture_arms=kitchen-sink=A,B,C stress-1k=A,B,C giant-table=A,B,C list-dense=A,B,C",
+                            "runs=3", "warmup=1", "rule=median-relative", "list_proof=list-dense",
+                            "baseline_completion=1", "fixture_hashes=1", "includes=pr45"]),
+                   ("pr45", ["fixtures=kitchen-sink stress-1k giant-table",
+                             "fixture_arms=kitchen-sink=A,B,C stress-1k=A,B,C giant-table=A,B,C", "runs=3",
+                             "warmup=1", "rule=median-relative", "list_proof=", "baseline_completion=0",
+                             "fixture_hashes=0", "includes="])):
+    res = subprocess.run([sys.executable, "-I", SUMMARIZE, "--print-design", name], capture_output=True, text=True)
+    lines = res.stdout.splitlines()
+    ok = res.returncode == 0 and all(w in lines for w in want)
+    results.append(ok)
+    print(f"{'ok  ' if ok else 'FAIL'} --print-design {name}: exit {res.returncode} "
+          f"{[w for w in want if w not in lines] or 'all lines present'}")
+
+# RENDERER_STATS parsing (perf_trial.py): the list keys land in their columns,
+# the READY line feeds tk2_list_live_ready, and an old build leaves them empty.
+log_path = os.path.join(work, "stats.log")
+with open(log_path, "w") as fh:
+    fh.write("#T0\t1000000000\n"
+             "1600000000\tREADY fixture=list-dense blocks=640 firstChunkMs=50\n"
+             "1600000001\tRENDERER_STATS renderer=textkit2 tk2Live=9 tk2Layouts=1 tk2Draws=0 tk2NativeDraws=0 "
+             "tk1BackedRows=0 tk1BackedDraws=0 eligibleRoots=40 fallbackRoots=600 textFallbackRoots=0 linkRoots=0 "
+             "tk2ListLive=6 eligibleTextLeaves=2440 linkedTextLeaves=300 fallbackTextLeaves=302 "
+             "listLeaderLeaves=2700 listTrailingLeaves=300\n"
+             "9000000000\tSCROLL_METRICS fixture=list-dense frames=8400 dropped=0 hitchRatioMsPerS=0.00 startRow=0 "
+             "endRow=639 scrollMs=140000 completed=1\n"
+             "9000000001\tRENDERER_STATS renderer=textkit2 tk2Live=3 tk2Layouts=900 tk2Draws=950 tk2NativeDraws=800 "
+             "tk1BackedRows=1 tk1BackedDraws=150 eligibleRoots=40 fallbackRoots=600 textFallbackRoots=0 linkRoots=0 "
+             "tk2ListLive=2 eligibleTextLeaves=2440 linkedTextLeaves=300 fallbackTextLeaves=302 "
+             "listLeaderLeaves=2700 listTrailingLeaves=300 futureKey=7\n"
+             "#EXIT\t9500000000\t0\n")
+parsed = perf_trial.derive(log_path, "-", {"requires_completion": "1"})
+want = {"tk2_list_live_ready": "6", "tk2_list_live": "2", "eligible_text_leaves": "2440", "linked_text_leaves": "300",
+        "fallback_text_leaves": "302", "list_leader_leaves": "2700", "list_trailing_leaves": "300",
+        "renderer_stats_extra": "futureKey=7"}
+ok = all(parsed.get(k) == v for k, v in want.items())
+old_log = os.path.join(work, "stats-old.log")
+with open(old_log, "w") as fh:
+    fh.write("".join(line + "\n" for line in open(log_path).read().splitlines()
+                     if "tk2ListLive" not in line))
+old = perf_trial.derive(old_log, "-", {})
+ok = ok and all(old.get(k) == "" for k in want if k != "renderer_stats_extra")
+results.append(ok)
+print(f"{'ok  ' if ok else 'FAIL'} perf_trial parses the list RENDERER_STATS keys "
+      f"({ {k: parsed.get(k) for k in want} }); an old build leaves them empty")
+
+# list-dense bounds: a 3-pair calibrate-mode pilot on A only, measured, then
+# merged into a copy of Scripts/perf-bounds.json (never replacing an entry).
+ld_plan = plan("full", 3, ["A", "A2"], fixtures=["list-dense"], mode="calibrate", pilot=True, fixture_hashes=True)
+ld_csv = write("bounds-ld-measure", ld_plan, grid(3, ["A", "A2"], ["list-dense"]))
+ld_out = os.path.join(work, "bounds-ld-measure", "bounds.json")
+res = subprocess.run([sys.executable, "-I", SUMMARIZE, ld_csv, "--measure-bounds", "--quiet", "--write-bounds", ld_out],
+                     capture_output=True, text=True)
+ldb = json.load(open(ld_out)) if os.path.exists(ld_out) else {}
+ok = (res.returncode == 0 and ldb.get("verdict") == "MEASURED"
+      and ldb.get("fixtures", {}).get("list-dense", {}).get("launch_to_ready_ms", {}).get("n_subsets") == 1
+      and ldb.get("fixture_sha256", {}).get("list-dense") == FIXTURE_SHA["list-dense"])
+results.append(ok)
+print(f"{'ok  ' if ok else 'FAIL'} measure list-dense bounds from 3 A–A′ pairs: exit {res.returncode} {ldb.get('verdict')}")
+base_copy = os.path.join(work, "perf-bounds-copy.json")
+with open(os.path.join(SCRIPTS, "perf-bounds.json")) as src, open(base_copy, "w") as dst:
+    base_before = json.load(src)
+    json.dump(base_before, dst, indent=2, sort_keys=True)
+res = subprocess.run([sys.executable, "-I", SUMMARIZE, "--merge-bounds", ld_out, "--bounds", base_copy],
+                     capture_output=True, text=True)
+merged = json.load(open(base_copy))
+src_entry = (merged.get("fixture_sources") or {}).get("list-dense") or {}
+ok = (res.returncode == 0 and "list-dense" in merged["fixtures"]
+      and all(merged["fixtures"][f] == base_before["fixtures"][f] for f in base_before["fixtures"])
+      and merged["app_sha256"] == base_before["app_sha256"] and src_entry.get("app_sha256") == SHA["A"]
+      and src_entry.get("fixture_sha256") == FIXTURE_SHA["list-dense"])
+results.append(ok)
+print(f"{'ok  ' if ok else 'FAIL'} merge list-dense bounds: exit {res.returncode}; existing entries unchanged; "
+      f"fixture_sources.list-dense app {str(src_entry.get('app_sha256'))[:8]}")
+res = subprocess.run([sys.executable, "-I", SUMMARIZE, "--merge-bounds", ld_out, "--bounds", base_copy],
+                     capture_output=True, text=True)
+ok = res.returncode == 2 and "already bounded" in res.stderr
+results.append(ok)
+print(f"{'ok  ' if ok else 'FAIL'} merge the same fixture again -> refused: exit {res.returncode}")
+bad_measure = os.path.join(work, "bounds-ld-measure", "bounds-invalid.json")
+with open(bad_measure, "w") as fh:
+    json.dump({**ldb, "verdict": "INVALID", "fixtures": {"lists-parity": {}}}, fh)
+res = subprocess.run([sys.executable, "-I", SUMMARIZE, "--merge-bounds", bad_measure, "--bounds", base_copy],
+                     capture_output=True, text=True)
+ok = res.returncode == 2 and "MEASURED" in res.stderr
+results.append(ok)
+print(f"{'ok  ' if ok else 'FAIL'} merge an INVALID measurement -> refused: exit {res.returncode}")
+res = subprocess.run([sys.executable, "-I", SUMMARIZE, write("bounds-ld-gate", P2, grid(3, ARMS, PR2)),
+                      "--measure-bounds", "--quiet", "--write-bounds", os.path.join(work, "bounds-ld-gate", "b.json")],
+                     capture_output=True, text=True)
+ok = res.returncode == 2
+results.append(ok)
+print(f"{'ok  ' if ok else 'FAIL'} measure bounds from a pr2 gate run (not A–A′) -> INVALID: exit {res.returncode}")
 
 print(f"\n{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

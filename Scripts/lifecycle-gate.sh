@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Scripts/lifecycle-gate.sh — the TextKit 2 stack's lifecycle checks (plan §3,
-# quantitative checks 2–6) as one reproducible gate: runs
+# quantitative checks 2–6, and PR 2's list additions, Astra §6 items 1–6) as
+# one reproducible gate: runs
 # Demo/ADFReaderUITests/LifecycleUITests on one explicit simulator with the
 # host measurement agent (Scripts/lifecycle_agent.py) answering the tests'
 # requests (Darwin-hook rotation, `top` CPU settle, `footprint` memory, 60 s
@@ -9,10 +10,15 @@
 # USAGE
 #   Scripts/lifecycle-gate.sh --udid <UDID> --out <dir>
 #       [--derived-data <dir>] [--skip-build] [--only <testName>]...
-#       [--suite-timeout 5400] [--xcodebuild-grace 120] [--keep-booted] [--dry-run]
+#       [--suite-timeout 9000] [--xcodebuild-grace 120] [--keep-booted]
+#       [--allow-other-booted] [--dry-run]
 #
 #   --udid          required; never creates devices; refuses when another
 #                   simulator is booted; shuts down only a device it booted.
+#   --allow-other-booted  run anyway beside other booted simulators (never
+#                   touched): a shakedown on a shared host. lifecycle.md
+#                   records them and every CPU/soak/footprint figure is then
+#                   provisional — a gate verdict needs a quiet host.
 #   --out           output dir (lifecycle.md, results.jsonl, agent.log,
 #                   xcodebuild.log, lifecycle.xcresult, channel/).
 #   --derived-data  isolated derived data (default <out>/DerivedData). A fresh
@@ -29,14 +35,34 @@
 #                   alternating — medians of 2, ~30 min),
 #                   test8RendererLaunchFlagsAndPersistence (Fable S16:
 #                   -textkit2 over a persisted SwiftUI choice, plain
-#                   relaunch, toolbar pick persists; ~1 min)
+#                   relaunch, toolbar pick persists; ~1 min);
+#                   PR 2 lists (Astra §6, Fable F14/F16; fixtures
+#                   lists-parity and list-dense):
+#                   testL1ListFiveRoundTripsAtParkedPositions (6.1 on
+#                   lists-parity, ~2 min), testL1bListFiveRoundTripsListDense
+#                   (6.1 on list-dense, ~2 min),
+#                   testL2ListCollapseRoundTripBothDirections (6.2, ~10 min),
+#                   testL3aListRotateAndSizeDriftMatchesSwiftUI (6.3, ~8 min),
+#                   testL3bListStateSurvivesRotateSizeAndSwitch (6.3 state on
+#                   lists-parity, ~3 min),
+#                   testL3cListStateSurvivesRotateSizeAndSwitchListDense (6.3
+#                   state on list-dense, ~4 min),
+#                   testL4aListSwitchDuringStreamingLoad (6.4, ~1
+#                   min), testL4bListCollidingIDsReplacementDocument (6.4,
+#                   ~2 min), testL5aFlingThrashSoakListDenseSwiftUI,
+#                   testL5bFlingThrashSoakListDenseTextKit2 (6.5, ~3 each),
+#                   testL6TwentyFlipsListDense (6.6: test7's design on
+#                   list-dense plus F14 census, ~30 min)
 #   --dry-run       print the plan; touch no simulator, run no xcodebuild.
 #
 # PASS (exit 0) only when every selected test case printed `passed` and every
 # recorded check passed. Exit 1 on any failure/skip/missing result, 2 on
-# usage errors. Estimated duration: ~43 min for all eight tests (test7 ~30,
-# the two soak tests ~3 each) plus ~4 min for a fresh build; the default
-# --suite-timeout (5400 s) leaves room for a loaded host.
+# usage errors. Estimated duration: ~43 min for tests 1-8 (test7 ~30, the
+# two soak tests ~3 each) + ~70 min for the list tests (testL6 ~30) = ~115
+# min, plus ~4 min for a fresh build; the default --suite-timeout (9000 s)
+# leaves room for a loaded host. A failed check whose record carries
+# failure_class (a no-switch control drift over 2 px) is the known lifecycle
+# flake (Fable F16): rerun it with --only; limits are never re-tuned.
 #
 # bash 3.2 compatible; needs Xcode, xcodegen, python3.
 set -euo pipefail
@@ -50,10 +76,10 @@ AGENT_PY="$SCRIPT_DIR/lifecycle_agent.py"
 BUNDLE_ID="com.connie.adfreader"
 XCODEGEN="${XCODEGEN:-xcodegen}"
 CLASS="LifecycleUITests"
-ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence"
+ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense"
 
-UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=5400; GRACE=120
-KEEP_BOOTED=0; DRY_RUN=0
+UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=9000; GRACE=120
+KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 log() { printf '[lifecycle-gate %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
@@ -69,6 +95,7 @@ while [[ $# -gt 0 ]]; do
         --suite-timeout) SUITE_TIMEOUT="$2"; shift 2 ;;
         --xcodebuild-grace) GRACE="$2"; shift 2 ;;
         --keep-booted) KEEP_BOOTED=1; shift ;;
+        --allow-other-booted) ALLOW_OTHERS=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
@@ -113,11 +140,20 @@ select_xctestrun() {
 }
 
 BOOTED_BY_US=0; AGENT_PID=""; XCODEBUILD_PID=""
+# Signals go only to this script's own children, by recorded PID and only
+# while that PID is still our child: PIDs wrap within minutes on a busy
+# host, so a recorded PID whose process has exited can belong to another
+# worker's xcodebuild or test runner. Never pattern-match (pkill/killall).
+ours() { [[ -n "$1" && "$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')" == "$$" ]]; }
+stop_child() {
+    if ours "$1"; then kill -TERM "$1" 2>/dev/null || true; fi
+    wait "$1" 2>/dev/null || true
+}
 cleanup() {
     local status=$?
     trap - EXIT
-    [[ -z "$XCODEBUILD_PID" ]] || kill "$XCODEBUILD_PID" 2>/dev/null || true
-    [[ -z "$AGENT_PID" ]] || { kill -TERM "$AGENT_PID" 2>/dev/null || true; wait "$AGENT_PID" 2>/dev/null || true; }
+    [[ -z "$XCODEBUILD_PID" ]] || stop_child "$XCODEBUILD_PID"
+    [[ -z "$AGENT_PID" ]] || stop_child "$AGENT_PID"
     if [[ $BOOTED_BY_US -eq 1 && $KEEP_BOOTED -eq 0 ]]; then
         log "shutting down $UDID (booted by this run)"
         xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true
@@ -144,8 +180,11 @@ XCTESTRUN="$(select_xctestrun "$DERIVED_DATA")" || die "cannot pick the xctestru
 BUILD_SHA="$(shasum -a 256 "$APP/ADFReader" | awk '{print $1}')"
 
 # ------------------------------------------------------------------ device
-OTHERS="$(sim_other_booted "$UDID")"
-[[ -z "$OTHERS" ]] || die "another simulator is booted ($OTHERS); one device at a time"
+OTHERS="$(sim_other_booted "$UDID" | tr '\n' ' ' | sed 's/ *$//')"
+if [[ -n "$OTHERS" ]]; then
+    [[ $ALLOW_OTHERS -eq 1 ]] || die "another simulator is booted ($OTHERS); one device at a time (--allow-other-booted: provisional shakedown)"
+    log "warning: other simulators booted ($OTHERS); CPU/soak/footprint figures are provisional"
+fi
 STATE="$(sim_device_field "$UDID" state)"
 if [[ "$STATE" != "Booted" ]]; then
     log "booting $UDID"
@@ -181,18 +220,16 @@ verdict_count() {
 }
 EXPECTED=$(echo "$TESTS" | wc -w | tr -d ' ')
 deadline=$(( SECONDS + SUITE_TIMEOUT ))
-while kill -0 "$XCODEBUILD_PID" 2>/dev/null; do
+while ours "$XCODEBUILD_PID"; do
     [[ "$(verdict_count)" -lt "$EXPECTED" ]] || break
     (( SECONDS < deadline )) || { log "suite timeout (${SUITE_TIMEOUT}s)"; break; }
     sleep 5
 done
 grace=$(( SECONDS + GRACE ))
-while kill -0 "$XCODEBUILD_PID" 2>/dev/null && (( SECONDS < grace )); do sleep 2; done
-kill "$XCODEBUILD_PID" 2>/dev/null || true
-wait "$XCODEBUILD_PID" 2>/dev/null || true
+while ours "$XCODEBUILD_PID" && (( SECONDS < grace )); do sleep 2; done
+stop_child "$XCODEBUILD_PID"
 XCODEBUILD_PID=""
-kill -TERM "$AGENT_PID" 2>/dev/null || true
-wait "$AGENT_PID" 2>/dev/null || true
+stop_child "$AGENT_PID"
 AGENT_PID=""
 
 # ------------------------------------------------------------------ report
@@ -211,6 +248,7 @@ python3 -I "$AGENT_PY" report --results "$RESULTS" --out "$OUT/lifecycle.md" \
     --meta "build=$([[ $SKIP_BUILD -eq 1 ]] && echo "reused $DERIVED_DATA" || echo "fresh $DERIVED_DATA") sha256=$BUILD_SHA" \
     --meta "device=$UDID $(sim_device_field "$UDID" name) $(sim_device_field "$UDID" runtime)" \
     --meta "tests=$TESTS" --meta "xcresult=$RESULT_BUNDLE" --meta "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --meta "other_booted_simulators=${OTHERS:-none}$([[ -n "$OTHERS" ]] && echo ' (shared host: CPU/soak/footprint figures provisional)')" \
     || REPORT_STATUS=$?
 [[ $REPORT_STATUS -eq 0 ]] || problems=$((problems + 1))
 log "report: $OUT/lifecycle.md"

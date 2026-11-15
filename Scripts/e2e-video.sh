@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
-# Scripts/e2e-video.sh — records a screen-capture video of the ADFReader
-# renderer-switch UI test on one explicit iOS Simulator and writes a
-# provenance manifest that ties the video to one exact build: the sha256 of
-# the built binary, of every executable companion and fixture in the .app, of
-# the binary installed on the device, and of what the test read off the
-# About This Build screen (OBSERVED_BUILD_SHA256).
+# Scripts/e2e-video.sh — records a screen-capture video of one named ADFReader
+# UI test (the renderer-switch test, or the list storyboard) on one explicit
+# iOS Simulator and writes a provenance manifest that ties the video to one
+# exact build: the sha256 of the built binary, of every executable companion
+# and fixture in the .app, of the binary installed on the device, and of
+# what the test read off the About This Build screen (OBSERVED_BUILD_SHA256).
 #
 # USAGE
 #   Scripts/e2e-video.sh (--udid <UDID> | --create-device <name>) --out <path.mp4>
-#       [--derived-data <dir>] [--skip-build] [--keep-booted]
+#       [--test switch|lists] [--derived-data <dir>] [--skip-build] [--keep-booted]
 #       [--expected-sha256 <hex> | --negative] [--test-timeout <s>]
-#       [--recorder-ready-timeout <s>] [--xcodebuild-grace <s>] [--dry-run]
+#       [--recorder-ready-timeout <s>] [--xcodebuild-grace <s>] [--allow-other-booted]
+#       [--dry-run]
 #
+#   --test             which test to record (default switch); nothing else
+#                      is accepted:
+#                        switch  ADFReaderUITests/RendererSwitchUITests/
+#                                testLiveSwitchSwiftUIToTextKit2AndBack
+#                                (kitchen-sink, the foundation switch)
+#                        lists   ADFReaderUITests/ListStoryboardUITests/
+#                                testListStoryboardSwiftUIToTextKit2AndBack
+#                                (lists-parity, the list storyboard)
+#                      Both assert the About checksum with the same message,
+#                      so --negative works for either. Two videos from ONE
+#                      build: run `--test switch --out A.mp4` (fresh build,
+#                      default derived data A.DerivedData), then `--test lists
+#                      --out B.mp4 --skip-build --derived-data A.DerivedData`;
+#                      both provenance files then carry the same build
+#                      manifest digests.
 #   --udid             the simulator to use (required unless --create-device).
 #                      The script never looks devices up by name.
 #   --create-device    explicit opt-in: create an iPhone 17 Pro simulator with
@@ -34,6 +50,11 @@
 #                      digest and EXPECT the named test to fail on the checksum
 #                      assertion. Exit 0 only when it did; the manifest records
 #                      mode=negative. Use a separate --out (e.g. videos/negative/).
+#   --allow-other-booted
+#                      provisional shakedown only: run although other
+#                      simulators are booted (a shared host). They are listed
+#                      in the log and the provenance (other_booted: ...); a
+#                      final video is recorded without this flag.
 #   --dry-run          print the resolved plan and commands; touch no simulator
 #                      and run no xcodebuild.
 #
@@ -49,7 +70,8 @@
 #      digest re-verified; the provenance names the manifest's commit, not
 #      the current checkout's. Exactly one .xctestrun must exist under
 #      <dd>/Build/Products.
-#   2. Refuse if any other simulator is booted; boot --udid if shut down
+#   2. Refuse if any other simulator is booted (unless --allow-other-booted,
+#      which records them); boot --udid if shut down
 #      (remembered: only that device is shut down on exit); status bar pinned
 #      (9:41, full battery/signal); light appearance; uninstall ADFReader.
 #   3. Start `simctl io <udid> recordVideo --codec h264 --force <out>` BEFORE
@@ -59,10 +81,13 @@
 #   4. TEST_RUNNER_ADF_EXPECTED_BUILD_SHA256=<digest> xcodebuild
 #      test-without-building -xctestrun <exact> -destination id=<udid>
 #      -only-testing:<test id> -resultBundlePath <base>.xcresult > <base>.log
+#      Before it runs, the UI-test bundle binary must contain the selected
+#      test method's name (a build without that test FAILs here).
 #   5. The recorder must stay alive until the named test's result line (an
-#      earlier exit FAILs). Stop it only after that line
-#      `Test Case '-[ADFReaderUITests.RendererSwitchUITests
-#      testLiveSwitchSwiftUIToTextKit2AndBack]' passed|failed`: SIGINT, wait
+#      earlier exit FAILs). Stop it only after the selected test's line
+#      `Test Case '-[<Target>.<Class> <method>]' passed|failed` (e.g.
+#      `-[ADFReaderUITests.RendererSwitchUITests
+#      testLiveSwitchSwiftUIToTextKit2AndBack]`): SIGINT, wait
 #      for the recorder to exit, then check the file with ffprobe (required):
 #      its duration must cover the interval from recorder-ready to the result
 #      line (2 s tolerance).
@@ -94,10 +119,12 @@ DEMO_DIR="$ROOT/Demo"
 SCHEME="ADFReader"
 BUNDLE_ID="com.connie.adfreader"
 DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
-TEST_ID="ADFReaderUITests/RendererSwitchUITests/testLiveSwitchSwiftUIToTextKit2AndBack"
 XCODEGEN="${XCODEGEN:-xcodegen}"
-# Failure message of the test's checksum assertion (RendererSwitchUITests).
+# Failure message of the checksum assertion; RendererSwitchUITests and
+# ListStoryboardUITests use exactly this text.
 DIGEST_FAILURE_TEXT="on-screen checksum differs from the built binary"
+
+TEST_SELECTOR="switch"
 
 UDID=""
 CREATE_DEVICE=""
@@ -105,6 +132,8 @@ OUT=""
 DERIVED_DATA=""
 SKIP_BUILD=0
 KEEP_BOOTED=0
+ALLOW_OTHER_BOOTED=0
+OTHER_BOOTED=""
 EXPECTED_OVERRIDE=""
 NEGATIVE=0
 DRY_RUN=0
@@ -121,6 +150,22 @@ usage_error() { log "usage error: $*"; exit 2; }
 # (Sourced by tests with E2E_VIDEO_SOURCED=1; no side effects.)
 
 sha256_file() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+# The Target/Class/method id a --test selector names; returns 1 for any
+# other selector (no partial or case-insensitive matches).
+test_id_for() {
+    case "$1" in
+        switch) printf '%s\n' "ADFReaderUITests/RendererSwitchUITests/testLiveSwitchSwiftUIToTextKit2AndBack" ;;
+        lists) printf '%s\n' "ADFReaderUITests/ListStoryboardUITests/testListStoryboardSwiftUIToTextKit2AndBack" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Whether the UI-test bundle binary $1 holds the test method name $2 (the
+# selector XCTest discovers the test by).
+binary_has_test() {
+    [[ -f "$1" && -n "$2" ]] && LC_ALL=C grep -aqF -- "$2" "$1"
+}
 
 # CFBundleExecutable of a bundle dir, or $2 (default: bundle basename sans ext).
 bundle_executable() {
@@ -241,9 +286,11 @@ while [[ $# -gt 0 ]]; do
         --udid) UDID="${2:-}"; shift 2 ;;
         --create-device) CREATE_DEVICE="${2:-}"; shift 2 ;;
         --out) OUT="${2:-}"; shift 2 ;;
+        --test) TEST_SELECTOR="${2:-}"; shift 2 ;;
         --derived-data) DERIVED_DATA="${2:-}"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
         --keep-booted) KEEP_BOOTED=1; shift ;;
+        --allow-other-booted) ALLOW_OTHER_BOOTED=1; shift ;;
         --expected-sha256) EXPECTED_OVERRIDE="$(printf '%s' "${2:-}" | tr 'A-F' 'a-f')"; shift 2 ;;
         --negative) NEGATIVE=1; shift ;;
         --test-timeout) TEST_TIMEOUT="${2:-}"; shift 2 ;;
@@ -261,6 +308,8 @@ if [[ -z "$UDID" && -z "$CREATE_DEVICE" ]]; then usage_error "--udid <UDID> is r
 [[ "$OUT" == *.mp4 ]] || usage_error "--out must end in .mp4"
 if [[ -n "$EXPECTED_OVERRIDE" && $NEGATIVE -eq 1 ]]; then usage_error "--negative picks its own wrong digest; drop --expected-sha256"; fi
 if [[ -n "$EXPECTED_OVERRIDE" ]] && ! is_sha256 "$EXPECTED_OVERRIDE"; then usage_error "--expected-sha256 must be 64 hex characters"; fi
+TEST_ID="$(test_id_for "$TEST_SELECTOR")" || usage_error "--test must be 'switch' or 'lists' (got '$TEST_SELECTOR')"
+TEST_METHOD="${TEST_ID##*/}"
 for n in "$TEST_TIMEOUT" "$RECORDER_READY_TIMEOUT" "$XCODEBUILD_GRACE"; do
     [[ "$n" =~ ^[0-9]+$ ]] || usage_error "timeouts must be whole seconds (got '$n')"
 done
@@ -302,6 +351,8 @@ if [[ $DRY_RUN -eq 1 ]]; then
     fi
     echo "video:          $OUT"
     echo "derived data:   $DERIVED_DATA ($([[ $SKIP_BUILD -eq 1 ]] && echo reused || echo 'fresh build; must not already hold an .xctestrun'))"
+    echo "test selector:  $TEST_SELECTOR"
+    echo "other booted:   $([[ $ALLOW_OTHER_BOOTED -eq 1 ]] && echo 'allowed and recorded (--allow-other-booted)' || echo 'refused')"
     echo "test case:      $TEST_CASE"
     echo "git:            $(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown) ($(git -C "$ROOT" status --porcelain 2>/dev/null | grep -c . || true) dirty path(s))"
     if [[ $SKIP_BUILD -eq 0 ]]; then
@@ -366,9 +417,11 @@ resolve_device() {
 }
 
 assert_only_booted_device() {
-    local other
-    other="$(sim_other_booted "$UDID" | head -n 1)"
-    [[ -z "$other" ]] || die "another simulator is already booted ($other); this script uses one device at a time"
+    OTHER_BOOTED="$(sim_other_booted "$UDID" | tr '\n' ' ' | sed 's/ *$//')"
+    [[ -n "$OTHER_BOOTED" ]] || return 0
+    [[ $ALLOW_OTHER_BOOTED -eq 1 ]] \
+        || die "another simulator is already booted (${OTHER_BOOTED%% *}); this script uses one device at a time (--allow-other-booted: provisional shakedown)"
+    log "warning: other simulators booted ($OTHER_BOOTED); provisional shakedown (--allow-other-booted)"
 }
 
 boot_device() {
@@ -444,6 +497,8 @@ fi
 [[ -x "$APP/ADFReader" ]] || die "no Release app at $APP"
 XCTESTRUN="$(select_xctestrun "$DERIVED_DATA")" || die "cannot pick the xctestrun"
 [[ -f "$UITEST_BINARY" ]] || die "no UI-test bundle binary at $UITEST_BINARY"
+binary_has_test "$UITEST_BINARY" "$TEST_METHOD" || \
+    die "the UI-test bundle has no $TEST_METHOD (--test $TEST_SELECTOR); was it built from a checkout without that test?"
 BUILD_SHA="$(sha256_file "$APP/ADFReader")"
 UITEST_SHA="$(sha256_file "$UITEST_BINARY")"
 XCTESTRUN_SHA="$(sha256_file "$XCTESTRUN")"
@@ -677,6 +732,7 @@ fi
     echo "xcode:               $XCODE_VERSION"
     echo "simulator:           $UDID  $DEVICE_NAME  $DEVICE_RUNTIME"
     echo "simulator_state:     $DEVICE_STATE_AT_START at start; booted_by_script=$([[ $BOOTED_BY_US -eq 1 ]] && echo yes || echo no); created_by_script=$CREATED_DEVICE"
+    echo "other_booted:        ${OTHER_BOOTED:-none}$([[ -n "$OTHER_BOOTED" ]] && echo '  (allowed by --allow-other-booted: provisional shakedown)')"
     if [[ $SKIP_BUILD -eq 1 ]]; then
         echo "build:               SKIPPED (--skip-build); reused derived data, build manifest digests verified"
     else
@@ -721,6 +777,7 @@ fi
     echo "installed_sha256:    ${INSTALLED_SHA:-(missing)}"
     echo "expected_sha256:     $EXPECTED_SHA $([[ $NEGATIVE -eq 1 ]] && echo '(deliberately wrong: negative control)')"
     echo "observed_sha256:     ${OBSERVED_SHA:-(absent)}  [source: $OBSERVED_SOURCE]"
+    echo "test_selector:       $TEST_SELECTOR"
     echo "test:                $TEST_ID"
     echo "test_command:        TEST_RUNNER_ADF_EXPECTED_BUILD_SHA256=$EXPECTED_SHA ${TEST_CMD[*]}"
     echo "test_result:         ${TEST_RESULT:-(no result line)}"

@@ -36,9 +36,10 @@ public struct ADFDocumentView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// - Parameters:
-    ///   - textRenderer: The engine for top-level paragraphs and headings;
-    ///     `.textKit2` is opt-in and falls back to SwiftUI per block for
-    ///     content it does not cover.
+    ///   - textRenderer: The engine for top-level paragraphs and headings
+    ///     and the text of top-level lists (see `ADFTextRenderer`);
+    ///     `.textKit2` is opt-in and falls back to SwiftUI per text block
+    ///     for content it does not cover.
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -273,11 +274,12 @@ private struct DocumentRow: View {
     let containerWidth: CGFloat
     let visibility: VisibleRowRegistry
     /// The host's text engine choice. Applied to this row's environment only
-    /// when the block is a top-level `.richText` (paragraph/heading): nested
-    /// text — panels, quotes, lists, captions, table cells — always renders
-    /// with SwiftUI, so the environment is reset to `.swiftUI` for every
-    /// other kind (an environment value would otherwise leak into a
-    /// container's children).
+    /// when the block is a top-level `.richText` (paragraph/heading) or
+    /// `.listRows` (whose rows pass it on to their own text only,
+    /// `ListRowView`; `TextKit2Scope`). Text inside panels, quotes,
+    /// captions and table cells always renders with SwiftUI, so the
+    /// environment is reset to `.swiftUI` for every other kind (an
+    /// environment value would otherwise leak into a container's children).
     let textRenderer: ADFTextRenderer
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -309,8 +311,7 @@ private struct DocumentRow: View {
     }
 
     private var rowTextRenderer: ADFTextRenderer {
-        if case .richText = block.kind { return textRenderer }
-        return .swiftUI
+        TextKit2Scope.inheritsRenderer(block.kind) ? textRenderer : .swiftUI
     }
 
     var body: some View {
@@ -318,6 +319,11 @@ private struct DocumentRow: View {
             if isInRenderRegion || heights.isEmpty {
                 BlockView(block: block)
                     .environment(\.adfTextRenderer, rowTextRenderer)
+                    // The width a top-level list is laid out at, so its
+                    // rows can tell when their text column has no room
+                    // (`TextKit2Scope.listTextFits`); unknown (0) until
+                    // the stack's first width observation.
+                    .environment(\.adfListWidth, containerWidth > 0 ? containerWidth : nil)
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
                     // Full width so the size measured below reports the

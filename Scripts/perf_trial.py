@@ -32,8 +32,9 @@ SUBCOMMANDS
         Derives one trial's metrics from the stamped log and the samples and
         appends one row to <trials.csv> (header written when the file is
         new or empty). --meta supplies the driver's columns (run, fixture,
-        arm, label, app_sha256, installed_sha256, argv, shell_status,
-        requires_completion, …). Prints a one-line digest to stdout.
+        arm, label, app_sha256, installed_sha256, installed_fixture_sha256,
+        argv, shell_status, requires_completion, …). Prints a one-line
+        digest to stdout.
 
     host [--top-samples 2]
         Prints one JSON line describing host load: {"load1", "load5",
@@ -51,10 +52,14 @@ LOG LINES CONSUMED (contract with Demo/ADFReader)
     RENDERER_STATS renderer=<swiftui|textkit2> tk2Live=<n> tk2Layouts=<n>
         tk2Draws=<n> tk2NativeDraws=<n> tk1BackedRows=<n> tk1BackedDraws=<n>
         eligibleRoots=<n> fallbackRoots=<n> textFallbackRoots=<n>
-        linkRoots=<n> [other k=v...]
+        linkRoots=<n> [tk2ListLive=<n> eligibleTextLeaves=<n>
+        linkedTextLeaves=<n> fallbackTextLeaves=<n> listLeaderLeaves=<n>
+        listTrailingLeaves=<n>] [other k=v...]
         (printed at READY and again with SCROLL_METRICS; the last one wins
-        for the counters, the first one is kept as renderer_ready and
-        tk2_live_ready; Demo/ADFReader/RendererStats.swift)
+        for the counters, the first one is kept as renderer_ready,
+        tk2_live_ready and tk2_list_live_ready; Demo/ADFReader/RendererStats.swift).
+        The log key of every counter column lives in STATS_FIELDS (and
+        READY_STATS_FIELDS) only: a renamed key is a one-line change there.
 """
 
 from __future__ import annotations
@@ -71,34 +76,56 @@ import sys
 import threading
 import time
 
-CSV_COLUMNS = [
-    # driver-supplied
+DRIVER_COLUMN_LIST = [
     "run", "fixture", "arm", "label", "order_index", "app_sha256", "installed_sha256",
-    "argv", "requires_completion", "trial_timeout_s", "shell_status",
+    "installed_fixture_sha256", "argv", "requires_completion", "trial_timeout_s", "shell_status",
     "started_utc", "host_load1", "host_top3",
+]
+CSV_COLUMNS = DRIVER_COLUMN_LIST + [
     # derived
     "status", "launch_exit", "launch_to_ready_ms", "ready_fixture", "first_chunk_ms", "blocks",
     "frames", "dropped_frames", "dropped_rate_pct", "hitch_ms_per_s",
     "start_row", "end_row", "scroll_ms", "completed",
     "renderer", "renderer_ready", "tk2_live_ready", "tk2_live", "tk2_layouts", "tk2_draws",
     "tk2_native_draws", "tk1_backed_rows", "tk1_backed_draws",
-    "eligible_roots", "fallback_roots", "text_fallback_roots", "link_roots", "renderer_stats_extra",
+    "eligible_roots", "fallback_roots", "text_fallback_roots", "link_roots",
+    "tk2_list_live_ready", "tk2_list_live", "eligible_text_leaves", "linked_text_leaves",
+    "fallback_text_leaves", "list_leader_leaves", "list_trailing_leaves", "renderer_stats_extra",
     "rss_ready_kb", "rss_peak_kb", "footprint_ready_kb", "footprint_peak_kb",
     "memory_samples", "footprint_samples", "app_cpu_median_pct", "app_cpu_max_pct",
     "rss_interval_ms_median", "rss_interval_ms_max",
     "footprint_interval_ms_median", "footprint_interval_ms_max",
     "trial_wall_ms", "log", "samples",
 ]
-# RENDERER_STATS keys added with the TextKit 1-backed link rows (ebbdb01):
-# CSV column -> log key. The summarizer's renderer proof reads these.
+# RENDERER_STATS keys read from the FINAL line: CSV column -> log key. The
+# summarizer's renderer proof reads the columns, never the log keys, so a key
+# the app renames is changed here and nowhere else.
 STATS_FIELDS = {
+    # TextKit 1-backed link rows (ebbdb01)
     "tk2_native_draws": "tk2NativeDraws",
     "tk1_backed_rows": "tk1BackedRows",
     "tk1_backed_draws": "tk1BackedDraws",
     "text_fallback_roots": "textFallbackRoots",
     "link_roots": "linkRoots",
+    # Lists stage (PR 2): live TextKit 2 rows whose owner is list text (a
+    # leader or a trailing paragraph/heading of a list row) — the list-native
+    # proof — and the static leaf coverage of the F4 scope (root richText +
+    # list leaders + list trailing text): eligible leaves (root and list),
+    # the linked (TextKit 1-backed) and SwiftUI-fallback leaves, and the list
+    # leader / trailing leaf counts.
+    "tk2_list_live": "tk2ListLive",
+    "eligible_text_leaves": "eligibleTextLeaves",
+    "linked_text_leaves": "linkedTextLeaves",
+    "fallback_text_leaves": "fallbackTextLeaves",
+    "list_leader_leaves": "listLeaderLeaves",
+    "list_trailing_leaves": "listTrailingLeaves",
 }
-DRIVER_COLUMNS = set(CSV_COLUMNS[:14]) | {"log", "samples"}
+# Columns also taken from the FIRST line (printed at READY): ready column ->
+# the STATS_FIELDS column whose log key it reads.
+READY_STATS_FIELDS = {
+    "tk2_list_live_ready": "tk2_list_live",
+}
+DRIVER_COLUMNS = set(DRIVER_COLUMN_LIST) | {"log", "samples"}
 
 # ------------------------------------------------------------------ launch
 
@@ -428,6 +455,8 @@ def derive(log_path: str, samples_path: str, meta: dict[str, str]) -> dict[str, 
         for column, key in STATS_FIELDS.items():
             row[column] = num(last.get(key))
             known.add(key)
+        for column, final_column in READY_STATS_FIELDS.items():
+            row[column] = num(first.get(STATS_FIELDS[final_column]))
         row["renderer_stats_extra"] = ";".join(f"{k}={v}" for k, v in last.items() if k not in known)
 
     rss, fp = samples["rss"], samples["fp"]
