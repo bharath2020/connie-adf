@@ -15,9 +15,11 @@ import ADFPreparation
 //
 //   TextKit2CodeParitySmokeTests    every E2 shape at Large, regular weight
 //   TextKit2CodeParityTests         the whole E2 matrix (shape × 6 sizes × 2
-//                                   weights), dark, breakout documents
+//                                   weights), dark, interior empty lines at
+//                                   AX4, breakout documents
 //   TextKit2CodeShapeExperiments    record only: shapes outside the admitted
-//                                   cohort forced onto the row; never fails
+//                                   cohort, and interior empty lines at AX4
+//                                   and AX5, forced onto the row; never fails
 //   TextKit2CodeMeasureFirstTests   E1 proposals, E3 canvas ladder, E4 pan
 //                                   across renderer flips, E5 accessibility
 //   TextKit2CodeAdapterTests        narrow outer frames, pan, and the
@@ -63,12 +65,18 @@ enum TK2CodeParity {
         var direction: LayoutDirection = .leftToRight
         var cohort: Cohort = .admitted
         /// Pinned by hand: the gate must admit the sample at every size up
-        /// to and including this one (left to right). Past it, and for a
+        /// to and including this one (left to right), except where
+        /// `interiorEmptyLines` pins it to SwiftUI. Past it, and for a
         /// sample with none, the gate's own answer is taken, so a gate that
         /// rejected everything would still fail here.
         var admittedThrough: DynamicTypeSize? = nil
         /// Pinned by hand: over the canvas bound at every size and scale.
         var overBudget = false
+        /// Pinned by hand: the code has an empty line between its first
+        /// line and its last non-empty one, so before iOS 26 the gate keeps
+        /// it on SwiftUI above AX3 (`osGatedEmptyLines`); a sample without
+        /// one is never gated for it.
+        var interiorEmptyLines = false
 
         var description: String { name }
     }
@@ -105,8 +113,8 @@ enum TK2CodeParity {
         Sample(name: "eight-lines", text: eightLines, admittedThrough: .xxxLarge),
         Sample(name: "language-nil", text: eightLines, language: nil, admittedThrough: .xxxLarge),
         Sample(name: "language-empty", text: eightLines, language: "", admittedThrough: .xxxLarge),
-        Sample(name: "blank-middle-1", text: "let a = 1\n\nlet b = 2", admittedThrough: .accessibility5),
-        Sample(name: "blank-middle-3", text: "let a = 1\n\n\n\nlet b = 2", admittedThrough: .accessibility5),
+        Sample(name: "blank-middle-1", text: "let a = 1\n\nlet b = 2", admittedThrough: .accessibility5, interiorEmptyLines: true),
+        Sample(name: "blank-middle-3", text: "let a = 1\n\n\n\nlet b = 2", admittedThrough: .accessibility5, interiorEmptyLines: true),
         Sample(name: "leading-blank", text: "\nlet a = 1\nlet b = 2", admittedThrough: .accessibility5),
         Sample(name: "trailing-1", text: "let a = 1\nlet b = 2\n", admittedThrough: .accessibility5),
         Sample(name: "trailing-2", text: "let a = 1\nlet b = 2\n\n", cohort: .trailingBreaks),
@@ -158,7 +166,8 @@ enum TK2CodeParity {
     struct Classification {
         /// Whether the TextKit 2 arm must draw the code with a TextKit 2 row.
         var textKit2: Bool
-        /// "admitted", a `TextKit2Eligibility.Fallback` case, "direction" or "canvas".
+        /// "admitted", a `TextKit2Eligibility.Fallback` case, "direction",
+        /// "canvas" or "osGatedEmptyLines".
         var reason: String
         var failures: [String]
     }
@@ -166,7 +175,9 @@ enum TK2CodeParity {
     /// Which engine must draw `code` under `env` at `scale`. The content
     /// verdict is pinned by hand per sample (`Sample.cohort`); the
     /// view-time answer is the gate's, with the hand-pinned anchors of
-    /// `Sample.admittedThrough`, `Sample.overBudget` and right-to-left.
+    /// `Sample.admittedThrough`, `Sample.overBudget`,
+    /// `Sample.interiorEmptyLines` (before iOS 26, above AX3) and
+    /// right-to-left.
     @MainActor
     static func classify(_ sample: Sample, code: AttributedString, env: TK2Parity.Environment, scale: CGFloat) -> Classification {
         var failures: [String] = []
@@ -201,13 +212,25 @@ enum TK2CodeParity {
             reason = "direction"
         case .some(.canvas):
             reason = "canvas"
+        case .some(.osGatedEmptyLines):
+            reason = "osGatedEmptyLines"
         }
+        // Measured on iOS 18.5: through AX3 an interior empty line matched
+        // `Text` exactly, at AX5 it did not; iOS 26.3 matched at AX5.
+        let emptyLinesGated = sample.interiorEmptyLines && !TextKit2Scope.codeEmptyLinesMatchText && env.size > .accessibility3
         if env.direction == .rightToLeft {
             if gate != .direction { failures.append("gate: right-to-left code must stay on SwiftUI (direction), got \(reason)") }
         } else if sample.overBudget {
             if gate != .canvas { failures.append("gate: \(sample.name) must be over the canvas bound, got \(reason)") }
+        } else if emptyLinesGated {
+            if gate != .osGatedEmptyLines {
+                failures.append("gate: \(sample.name) has an interior empty line, so before iOS 26 it must stay on SwiftUI at \(env.size) (osGatedEmptyLines), got \(reason)")
+            }
         } else if let through = sample.admittedThrough, env.size <= through, gate != nil {
             failures.append("gate: \(sample.name) must be admitted at \(env.size), got \(reason)")
+        }
+        if gate == .osGatedEmptyLines, !emptyLinesGated {
+            failures.append("gate: \(sample.name) must not be gated for interior empty lines at \(env.size)")
         }
         return Classification(textKit2: gate == nil, reason: reason, failures: failures)
     }
@@ -701,6 +724,15 @@ struct TextKit2CodeParityTests {
         try await TK2CodeParity.check(sample, env: TK2Parity.Environment(size: .large, dark: true), suite: "parity")
     }
 
+    /// AX4 is not among the matrix's sizes: the interior-empty-line samples
+    /// there, regular and Bold Text (on SwiftUI before iOS 26).
+    @Test("E2: interior empty lines at AX4", arguments: ["blank-middle-1", "blank-middle-3"], [false, true])
+    func emptyLinesAtAX4(name: String, bold: Bool) async throws {
+        let sample = try #require(TK2CodeParity.samples.first { $0.name == name })
+        let env = TK2Parity.Environment(size: .accessibility4, legibility: bold ? LegibilityWeight.bold : nil)
+        try await TK2CodeParity.check(sample, env: env, suite: "parity")
+    }
+
     /// Breakout `wide` and `full-width` through the real `ADFDocumentView`:
     /// a document of code blocks only, so every pixel outside a code
     /// viewport must be the same on both arms.
@@ -829,7 +861,9 @@ struct TextKit2CodeParityTests {
 /// What the row would do with text outside the admitted cohort: each such
 /// shape is re-stamped with a shape that claims printable ASCII
 /// (`TK2Parity.restamped`; the content verdict trusts the stamp), hosted
-/// through the real `CodeBlockView`, and measured by the parity rule.
+/// through the real `CodeBlockView`, and measured by the parity rule. The
+/// same seam forces code with interior empty lines past the gate's
+/// before-iOS-26 rule at AX4 and AX5 (the claimed shape has none).
 ///
 /// Record only: it prints `CODE_E2 … suite=experiment` (and a
 /// `CODE_E2_NOTE` listing what the rule would have failed) and never fails
@@ -843,7 +877,26 @@ struct TextKit2CodeParityTests {
 struct TextKit2CodeShapeExperiments {
     @Test("shapes outside the admitted cohort, forced onto the row", arguments: TK2CodeParity.experimentSamples, [DynamicTypeSize.large, .accessibility3])
     func forced(sample: TK2CodeParity.Sample, size: DynamicTypeSize) async {
-        let env = TK2Parity.Environment(size: size)
+        await Self.force(sample, env: TK2Parity.Environment(size: size))
+    }
+
+    /// The interior-empty-line samples above AX3, where before iOS 26 the
+    /// gate keeps them on SwiftUI (`CodeGate.osGatedEmptyLines`): the
+    /// forced shape claims no interior empty line, so the gate admits them
+    /// and the row is measured against `Text`, AX4 included.
+    @Test("interior empty lines forced onto the row at AX4 and AX5",
+          arguments: ["blank-middle-1", "blank-middle-3"], [DynamicTypeSize.accessibility4, .accessibility5])
+    func forcedEmptyLines(name: String, size: DynamicTypeSize) async throws {
+        let sample = try #require(TK2CodeParity.samples.first { $0.name == name })
+        for legibility in [LegibilityWeight?.none, .bold] {
+            await Self.force(sample, env: TK2Parity.Environment(size: size, legibility: legibility))
+        }
+    }
+
+    /// Forces `sample` onto the row under a shape that claims only its line
+    /// count and longest line, measures it under `env` and prints its line;
+    /// a failure is a note, never an issue.
+    static func force(_ sample: TK2CodeParity.Sample, env: TK2Parity.Environment) async {
         do {
             let block = try await TK2Parity.codeBlock(sample.text, language: sample.language)
             let measured = ADFCodeShape(sample.text)
@@ -854,11 +907,11 @@ struct TextKit2CodeShapeExperiments {
                 checkBound: false
             )
             if !outcome.failures.isEmpty {
-                print("CODE_E2_NOTE shape=\(sample.name) size=\(size) rows=\(outcome.textKit2Rows) " + outcome.failures.joined(separator: " ; "))
+                print("CODE_E2_NOTE shape=\(sample.name) size=\(env.size) rows=\(outcome.textKit2Rows) " + outcome.failures.joined(separator: " ; "))
             }
         } catch {
             TK2CodeParity.emit("CODE_E2", [
-                "shape=\(sample.name)", "size=\(size)", "weight=regular",
+                "shape=\(sample.name)", "size=\(env.size)", "weight=\(env.legibility == .bold ? "bold" : "regular")",
                 "scale=\(TK2CodeParity.scaleText(TK2Parity.nativeScale))", "os=\(TK2Parity.osVersion)",
                 "dH=nan", "dW=nan", "inkExact=false", "diffPct=nan",
                 "arm=error", "reason=forced", "suite=experiment", "error=\(error)",

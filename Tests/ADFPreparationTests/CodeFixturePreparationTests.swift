@@ -283,6 +283,33 @@ struct CodeFixturePreparationTests {
         #expect(stripped == main)
     }
 
+    @Test("the stamped shape counts interior empty lines (not an empty first line, not trailing ones); the text is unchanged")
+    func interiorEmptyLines() async throws {
+        let doc = try await parseDoc(#"""
+        {"version":1,"type":"doc","content":[
+          {"type":"codeBlock","content":[{"type":"text","text":"let a = 1\n\nlet b = 2"}]},
+          {"type":"codeBlock","content":[{"type":"text","text":"let a = 1\n\n\n\nlet b = 2"}]},
+          {"type":"codeBlock","content":[{"type":"text","text":"\nlet a = 1\nlet b = 2"}]},
+          {"type":"codeBlock","content":[{"type":"text","text":"let a = 1\nlet b = 2\n"}]}
+        ]}
+        """#)
+        let prepared = preparedCode(in: DocumentPreparer(theme: .default).prepare(doc))
+        #expect(prepared.map(\.id) == ["0.0", "0.1", "0.2", "0.3"])
+        // Counted by hand: the lines of each text, split at LF.
+        let expected: [(text: String, shape: ADFCodeShape)] = [
+            ("let a = 1\n\nlet b = 2", ADFCodeShape(lineCount: 3, maxLineUTF16: 9, interiorEmptyLineCount: 1)),
+            ("let a = 1\n\n\n\nlet b = 2", ADFCodeShape(lineCount: 5, maxLineUTF16: 9, interiorEmptyLineCount: 3)),
+            ("\nlet a = 1\nlet b = 2", ADFCodeShape(lineCount: 3, maxLineUTF16: 9)),
+            ("let a = 1\nlet b = 2\n", ADFCodeShape(lineCount: 3, maxLineUTF16: 9, trailingNewlineCount: 1)),
+        ]
+        guard prepared.count == expected.count else { return }
+        for (entry, pin) in zip(prepared, expected) {
+            #expect(Array(String(entry.code.characters).unicodeScalars) == Array(pin.text.unicodeScalars), "\(entry.id)")
+            #expect(entry.code.runs.count == 1, "\(entry.id)")
+            #expect(entry.code.runs.first?.adfCodeShape == pin.shape, "\(entry.id)")
+        }
+    }
+
     @Test("the shapes of named fixture blocks match hand counts from the JSON")
     func handCountedShapes() async throws {
         // Counted from the JSON: the number of lines (LF count + 1) and the
@@ -355,6 +382,15 @@ struct CodeShapeTests {
         ("a\n\n", ADFCodeShape(lineCount: 3, maxLineUTF16: 1, trailingNewlineCount: 2), "two trailing LF"),
         ("a\n\n\n", ADFCodeShape(lineCount: 4, maxLineUTF16: 1, trailingNewlineCount: 3), "three trailing LF"),
         ("a\n \n", ADFCodeShape(lineCount: 3, maxLineUTF16: 1, trailingNewlineCount: 1), "a space between LFs ends the trailing run"),
+        // Interior empty lines: after the first line, before the last line
+        // that is not empty.
+        ("a\n\nb", ADFCodeShape(lineCount: 3, maxLineUTF16: 1, interiorEmptyLineCount: 1), "one interior empty line"),
+        ("a\n\n\n\nb", ADFCodeShape(lineCount: 5, maxLineUTF16: 1, interiorEmptyLineCount: 3), "three interior empty lines"),
+        ("a\n\nb\n\nc", ADFCodeShape(lineCount: 5, maxLineUTF16: 1, interiorEmptyLineCount: 2), "two runs of one"),
+        ("\n\na", ADFCodeShape(lineCount: 3, maxLineUTF16: 1, interiorEmptyLineCount: 1), "the empty first line is not interior, the second is"),
+        ("a\n\nb\n\n", ADFCodeShape(lineCount: 5, maxLineUTF16: 1, trailingNewlineCount: 2, interiorEmptyLineCount: 1), "the trailing run's lines are not interior"),
+        ("a\n \nb", ADFCodeShape(lineCount: 3, maxLineUTF16: 1), "a line of a space is not empty"),
+        ("a\r\n\r\nb", ADFCodeShape(lineCount: 3, maxLineUTF16: 2, isPrintableASCIIAndLF: false, hasOtherLineBreaks: true), "a line of a CR is not empty"),
         // CR and CRLF: one newline character, but not a line split by
         // itself; the CR is a unit of its line.
         ("a\r\nb", ADFCodeShape(lineCount: 2, maxLineUTF16: 2, isPrintableASCIIAndLF: false, hasOtherLineBreaks: true), "CRLF inside"),
@@ -403,6 +439,7 @@ struct CodeShapeTests {
         let shape = ADFCodeShape(lineCount: 3, maxLineUTF16: 7)
         #expect(shape.lineCount == 3 && shape.maxLineUTF16 == 7)
         #expect(shape.trailingNewlineCount == 0)
+        #expect(shape.interiorEmptyLineCount == 0)
         #expect(!shape.isAllNewlines)
         #expect(shape.isPrintableASCIIAndLF)
         #expect(!shape.hasTabs && !shape.hasNonASCII && !shape.hasOtherLineBreaks)
@@ -411,7 +448,9 @@ struct CodeShapeTests {
 
     /// The same facts from a plain scan of the string, each by its own
     /// definition: UTF-16 line lengths from a split at LF, the newline facts
-    /// from `Character.isNewline`, the flags from the scalars.
+    /// from `Character.isNewline`, the flags from the scalars, and the
+    /// interior empty lines as the zero-length lines strictly between the
+    /// first line and the last non-empty one.
     static func scanned(_ text: String) -> ADFCodeShape {
         let lines = text.utf16.split(separator: 0x0A, omittingEmptySubsequences: false)
         let printable: ClosedRange<UInt32> = 0x20...0x7E
@@ -420,10 +459,13 @@ struct CodeShapeTests {
         let lengths = lines.map(\.count)
         let trailing = text.reversed().prefix(while: \.isNewline).count
         let allNewlines = !text.isEmpty && text.allSatisfy(\.isNewline)
+        let lastNonEmpty = lengths.lastIndex { $0 > 0 } ?? 0
+        let interior = lastNonEmpty > 1 ? lengths[1..<lastNonEmpty].filter { $0 == 0 }.count : 0
         return ADFCodeShape(
             lineCount: lines.count,
             maxLineUTF16: lengths.max() ?? 0,
             trailingNewlineCount: trailing,
+            interiorEmptyLineCount: interior,
             isAllNewlines: allNewlines,
             isPrintableASCIIAndLF: values.allSatisfy { $0 == 0x0A || printable.contains($0) },
             hasTabs: values.contains(0x09),

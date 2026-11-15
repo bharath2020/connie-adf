@@ -199,7 +199,8 @@ struct TextKit2FixtureSweepTests {
     /// at the sweep's text sizes on this device: eligible by content (the
     /// coverage walk's verdict, `TextKit2Eligibility.codeVerdict`) and
     /// admitted by the code gate (`TextKit2Scope.codeGate`: left to right,
-    /// within the canvas bound at that size and display scale). Each must
+    /// within the canvas bound at that size and display scale, and before
+    /// iOS 26 no interior empty line above AX3). Each must
     /// be one TextKit 2 code row on that arm and none on the other, and
     /// match `Text` within 0.01 pt in the block's height and width and in
     /// its scroll content's width and height. No exemptions: code the gate
@@ -291,7 +292,8 @@ struct TextKit2FixtureSweepTests {
                 #expect(measured > 0, "\(document) \(size): no code root admitted, so none was measured")
                 print("TK2 code sweep \(document) \(size) @\(scaleText)x os=\(TK2Parity.osVersion): \(codeBlocks.count) top-level code blocks, "
                     + "\(eligible.count) eligible, \(admission.admittedCodeRoots) admitted, \(measured) measured, "
-                    + "\(gatedCount) gated (canvas \(gated[.canvas, default: 0]), direction \(gated[.direction, default: 0])), "
+                    + "\(gatedCount) gated (canvas \(gated[.canvas, default: 0]), direction \(gated[.direction, default: 0]), "
+                    + "empty lines \(gated[.osGatedEmptyLines, default: 0])), "
                     + "\(fallbackCount) content fallbacks \(fallbacks)")
             }
         }

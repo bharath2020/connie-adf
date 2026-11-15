@@ -365,7 +365,9 @@ struct TextKit2CodeDiagnosticsTests {
 
     /// Admitted and gated as the rule functions give them block by block,
     /// without the coverage walk: the content verdict, the font's metrics
-    /// at this size and weight, and the pure canvas bound at this scale.
+    /// at this size and weight, the pure canvas bound at this scale, and,
+    /// before iOS 26, an interior empty line above AX3 (the shape's count
+    /// against the size, written out here rather than through the gate).
     static func recomputed(
         _ blocks: [RenderBlock], _ category: UIContentSizeCategory, weight: LegibilityWeight?, scale: CGFloat
     ) -> [Int] {
@@ -379,7 +381,9 @@ struct TextKit2CodeDiagnosticsTests {
             let bound = metrics.flatMap {
                 TextKit2Scope.codeCanvasBound(shape, advance: $0.advance, lineHeight: $0.lineHeight, displayScale: scale)
             }
-            if bound != nil { admitted += 1 } else { gated += 1 }
+            let emptyLines = !TextKit2Scope.codeEmptyLinesMatchText && shape.interiorEmptyLineCount > 0
+                && [UIContentSizeCategory.accessibilityExtraExtraLarge, .accessibilityExtraExtraExtraLarge].contains(category)
+            if bound != nil, !emptyLines { admitted += 1 } else { gated += 1 }
         }
         return [admitted, gated]
     }

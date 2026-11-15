@@ -516,12 +516,16 @@ struct TextKit2CodeFallbackTests {
         TextKit2Scope.codeFitsCanvas(code, sizeCategory: category, legibilityWeight: weight, displayScale: scale)
     }
 
+    /// The code gate; `emptyLinesMatchText` is this runtime's answer unless
+    /// a test passes the other OS's.
     static func gate(
         _ code: AttributedString, _ category: UIContentSizeCategory = .large, weight: LegibilityWeight? = nil,
-        scale: CGFloat = 3, direction: LayoutDirection = .leftToRight
+        scale: CGFloat = 3, direction: LayoutDirection = .leftToRight,
+        emptyLinesMatchText: Bool = TextKit2Scope.codeEmptyLinesMatchText
     ) -> TextKit2Scope.CodeGate? {
         TextKit2Scope.codeGate(
-            code, sizeCategory: category, legibilityWeight: weight, displayScale: scale, layoutDirection: direction
+            code, sizeCategory: category, legibilityWeight: weight, displayScale: scale, layoutDirection: direction,
+            emptyLinesMatchText: emptyLinesMatchText
         )
     }
 
@@ -724,6 +728,133 @@ struct TextKit2CodeFallbackTests {
         hosted.show(TK2CodeLogic.codeView(code))
         try await hosted.settle()
         #expect(hosted.codeRows.count == 1)
+    }
+
+    // MARK: Interior empty lines before iOS 26
+
+    /// Code with and without an interior empty line, every one within the
+    /// canvas bound at AX5 and Bold Text on 2x and 3x.
+    nonisolated static let emptyLineCodes: [(name: String, string: String, interior: Bool)] = [
+        ("one interior empty line", "let a = 1\n\nlet b = 2", true),
+        ("three interior empty lines", "let a = 1\n\n\n\nlet b = 2", true),
+        ("two empty first lines (the second is interior)", "\n\nlet a = 1", true),
+        ("an empty first line", "\nlet a = 1\nlet b = 2", false),
+        ("one trailing line feed", "let a = 1\nlet b = 2\n", false),
+        ("a line of spaces", "if ready {\n    \n    start(now)\n}", false),
+        ("no empty line", "let a = 1\nlet b = 2", false),
+    ]
+
+    @Test("interior empty lines: on SwiftUI at AX4 and AX5 before iOS 26, admitted at every size from iOS 26; empty first and trailing lines never gated")
+    func interiorEmptyLines() {
+        #expect(TextKit2Scope.largestEmptyLinesCodeSizeBeforeiOS26 == .accessibilityExtraLarge)
+        // The default answer is this runtime's OS.
+        #expect(TextKit2Scope.codeEmptyLinesMatchText == (ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26))
+        let categories: [UIContentSizeCategory] = [
+            .large, .accessibilityLarge, .accessibilityExtraLarge, .accessibilityExtraExtraLarge, .accessibilityExtraExtraExtraLarge,
+        ]
+        let aboveAX3: Set<UIContentSizeCategory> = [.accessibilityExtraExtraLarge, .accessibilityExtraExtraExtraLarge]
+        var gatedCount = 0
+        for item in Self.emptyLineCodes {
+            let code = TK2CodeLogic.stamped(item.string)
+            #expect(((code.runs.first?.adfCodeShape?.interiorEmptyLineCount ?? 0) > 0) == item.interior, "\(item.name)")
+            for matchText in [false, true] {
+                for category in categories {
+                    for weight in [LegibilityWeight?.none, .bold] {
+                        for scale in [CGFloat(2), 3] {
+                            let label = "\(item.name), \(category.rawValue), \(String(describing: weight)), @\(scale), match \(matchText)"
+                            let gated = !matchText && item.interior && aboveAX3.contains(category)
+                            let expected: TextKit2Scope.CodeGate? = gated ? .osGatedEmptyLines : nil
+                            #expect(Self.gate(code, category, weight: weight, scale: scale, emptyLinesMatchText: matchText) == expected, "\(label)")
+                            #expect(TextKit2Scope.codeEmptyLinesKeepRenderer(
+                                code, sizeCategory: category, emptyLinesMatchText: matchText
+                            ) == !gated, "\(label)")
+                            if gated { gatedCount += 1 }
+                        }
+                    }
+                }
+            }
+        }
+        // Not vacuous: three codes × two sizes × two weights × two scales.
+        #expect(gatedCount == 24)
+    }
+
+    @Test("interior empty lines are judged after the direction and the canvas, from the prepared shape alone")
+    func interiorEmptyLinesOrder() {
+        let ax5 = UIContentSizeCategory.accessibilityExtraExtraExtraLarge
+        let code = TK2CodeLogic.stamped("let a = 1\n\nlet b = 2")
+        #expect(Self.gate(code, ax5, emptyLinesMatchText: false) == .osGatedEmptyLines)
+        #expect(Self.gate(code, ax5, emptyLinesMatchText: true) == nil)
+        // The default is the runtime's answer.
+        #expect(Self.gate(code, ax5) == Self.gate(code, ax5, emptyLinesMatchText: TextKit2Scope.codeEmptyLinesMatchText))
+        // The direction first, then the canvas.
+        #expect(Self.gate(code, ax5, direction: .rightToLeft, emptyLinesMatchText: false) == .direction)
+        let huge = TK2CodeLogic.stamped(String(repeating: "x", count: 5_000) + "\n\nx")
+        #expect(Self.gate(huge, ax5, emptyLinesMatchText: false) == .canvas)
+        #expect(Self.gate(huge, .large, emptyLinesMatchText: false) == .canvas)
+
+        // The prepared shape decides; the characters are never scanned.
+        let claimed = ADFCodeShape(lineCount: 3, maxLineUTF16: 9, interiorEmptyLineCount: 1)
+        #expect(Self.gate(TK2CodeLogic.stamped("let a = 1\nx\nlet b = 2", shape: claimed), ax5, emptyLinesMatchText: false) == .osGatedEmptyLines)
+        let unclaimed = ADFCodeShape(lineCount: 3, maxLineUTF16: 9)
+        #expect(Self.gate(TK2CodeLogic.stamped("let a = 1\n\nlet b = 2", shape: unclaimed), ax5, emptyLinesMatchText: false) == nil)
+
+        // The pure rule: any count above zero, only above AX3, only where
+        // `Text` does not match.
+        for count in [0, 1, 7] {
+            let shape = ADFCodeShape(lineCount: count + 2, maxLineUTF16: 9, interiorEmptyLineCount: count)
+            for category in [UIContentSizeCategory.accessibilityExtraLarge, .accessibilityExtraExtraLarge, ax5] {
+                let gated = count > 0 && category != .accessibilityExtraLarge
+                #expect(TextKit2Scope.codeEmptyLinesKeepRenderer(shape, sizeCategory: category, emptyLinesMatchText: false) == !gated, "\(count) \(category.rawValue)")
+                #expect(TextKit2Scope.codeEmptyLinesKeepRenderer(shape, sizeCategory: category, emptyLinesMatchText: true), "\(count) \(category.rawValue)")
+            }
+        }
+
+        // Not one prepared run: no shape to read, so it fails closed (in the
+        // gate the canvas has already answered for such a string).
+        for matchText in [false, true] {
+            #expect(!TextKit2Scope.codeEmptyLinesKeepRenderer(TK2CodeLogic.stamped("let a = 1", shape: nil), sizeCategory: .large, emptyLinesMatchText: matchText))
+            #expect(!TextKit2Scope.codeEmptyLinesKeepRenderer(AttributedString(), sizeCategory: .large, emptyLinesMatchText: matchText))
+            #expect(Self.gate(TK2CodeLogic.stamped("let a = 1", shape: nil), ax5, emptyLinesMatchText: matchText) == .canvas)
+        }
+    }
+
+    @Test("hosted: a Text Size change moves code with an interior empty line off the row above AX3 before iOS 26, and back; from iOS 26 it stays")
+    func hostedEmptyLinesCrossing() async throws {
+        let gatedOnThisOS = !TextKit2Scope.codeEmptyLinesMatchText
+        let code = TK2CodeLogic.stamped("let a = 1\n\nlet b = 2")
+        let hosted = TK2CodeLogic.Hosted(TK2CodeLogic.codeView(code, size: .accessibility3))
+        defer { hosted.close() }
+        try await hosted.settle()
+        #expect(hosted.codeRows.count == 1, "at AX3 a row draws it on every OS")
+        for size in [DynamicTypeSize.accessibility4, .accessibility5] {
+            for legibility in [LegibilityWeight?.none, .bold] {
+                hosted.show(TK2CodeLogic.codeView(code, size: size, legibility: legibility))
+                try await hosted.settle()
+                let label = "\(size) \(String(describing: legibility))"
+                #expect(hosted.codeRows.count == (gatedOnThisOS ? 0 : 1), "\(label): \(hosted.codeRows.count) code rows")
+                #expect(hosted.scrollViews.count == 1, "\(label): the code block is still there")
+            }
+        }
+        hosted.show(TK2CodeLogic.codeView(code, size: .accessibility3))
+        try await hosted.settle()
+        #expect(hosted.codeRows.count == 1, "back at AX3 the row returns")
+
+        // The public measurement counts the same: `0.0` has an interior
+        // empty line, `0.1` an empty first line, `0.2` a trailing line feed.
+        let data = try TK2CodeLogic.document([
+            TK2CodeLogic.code("let a = 1\n\nlet b = 2"),
+            TK2CodeLogic.code("\nlet a = 1\nlet b = 2"),
+            TK2CodeLogic.code("let a = 1\nlet b = 2\n"),
+        ])
+        let blocks = try await TK2CodeLogic.prepared(data)
+        for size in [DynamicTypeSize.large, .accessibility3, .accessibility4, .accessibility5] {
+            let admission = ADFTextRenderer.textKit2CodeAdmission(
+                of: blocks, dynamicTypeSize: size, legibilityWeight: nil, displayScale: 3, layoutDirection: .leftToRight
+            )
+            let gated = gatedOnThisOS && size > .accessibility3 ? 1 : 0
+            #expect(admission.admittedCodeRoots == 3 - gated && admission.gatedCodeRoots == gated,
+                    "\(size): admitted \(admission.admittedCodeRoots), gated \(admission.gatedCodeRoots)")
+        }
     }
 
     @Test("a Text Size change moves a block across the canvas limit", arguments: [CGFloat(2), 3])
