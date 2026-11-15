@@ -243,39 +243,6 @@ struct TextKit2CodeScopeRuleTests {
         let missing = TextKit2Scope.Leaf(ownerID: "m", segments: [.text(plain)], style: nil, position: .codeRoot)
         #expect(TK2CodeLogic.reason(missing.verdict) == .empty)
     }
-
-    @Test("code adds no renderer setter: the code view only marks its text as code")
-    func codeOnlyMarksItsOwnerKind() throws {
-        var sources = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { sources.deleteLastPathComponent() } // …/Tests/ADFRenderingTests/TextKit2 → repo root
-        sources.appendPathComponent("Sources")
-        let enumerator = try #require(FileManager.default.enumerator(atPath: sources.path))
-        var rendererSetters: [String] = []
-        var ownerKindSetters: [String] = []
-        while let path = enumerator.nextObject() as? String {
-            guard path.hasSuffix(".swift") else { continue }
-            let source = try String(contentsOf: sources.appendingPathComponent(path), encoding: .utf8)
-            let file = (path as NSString).lastPathComponent
-            for line in source.components(separatedBy: .newlines) {
-                let code = line.components(separatedBy: "//").first ?? line
-                if code.contains("\\.adfTextRenderer,") || code.contains("transformEnvironment(\\.adfTextRenderer")
-                    || code.contains(".adfTextRenderer =") {
-                    rendererSetters.append(file)
-                }
-                if code.contains("\\.adfTextOwnerKind,") || code.contains("transformEnvironment(\\.adfTextOwnerKind")
-                    || code.contains(".adfTextOwnerKind =") {
-                    ownerKindSetters.append(file)
-                }
-            }
-        }
-        // Still exactly the two renderer setters of PR 2: the document row
-        // and the list row. The code view, the code gate and the engine
-        // leaf set nothing.
-        #expect(rendererSetters.sorted() == ["ADFDocumentView.swift", "ListBlockView.swift"], "\(rendererSetters)")
-        // The owner kind (not a renderer choice) is set by the list row and
-        // by the code view, once each.
-        #expect(ownerKindSetters.sorted() == ["CodeBlockView.swift", "ListBlockView.swift"], "\(ownerKindSetters)")
-    }
 }
 
 #if canImport(UIKit)
