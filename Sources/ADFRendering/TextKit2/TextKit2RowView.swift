@@ -109,7 +109,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = false
-        backgroundColor = .clear
+        // Never animated: the lazy stack builds rows off-window inside a
+        // rotation's animation block, and an animation on such a throwaway
+        // row can leave XCTest's animation count stuck above zero.
+        UIView.performWithoutAnimation { backgroundColor = .clear }
         clipsToBounds = false
         contentStorage.addTextLayoutManager(layoutManager)
         textContainer.lineFragmentPadding = 0
