@@ -23,8 +23,9 @@ struct TK2CodeCoveragePin: Sendable {
 /// The pins of one of PR 3's generated code fixtures, counted from its JSON
 /// by a standalone script outside the project's code (Python, `json.load`;
 /// the shape, content verdict and canvas bound re-derived from their
-/// documented rules, the bound at SF Mono's font-file metrics), not by the
-/// coverage walk.
+/// documented rules, the bound at advance 10.5088 pt, SF Mono's font-file
+/// value, and line pitch 22.0 pt, measured at Large on iOS 26.3), not by
+/// the coverage walk. The fixtures are generated at the same pitch.
 struct TK2CodeNewFixturePins {
     /// Top-level nodes (each prepares to one top-level block).
     var blocks: Int
@@ -262,11 +263,11 @@ struct TextKit2CodeCoverageTests {
             eligible: 600,            // eligibleCodeRoots: printable ASCII and LF, no trailing line feed
             eligibleBeforeIOS26: 600, // the same before iOS 26
             admittedAt3x: 582,        // codeAdmitted at Large on 3x: the 18 blocks kept over the budget are gated
-            // codeAdmitted at Large on 2x: CD-005, CD-374, CD-534 and CD-271
-            // are gated. CD-271 (21 lines x 214 columns, 16.10 MiB at the
-            // font-file metrics) is the one block inside the generator's 3 %
-            // metric band. If a run admits it (597), the measured metrics are
-            // below the font file's: re-pin from the run, not from this count.
+            // codeAdmitted at Large on 2x: CD-005, CD-374, CD-497 and CD-527
+            // are gated. CD-340 (19 lines x 204 columns, 15.19 MiB at the
+            // measured metrics, admitted) is the one block inside the
+            // generator's 3 % metric band. If a run gates it (595), the
+            // measured metrics moved: re-pin from the run, not from this count.
             admittedAt2x: 596,
             nestedCode: 0             // no nested code
         ))
@@ -275,6 +276,8 @@ struct TextKit2CodeCoverageTests {
     @Test("code-tall: code pins")
     func codeTallPins() async throws {
         // Counted from the JSON; each agrees with fixture-notes section 7.
+        // CT-NEAR and CT-SEQ-1 to CT-SEQ-8 are sized just under the budget
+        // at the measured 22.0 pt pitch (none inside the 3 % band).
         try await Self.check("code-tall", TK2CodeNewFixturePins(
             blocks: 12,              // top-level nodes: 11 code blocks and the CT-SEQ heading
             codeBlocks: 11,          // CT-TALL, CT-NEAR, CT-END, CT-SEQ-1 to CT-SEQ-8
