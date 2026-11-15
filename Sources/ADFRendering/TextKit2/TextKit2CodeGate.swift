@@ -111,7 +111,9 @@ extension TextKit2Scope {
     /// 1.333 pt taller than `Text` with one interior empty line and
     /// 3.667 pt with three, 1.8–2.7 % of pixels apart; an empty first line,
     /// one trailing line feed and every size through AX3 matched exactly,
-    /// as iOS 26.3 does at AX5. AX4 is not measured and stays with AX5.
+    /// as iOS 26.3 does at AX5. At AX4 the row also differs: one interior
+    /// empty line puts the last ink row 1 px lower (0.7 % of pixels), three
+    /// make it 0.333 pt taller.
     static func codeEmptyLinesKeepRenderer(
         _ shape: ADFCodeShape, sizeCategory: UIContentSizeCategory,
         emptyLinesMatchText: Bool = codeEmptyLinesMatchText
