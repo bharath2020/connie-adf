@@ -990,9 +990,14 @@ struct TextKit2CodeMeasureFirstTests {
         let capBytes = TextKit2Scope.maximumCodeCanvasBytes
         let capDimension = TextKit2Scope.maximumCodeCanvasDimension
         let tall = axis == "tall"
+        /// The tall rungs' width. Narrow, so the height cap is the one they
+        /// reach and the 25 % rung exists: 100 columns alone are 39 % of the
+        /// width cap on 3x (3,156 px) and 26 % on 2x, which left no rung
+        /// under 25 % (run on 26.3, 3x: rungs 0, 18, 29).
+        let tallColumns = 12
 
         func estimate(_ count: Int) -> TextKit2Scope.CodeCanvasBound? {
-            let shape = tall ? ADFCodeShape(lineCount: count, maxLineUTF16: 100) : ADFCodeShape(lineCount: 2, maxLineUTF16: count)
+            let shape = tall ? ADFCodeShape(lineCount: count, maxLineUTF16: tallColumns) : ADFCodeShape(lineCount: 2, maxLineUTF16: count)
             return TextKit2Scope.codeCanvasEstimate(shape, advance: metrics.advance, lineHeight: metrics.lineHeight, displayScale: scale)
         }
         /// The share of the admission bound used: over 1 is over a cap.
@@ -1004,7 +1009,7 @@ struct TextKit2CodeMeasureFirstTests {
         }
         func text(_ count: Int) -> String {
             let lines = tall ? count : 2
-            let columns = tall ? 100 : count
+            let columns = tall ? tallColumns : count
             let digits = String(repeating: "0123456789", count: columns / 10 + 1)
             let line = String(digits.prefix(columns - 1)) + "#"
             return Array(repeating: line, count: lines).joined(separator: "\n")
@@ -1046,7 +1051,7 @@ struct TextKit2CodeMeasureFirstTests {
             }
             let bound = try #require(estimate(count))
             let lines = tall ? count : 2
-            let columns = tall ? 100 : count
+            let columns = tall ? tallColumns : count
             let used = String(format: "%.3f", share(bound))
             let isAdmitted = gate == nil
             TK2CodeParity.emit("CODE_E3", [
@@ -1124,7 +1129,8 @@ struct TextKit2CodeMeasureFirstTests {
     ///
     /// The TextKit 2 row's own exposure is always asserted. SwiftUI builds
     /// its accessibility tree for an assistive client; in a unit-test host
-    /// with none it may expose nothing, and then the two trees cannot be
+    /// with none it may expose nothing, or the badge and Copy without the
+    /// code text in its scroll view, and then the two trees cannot be
     /// compared here: that is printed (`CODE_E5 observable=false`) and
     /// recorded as a known issue, and the UI-test half (VoiceOver on an
     /// iOS 27 simulator) owns the comparison.
@@ -1152,7 +1158,13 @@ struct TextKit2CodeMeasureFirstTests {
         }
         let copyOff = trees[0].contains { $0.label == "Copy code" }
         let copyOn = trees[1].contains { $0.label == "Copy code" }
-        let observable = copyOff && copyOn
+        // The SwiftUI code text sits in SwiftUI's horizontal scroll view with
+        // no UIView of its own: without an assistive client the walk can
+        // list the badge and Copy and still miss it (26.3, 3x), while the
+        // row is a real subview and is always found. The trees compare only
+        // when the SwiftUI arm lists the code too.
+        let codeOff = trees[0].contains { $0.label == text }
+        let observable = copyOff && copyOn && codeOff
         print("CODE_E5 observable=\(observable) os=\(TK2Parity.osVersion)")
         if observable {
             #expect(trees[0] == trees[1], "swiftUI=\(trees[0]) textKit2=\(trees[1])")
@@ -1167,8 +1179,8 @@ struct TextKit2CodeMeasureFirstTests {
                 }
             }
         } else {
-            withKnownIssue("SwiftUI exposes no accessibility tree to a unit-test host without an assistive client") {
-                Issue.record("E5 hosted half not observable: swiftUI=\(trees[0].count) elements, textKit2=\(trees[1].count)")
+            withKnownIssue("SwiftUI exposes no accessibility element for its scrolled code text to a unit-test host without an assistive client") {
+                Issue.record("E5 hosted half not observable: swiftUI=\(trees[0]) textKit2=\(trees[1])")
             }
         }
     }
@@ -1205,8 +1217,25 @@ struct TextKit2CodeAdapterTests {
         let sameNatural = abs(natural[0].width - natural[1].width) <= tolerance && abs(natural[0].height - natural[1].height) <= tolerance
         #expect(sameNatural, "natural content swiftUI=\(natural[0]) textKit2=\(natural[1])")
 
+        // The block's own minimum width, the SwiftUI arm's viewport in a
+        // one-pixel frame: the header (badge, Copy, padding) does not shrink
+        // below it, so SwiftUI lets the block overflow a narrower frame (26.3,
+        // 3x: 54.667 pt in a 44 pt frame, on both arms). The viewport obeys
+        // the frame down to that width; below it, it must equal SwiftUI's.
+        let minimumWidth: CGFloat
+        do {
+            let view = TK2Parity.hostedCode(block, arm: .swiftUI, env: env).frame(width: pixel, alignment: .topLeading)
+            let host = TK2Parity.Host(view, width: 400, height: 600)
+            defer { host.close() }
+            try await host.settle()
+            let scroll = try #require(TK2Parity.scrollViews(in: host.view).first, "minimum width: no scroll view")
+            minimumWidth = scroll.convert(scroll.bounds, to: nil).width
+        }
+        #expect(minimumWidth < 120.5, "minimum width \(minimumWidth) pt: no frame below 200 pt is narrower than the content")
+
         let widths: [CGFloat] = [320, 200, 120.5, 44, 8, 1, pixel]
         for width in widths {
+            let limit = max(width, minimumWidth)
             var viewports: [CGRect] = []
             for (index, arm) in arms.enumerated() {
                 let label = "\(arm) frame=\(width)"
@@ -1219,9 +1248,10 @@ struct TextKit2CodeAdapterTests {
                 viewports.append(viewport)
                 let content = scroll.contentSize
 
-                // The viewport is the frame's; the content is the code's.
-                #expect(viewport.width <= width + pixel + tolerance, "\(label): viewport \(viewport.width) pt wide")
-                #expect(viewport.minX >= -tolerance && viewport.maxX <= width + pixel + tolerance, "\(label): viewport \(viewport)")
+                // The viewport is the frame's (down to the block's minimum
+                // width); the content is the code's.
+                #expect(viewport.width <= limit + pixel + tolerance, "\(label): viewport \(viewport.width) pt wide, limit \(limit)")
+                #expect(viewport.minX >= -tolerance && viewport.maxX <= limit + pixel + tolerance, "\(label): viewport \(viewport), limit \(limit)")
                 let sameContent = abs(content.width - natural[index].width) <= tolerance && abs(content.height - natural[index].height) <= tolerance
                 #expect(sameContent, "\(label): content \(content), natural \(natural[index])")
                 let row = TextKit2FallbackTests.rows(in: host.view).first
