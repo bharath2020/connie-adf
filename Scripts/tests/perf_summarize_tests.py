@@ -970,7 +970,10 @@ check_that("pr3 clean: the report has per-fixture B and C tables, the code line,
            and "Code blocks (top-level, static potential): eligible 552, SwiftUI fallback 48 (8.0 %" in md3
            and "Work counters (diagnostics, not gated; since launch at the end of the trial): layouts " in md3
            and "## Known debt (annotation only)" in md3 and "## Paired predecessor supplement, D vs C — COMPLETE" in md3
-           and md3.count("**OVERALL: PASS**") == 1 and md3.rstrip().endswith("**OVERALL: PASS**"))
+           and md3.count("**OVERALL: PASS**") == 1
+           and md3.rstrip().splitlines()[-1] == "**OVERALL: PASS** (D/C supplement: NO-ADDED-REGRESSION (every "
+                                                "fixture and metric))"
+           and pass3.get("predecessor_outcome", "") == "D/C supplement: NO-ADDED-REGRESSION (every fixture and metric)")
 check("pr2 with PR 2-era rows (no code columns) -> PASS (pr2 unchanged)",
       summarize(write("pr2-pr2rows", P2, grid(3, ARMS, PR2, mutate=lambda r: r.update(
           {k: "" for k in CODE_KEYS + ("tk2_conversions",)})))), 0, "PASS", lacks='"known_debt": {')
@@ -1128,7 +1131,8 @@ check_that("pr3 debt run: 4 failing rows, all 4 labelled, none unlabelled, label
 mdd = open(os.path.join(work, "pr3-debt", "summary.md")).read()
 check_that("pr3 debt run: the report labels the rows, keeps one unqualified verdict and cites the source",
            mdd.startswith("# perf gate (pr3:") and "— **FAIL**" in mdd.splitlines()[0]
-           and mdd.count("OVERALL") == 1 and mdd.rstrip().endswith("**OVERALL: FAIL**")
+           and mdd.count("OVERALL") == 1
+           and mdd.rstrip().splitlines()[-1].startswith("**OVERALL: FAIL** (D/C supplement: ")
            and "**FAIL** (known debt) |" in mdd and "— known debt (still a failure)" in mdd
            and "pr2-a76736f-quiet2" in mdd and "issues/10" in mdd
            and "labelled as known debt: 4; not labelled: 0." in mdd and "excluding" not in mdd)
@@ -1296,9 +1300,14 @@ check_that("pr3 D/C +9..+12 frames: ADDED-REGRESSION on dropped frames, dropped 
            and set(pred_results(got, "kitchen-sink").values()) == {"NO-ADDED-REGRESSION"}
            and got[1]["predecessor"]["status"] == "COMPLETE", str(pred_results(got)))
 mda = open(os.path.join(work, "pr3-pred-added", "summary.md")).read()
-check_that("pr3 D/C ADDED-REGRESSION: reported in its own labelled section, the verdict line unchanged",
-           "| **ADDED-REGRESSION** |" in mda and "Separate from the A/B/C verdict, which it never changes" in mda
-           and mda.rstrip().endswith("**OVERALL: PASS**") and "Structural diagnostics" in mda)
+check_that("pr3 D/C ADDED-REGRESSION: reported in its own labelled section; the verdict stays PASS (exit 0) and the "
+           "OVERALL line names the added regression (Fable review R4)",
+           "| **ADDED-REGRESSION** |" in mda and "Separate from the A/B/C verdict: its results never change it" in mda
+           and mda.rstrip().splitlines()[-1] == "**OVERALL: PASS** (D/C supplement: ADDED-REGRESSION list-dense "
+                                                "(dropped_frames, dropped_rate_pct, hitch_ms_per_s))"
+           and got[1].get("predecessor_outcome", "") == "D/C supplement: ADDED-REGRESSION list-dense (dropped_frames, "
+                                                "dropped_rate_pct, hitch_ms_per_s)"
+           and "Structural diagnostics" in mda)
 got = pred_case("pr3-pred-straddle", pred_rows=pred_grid(mutate=pred_delta([-3, 0, 1, 4, 6])))
 check("pr3 D/C on list-dense, C − D = −3, 0, +1, +4, +6 frames -> PASS; INCONCLUSIVE (never 'unchanged')", got, 0,
       "PASS", contains="the bounds straddle the sensitivity", lacks="unchanged")
@@ -1306,6 +1315,11 @@ check_that("pr3 D/C straddling +2 frames: INCONCLUSIVE although the median diffe
            pred_results(got)["dropped_frames"] == "INCONCLUSIVE"
            and got[1]["predecessor"]["fixtures"]["list-dense"]["rows"]["dropped_frames"]["median_delta"] == 1,
            str(pred_results(got)))
+check_that("pr3 D/C INCONCLUSIVE: the verdict stays PASS and the OVERALL line names the unresolved rows (Fable R4)",
+           got[1].get("predecessor_outcome", "").startswith("D/C supplement: INCONCLUSIVE list-dense (dropped_frames")
+           and "kitchen-sink" not in got[1].get("predecessor_outcome", "")
+           and open(os.path.join(work, "pr3-pred-straddle", "summary.md")).read().rstrip().splitlines()[-1]
+           == f"**OVERALL: PASS** ({got[1].get('predecessor_outcome', '')})", got[1].get("predecessor_outcome", ""))
 got = pred_case("pr3-pred-one-outlier", pred_rows=pred_grid(mutate=pred_delta([0, 0, 0, 0, 9])))
 check_that("pr3 D/C four pairs at 0 and one at +9 frames -> INCONCLUSIVE (one pair beyond the sensitivity)",
            pred_results(got)["dropped_frames"] == "INCONCLUSIVE", str(pred_results(got)))
@@ -1336,6 +1350,12 @@ check_that("pr3 debt + supplement: D and C both breach the ceilings in every pai
 check("pr3 without the predecessor block (no --app-d) -> INCOMPLETE (missing reference D)",
       pred_case("pr3-pred-missing", p=plan("pr3", 3, ARMS, pred=False)), 5, "INCOMPLETE",
       contains="paired predecessor supplement MISSING")
+check_that("  ... and the OVERALL line names the missing supplement",
+           open(os.path.join(work, "pr3-pred-missing", "summary.md")).read().rstrip().splitlines()[-1]
+           == "**OVERALL: INCOMPLETE** (D/C supplement: MISSING (no result))")
+check_that("a design without a supplement (pr2) keeps a bare OVERALL line",
+           open(os.path.join(work, "pr2-pr2rows", "summary.md")).read().rstrip().splitlines()[-1]
+           == "**OVERALL: PASS**")
 check("pr3 debt FAIL without the predecessor block -> FAIL (a missing supplement never softens or hides a FAIL)",
       pred_case("pr3-pred-missing-fail", p=plan("pr3", 3, ARMS, pred=False), rows=grid(3, ARMS, PR3, mutate=debt)),
       1, "FAIL", contains="paired predecessor supplement MISSING")
@@ -1369,7 +1389,69 @@ check("pr3 D/C warm-up file missing -> INCOMPLETE", pred_case("pr3-pred-nowarmcs
 check("pr3 D/C warm-up of one arm missing -> INCOMPLETE",
       pred_case("pr3-pred-nowarmD", warm_rows=[r for r in pred_warm() if not (r["arm"] == "D"
                                                                              and r["fixture"] == "list-dense")]),
-      5, "INCOMPLETE", contains="warm-up trial missing (0 of 1 ran)")
+      5, "INCOMPLETE", contains="warm-up trial missing (0 of 1 ran successfully)")
+
+
+# A warm-up counts only when it ran successfully (Astra review R3): a row
+# with the right fixture and arm is not enough.
+def warm_with(m) -> list[dict]:
+    rows = pred_warm()
+    for r in rows:
+        m(r)
+    return rows
+
+
+NO_READY = {"shell_status": "no_ready", "status": "no_ready", "launch_exit": "", "launch_to_ready_ms": "",
+            "ready_fixture": "", "first_chunk_ms": "", "blocks": "", "frames": "", "dropped_frames": "",
+            "dropped_rate_pct": "", "hitch_ms_per_s": "", "start_row": "", "end_row": "", "scroll_ms": "",
+            "completed": "", "renderer": "", "renderer_ready": ""}
+for slug, case, arm, change, needle in (
+        ("no-ready", "times out before READY", "D", NO_READY, "warm-up not successful: trial status no_ready"),
+        ("deadline", "exceeds the trial deadline after READY", "C", {"shell_status": "timeout", "status": "timeout"},
+         "warm-up not successful: trial status timeout"),
+        ("installed-sha", "installed another executable", "D", {"installed_sha256": "c" * 64},
+         "warm-up not successful: installed sha256 " + "c" * 64),
+        ("app-sha", "ran another executable", "C", {"app_sha256": "c" * 64, "installed_sha256": "c" * 64},
+         "warm-up not successful: app sha256 " + "c" * 64),
+        ("fixture-sha", "installed other fixture bytes", "D", {"installed_fixture_sha256": "f" * 64},
+         "warm-up not successful: installed list-dense.json sha256"),
+        ("short", "stopped short of the last block (truncated traversal)", "D", {"end_row": "500"},
+         "warm-up not successful: scroll ended at row 500, not the last block 639"),
+        ("incomplete", "did not complete its scroll", "C", {"status": "incomplete", "completed": "0"},
+         "warm-up not successful: trial status incomplete"),
+        ("swiftui", "ran on SwiftUI (no renderer proof)", "D", {"renderer": "swiftui", "renderer_ready": "swiftui"},
+         "warm-up not successful: RENDERER_STATS renderer=swiftui"),
+        ("nolist", "has no live list rows (no list proof)", "C", {"tk2_list_live": "0", "tk2_list_live_ready": "0"},
+         "warm-up not successful: TextKit 2 arm with tk2_list_live_ready=0")):
+    got = pred_case(f"pr3-pred-warm-{slug}",
+                    warm_rows=warm_with(mut(arm=arm, fixture="list-dense", set=change)))
+    check(f"pr3 D/C warm-up of arm {arm} on list-dense {case} -> INCOMPLETE (it does not count)", got, 5,
+          "INCOMPLETE", contains=needle)
+    check_that(f"  ... list-dense is INVALID with its warm-up missing, kitchen-sink keeps its result ({case})",
+               got[1]["predecessor"]["fixtures"]["list-dense"]["status"] == "INVALID"
+               and got[1]["predecessor"]["fixtures"]["kitchen-sink"]["status"] == "COMPLETE"
+               and any(p["message"] == "warm-up trial missing (0 of 1 ran successfully)" and p["arm"] == arm
+                       for p in got[1]["predecessor"]["problems"]))
+check("pr3 a D/C warm-up row of a fixture outside the block -> INCOMPLETE (a malformed warm-up file)",
+      pred_case("pr3-pred-warm-undeclared", warm_rows=pred_warm() + [r for r in pred_warm(fixtures=["code-dense"])
+                                                                      if r["arm"] == "C"]),
+      5, "INCOMPLETE", contains="warm-up row for an undeclared fixture/arm")
+check("pr3 a counted row in the warm-up file (run 1) -> INCOMPLETE (a warm-up is run 0)",
+      pred_case("pr3-pred-warm-run1", warm_rows=warm_with(mut(arm="D", fixture="kitchen-sink", set={"run": "1"}))),
+      5, "INCOMPLETE", contains="warm-up not successful: run 1 (a warm-up is run 0)")
+check("pr3 a failed D warm-up beside a successful one (2 rows, 1 declared) -> INCOMPLETE (never outvoted)",
+      pred_case("pr3-pred-warm-outvoted", warm_rows=pred_warm() + warm_with(mut(arm="D", fixture="list-dense",
+                                                                                set=NO_READY))[:1]),
+      5, "INCOMPLETE", contains="warm-up not successful: trial status no_ready")
+got = pred_case("pr3-pred-warm-measures", warm_rows=warm_with(mut(arm="C", set={
+    "dropped_frames": "4000", "hitch_ms_per_s": "900.0", "frames": "8000"})))
+check("pr3 a successful warm-up with wild measurements -> PASS (a warm-up is never measured)", got, 0, "PASS")
+check_that("  ... the warm-ups stay out of the statistics: 5 pairs per arm, NO-ADDED-REGRESSION, C's dropped-frame "
+           "maximum is a counted trial's",
+           got[1]["predecessor"]["status"] == "COMPLETE"
+           and set(pred_results(got).values()) == {"NO-ADDED-REGRESSION"}
+           and got[1]["predecessor"]["fixtures"]["list-dense"]["arms"]["C"]["dropped_frames"]["n"] == 5
+           and got[1]["predecessor"]["fixtures"]["list-dense"]["arms"]["C"]["dropped_frames"]["max"] <= 1)
 check("pr3 block without list-dense (kitchen-sink only) -> INCOMPLETE",
       pred_case("pr3-pred-1fx", p=plan("pr3", 3, ARMS, pred=pred_block(fixtures=["kitchen-sink"]))), 5, "INCOMPLETE",
       contains="['list-dense'] declared by design pr3 are missing")
@@ -1473,13 +1555,73 @@ check("pr3 D's scroll stops short in one pair -> INCOMPLETE (supplement INVALID)
       pred_case("pr3-pred-d-short", pred_rows=pred_grid(mutate=mut(arm="D", run="3", fixture="list-dense",
                                                                    set={"end_row": "500"}))), 5, "INCOMPLETE",
       contains="scroll ended at row 500")
-got = pred_case("pr3-pred-c-crash", pred_rows=pred_grid(mutate=mut(arm="C", run="1", fixture="kitchen-sink", set={
-    "status": "crashed", "launch_exit": "1", "frames": ""})))
-check("pr3 C crashes in a supplement trial -> INCOMPLETE (reported there; the gate's own trials decide FAIL)",
-      got, 5, "INCOMPLETE", contains="candidate trial status crashed")
-check_that("pr3 C crash in the supplement: it is not among the A/B/C problems",
-           got[1]["problems"] == [] and got[1]["predecessor"]["fixtures"]["kitchen-sink"]["status"] == "INVALID"
-           and got[1]["predecessor"]["fixtures"]["list-dense"]["status"] == "COMPLETE")
+# The gated binary C failing a counted supplement trial is the gate's own
+# candidate failure (Fable review R2): FAIL, and the ledger refuses a rerun
+# of the same binaries. D's failures, warm-ups and rows that cannot be
+# attributed to C stay the supplement's (INVALID -> INCOMPLETE).
+CRASHED = {"status": "crashed", "launch_exit": "1", "frames": ""}
+pred_ledger = os.path.join(work, "pred-ledger-case.jsonl")
+if os.path.exists(pred_ledger):
+    os.remove(pred_ledger)
+got = summarize(write("pr3-pred-c-crash", P3, grid(3, ARMS, PR3), pred_rows=pred_grid(
+    mutate=mut(arm="C", run="1", fixture="kitchen-sink", set=CRASHED))), ledger=pred_ledger)
+check("pr3 C crashes in a supplement trial -> FAIL (a crash of the gated binary, PRECEDENCE 1)",
+      got, 1, "FAIL", contains="D/C supplement trial: candidate trial status crashed")
+check_that("pr3 C crash in the supplement: a crash among the gate's problems, the supplement INVALID on that fixture "
+           "only, and the OVERALL line says so",
+           [(p["kind"], p["fixture"], p["arm"], p["run"]) for p in got[1]["problems"]]
+           == [("crash", "kitchen-sink", "C", "1")]
+           and got[1]["predecessor"]["fixtures"]["kitchen-sink"]["status"] == "INVALID"
+           and got[1]["predecessor"]["fixtures"]["list-dense"]["status"] == "COMPLETE"
+           and got[1].get("predecessor_outcome", "") == "D/C supplement: INVALID (no result)"
+           and open(os.path.join(work, "pr3-pred-c-crash", "summary.md")).read().rstrip().splitlines()[-1]
+           == "**OVERALL: FAIL** (D/C supplement: INVALID (no result))")
+check("pr3 the same binaries rerun after that FAIL, now clean -> REFUSED (the crash reached the ledger)",
+      summarize(write("pr3-pred-c-crash-rerun", P3, grid(3, ARMS, PR3)), ledger=pred_ledger), 2, "REFUSED",
+      contains="a FAIL is never rerun to green")
+for slug, case, change, needle in (
+        ("timeout", "times out", {"shell_status": "timeout", "status": "timeout"}, "candidate trial status timeout"),
+        ("no-ready", "gets no READY", {"shell_status": "no_ready", "status": "no_ready", "ready_fixture": "",
+                                       "blocks": "", "frames": ""}, "candidate trial status no_ready"),
+        ("incomplete", "does not complete its scroll", {"status": "incomplete", "completed": "0"},
+         "candidate trial status incomplete"),
+        ("short", "stops short of the last block", {"end_row": "500"}, "scroll ended at row 500")):
+    got = pred_case(f"pr3-pred-c-{slug}", pred_rows=pred_grid(mutate=mut(arm="C", run="3", fixture="list-dense",
+                                                                        set=change)))
+    check(f"pr3 C {case} in a supplement pair -> FAIL (a candidate failure of the gate)", got, 1, "FAIL",
+          contains="D/C supplement trial: " + needle)
+    check_that(f"  ... one candidate_failure among the gate's problems ({case})",
+               [(p["kind"], p["fixture"], p["arm"], p["run"]) for p in got[1]["problems"]]
+               == [("candidate_failure", "list-dense", "C", "3")])
+for slug, case, change, needle in (
+        ("crash", "crashes", CRASHED, "baseline trial status crashed"),
+        ("timeout", "times out", {"shell_status": "timeout", "status": "timeout"}, "baseline trial status timeout")):
+    got = pred_case(f"pr3-pred-d-{slug}", pred_rows=pred_grid(mutate=mut(arm="D", run="2", fixture="list-dense",
+                                                                        set=change)))
+    check(f"pr3 D {case} in a supplement pair -> INCOMPLETE (the reference's failure stays the supplement's)", got, 5,
+          "INCOMPLETE", contains=needle)
+    check_that(f"  ... nothing among the gate's problems (D {case})", got[1]["problems"] == [])
+got = pred_case("pr3-pred-c-crash-other-binary", pred_rows=pred_grid(mutate=mut(
+    arm="C", run="2", fixture="list-dense", set={**CRASHED, "installed_sha256": "c" * 64})))
+check("pr3 a supplement C row that crashed with another binary installed -> INCOMPLETE (not attributable to C)",
+      got, 5, "INCOMPLETE", contains="installed sha256 " + "c" * 64)
+check_that("  ... nothing among the gate's problems (a row we cannot attribute is never evidence)",
+           got[1]["problems"] == [])
+got = pred_case("pr3-pred-c-warm-crash", warm_rows=warm_with(mut(arm="C", fixture="list-dense", set=CRASHED)))
+check("pr3 C crashes in a supplement warm-up -> INCOMPLETE (a warm-up is never counted, as in the gate)", got, 5,
+      "INCOMPLETE", contains="warm-up not successful: trial status crashed")
+got = pred_case("pr3-pred-c-crash-debt", rows=grid(3, ARMS, PR3, mutate=debt),
+                pred_rows=pred_grid(mutate=mut(arm="C", run="4", fixture="list-dense", set=CRASHED)))
+check("pr3 known-debt rows and a C crash on list-dense in the supplement -> FAIL", got, 1, "FAIL")
+check_that("  ... the crash withholds the list-dense debt labels, as a crash in the gate's own trials does",
+           [e["status"] for e in got[1]["known_debt"]["entries"] if e["fixture"] == "list-dense"]
+           and all(e["status"] == "withheld" for e in got[1]["known_debt"]["entries"] if e["fixture"] == "list-dense"))
+got = summarize(write("pr3-pilot-pred-c-crash", plan("pr3", 2, ARMS, fixtures=["kitchen-sink"], pilot=True, warmup=0,
+                                                     pred=pred_block(runs=3, warmup=0, fixtures=["kitchen-sink"])),
+                      grid(2, ARMS, ["kitchen-sink"]), warm_rows=False,
+                      pred_rows=pred_grid(3, ["kitchen-sink"], mutate=mut(arm="C", run="2", set=CRASHED))), "--pilot")
+check("pr3 pilot with a C crash in its supplement -> FAIL (a crash outranks PILOT)", got, 1, "FAIL",
+      contains="D/C supplement trial: candidate trial status crashed")
 check("pr3 D reports renderer=swiftui (TextKit 2 was not ON) -> INCOMPLETE",
       pred_case("pr3-pred-d-swiftui", pred_rows=pred_grid(mutate=mut(arm="D", set={"renderer": "swiftui",
                                                                                    "renderer_ready": "swiftui"}))),

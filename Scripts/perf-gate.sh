@@ -147,7 +147,10 @@
 #   candidate's or the reference's binary; D with another sha256 than the
 #   design pins (a pilot runs it and its supplement is INVALID); D or C
 #   lacking a predecessor fixture, or bundling different bytes. The
-#   supplement is reported in its own section and never changes the verdict.
+#   supplement is reported in its own section and named on the OVERALL line;
+#   its regression outcome never changes the verdict, but a crash, timeout,
+#   missing READY or short scroll of C in a counted supplement trial is a
+#   gate FAIL (it is the gated binary failing).
 #
 # PROCEDURE (per trial)
 #   terminate + uninstall + install the arm's .app (fresh install: no

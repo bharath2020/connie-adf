@@ -200,11 +200,24 @@ PREDECESSOR (design key predecessor; supplemental, never the verdict) — an
     conversions, draws, live rows) are structural diagnostics, never gated
     for equality. The supplement is INVALID (no result) on any problem in
     its trials or declaration: no D, a missing trial, pair or warm-up, an
+    unsuccessful warm-up (one counts only when its row shows the arm's
+    binary, fixture bytes and flags, a launch to READY with exit 0, the
+    renderer proof the arm needs and, where the arm is held to completion,
+    a scroll to the last block; its measurements are never read), an
     installed or pinned sha256 mismatch, D = C or D = A, fixture bytes that
     differ between D and C (or from the gate's), unbalanced order. Its
     results never change the A/B/C verdict; a MISSING or INVALID supplement
     makes the design reduced (INCOMPLETE instead of PASS; a FAIL, INVALID
-    or PILOT verdict stays what it is).
+    or PILOT verdict stays what it is). The OVERALL line (and the stderr
+    verdict line, and summary.json "predecessor_outcome") names the
+    supplement's outcome beside the verdict: its status when it has no
+    result, else every ADDED-REGRESSION and INCONCLUSIVE row by fixture,
+    or NO-ADDED-REGRESSION. The gated binary C failing a counted
+    supplement trial is not a result but the gate's own candidate failure
+    (PRECEDENCE 1 and 3, so FAIL, and the ledger): a crash, or a timeout,
+    no READY or incomplete scroll on a row attributable to C. D's failures,
+    warm-ups (as the gate's own) and rows that are not C's stay the
+    supplement's.
 
 HOST (firstmate policy, 2026-10-26) — quiet = 1-min load <= 4.0 and no
     non-simulator process above 100 % CPU. perf-gate.sh waits up to 20 min
@@ -215,10 +228,12 @@ HOST (firstmate policy, 2026-10-26) — quiet = 1-min load <= 4.0 and no
     the next quiet window before it counts. Nothing is ever killed.
 
 PRECEDENCE
-      1. a candidate crash on a provenance-clean row        -> FAIL
+      1. a candidate crash on a provenance-clean row (a D/C
+         supplement trial of C included)                     -> FAIL
       2. any baseline failure, validity problem or A
          ceiling breach                                      -> INVALID
-      3. a candidate timeout / no READY / incomplete scroll  -> FAIL
+      3. a candidate timeout / no READY / incomplete scroll
+         (a D/C supplement trial of C included)              -> FAIL
       4. (full) calibration INCONCLUSIVE                      -> INCONCLUSIVE
       5. a rule or ceiling FAIL                               -> FAIL
       6. plan.pilot                                           -> PILOT
@@ -237,8 +252,9 @@ RERUN LEDGER — every verdict is appended to perf-ledger.jsonl in the run
     another (pr2 includes pr45; pr3 includes pr45 and pr2) is also REFUSED
     after a FAIL of the included design for the same candidate binaries: it
     re-measures those fixtures, so a PASS would rerun that FAIL to green.
-    Known-debt annotations and the predecessor supplement never enter the
-    ledger: a FAIL made only of annotated rows is a FAIL there too.
+    Known-debt annotations and the predecessor supplement's results never
+    enter the ledger: a FAIL made only of annotated rows is a FAIL there
+    too, and so is a FAIL made by C failing a supplement trial.
 
 LABELS — launch_to_ready_ms is "preparation readiness" (READY: model
     prepared), not first visible content; rss_peak_kb is a sampled peak;
@@ -673,26 +689,10 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
         role = spec.get("role", "baseline")
 
         # Provenance first: a row we cannot attribute is never evidence.
-        provenance_ok = True
-        if row.get("app_sha256", "") != spec.get("sha256"):
-            problems.add("invalid", f"app sha256 {row.get('app_sha256') or '∅'} != plan {spec.get('sha256')}", **where)
-            provenance_ok = False
-        if row.get("installed_sha256", "") != spec.get("sha256"):
-            problems.add("invalid", f"installed sha256 {row.get('installed_sha256') or '∅'} != plan {spec.get('sha256')}",
-                         **where)
-            provenance_ok = False
-        want_fixture = (spec.get("fixture_sha256") or {}).get(fixture)
-        if want_fixture and (row.get("installed_fixture_sha256") or "") != want_fixture:
-            problems.add("invalid", f"installed {fixture}.json sha256 {row.get('installed_fixture_sha256') or '∅'} != "
-                                    f"plan {want_fixture} (the arm's bundled fixture at preflight)", **where)
-            provenance_ok = False
-        argv = flags_in(row.get("argv", ""))
-        missing = [f for f in spec.get("required_flags", []) if f not in argv]
-        forbidden = [f for f in spec.get("forbidden_flags", []) if f in argv]
-        if missing or forbidden or "-fixture" not in argv or fixture not in argv:
-            problems.add("invalid", f"argv wrong for arm (missing {missing}, forbidden {forbidden}): {row.get('argv')}",
-                         **where)
-            provenance_ok = False
+        provenance = provenance_problems(row, spec, fixture)
+        for message in provenance:
+            problems.add("invalid", message, **where)
+        provenance_ok = not provenance
         if not pilot and finite(row.get("host_load1")) is None:
             problems.add("invalid", "host 1-min load not recorded for the trial", **where)
 
@@ -791,6 +791,63 @@ def check_rows(rows: list[dict], plan: dict, problems: Problems, expected_blocks
                                  f"(> ±{TRAVERSAL_FRAMES_PCT:g} %)", fixture, arm, str(run))
                     del clean[(fixture, arm)][run]
     return clean
+
+
+def provenance_problems(row: dict, spec: dict, fixture: str) -> list[str]:
+    """Why a row cannot be attributed to its arm (empty when it can): the
+    arm's binary built and installed, the arm's bundled fixture bytes
+    installed, the arm's flags on the fixture's argv."""
+    out = []
+    if row.get("app_sha256", "") != spec.get("sha256"):
+        out.append(f"app sha256 {row.get('app_sha256') or '∅'} != plan {spec.get('sha256')}")
+    if row.get("installed_sha256", "") != spec.get("sha256"):
+        out.append(f"installed sha256 {row.get('installed_sha256') or '∅'} != plan {spec.get('sha256')}")
+    want_fixture = (spec.get("fixture_sha256") or {}).get(fixture)
+    if want_fixture and (row.get("installed_fixture_sha256") or "") != want_fixture:
+        out.append(f"installed {fixture}.json sha256 {row.get('installed_fixture_sha256') or '∅'} != "
+                   f"plan {want_fixture} (the arm's bundled fixture at preflight)")
+    argv = flags_in(row.get("argv", ""))
+    missing = [f for f in spec.get("required_flags", []) if f not in argv]
+    forbidden = [f for f in spec.get("forbidden_flags", []) if f in argv]
+    if missing or forbidden or "-fixture" not in argv or fixture not in argv:
+        out.append(f"argv wrong for arm (missing {missing}, forbidden {forbidden}): {row.get('argv')}")
+    return out
+
+
+def warmup_problems(row: dict, spec: dict, fixture: str, list_proof: bool, code_proof: bool) -> list[str]:
+    """Why one discarded warm-up does not count (empty when it ran
+    successfully): it is run 0, it is attributable to its arm (provenance),
+    it launched, reached READY on its fixture and exited 0 (status ok: no
+    timeout, no missing READY, no crash), it carries the renderer proof the
+    arm requires, and it scrolled to the last block where the arm is held
+    to completion. Its measurements are never read: a warm-up never enters
+    the statistics."""
+    out = []
+    if finite(row.get("run")) != 0:
+        out.append(f"run {row.get('run') or '∅'} (a warm-up is run 0)")
+    out += provenance_problems(row, spec, fixture)
+    status = row.get("status", "")
+    if status != "ok":
+        return out + [f"trial status {status or '∅'} (exit {row.get('launch_exit') or '∅'})"]
+    if finite(row.get("launch_exit")) != 0:
+        out.append(f"status ok but launch_exit {row.get('launch_exit') or '∅'}")
+    if row.get("ready_fixture", "") != fixture:
+        out.append(f"READY fixture {row.get('ready_fixture') or '∅'} != {fixture}")
+    blocks = finite(row.get("blocks"))
+    if blocks is None or blocks <= 0:
+        out.append("READY blocks missing or 0")
+    if spec.get("requires_completion"):
+        end_row = finite(row.get("end_row"))
+        if row.get("completed") != "1":
+            out.append(f"SCROLL_METRICS completed={row.get('completed') or '∅'} (need 1)")
+        if end_row is None:
+            out.append("SCROLL_METRICS endRow missing")
+        elif blocks and end_row != blocks - 1:
+            out.append(f"scroll ended at row {end_row:g}, not the last block {blocks - 1:g}")
+    renderer = spec.get("expected_renderer")
+    if renderer:
+        out += renderer_problems(row, renderer, list_proof, code_proof)
+    return out
 
 
 def renderer_problems(row: dict, renderer: str, list_proof: bool = False, code_proof: bool = False) -> list[str]:
@@ -1436,11 +1493,26 @@ def predecessor_supplement(plan: dict, name: str | None, design: dict | None, pi
                     warm_rows = load_csv(warm_path)
                 except (OSError, SystemExit) as error:
                     problems.add("invalid", f"cannot read the predecessor warm-ups: {error}")
-                for fixture in fixtures:
-                    for arm in (PRED_ARM, PRED_AGAINST):
-                        ran = sum(1 for r in warm_rows if r.get("fixture") == fixture and r.get("arm") == arm)
-                        if ran < warmup:
-                            problems.add("invalid", f"warm-up trial missing ({ran} of {warmup} ran)", fixture, arm)
+                # A warm-up counts only when it ran successfully; one that did
+                # not (or a row of no declared fixture and arm) makes the
+                # supplement INVALID even when enough others succeeded.
+                ran = {(f, a): 0 for f in fixtures for a in (PRED_ARM, PRED_AGAINST)}
+                specs = {PRED_ARM: d_spec, PRED_AGAINST: c_spec}
+                list_proof, code_proof = list_proof_fixtures(), code_proof_fixtures()
+                for r in warm_rows:
+                    fixture, arm = r.get("fixture", ""), r.get("arm", "")
+                    if (fixture, arm) not in ran:
+                        problems.add("invalid", "warm-up row for an undeclared fixture/arm", fixture, arm, "0")
+                        continue
+                    why = warmup_problems(r, specs[arm], fixture, fixture in list_proof, fixture in code_proof)
+                    for message in why:
+                        problems.add("invalid", f"warm-up not successful: {message}", fixture, arm, "0")
+                    if not why:
+                        ran[(fixture, arm)] += 1
+                for (fixture, arm), count in ran.items():
+                    if count < warmup:
+                        problems.add("invalid", f"warm-up trial missing ({count} of {warmup} ran successfully)",
+                                     fixture, arm)
         for row in rows:
             run = finite(row.get("run"))
             if run is None or run < 1:
@@ -1482,12 +1554,42 @@ def predecessor_supplement(plan: dict, name: str | None, design: dict | None, pi
                                          for arm, arm_rows in ((PRED_ARM, d_rows), (PRED_AGAINST, c_rows))}
                 fx["rows"][metric] = entry
         out["fixtures"][fixture] = fx
+    # The gated binary C failing a counted trial (a crash; a timeout, no
+    # READY or an incomplete scroll on a row attributable to C) is a
+    # candidate failure of the gate, not only of the supplement: gate()
+    # adds these to its own problems (PRECEDENCE 1 and 3, the ledger). D's
+    # failures and every warm-up stay here.
+    unattributable = {(p["fixture"], p["run"]) for p in problems.items
+                      if p["arm"] == PRED_AGAINST and p["kind"] == "invalid"}
+    out["candidate_failures"] = [dict(p) for p in problems.items if p["arm"] == PRED_AGAINST and (
+        p["kind"] == "crash" or (p["kind"] == "candidate_failure" and (p["fixture"], p["run"]) not in unattributable))]
     out["problems"] = problems.items
     out["runs"], out["warmup"] = runs, warmup
     out["arms"] = {PRED_ARM: {"label": d_spec.get("label", PRED_ARM), "sha256": d_sha},
                    PRED_AGAINST: {"label": c_spec.get("label", PRED_AGAINST), "sha256": c_spec.get("sha256")}}
     out["status"] = "INVALID" if problems.items else "COMPLETE"
     return out
+
+
+def predecessor_outcome(sup: dict | None) -> str:
+    """The supplement's outcome as the OVERALL line and summary.json name it
+    ("" without a supplement): its status when it has no result, else every
+    ADDED-REGRESSION and INCONCLUSIVE row by fixture. It never changes the
+    verdict; it keeps an added regression or an unresolved result beside
+    it, where a reader of the verdict line sees it."""
+    if not sup:
+        return ""
+    head = f"{sup['arm']}/{sup['against']} supplement: "
+    if sup.get("status") != "COMPLETE":
+        return head + f"{sup.get('status')} (no result)"
+    parts = []
+    for result in ("ADDED-REGRESSION", "INCONCLUSIVE"):
+        cells = [f"{fixture} ({', '.join(m for m, row in fx['rows'].items() if row['result'] == result)})"
+                 for fixture, fx in sup["fixtures"].items()
+                 if any(row["result"] == result for row in fx["rows"].values())]
+        if cells:
+            parts.append(f"{result} " + ", ".join(cells))
+    return head + ("; ".join(parts) if parts else "NO-ADDED-REGRESSION (every fixture and metric)")
 
 
 # ------------------------------------------------------------------ bounds
@@ -1886,12 +1988,10 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
             fx["comparisons"][arm] = comp
         fixtures_out[fixture] = fx
 
-    # KNOWN DEBT: labels only; stat_fail and every verdict stay as computed.
-    known_debt = None if refused_design else annotate_known_debt(design, plan, fixtures_out, cand_ceiling, problems,
-                                                                 clean, ref, runs, rule)
     # PREDECESSOR: the D vs C supplement, from its own rows and problems. A
     # declared supplement that is missing or invalid reduces the design; its
-    # results (PRED_RESULTS) change nothing.
+    # results (PRED_RESULTS) change nothing. A failure of the gated binary C
+    # in its counted trials is the gate's own candidate failure.
     supplement = None
     if design is not None and not refused_design:
         csv_arg = getattr(args, "csv", None)
@@ -1899,9 +1999,14 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
         supplement = predecessor_supplement(plan, plan.get("design"), design, pilot, run_dir,
                                             getattr(args, "predecessor_csv", None),
                                             getattr(args, "predecessor_warmup_csv", None))
+        for p in (supplement or {}).get("candidate_failures", []):
+            problems.add(p["kind"], f"D/C supplement trial: {p['message']}", p["fixture"], p["arm"], p["run"])
         if supplement is not None and supplement["status"] != "COMPLETE":
             reduced.append(f"paired predecessor supplement {supplement['status']} ({PRED_ARM} vs {PRED_AGAINST}; "
                            f"design {plan.get('design')} enforces it)")
+    # KNOWN DEBT: labels only; stat_fail and every verdict stay as computed.
+    known_debt = None if refused_design else annotate_known_debt(design, plan, fixtures_out, cand_ceiling, problems,
+                                                                 clean, ref, runs, rule)
 
     crashes = problems.of("crash")
     invalid = problems.of("invalid") + problems.of("baseline_failure")
@@ -1936,7 +2041,8 @@ def gate(rows: list[dict], plan: dict, args: argparse.Namespace, calibration: di
             "candidates": cands, "metrics": metrics, "pilot": pilot, "min_pairs": min_pairs,
             "calibration": calibration_path, "calibration_verdict": cal_verdict, "problems": problems.items,
             "fixtures": fixtures_out, "candidate_sha256": {a: arms[a].get("sha256") for a in cands},
-            "known_debt": known_debt, "predecessor": supplement}
+            "known_debt": known_debt, "predecessor": supplement,
+            "predecessor_outcome": predecessor_outcome(supplement)}
 
 
 # ------------------------------------------------------------------ ledger
@@ -2116,7 +2222,9 @@ def render_predecessor(summary: dict) -> list[str]:
         return []
     lines = [f"## Paired predecessor supplement, {sup['arm']} vs {sup['against']} — {sup['status']}"
              + (" (pilot)" if sup.get("pilot") else ""), "",
-             f"Separate from the A/B/C verdict, which it never changes; {sup['arm']} never replaces the reference "
+             "Separate from the A/B/C verdict: its results never change it (the verdict line names them), while a "
+             f"crash, timeout or incomplete scroll of the gated binary {sup['against']} in a counted trial is a "
+             f"candidate failure of the gate; {sup['arm']} never replaces the reference "
              "arm. Method, frozen in the design before any candidate timing: interleaved, balanced "
              f"{sup['arm']},{sup['against']} / {sup['against']},{sup['arm']} pairs after the warm-ups; paired "
              f"differences {sup['against']} − {sup['arm']}; sensitivity = the gate's dropped-frame scale "
@@ -2302,7 +2410,8 @@ def render_gate(summary: dict, csv_path: str, coverage: str | None) -> str:
             lines.append("")
     lines += render_known_debt(summary)
     lines += render_predecessor(summary)
-    lines.append(f"**OVERALL: {summary['verdict']}**")
+    outcome = summary.get("predecessor_outcome")
+    lines.append(f"**OVERALL: {summary['verdict']}**" + (f" ({outcome})" if outcome else ""))
     lines.append("")
     return "\n".join(lines)
 
@@ -2534,8 +2643,9 @@ def main(argv: list[str] | None = None) -> int:
             handle.write("\n")
     if not args.quiet:
         print(text)
-    print(f"gate {summary['verdict']}: wrote {out_path}" + (f" and {args.json_path}" if args.json_path else ""),
-          file=sys.stderr)
+    outcome = summary.get("predecessor_outcome")
+    print(f"gate {summary['verdict']}" + (f" ({outcome})" if outcome else "") + f": wrote {out_path}"
+          + (f" and {args.json_path}" if args.json_path else ""), file=sys.stderr)
     return EXIT[summary["verdict"]]
 
 
