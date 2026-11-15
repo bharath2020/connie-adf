@@ -1,4 +1,10 @@
 import SwiftUI
+import CoreText
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 import ADFPreparation
 
 /// Flattened list rows (bullet / ordered / task / decision) with a
@@ -135,7 +141,7 @@ struct ListRowView: View {
     private var markerView: some View {
         switch row.marker {
         case .bullet(let depth):
-            Text(Self.bulletGlyph(depth: depth))
+            BulletMarkerView(depth: depth)
                 .accessibilityHidden(true)
         case .ordered(let text):
             Text(text)
@@ -156,14 +162,131 @@ struct ListRowView: View {
         }
     }
 
+    /// A round bullet's (• ◦) diameter as a fraction of the body text's
+    /// capital height. The captain's reference picture (a Slack message on
+    /// iPhone: dots 17.8 px across by their ink area, beside 37 px
+    /// capitals) measures 0.48; the captain then asked for the round
+    /// bullets a little bigger again. The system font's own • is about 0.28.
+    static let roundBulletDiameterToCapHeight: CGFloat = 0.55
+
+    /// The square bullet's (▪) side as a fraction of the body text's capital
+    /// height: the reference picture's 0.48, which the captain kept when
+    /// the round bullets grew.
+    static let squareBulletSideToCapHeight: CGFloat = 0.48
+
+    /// A nesting level's bullet size as a fraction of the capital height:
+    /// round for • and ◦, square for ▪.
+    static func bulletSideToCapHeight(depth: Int) -> CGFloat {
+        bulletGlyph(depth: depth) == "▪" ? squareBulletSideToCapHeight : roundBulletDiameterToCapHeight
+    }
+
     /// Bullet glyph per bullet-list nesting level (ordered-list ancestors
-    /// don't count): • ◦ ▪ cycling every three levels.
+    /// don't count): • ◦ ▪ cycling every three levels. `BulletMarkerView`
+    /// draws each as a shape; this names it.
     static func bulletGlyph(depth: Int) -> String {
         switch max(depth, 0) % 3 {
         case 0: return "•"
         case 1: return "◦"
         default: return "▪"
         }
+    }
+}
+
+/// A bullet marker: a filled dot (•), a ring (◦) or a flat square (▪),
+/// `ListRowView.bulletSideToCapHeight(depth:)` of the body text's capital
+/// height across (the round marks a little larger than the square), in the
+/// text colour.
+///
+/// The marks are shapes sized from the body font's metrics at the current
+/// Dynamic Type size, not glyphs: the system font's • is smaller than the
+/// size asked for, and it has no ▪ at all (the fallback draws an emoji, a
+/// large glossy square). A hidden • lays the marker out, so the column,
+/// first-baseline alignment and row height are the glyph's, and each mark
+/// is centred where that glyph's dot is centred: `dotMidY` above the baseline,
+/// on the first line of the item's text.
+struct BulletMarkerView: View {
+    let depth: Int
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.legibilityWeight) private var legibilityWeight
+
+    var body: some View {
+        let metrics = BulletMetrics.body(size: dynamicTypeSize, bold: legibilityWeight == .bold)
+        let side = metrics.capHeight * ListRowView.bulletSideToCapHeight(depth: depth)
+        Text(ListRowView.bulletGlyph(depth: 0))
+            .hidden()
+            .overlay(alignment: Alignment(horizontal: .center, vertical: .firstTextBaseline)) {
+                mark(side: side, ringWidth: side * BulletMetrics.ringWidthToDiameter)
+                    .frame(width: side, height: side)
+                    .alignmentGuide(.firstTextBaseline) { $0.height / 2 + metrics.dotMidY }
+            }
+    }
+
+    @ViewBuilder
+    private func mark(side: CGFloat, ringWidth: CGFloat) -> some View {
+        switch max(depth, 0) % 3 {
+        case 0: Circle()
+        case 1: Circle().strokeBorder(lineWidth: ringWidth)
+        default: Rectangle()
+        }
+    }
+}
+
+/// The body text style's metrics a bullet is drawn from, at a Dynamic Type
+/// size: its capital height and how far its dot's (•) centre sits above
+/// the baseline. A marker inherits the body text style.
+enum BulletMetrics {
+    struct Metrics: Equatable {
+        var capHeight: CGFloat
+        var dotMidY: CGFloat
+    }
+
+    /// The ring's (◦) stroke as a fraction of its diameter: a thin
+    /// outline (the system font's own ◦ is heavier, about a third).
+    static let ringWidthToDiameter: CGFloat = 0.12
+
+    private struct Key: Hashable {
+        var size: DynamicTypeSize
+        var bold: Bool
+    }
+
+    @MainActor private static var cache: [Key: Metrics] = [:]
+
+    @MainActor
+    static func body(size: DynamicTypeSize, bold: Bool) -> Metrics {
+        let key = Key(size: size, bold: bold)
+        if let metrics = cache[key] { return metrics }
+        let metrics = measure(font(size: size, bold: bold))
+        cache[key] = metrics
+        return metrics
+    }
+
+    static func font(size: DynamicTypeSize, bold: Bool) -> CTFont {
+        #if canImport(UIKit)
+        var traits = UITraitCollection(preferredContentSizeCategory: size.uiContentSizeCategory)
+        if bold { traits = UITraitCollection(traitsFrom: [traits, UITraitCollection(legibilityWeight: .bold)]) }
+        return UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits) as CTFont
+        #else
+        return NSFont.preferredFont(forTextStyle: .body) as CTFont
+        #endif
+    }
+
+    static func measure(_ font: CTFont) -> Metrics {
+        let capHeight = CTFontGetCapHeight(font)
+        // Without the glyph: the system font's proportion.
+        var metrics = Metrics(capHeight: capHeight, dotMidY: capHeight * 0.4)
+        if let dot = glyph(0x2022, in: font) {
+            var bounds = CGRect.zero
+            var glyph = dot
+            CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyph, &bounds, 1)
+            metrics.dotMidY = bounds.midY
+        }
+        return metrics
+    }
+
+    private static func glyph(_ character: UniChar, in font: CTFont) -> CGGlyph? {
+        var character = character
+        var glyph: CGGlyph = 0
+        return CTFontGetGlyphsForCharacters(font, &character, &glyph, 1) ? glyph : nil
     }
 }
 
