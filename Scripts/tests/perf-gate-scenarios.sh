@@ -336,9 +336,20 @@ EXPECT_GATE="$PR3_GATE" expect pr3-pred-pilot 4 "gate PILOT" -- -- "${PRED_PILOT
     --fixture-arms "kitchen-sink=A,C" --predecessor-fixtures kitchen-sink
 expect_file pr3-pred-pilot summary.md "| **NO-ADDED-REGRESSION** |"
 expect_file pr3-pred-pilot summary.md "Paired predecessor supplement, D vs C — COMPLETE"
-EXPECT_GATE="$PR3_GATE" expect pr3-pred-pilot-added 1 "gate FAIL" -- FAKE_SCENARIO=c_added -- "${PRED_PILOT[@]}" \
-    --fixtures list-dense --fixture-arms "list-dense=A,C" --predecessor-fixtures list-dense
-expect_file pr3-pred-pilot-added summary.md "| **ADDED-REGRESSION** |"
+# Only the D/C rows differ (C drops 12 more frames than D, the same as A):
+# the supplement finds an ADDED-REGRESSION, the A/B/C verdict stays PILOT,
+# and the OVERALL line names the supplement's result beside it.
+EXPECT_GATE="$PR3_GATE" expect pr3-pred-pilot-added-only 4 "gate PILOT" -- FAKE_SCENARIO=dc_added_only -- \
+    "${PRED_PILOT[@]}" --fixtures list-dense --fixture-arms "list-dense=A,C" --predecessor-fixtures list-dense
+expect_file pr3-pred-pilot-added-only summary.md "| **ADDED-REGRESSION** |"
+expect_file pr3-pred-pilot-added-only summary.md "**OVERALL: PILOT** (D/C supplement: ADDED-REGRESSION list-dense ("
+# c_added carries list_debt, so its exit 1 FAIL is the A/C rows' own (C
+# over the ceilings); what this checks is that the supplement's
+# ADDED-REGRESSION is still reported beside that FAIL.
+EXPECT_GATE="$PR3_GATE" expect pr3-pred-pilot-added-beside-fail 1 "gate FAIL" -- FAKE_SCENARIO=c_added -- \
+    "${PRED_PILOT[@]}" --fixtures list-dense --fixture-arms "list-dense=A,C" --predecessor-fixtures list-dense
+expect_file pr3-pred-pilot-added-beside-fail summary.md "| **ADDED-REGRESSION** |"
+expect_file pr3-pred-pilot-added-beside-fail summary.md "**OVERALL: FAIL** (D/C supplement: ADDED-REGRESSION list-dense ("
 EXPECT_GATE="$PR3_GATE" expect pr3-pred-pilot-d-short 4 "gate PILOT" -- FAKE_SCENARIO=d_short -- "${PRED_PILOT[@]}" \
     --fixtures kitchen-sink --fixture-arms "kitchen-sink=A,C" --predecessor-fixtures kitchen-sink \
     --predecessor-runs 1 --predecessor-warmup 0
@@ -353,7 +364,10 @@ expect_file pr3-pred-pilot-unpinned summary.md "!= the design's pinned predecess
 EXPECT_GATE="$PR3_GATE" expect pr3-smoke-pilot 4 "gate PILOT" -- -- "${CODE_PILOT[@]}" --app-d "$PRED" \
     --predecessor-fixtures kitchen-sink --predecessor-runs 1 --predecessor-warmup 0
 expect_file pr3-smoke-pilot summary.md "Paired predecessor supplement, D vs C — COMPLETE"
-expect_file pr3-smoke-pilot summary.md "INCONCLUSIVE"
+# The result cell and the OVERALL line, not the method text (which always
+# says "otherwise INCONCLUSIVE").
+expect_file pr3-smoke-pilot summary.md "| **INCONCLUSIVE (1 pairs: "
+expect_file pr3-smoke-pilot summary.md "**OVERALL: PILOT** (D/C supplement: INCONCLUSIVE kitchen-sink ("
 # The accepted list cost (PR 2's failing rows) with an unchanged candidate:
 # the rows are labelled known debt and still FAIL; D vs C adds nothing.
 EXPECT_GATE="$PR3_GATE" expect pr3-debt-pilot 1 "gate FAIL" -- FAKE_SCENARIO=list_debt -- "${GATE_ARGS[@]}" \

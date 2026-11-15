@@ -348,8 +348,10 @@ CODE_CAPTURES_DEFAULT=(
     "code-parity@0.66=fallback;0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22"
     # CP-S6: nested code stays on SwiftUI (CP-25 in a bullet item, CP-26 in
     # a panel; CP-27 is in a collapsed expand and not on screen). The
-    # landing block CP-22 (non-ASCII) is outside the admitted cohort.
-    "code-parity@0.78=fallback;0.26=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26"
+    # landing block CP-22 (non-ASCII) is outside the admitted cohort, and
+    # CP-23 ("") and CP-24 ("\n") below it hold no drawable text (fallback
+    # .empty), so none of the five may have a TextKit 2 row (G6).
+    "code-parity@0.78=fallback;0.26=swiftui,0.27=swiftui,0.28=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26"
     "code-dense@0=positive;0.1=tk2,0.2=tk2;land=0.0"
     "code-dense@0.5=positive;0.301=tk2;land=0.300"
 )

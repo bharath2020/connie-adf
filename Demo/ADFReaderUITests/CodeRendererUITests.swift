@@ -418,12 +418,21 @@ private struct CodeUIDriver {
 
     /// Presses the first line of `block`'s code for 1.2 s and reports
     /// whether an edit menu came up within 3 s (a "Copy" item that was not
-    /// there before).
-    func longPressShowsEditMenu(_ block: CodeUIBlock) -> Bool {
+    /// there before). With `inside`, the press point (screen points) is
+    /// first asserted to lie inside that element's frame and the viewport,
+    /// so a missing menu can only mean the element showed none.
+    func longPressShowsEditMenu(_ block: CodeUIBlock, inside target: XCUIElement? = nil) -> Bool {
         let before = editMenuCopyItems.count
         let frame = text(block).frame
-        let point = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: frame.minX + 40, dy: frame.minY + 10))
+        let press = CGPoint(x: frame.minX + 40, y: frame.minY + 10)
+        if let target {
+            let targetFrame = target.frame
+            let viewport = reader.viewport
+            XCTAssertTrue(target.exists && targetFrame.contains(press),
+                          "the press point \(press) is not inside \(target.identifier)'s frame \(targetFrame)")
+            XCTAssertTrue(viewport.contains(press), "the press point \(press) is outside the viewport \(viewport)")
+        }
+        let point = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: press.x, dy: press.y))
         point.press(forDuration: 1.2)
         let deadline = Date().addingTimeInterval(3)
         repeat {
@@ -664,20 +673,46 @@ final class CodeRendererUITests: XCTestCase {
     /// literals, not read back from the screen). The pasteboard is read on
     /// the host through the lifecycle agent (`HostAgent.pasteboard`); the
     /// copies run in an order in which each differs from the one before,
-    /// and the agent first puts a sentinel there, so a Copy that wrote
-    /// nothing cannot pass on stale content. Without the agent the test
+    /// and a sentinel is put there first (by the agent, or by the runner
+    /// when `simctl pbcopy` does not take) and read back through the agent
+    /// (the test fails before any tap when it is not there), so a Copy that
+    /// wrote nothing cannot pass on stale content. Without the agent the test
     /// still taps every Copy and prints the `CODE_COPY …` lines, then
     /// skips: nothing was verified in the run.
     func testCopyPutsExactCodeOnPasteboard() throws {
         let agent = try? HostAgent.fromEnvironment()
         let blocks = [CodeUIParity.cp01, CodeUIParity.cp02, CodeUIParity.cp11]
-        var sentinelSet = false
+        let sentinel = "ADF-CODE-COPY-SENTINEL"
+        var sentinelSource = "the host agent (simctl pbcopy)"
         if let agent {
+            // The sentinel must be on the pasteboard, read back, before the
+            // first tap; otherwise the first Copy could pass on stale content.
+            var sentinelProblem: String?
             do {
-                try agent.setPasteboard("ADF-CODE-COPY-SENTINEL")
-                sentinelSet = true
+                try agent.setPasteboard(sentinel)
+                var readBack = try agent.pasteboard()
+                if readBack != sentinel {
+                    // `simctl pbcopy` exits 0 and leaves the device
+                    // pasteboard unchanged on this host's iOS 26.3
+                    // simulators (Nov 2026), so the runner writes the
+                    // sentinel itself; it never reads `UIPasteboard`.
+                    sentinelSource = "the UI-test runner (simctl pbcopy left \(readBack.utf8.count) UTF-8 bytes unchanged)"
+                    UIPasteboard.general.string = sentinel
+                    readBack = try agent.pasteboard()
+                }
+                if readBack != sentinel {
+                    sentinelProblem = "the pasteboard holds \(readBack.debugDescription.prefix(80)) after the sentinel was set"
+                }
             } catch {
-                codeUINote("the host agent could not set a pasteboard sentinel: \(error)")
+                sentinelProblem = "the host agent could not set or read back a pasteboard sentinel: \(error)"
+            }
+            if let sentinelProblem {
+                try agent.record("Code Copy puts the exact code on the pasteboard (code-parity)", pass: false, [
+                    "copies": [[String: Any]](), "mismatches": [String](), "sentinel_set_first": false,
+                    "sentinel_problem": sentinelProblem,
+                ])
+                XCTFail("no Copy was checked: \(sentinelProblem)")
+                return
             }
         }
         var copies: [[String: Any]] = []
@@ -719,7 +754,7 @@ final class CodeRendererUITests: XCTestCase {
                 + "with the CODE_COPY_LAST line.")
         }
         try agent.record("Code Copy puts the exact code on the pasteboard (code-parity)", pass: mismatches.isEmpty, [
-            "copies": copies, "mismatches": mismatches, "sentinel_set_first": sentinelSet,
+            "copies": copies, "mismatches": mismatches, "sentinel_set_first": true, "sentinel_set_by": sentinelSource,
             "read_with": "host agent request '\(HostAgent.pasteboardReadKind)' (xcrun simctl pbpaste)",
         ])
         XCTAssertTrue(mismatches.isEmpty, mismatches.joined(separator: "; "))
@@ -837,7 +872,9 @@ final class CodeRendererUITests: XCTestCase {
                                                       timeout: CodeUIDriver.engineTimeout),
                           "\(arm): the highlighted block \(block.owner) is still a TextKit 2 row")
             XCTAssertTrue(text.exists, "\(arm): the matched block is not in the tree")
+            var neighboursChecked = 0
             for neighbour in neighbours where driver.isPartlyShown(driver.text(neighbour)) {
+                neighboursChecked += 1
                 if textKit2 {
                     XCTAssertTrue(driver.isTextKit2(neighbour),
                                   "neighbour \(neighbour.owner) left TextKit 2 (the search fallback is per block)")
@@ -845,6 +882,8 @@ final class CodeRendererUITests: XCTestCase {
                     XCTAssertFalse(driver.textKit2Row(owner: neighbour.owner).exists, "a TextKit 2 row on SwiftUI")
                 }
             }
+            XCTAssertGreaterThan(neighboursChecked, 0, "\(arm): no neighbour of \(block.name) "
+                + "(\(neighbours.map(\.name).joined(separator: ", "))) was on screen to check")
             let line = driver.firstLine(of: text.frame)
             let viewport = reader.viewport
             XCTAssertTrue(line.minY >= viewport.minY - 2 && line.maxY <= viewport.maxY + 2,
@@ -860,12 +899,14 @@ final class CodeRendererUITests: XCTestCase {
             let scale = reader.pixelScale()
             let before = driver.tops([block] + neighbours)
             driver.clearSearch()
+            // The engine first (under TextKit 2 the row returns), then the
+            // tops, so a shift the swap back causes is measured.
+            expectEngine(driver, block, textKit2: textKit2, "after clearing the search")
             let after = driver.tops([block] + neighbours)
             let shift = LabelShift(from: before, to: after, scale: scale)
             XCTAssertGreaterThan(shift.common, 0, "\(arm): no code text to compare across the clear")
             XCTAssertLessThanOrEqual(shift.maxPixels, Self.shiftLimit,
                                      "\(arm): clearing the search moved \(shift.worstLabel) \(shift.maxPixels) px")
-            expectEngine(driver, block, textKit2: textKit2, "after clearing the search")
             let cleared = driver.highlightPixels(in: driver.firstLine(of: text.frame))
             XCTAssertLessThanOrEqual(cleared, Self.unhighlightedPixels,
                                      "\(arm): \(cleared) highlight-coloured pixels left after clearing")
@@ -901,7 +942,9 @@ final class CodeRendererUITests: XCTestCase {
         driver.pause(1.5)
         XCTAssertTrue(driver.show(block), "\(block.name) is not in view after switching ON")
         expectEngine(driver, block, textKit2: true, "before the long press")
-        let textKit2Menu = driver.longPressShowsEditMenu(block)
+        // The press must land on the block's own `tk2-row:` element, so the
+        // expected failure below can only be "no selection appeared".
+        let textKit2Menu = driver.longPressShowsEditMenu(block, inside: driver.textKit2Row(owner: block.owner))
         codeUIAttach(driver.app, "long-press-textkit2")
         driver.dismissEditMenu(leaving: baseline)
         reader.chooseRenderer(textKit2: false)

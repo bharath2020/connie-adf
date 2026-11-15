@@ -120,6 +120,13 @@ enum TK2CodeParity {
         Sample(name: "trailing-2", text: "let a = 1\nlet b = 2\n\n", cohort: .trailingBreaks),
         Sample(name: "trailing-3", text: "let a = 1\nlet b = 2\n\n\n", cohort: .trailingBreaks),
         Sample(name: "whitespace-line", text: "if ready {\n    \n    start(now)      \n}", admittedThrough: .accessibility5),
+        // Code of spaces only: printable ASCII, so admitted (the `.empty`
+        // fallback is for "" and newlines only); no line has ink, so sizes
+        // and the chrome decide.
+        Sample(name: "spaces-only", text: "   ", admittedThrough: .accessibility5),
+        Sample(name: "space-lf-space", text: " \n ", admittedThrough: .accessibility5),
+        Sample(name: "spaces-trailing-lf", text: "    \n", admittedThrough: .accessibility5),
+        Sample(name: "spaces-blank-middle", text: "  \n\n  ", admittedThrough: .accessibility5, interiorEmptyLines: true),
         Sample(name: "long-300", text: threeHundredColumns),
         Sample(name: "tabs", text: "\tindented by a tab\nkey\tvalue\n\t\tdeeper", cohort: .fallback(.codeTabs)),
         Sample(name: "emoji-cjk", text: "let total = 3 // \u{1F600} \u{5408}\u{8A08}\nprint(total)", cohort: .fallback(.codeNonASCII)),
@@ -802,7 +809,29 @@ struct TextKit2CodeParityTests {
             if gate == nil { expected.insert("tk2-row:\(block.id)") }
         }
         #expect(identifiers == expected, "\(label): rows \(identifiers.sorted()) expected \(expected.sorted())")
-        if size == .large { #expect(expected.count == 4, "\(label): all four blocks are admitted at Large") }
+        // The set is also pinned by hand, so it can never pass empty (a gate
+        // that admitted nothing would leave both arms on SwiftUI, and the
+        // frames below would compare SwiftUI with SwiftUI). All four blocks
+        // are admitted at Large. At AX1 the three eight-line blocks are
+        // admitted and the six 130-column lines (blocks[3]) are over the
+        // canvas bound at 3x and admitted at 2x (measured on iOS 26.3 and
+        // iOS 18.5).
+        let allFour = Set(blocks.map { "tk2-row:\($0.id)" })
+        let pinned: Set<String>?
+        switch (size, scale) {
+        case (.large, 2), (.large, 3), (.accessibility1, 2):
+            pinned = allFour
+        case (.accessibility1, 3):
+            pinned = allFour.subtracting(["tk2-row:\(blocks[3].id)"])
+        default:
+            pinned = nil
+        }
+        if let pinned {
+            #expect(!expected.isEmpty && expected == pinned,
+                    "\(label) @\(scale)x: the gate admits \(expected.sorted()), pinned \(pinned.sorted())")
+        } else {
+            Issue.record("\(label): no hand-pinned row set at \(scale)x")
+        }
 
         // Same frames and scroll ranges on both arms; breakout widens them.
         for index in 0..<4 {

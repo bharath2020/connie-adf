@@ -29,6 +29,9 @@ FAKE_SCENARIO  normal | c_slow | c_crash | a_timeout | c_timeout | b_wrong_rende
                | list_debt (the accepted list cost: on list-dense C and D
                  drop 70 frames, A and B 44)
                | c_added (list_debt, and C drops 12 more frames than D)
+               | dc_added_only (on list-dense A, B and C drop 12 frames, D
+                 none: only the D/C rows differ, A/B/C stays within its
+                 bounds and ceilings)
 FAKE_OTHER_BOOTED  if set, a second device is reported Booted
 """
 import json
@@ -164,6 +167,8 @@ elif cmd == "launch":
         dropped = 70 if arm in ("C", "D") else 44
         if scenario == "c_added" and arm == "C":
             dropped += 12
+    if scenario == "dc_added_only" and fixture == "list-dense":
+        dropped = 0 if arm == "D" else 12
     frames = FRAMES.get(fixture, 600)
     # One frame interval (1/60 s) of hitch per dropped frame of a 60 Hz scroll.
     line = (f"SCROLL_METRICS fixture={fixture} frames={frames} dropped={dropped} "

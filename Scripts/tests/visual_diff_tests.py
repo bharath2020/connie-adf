@@ -369,8 +369,16 @@ edge_pixel = code_page("code-edge-pixel", edits=((150, 19, -1),))
 code, pair = run_pair("cb-chrome-outline", "tolerant", code_a, edge_pixel)
 check("one pixel just outside the box edge one level off (tolerant) -> FAIL", (code, pair["verdict"]), 1, "FAIL")
 expect("outline px at threshold 0", pair["code_details"][0]["outline_px"] if pair.get("code_details") else None, 1)
-check("a pixel of the code text area one level off (tolerant) -> PASS (text is tolerant, chrome is exact)",
-      run("cb-text-pixel", "tolerant", code_a, code_page("code-text-pixel", edits=((150, 150, 1),))), 0, "PASS")
+# Inside the first code line (rows 112 to 120, x 32 to 231), so inside the
+# scored text crop and outside the chrome.
+code, pair = run_pair("cb-text-pixel", "tolerant", code_a, code_page("code-text-pixel", edits=((115, 100, 1),)))
+check("a pixel of the code text one level off (tolerant) -> PASS (text is tolerant, chrome is exact)",
+      (code, pair["verdict"]), 0, "PASS")
+box = pair["code_details"][0] if pair.get("code_details") else {}
+tx0, ty0, tx1, ty1 = (int(v) for v in (box.get("text_box") or "0,0,0,0").split(","))
+expect("the edited pixel (x 100, y 115) is inside the scored text crop", tx0 <= 100 < tx1 and ty0 <= 115 < ty1, True)
+expect("... and not in the chrome: header and outline px at threshold 0",
+       (box.get("header_px"), box.get("outline_px")), (0, 0))
 taller = code_page("code-taller", box=(20, 80, 280, 201))
 code, pair = run_pair("cb-geometry", "tolerant", code_a, taller)
 check("the box one pixel taller (tolerant) -> FAIL", (code, pair["verdict"]), 1, "FAIL")

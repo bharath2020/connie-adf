@@ -784,8 +784,19 @@ struct TextKit2CodeFallbackTests {
         let code = TK2CodeLogic.stamped("let a = 1\n\nlet b = 2")
         #expect(Self.gate(code, ax5, emptyLinesMatchText: false) == .osGatedEmptyLines)
         #expect(Self.gate(code, ax5, emptyLinesMatchText: true) == nil)
-        // The default is the runtime's answer.
-        #expect(Self.gate(code, ax5) == Self.gate(code, ax5, emptyLinesMatchText: TextKit2Scope.codeEmptyLinesMatchText))
+        // The production default (no `emptyLinesMatchText` argument) is the
+        // runtime's answer: gated before iOS 26, admitted from it.
+        let byDefault = TextKit2Scope.codeGate(
+            code, sizeCategory: ax5, legibilityWeight: nil, displayScale: 3, layoutDirection: .leftToRight
+        )
+        let keepsByDefault = TextKit2Scope.codeEmptyLinesKeepRenderer(code, sizeCategory: ax5)
+        if #available(iOS 26.0, *) {
+            #expect(byDefault == nil)
+            #expect(keepsByDefault)
+        } else {
+            #expect(byDefault == .osGatedEmptyLines)
+            #expect(!keepsByDefault)
+        }
         // The direction first, then the canvas.
         #expect(Self.gate(code, ax5, direction: .rightToLeft, emptyLinesMatchText: false) == .direction)
         let huge = TK2CodeLogic.stamped(String(repeating: "x", count: 5_000) + "\n\nx")

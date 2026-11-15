@@ -127,8 +127,8 @@ expect_has "CP-S4 at step 3 is declared fallback (#s3 beats the step-less declar
     "code-parity-p0.515-light-s3-AC|fallback|0.18=swiftui,0.19=swiftui;land=0.17|textkit2|"
 expect_has "CP-S5 (tabs, non-ASCII) is expected fallback" "$OUT.decl" \
     "code-parity-p0.66-dark-s0-AC|fallback|0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22|textkit2|"
-expect_has "CP-S6 (nested code, landed on CP-22 above the end clamp) is expected fallback with nested owner ids" "$OUT.decl" \
-    "code-parity-p0.78-light-s0-AC|fallback|0.26=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26|textkit2|"
+expect_has "CP-S6 (nested code, landed on CP-22 above the end clamp; CP-23 and CP-24 empty) is expected fallback with nested owner ids" "$OUT.decl" \
+    "code-parity-p0.78-light-s0-AC|fallback|0.26=swiftui,0.27=swiftui,0.28=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26|textkit2|"
 expect_has "code-dense@0.5 is positive on block 301 (300, its header under the band, is the landing)" "$OUT.decl" \
     "code-dense-p0.5-light-s3-AC|positive|0.301=tk2;land=0.300|textkit2|"
 expect_has "code-dense@0 is positive on blocks 1 and 2 (0, its header under the band, is the landing)" "$OUT.decl" \
