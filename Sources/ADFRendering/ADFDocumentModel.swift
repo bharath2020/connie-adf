@@ -39,6 +39,17 @@ public final class ADFDocumentModel {
     /// `clear`, streamed `matchCount`, highlight payload). One per model.
     public let search: ADFDocumentSearch
 
+    /// The top-level rows SwiftUI now reports at least 95 % inside the
+    /// viewport (the visibility feed search navigation reads,
+    /// `VisibleRowRegistry`), or nil before iOS 18 / macOS 15, where no
+    /// feed exists. A read of that record: it adds no observer and no
+    /// state. Diagnostics only (the demo's capture-geometry line).
+    @_spi(ADFDiagnostics)
+    public var fullyVisibleRowIDs: Set<String>? {
+        if #available(iOS 18.0, macOS 15.0, *) { return search.visibleRows.ids }
+        return nil
+    }
+
     /// Expand blocks currently open, keyed by block ID. Owned here (not view
     /// `@State`) so expansion survives rows collapsing to spacers, and so
     /// search navigation can open expands programmatically.

@@ -16,8 +16,8 @@ import UIKit
 ///
 ///   `SCROLL_LANDED` names the block the jump went to (`block=`, the
 ///   `RenderBlock.id` at `index=` of `blocks=`: the jump's target, not a
-///   measured position) and is printed with or without `-rendererStats`;
-///   the other two only with it. `RENDERER_STATS` is the READY line's keys
+///   measured position; `-captureGeometryHook` measures it) and is printed
+///   with or without `-rendererStats`; the other two only with it. `RENDERER_STATS` is the READY line's keys
 ///   with fresh values (the stats printed at READY predate the jump).
 ///   `TK2_CODE_ROWS` lists each live TextKit 2 row drawing a code block's
 ///   code by owner, with its native draw passes; with none it is
@@ -85,6 +85,21 @@ import UIKit
 ///   `probe-url-opens`, `probe-url-last`) and each prints a `PROBE …` line.
 ///   Without the flag nothing is recorded, no About rows appear and links
 ///   open as usual (see `InteractionProbe`).
+/// - `-captureGeometryHook` (the visual gate, arms B and C) installs
+///   `CaptureGeometryHook`: each post of the Darwin notification
+///   `com.connie.adfreader.geometry` prints one line describing the screen
+///   at that moment, from a one-shot read of the key window
+///   (`RendererStats.printCaptureGeometry`):
+///
+///       CAPTURE_GEOMETRY seq=<n> scale=<s> screen=<w>x<h> window=<x0>,<y0>,<x1>,<y1>
+///           visibleRows=<id>[,<id>…]|-|unavailable
+///           rows=<owner>|<root|list|code>|<frame>|<visible or ->|<draws or ->[;…]|-
+///
+///   `Scripts/visual-parity.sh` posts it right before and right after its
+///   screenshot, and `Scripts/visual_diff.py` ties each scored code box to
+///   the TextKit 2 row whose frame holds its pixels, and measures the
+///   landing from `visibleRows`. Without the flag no observer exists and
+///   nothing is read or printed.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -106,6 +121,7 @@ struct LaunchOptions: Sendable {
     var rebuildControlPicks: Int?
     var scenePhaseProbe = false
     var interactionProbe = false
+    var captureGeometryHook = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -147,6 +163,8 @@ struct LaunchOptions: Sendable {
                 scenePhaseProbe = true
             case "-interactionProbe":
                 interactionProbe = true
+            case "-captureGeometryHook":
+                captureGeometryHook = true
             default:
                 break
             }
@@ -170,6 +188,9 @@ struct ADFReaderApp: App {
         RejumpHook.install()
         if options.memoryReliefHook {
             MemoryReliefHook.install()
+        }
+        if options.captureGeometryHook {
+            CaptureGeometryHook.install()
         }
     }
 
@@ -250,6 +271,33 @@ enum RejumpHook {
                 Task { @MainActor in NotificationCenter.default.post(name: RejumpHook.notification, object: nil) }
             },
             "com.connie.adfreader.rejump" as CFString,
+            nil,
+            .deliverImmediately
+        )
+    }
+}
+
+/// Prints the screen's geometry on request:
+/// `xcrun simctl spawn <udid> notifyutil -p com.connie.adfreader.geometry`
+/// makes the open reader print one `CAPTURE_GEOMETRY` line
+/// (`RendererStats.printCaptureGeometry`): every TextKit 2 row in the key
+/// window with its window frame and visible part, and the top-level rows the
+/// reader reports fully visible. The visual gate posts it right before and
+/// right after each screenshot of arms B and C, so the scorer can tie each
+/// scored code box to the row that drew it. Installed only with
+/// `-captureGeometryHook`; each post is one read of the window, no state
+/// and no observer on any row (ADR §8, §16, §20).
+enum CaptureGeometryHook {
+    static let notification = Notification.Name("ADFReaderCaptureGeometry")
+
+    static func install() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                Task { @MainActor in NotificationCenter.default.post(name: CaptureGeometryHook.notification, object: nil) }
+            },
+            "com.connie.adfreader.geometry" as CFString,
             nil,
             .deliverImmediately
         )

@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import ADFPreparation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// A read-only snapshot of the TextKit 2 renderer's counters — the proof of
 /// which text engine actually drew, independent of the host's switch state.
@@ -598,3 +601,84 @@ final class TextKit2Diagnostics {
         if appeared { rebuildControlAppearances += 1 }
     }
 }
+
+#if canImport(UIKit)
+/// One TextKit 2 row in a window at one moment
+/// (`ADFTextRenderer.textKit2RowFrames(in:)`).
+@_spi(ADFDiagnostics)
+public struct ADFTextKit2RowFrame: Sendable, Hashable {
+    /// What the row draws (`TextKit2OwnerKind`).
+    public enum Kind: String, Sendable, Hashable {
+        case root, list, code
+    }
+
+    /// The block the row draws (`RenderBlock.id`).
+    public var ownerID: String
+    public var kind: Kind
+    /// Where the row can draw (its bounds and its canvas, which covers the
+    /// ink overhang), in the window's coordinates, points.
+    public var frame: CGRect
+    /// `frame` clipped by every clipping ancestor (the document's scroll
+    /// view, a code block's horizontal scroll view, a layer mask) and by
+    /// the window; nil when nothing of it is shown (clipped away, or the
+    /// row or an ancestor hidden or transparent).
+    public var visible: CGRect?
+
+    public init(ownerID: String, kind: Kind, frame: CGRect, visible: CGRect?) {
+        self.ownerID = ownerID
+        self.kind = kind
+        self.frame = frame
+        self.visible = visible
+    }
+}
+
+extension ADFTextKit2RowFrame.Kind {
+    /// Exhaustive, so a new owner kind must pick its name.
+    init(_ kind: TextKit2OwnerKind) {
+        switch kind {
+        case .root: self = .root
+        case .list: self = .list
+        case .code: self = .code
+        }
+    }
+}
+
+extension ADFTextRenderer {
+    /// A one-shot walk of `window`'s view hierarchy: every TextKit 2 row in
+    /// it that has an owner id, with its frame and visible part, in
+    /// hierarchy order. It reads geometry only (frames, bounds, conversions,
+    /// clipping, hidden and alpha). It lays nothing out, keeps nothing and
+    /// observes nothing, so it adds no state to any row and no work to any
+    /// frame (ADR §8, §16, §20). Diagnostics only: the library never calls
+    /// it; the demo's capture-geometry hook does, once per request. A row
+    /// outside the window (a cached, never-shown row) is not listed.
+    @_spi(ADFDiagnostics)
+    @MainActor
+    public static func textKit2RowFrames(in window: UIWindow) -> [ADFTextKit2RowFrame] {
+        var rows: [ADFTextKit2RowFrame] = []
+        func walk(_ view: UIView, clip: CGRect, shown: Bool) {
+            let shown = shown && !view.isHidden && view.alpha > 0.01
+            var clip = clip
+            if view.clipsToBounds {
+                clip = clip.intersection(view.convert(view.bounds, to: window))
+            }
+            if let mask = view.layer.mask {
+                clip = clip.intersection(view.convert(mask.frame, to: window))
+            }
+            if let row = view as? TextKit2RowView, let owner = row.ownerID {
+                let frame = row.convert(row.bounds.union(row.canvasFrame), to: window)
+                let visible = frame.intersection(clip)
+                rows.append(ADFTextKit2RowFrame(
+                    ownerID: owner, kind: ADFTextKit2RowFrame.Kind(row.ownerKind), frame: frame,
+                    visible: shown && !visible.isNull && !visible.isEmpty ? visible : nil
+                ))
+            }
+            for subview in view.subviews {
+                walk(subview, clip: clip, shown: shown)
+            }
+        }
+        walk(window, clip: window.bounds, shown: true)
+        return rows
+    }
+}
+#endif

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Scripts/tests/gate-scripts-tests.sh — offline cases for what PR 3 added to
-# Scripts/visual-parity.sh (code capture positions and declarations),
+# Scripts/visual-parity.sh (code capture positions and declarations, the
+# capture-geometry bracket around the screenshot),
 # Scripts/e2e-video.sh (--test code) and Scripts/lifecycle-gate.sh (the
 # code tests, short names, tests of another class, the bundle check): their
 # --dry-run plans and their pure helpers.
@@ -112,7 +113,7 @@ for cfg in kitchen-sink-p0.275 code-parity-p0 code-parity-p0.19 code-parity-p0.2
     expect_eq "PR 3 position captured light/dark at steps 0 and 3: $cfg" "$found" "4"
 done
 expect_has "the kitchen-sink code position is launched as -scrollToFraction 0.275" "$OUT.out" \
-    "-fixture kitchen-sink -scrollToFraction 0.275 -fontSizeStep 3 -rendererReset -rendererStats -textkit2"
+    "-fixture kitchen-sink -scrollToFraction 0.275 -fontSizeStep 3 -rendererReset -rendererStats -captureGeometryHook -textkit2"
 expect_eq "nine code positions x 4 x three pairs are declared" "$(lines_of "$OUT.decl")" "108"
 expect_has "kitchen-sink names code block 0.12 native and lands on 0.10" "$OUT.decl" \
     "kitchen-sink-p0.275-dark-s3-AC|positive|0.12=tk2;land=0.10|textkit2|$OUT/captures/kitchen-sink-p0.275-dark-s3-C.log"
@@ -128,10 +129,10 @@ expect_has "CP-S5 (tabs, non-ASCII) is expected fallback" "$OUT.decl" \
     "code-parity-p0.66-dark-s0-AC|fallback|0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22|textkit2|"
 expect_has "CP-S6 (nested code, landed on CP-22 above the end clamp) is expected fallback with nested owner ids" "$OUT.decl" \
     "code-parity-p0.78-light-s0-AC|fallback|0.26=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26|textkit2|"
-expect_has "code-dense@0.5 is positive on blocks 300 and 301" "$OUT.decl" \
-    "code-dense-p0.5-light-s3-AC|positive|0.300=tk2,0.301=tk2;land=0.300|textkit2|"
-expect_has "code-dense@0 is positive on the three pinned blocks" "$OUT.decl" \
-    "code-dense-p0-dark-s0-AC|positive|0.0=tk2,0.1=tk2,0.2=tk2;land=0.0|textkit2|"
+expect_has "code-dense@0.5 is positive on block 301 (300, its header under the band, is the landing)" "$OUT.decl" \
+    "code-dense-p0.5-light-s3-AC|positive|0.301=tk2;land=0.300|textkit2|"
+expect_has "code-dense@0 is positive on blocks 1 and 2 (0, its header under the band, is the landing)" "$OUT.decl" \
+    "code-dense-p0-dark-s0-AC|positive|0.1=tk2,0.2=tk2;land=0.0|textkit2|"
 expect_eq "positive and fallback configurations: 26 + 10" \
     "$(grep -c -- '-AC|positive|' "$OUT.decl") $(grep -c -- '-AC|fallback|' "$OUT.decl")" "26 10"
 expect_lacks "a position without code is not declared" "$OUT.decl" "stress-5k-"
@@ -143,7 +144,20 @@ done <"$OUT.decl"
 expect_eq "every declaration names a scored pair" "$undeclared" "0"
 expect_has "the dry run lists each declared configuration" "$OUT.out" \
     "  code-parity-p0.515-dark-s3: fallback; 0.18=swiftui,0.19=swiftui;land=0.17"
-expect_lacks "owner-level proof is not demanded by default" "$OUT.out" "--require-owner-proof"
+expect_lacks "the scorer demands owner-level proof itself (no flag is passed)" "$OUT.out" "--require-owner-proof"
+# The screenshot bracket: arms B and C of a declared configuration post the
+# capture-geometry hook before and after the screenshot; arm A never does.
+GEO="      geometry: notifyutil -p com.connie.adfreader.geometry before and after the screenshot"
+expect_eq "the dry run brackets the screenshot of every declared B and C arm, and only those" \
+    "$(grep -cxF -- "$GEO" "$OUT.out")" "72"
+expect_eq "… right after the launch line of a declared configuration's arm C" \
+    "$(grep -A2 -F -- "  code-parity-p0.515-light-s0-C  " "$OUT.out" | tail -n 1)" "$GEO"
+expect_eq "… and of its arm B" \
+    "$(grep -A2 -F -- "  code-parity-p0.515-light-s0-B  " "$OUT.out" | tail -n 1)" "$GEO"
+expect_eq "… but not of its arms A and A2" \
+    "$(grep -A2 -F -- "  code-parity-p0.515-light-s0-A  " "$OUT.out" | tail -n 1 | grep -cF -- "$GEO")$(grep -A2 -F -- "  code-parity-p0.515-light-s0-A2  " "$OUT.out" | tail -n 1 | grep -cF -- "$GEO")" "00"
+expect_eq "… nor of an undeclared configuration's arm C" \
+    "$(grep -A2 -F -- "  stress-5k-p0-light-s0-C  " "$OUT.out" | tail -n 1 | grep -cF -- "$GEO")" "0"
 
 # The scorer accepts exactly what the capture script emits.
 run vp-parse python3 -I -c '
@@ -160,12 +174,20 @@ native = sum(1 for rule in rules.values() for _, engine in rule.owners if engine
 print(len(rules), sum(1 for rule in rules.values() if rule.cls == "positive"), native,
       rules["code-parity-p0.78-light-s0-AC"].land, rules["code-parity-p0.78-light-s0-AC"].owners[0][0])
 ' "$SCRIPTS/visual_diff.py" "$OUT.decl" "$OUT.pairs"
-expect_eq "visual_diff.py parses every emitted declaration" "$STATUS $(cat "$WORK/vp-parse.out")" "0 108 78 150 0.26 0.26"
+expect_eq "visual_diff.py parses every emitted declaration" "$STATUS $(cat "$WORK/vp-parse.out")" "0 108 78 126 0.26 0.26"
 
 parity vp-nostats --no-renderer-stats
-declarations vp-nostats
-expect_eq "--no-renderer-stats: no pair asks for engine proof" \
-    "$STATUS $(lines_of "$WORK/vp-nostats.decl") $(grep -c -- '|none|-$' "$WORK/vp-nostats.decl")" "0 108 108"
+expect_eq "--no-renderer-stats with the default code captures is a usage error" "$STATUS" "2"
+expect_has "… that says why" "$WORK/vp-nostats.out" \
+    "--no-renderer-stats drops the engine proof every declared code capture needs: add --no-code-captures, or keep the stats"
+parity vp-nostats-explicit --no-renderer-stats --no-code-captures --fixture code-dense@0.5 \
+    --code-capture 'code-dense@0.5=positive;0.301=tk2;land=0.300'
+expect_eq "… and with an explicit declaration" "$STATUS" "2"
+parity vp-nostats-none --no-renderer-stats --no-code-captures
+declarations vp-nostats-none
+expect_eq "--no-renderer-stats --no-code-captures: accepted, nothing declared" \
+    "$STATUS $(lines_of "$WORK/vp-nostats-none.decl") $(lines_of "$WORK/vp-nostats-none.pairs")" "0 0 264"
+expect_lacks "… and no arm gets the stats or the geometry hook" "$WORK/vp-nostats-none.out" "-captureGeometryHook"
 
 parity vp-none --no-code-captures
 declarations vp-none
@@ -183,29 +205,33 @@ declarations vp-override
 expect_eq "an explicit declaration replaces the default for its position" \
     "$STATUS $(grep -c -- '|fallback|0.305=swiftui;land=0.300|' "$WORK/vp-override.decl") $(lines_of "$WORK/vp-override.decl")" "0 12 12"
 
-parity vp-step --fixture code-dense@0.5 --code-capture 'code-dense@0.5#s3=positive;0.302=tk2'
+parity vp-step --fixture code-dense@0.5 --code-capture 'code-dense@0.5#s3=positive;0.302=tk2;land=0.300'
 declarations vp-step
-expect_eq "an explicit #s3 declaration applies to step 3 only, and land= is optional" \
-    "$STATUS $(grep -c -- '-s3-A.|positive|0.302=tk2|' "$WORK/vp-step.decl") $(grep -c -- '-s0-A.|positive|0.300=tk2,0.301=tk2;land=0.300|' "$WORK/vp-step.decl")" \
+expect_eq "an explicit #s3 declaration applies to step 3 only" \
+    "$STATUS $(grep -c -- '-s3-A.|positive|0.302=tk2;land=0.300|' "$WORK/vp-step.decl") $(grep -c -- '-s0-A.|positive|0.301=tk2;land=0.300|' "$WORK/vp-step.decl")" \
     "0 6 6"
+parity vp-no-land --fixture code-parity@0 --code-capture 'code-parity@0=positive;0.1=tk2'
+expect_eq "a declaration without land= is a usage error (the landing is measured)" "$STATUS" "2"
+expect_has "… and says so" "$WORK/vp-no-land.out" "land= is required: the landing is measured"
 
-parity vp-new --fixture code-tall@0 --code-capture 'code-tall@0=fallback;0.1=swiftui'
+parity vp-new --fixture code-tall@0 --code-capture 'code-tall@0=fallback;0.1=swiftui;land=0.0'
 declarations vp-new
 expect_eq "a declaration for a fixture without a default" "$STATUS $(lines_of "$WORK/vp-new.decl")" "0 12"
 
 parity vp-owner --require-owner-proof
-expect_has "--require-owner-proof reaches the scorer" "$WORK/vp-owner.out" " --require-owner-proof "
+expect_eq "--require-owner-proof is still accepted (always on since R1)" "$STATUS" "0"
+expect_lacks "… and is not passed on: the scorer always requires the owner-level proof" "$WORK/vp-owner.out" " --require-owner-proof"
 
 parity vp-bad-syntax --code-capture 'code-dense@0.5=positive'
 expect_eq "a declaration without owners is a usage error" "$STATUS" "2"
-parity vp-bad-class --code-capture 'code-dense@0.5=native;0.301=tk2'
+parity vp-bad-class --code-capture 'code-dense@0.5=native;0.301=tk2;land=0.300'
 expect_eq "an unknown class is a usage error" "$STATUS" "2"
-parity vp-bad-positive --code-capture 'code-dense@0.5=positive;0.301=swiftui'
+parity vp-bad-positive --code-capture 'code-dense@0.5=positive;0.301=swiftui;land=0.300'
 expect_eq "positive without a tk2 owner is a usage error" "$STATUS" "2"
 expect_has "… and says why" "$WORK/vp-bad-positive.out" "a positive capture needs an owner marked tk2"
-parity vp-bad-fallback --code-capture 'code-dense@0.5=fallback;0.301=tk2'
+parity vp-bad-fallback --code-capture 'code-dense@0.5=fallback;0.301=tk2;land=0.300'
 expect_eq "fallback naming a tk2 owner is a usage error" "$STATUS" "2"
-parity vp-bad-position --fixture kitchen-sink@0 --code-capture 'code-dense@0.25=positive;0.151=tk2'
+parity vp-bad-position --fixture kitchen-sink@0 --code-capture 'code-dense@0.25=positive;0.151=tk2;land=0.150'
 expect_eq "a declaration for a position that is not captured is a usage error" "$STATUS" "2"
 expect_has "… and names the position" "$WORK/vp-bad-position.out" "no --fixture position code-dense@0.25 in this run"
 parity vp-old-default --fixture kitchen-sink@0,0.5

@@ -115,6 +115,11 @@ struct ReaderView: View {
             .onReceive(NotificationCenter.default.publisher(for: RejumpHook.notification)) { _ in
                 rejump()
             }
+            // Posted only under -captureGeometryHook: one read of the key
+            // window per post, here on the host (never in a lazy row).
+            .onReceive(NotificationCenter.default.publisher(for: CaptureGeometryHook.notification)) { _ in
+                RendererStats.printCaptureGeometry(model: model)
+            }
             .onDisappear { metrics.stop() }
     }
 

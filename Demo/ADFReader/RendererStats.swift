@@ -65,7 +65,32 @@ import ADFPreparation
 /// `RenderBlock.id` at `index=` of `blocks=`: the jump's target, not a
 /// measured position) and is printed with or without `-rendererStats`; the
 /// other two only with it. `TK2_CODE_ROWS` is the per-owner code proof
-/// (`printCodeRows`): a total cannot say which block drew.
+/// (`printCodeRows`): a total cannot say which block drew, and a count
+/// says a row drew, not that it is on screen.
+///
+/// Under `-captureGeometryHook`, each `com.connie.adfreader.geometry` post
+/// prints what is on screen at that moment (`printCaptureGeometry`), which
+/// `Scripts/visual-parity.sh` requests right before and right after its
+/// screenshot:
+///
+///     CAPTURE_GEOMETRY seq=<n> scale=<s> screen=<w>x<h> window=<x0>,<y0>,<x1>,<y1>
+///         visibleRows=<id>[,<id>…]|-|unavailable
+///         rows=<owner>|<root|list|code>|<frame>|<visible or ->|<draws or ->[;…]|-
+///     CAPTURE_GEOMETRY seq=<n> error=no-key-window
+///
+/// One line, points with 4 decimals, rectangles as `x0,y0,x1,y1` in the
+/// key window's coordinates. `seq` counts the posts from 1. `scale` and
+/// `screen` are the window's screen (pixels = points × scale), `window`
+/// the window on that screen. `visibleRows` is the top-level rows the
+/// reader reports at least 95 % inside the viewport
+/// (`ADFDocumentModel.fullyVisibleRowIDs`, sorted by id; `-` none;
+/// `unavailable` before iOS 18, where no feed exists). `rows` is every
+/// TextKit 2 row in the window (`ADFTextRenderer.textKit2RowFrames(in:)`,
+/// sorted by owner id, then top): its owner, kind, the frame it can draw
+/// in (bounds and canvas), that frame clipped by its clipping ancestors and
+/// the window (`-` when nothing of it shows) and, for a code row, its
+/// native draws (`TK2_CODE_ROWS`); `rows=-` when there is none. Ids are
+/// node paths, which hold none of ` ,;|` (any would print as `_`).
 @MainActor
 enum RendererStats {
     /// The environment the reader draws a document in, for the measured
@@ -128,6 +153,68 @@ enum RendererStats {
         let list = owners.isEmpty ? "-" : owners.map { "\($0):\(rows[$0] ?? 0)" }.joined(separator: ",")
         Swift.print("TK2_CODE_ROWS live=\(owners.count) owners=\(list)")
         fflush(stdout)
+    }
+
+    /// Posts answered so far (`CAPTURE_GEOMETRY seq=`).
+    private static var geometrySequence = 0
+
+    /// One `CAPTURE_GEOMETRY` line (format in the type's comment): the key
+    /// window's TextKit 2 rows and the fully visible top-level rows, now.
+    /// One read of the window per call: nothing is laid out, kept or
+    /// observed.
+    static func printCaptureGeometry(model: ADFDocumentModel) {
+        geometrySequence += 1
+        var line = "CAPTURE_GEOMETRY seq=\(geometrySequence)"
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else {
+            Swift.print(line + " error=no-key-window")
+            fflush(stdout)
+            return
+        }
+        let screen = window.screen
+        let draws = ADFTextRenderer.textKit2CodeRowDraws
+        let rows = ADFTextRenderer.textKit2RowFrames(in: window).sorted { first, second in
+            let order = first.ownerID.compare(second.ownerID, options: .numeric)
+            if order != .orderedSame { return order == .orderedAscending }
+            if first.ownerID != second.ownerID { return first.ownerID < second.ownerID }
+            return first.frame.minY < second.frame.minY
+        }
+        line += " scale=\(geometryNumber(screen.scale))"
+        line += " screen=\(geometryNumber(screen.bounds.width))x\(geometryNumber(screen.bounds.height))"
+        line += " window=\(geometryRect(window.convert(window.bounds, to: screen.coordinateSpace)))"
+        let visibleRows: String
+        if let ids = model.fullyVisibleRowIDs {
+            visibleRows = ids.isEmpty ? "-" : ids.sorted { first, second in
+                let order = first.compare(second, options: .numeric)
+                return order == .orderedSame ? first < second : order == .orderedAscending
+            }.map(geometryID).joined(separator: ",")
+        } else {
+            visibleRows = "unavailable"
+        }
+        line += " visibleRows=\(visibleRows)"
+        let rowList = rows.map { row in
+            let visible = row.visible.map(geometryRect) ?? "-"
+            let rowDraws = row.kind == .code ? String(draws[row.ownerID] ?? 0) : "-"
+            return "\(geometryID(row.ownerID))|\(row.kind.rawValue)|\(geometryRect(row.frame))|\(visible)|\(rowDraws)"
+        }
+        line += " rows=\(rowList.isEmpty ? "-" : rowList.joined(separator: ";"))"
+        Swift.print(line)
+        fflush(stdout)
+    }
+
+    private static func geometryNumber(_ value: CGFloat) -> String {
+        String(format: "%.4f", Double(value))
+    }
+
+    /// `x0,y0,x1,y1` (minX, minY, maxX, maxY).
+    private static func geometryRect(_ rect: CGRect) -> String {
+        [rect.minX, rect.minY, rect.maxX, rect.maxY].map(geometryNumber).joined(separator: ",")
+    }
+
+    /// An id with any of the line's separators replaced (node paths have
+    /// none).
+    private static func geometryID(_ id: String) -> String {
+        String(id.map { " ,;|".contains($0) ? "_" : $0 })
     }
 
     /// `environment`: the environment the document is drawn in, when the

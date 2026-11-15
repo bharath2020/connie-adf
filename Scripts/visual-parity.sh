@@ -10,7 +10,7 @@
 #       [--fixture <name>[@<f1>,<f2>...]]... [--appearances "light dark"]
 #       [--list-fixture <name>[:<min markers>]]... [--allow-other-booted]
 #       [--code-capture <declaration>]... [--no-code-captures]
-#       [--require-owner-proof]
+#       [--require-owner-proof (accepted; always on)]
 #       [--size-steps "0 3"] [--arms "A A2 B C"] [--content-size large]
 #       [--settle 3] [--scroll-wait 2] [--ready-timeout 90]
 #       [--mask x0,y0,x1,y1]... [--top-band 330] [--bottom-band 102]
@@ -24,9 +24,11 @@
 #   A2  --ref-app again, same procedure                  (capture noise)
 #   B   --app with -rendererReset                        (SwiftUI text)
 #   C   --app with -rendererReset -textkit2              (TextKit 2 text)
-#   B and C also get -rendererStats and must print `RENDERER_STATS
-#   renderer=swiftui|textkit2 …` matching the arm (proof of which renderer
-#   ran; --no-renderer-stats drops the flag and the check).
+#   B and C also get -rendererStats -captureGeometryHook and must print
+#   `RENDERER_STATS renderer=swiftui|textkit2 …` matching the arm (proof of
+#   which renderer ran). --no-renderer-stats drops both flags and the check,
+#   and is refused while any code capture is declared (every declared code
+#   capture needs the engine proof): add --no-code-captures with it.
 #   Every arm gets `-fixture <f> -scrollToFraction <pos> -fontSizeStep <n>`.
 #   Arms are .app directories: --ref-app for A/A2 (main, or "main +
 #   fixtures" when a fixture is newer than main), --app for B/C (required
@@ -58,26 +60,38 @@
 # CODE CAPTURES (--code-capture, repeatable; added to the default set, a
 #   declaration for the same position and step replaces the default one;
 #   --no-code-captures drops the defaults)
-#     <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...][;land=<block id>]
+#     <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id>
 #   declares what a position shows, per size step when #s<step> is given
 #   (nothing is inferred from the screenshot or the stats):
 #     positive  the code owners marked tk2 are drawn by TextKit 2 on arm C
-#               (owners marked swiftui beside them stay on SwiftUI);
+#               (owners marked swiftui beside them stay on SwiftUI); name
+#               only tk2 owners whose code box is scored (a box whose header
+#               is under the --exact-mask band is not);
 #     fallback  every named owner stays on SwiftUI on arm C too (over the
 #               canvas budget, outside the admitted cohort, nested code). A
 #               fallback capture never counts as native coverage.
 #   <owner> is the code block's RenderBlock id (0.<n> at top level); land=
-#   is the id of the block the position scrolls to. Each pair of a declared
-#   capture is INVALID - not PASS - without a code box (and, when positive,
-#   a code text crop), and without its engine proof, read from the arm's
-#   launch log AFTER the app's `SCROLL_LANDED ... block=<id>` line (the
-#   RENDERER_STATS line at READY predates the jump): arm C renderer=textkit2
-#   with tk2CodeLive > 0 and tk2CodeDraws > 0 when positive; arm B
-#   renderer=swiftui with both 0; and, when the app prints `TK2_CODE_ROWS
-#   owners=<id>:<native draws>,...`, each tk2 owner listed with draws > 0
-#   and each swiftui owner absent (--require-owner-proof makes that line
-#   mandatory; without it a fallback capture is provable only when
-#   tk2CodeLive = 0). --no-renderer-stats drops the proof with the flag.
+#   (required) is the id of the block the position scrolls to. Each pair of
+#   a declared capture is INVALID - not PASS - without a code box (and, when
+#   positive, a code text crop), and without its engine proof, read from
+#   the arm's launch log AFTER the app's `SCROLL_LANDED ... block=<id>` line
+#   (the RENDERER_STATS line at READY predates the jump): arm C
+#   renderer=textkit2 with tk2CodeLive > 0 and tk2CodeDraws > 0 when
+#   positive; arm B renderer=swiftui with both 0; the `TK2_CODE_ROWS
+#   owners=<id>:<native draws>,...` line (always required) listing each tk2
+#   owner with draws > 0 and no swiftui owner; and the capture-time
+#   geometry: the two `CAPTURE_GEOMETRY` lines the app prints when this
+#   script posts com.connie.adfreader.geometry right before and right after
+#   the screenshot (CAPTURE PROCEDURE). visual_diff.py ("CODE CAPTURES")
+#   requires the two lines to agree and to describe the image, ties each
+#   scored code box to the TextKit 2 code row whose on-screen frame holds
+#   its code ink (a box under no code row is SwiftUI's), and then requires
+#   on arm C each tk2 owner to own a scored box, no box of a fallback
+#   capture under a TextKit 2 code row, no row at all for a swiftui owner;
+#   on arm B no TextKit 2 row at all; on both the land= block measured on
+#   screen (in the reader's fully visible rows, nothing more than one block
+#   above it, below the top band) and, for a fallback capture, a named owner
+#   visibly present.
 #
 # CAPTURE PROCEDURE (identical for every arm)
 #   terminate + uninstall + install the arm's .app (no persisted renderer key
@@ -98,7 +112,12 @@
 #   line, printed about 2.6 s after READY with the RENDERER_STATS and
 #   TK2_CODE_ROWS lines the code proof reads: the screenshot is never taken
 #   before the log describes it. A build that never prints the line is
-#   captured anyway and its code pairs score INVALID.
+#   captured anyway and its code pairs score INVALID. Those arms then
+#   bracket the screenshot: `simctl spawn notifyutil -p
+#   com.connie.adfreader.geometry`, wait (up to 5 s) for the app's
+#   `CAPTURE_GEOMETRY seq=1` line, `simctl io screenshot`, post again and
+#   wait for `seq=2`. A missing line is logged, not a capture failure: the
+#   pair scores INVALID.
 #
 # DEFAULTS
 #   fixtures   kitchen-sink@0,0.5 (H1, every-mark paragraph, centered and
@@ -186,7 +205,10 @@
 #                    sha256, argv, device, runtime, locale, READY and
 #                    RENDERER_STATS lines, png sha256, time, status, and the
 #                    SCROLL_LANDED line with the RENDERER_STATS and
-#                    TK2_CODE_ROWS lines printed after it (the code proof)
+#                    TK2_CODE_ROWS lines printed after it (the code proof),
+#                    and the CAPTURE_GEOMETRY seq=1 and seq=2 lines
+#                    (geometry_before, geometry_after; empty for arms
+#                    without the bracket)
 #   env.txt          host, Xcode, device, settings, git head of this checkout
 #   scores.csv, scores.json, summary.md, *.sbs.png, crops/   (visual_diff.py)
 #
@@ -225,6 +247,8 @@ SETTLE_SECONDS=3
 SCROLL_WAIT_SECONDS=2
 READY_TIMEOUT=90
 LANDED_WAIT_SECONDS=15   # extra wait for SCROLL_LANDED on a declared code capture
+GEOMETRY_NOTIFICATION="com.connie.adfreader.geometry"   # CaptureGeometryHook (-captureGeometryHook)
+GEOMETRY_WAIT_SECONDS=5  # per CAPTURE_GEOMETRY line of the screenshot bracket
 MASKS=()
 TOP_BAND=330
 BOTTOM_BAND=102
@@ -257,8 +281,14 @@ LIST_FIXTURES_DEFAULT=("lists-parity:3" "list-dense:3" "list-tall:3")
 #
 # TEAM LEAD: confirm every fraction, land= block and owner below against
 # the final fixtures' READY block counts and the generator's summary before
-# the gate run. The run checks the landing too: the app's SCROLL_LANDED line
-# must name the land= block, or the pair is INVALID.
+# the gate run. The run checks the landing twice: the app's SCROLL_LANDED
+# line must name the land= block (the jump went where it was told), and the
+# capture-time geometry must show it landed there (the land= block fully
+# visible, below the top band, nothing more than one block above it on
+# screen), or the pair is INVALID. A tk2 owner must own a scored code box
+# at the screenshot: name only owners whose box is below the band, and use
+# a #s<step> declaration where one step moves an owner out of the scored
+# region (never a looser rule).
 #
 # kitchen-sink: 37 top-level nodes prepare to 38 blocks. The code block is
 # node 12 = block id 0.12 = blocks[12]: nodes 0–11 (headings, paragraphs,
@@ -289,8 +319,9 @@ KITCHEN_SINK_CODE_OWNER="0.12"
 CODE_PARITY_POSITIONS="0,0.19,0.28,0.515,0.66,0.78"
 # code-dense: 600 code blocks and nothing else (block id 0.<i>, first line
 # "// CD-<iii>"). Block 0 and block 300 land with their header strip under
-# the band: they are live, drawn rows (named as owners) but not scored as
-# boxes; the boxes scored are the blocks below them. Blocks 0–2 are pinned
+# the band: they are live, drawn rows but not scored as boxes, so they are
+# the land= blocks and not named as owners (a tk2 owner must own a scored
+# box); the boxes scored are the blocks below them. Blocks 0–2 are pinned
 # by the generator to 3–8 lines of at most 40 columns. Blocks 300 (5 x 28)
 # and 301 (10 x 65) are predicted admitted at steps 0 and 3 by the
 # generator's Python port (fixture notes, section 6; neither is in the
@@ -319,13 +350,12 @@ CODE_CAPTURES_DEFAULT=(
     # a panel; CP-27 is in a collapsed expand and not on screen). The
     # landing block CP-22 (non-ASCII) is outside the admitted cohort.
     "code-parity@0.78=fallback;0.26=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26"
-    "code-dense@0=positive;0.0=tk2,0.1=tk2,0.2=tk2;land=0.0"
-    "code-dense@0.5=positive;0.300=tk2,0.301=tk2;land=0.300"
+    "code-dense@0=positive;0.1=tk2,0.2=tk2;land=0.0"
+    "code-dense@0.5=positive;0.301=tk2;land=0.300"
 )
 CODE_CAPTURES=()
 CODE_CAPTURES_EXPLICIT=()
 NO_CODE_CAPTURES=0
-REQUIRE_OWNER_PROOF=0
 DEFAULT_FIXTURE_SPECS=("kitchen-sink@0,0.5" "stress-5k@0,0.5"
     "lists-parity@0,0.119,0.214,0.357,0.405,0.452,0.548,0.643" "list-dense@0.761"
     "kitchen-sink@$KITCHEN_SINK_CODE_POSITION" "code-parity@$CODE_PARITY_POSITIONS"
@@ -370,7 +400,9 @@ while [[ $# -gt 0 ]]; do
         --list-fixture) need_value "$@"; LIST_FIXTURES+=("$2"); shift 2 ;;
         --code-capture) need_value "$@"; CODE_CAPTURES_EXPLICIT+=("$2"); shift 2 ;;
         --no-code-captures) NO_CODE_CAPTURES=1; shift ;;
-        --require-owner-proof) REQUIRE_OWNER_PROOF=1; shift ;;
+        # Accepted for old command lines: visual_diff.py always demands the
+        # owner-level proof now.
+        --require-owner-proof) shift ;;
         --skip-capture) SKIP_CAPTURE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -388,15 +420,19 @@ done
 # for the same position and step wins.
 [[ $NO_CODE_CAPTURES -eq 1 ]] || CODE_CAPTURES=("${CODE_CAPTURES_DEFAULT[@]}")
 for decl in ${CODE_CAPTURES_EXPLICIT[@]+"${CODE_CAPTURES_EXPLICIT[@]}"}; do CODE_CAPTURES+=("$decl"); done
-CODE_CAPTURE_RE='^[A-Za-z0-9_.-]+@(0|1|0?[.][0-9]+|1[.]0*)(#s-?[0-9]+)?=(positive|fallback);[0-9.]+=(tk2|swiftui)(,[0-9.]+=(tk2|swiftui))*(;land=[0-9.]+)?$'
+CODE_CAPTURE_RE='^[A-Za-z0-9_.-]+@(0|1|0?[.][0-9]+|1[.]0*)(#s-?[0-9]+)?=(positive|fallback);[0-9.]+=(tk2|swiftui)(,[0-9.]+=(tk2|swiftui))*(;land=[0-9.]+)$'
 for decl in ${CODE_CAPTURES[@]+"${CODE_CAPTURES[@]}"}; do
     [[ "$decl" =~ $CODE_CAPTURE_RE ]] ||
-        die "--code-capture '$decl': want <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...][;land=<block id>]"
+        die "--code-capture '$decl': want <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id> (land= is required: the landing is measured)"
     case "$decl" in
         *"=positive;"*) [[ "$decl" == *=tk2* ]] || die "--code-capture '$decl': a positive capture needs an owner marked tk2" ;;
         *) [[ "$decl" != *=tk2* ]] || die "--code-capture '$decl': a fallback capture cannot mark an owner tk2" ;;
     esac
 done
+# Every declared code capture needs the engine proof and the capture-time
+# geometry, which only -rendererStats and -captureGeometryHook print.
+[[ $RENDERER_STATS -eq 1 || ${#CODE_CAPTURES[@]} -eq 0 ]] ||
+    die "--no-renderer-stats drops the engine proof every declared code capture needs: add --no-code-captures, or keep the stats"
 for arm in $ARMS; do
     case "$arm" in A|A2|B|C) ;; *) die "--arms: unknown arm '$arm' (A A2 B C)" ;; esac
 done
@@ -446,7 +482,7 @@ arm_args() {
     case "$arm" in
         B|C)
             printf '%s\n' -rendererReset
-            [[ $RENDERER_STATS -eq 0 ]] || printf '%s\n' -rendererStats
+            [[ $RENDERER_STATS -eq 0 ]] || printf '%s\n' -rendererStats -captureGeometryHook
             [[ "$arm" != "C" ]] || printf '%s\n' -textkit2
             ;;
     esac
@@ -503,7 +539,6 @@ DIFF_ARGS=(--top-band "$TOP_BAND" --bottom-band "$BOTTOM_BAND" --threshold "$THR
     --max-raw-pct "$MAX_RAW_PCT" --max-crop-pct "$MAX_CROP_PCT" --max-offset-px "$MAX_OFFSET_PX")
 for mask in ${MASKS[@]+"${MASKS[@]}"}; do DIFF_ARGS+=(--mask "$mask"); done
 for mask in ${EXACT_MASKS[@]+"${EXACT_MASKS[@]}"}; do DIFF_ARGS+=(--exact-mask "$mask"); done
-[[ $REQUIRE_OWNER_PROOF -eq 0 ]] || DIFF_ARGS+=(--require-owner-proof)
 # List captures: pair names are <fixture>-p<position>-…, so the prefix
 # "<fixture>-p" names exactly that fixture's pairs.
 for rule in "${LIST_FIXTURES[@]}"; do
@@ -514,7 +549,8 @@ for rule in "${LIST_FIXTURES[@]}"; do
 done
 
 # The engine a pair's candidate arm ran, for the code proof: none for the
-# reference build (it prints no stats) and under --no-renderer-stats.
+# reference build (it prints no stats) and under --no-renderer-stats (then
+# no code capture is declared: refused above).
 arm_engine() {
     [[ $RENDERER_STATS -eq 1 ]] || { echo none; return 0; }
     case "$1" in B) echo swiftui ;; C) echo textkit2 ;; *) echo none ;; esac
@@ -569,6 +605,9 @@ if [[ $DRY_RUN -eq 1 ]]; then
                 args="$(arm_args "$arm" "$fixture" "$pos" "$step" | tr '\n' ' ')"
                 echo "  $cfg-$arm  appearance=$appearance  app=$(arm_app "$arm")"
                 echo "      xcrun simctl launch --console-pty $UDID $BUNDLE_ID ${args% }"
+                if [[ "$(arm_engine "$arm")" != "none" && -n "$(code_rule_for "$fixture" "$pos" "$step")" ]]; then
+                    echo "      geometry: notifyutil -p $GEOMETRY_NOTIFICATION before and after the screenshot"
+                fi
             done
         done
     fi
@@ -658,6 +697,20 @@ image_size() {
 # First line of $2 starting with marker $1 (PTY \r stripped), or "".
 marker_line() { tr -d '\r' <"$2" | grep -m1 -E "^$1( |\$)" || true; }
 
+# Line `CAPTURE_GEOMETRY seq=<$1> …` of log $2 (PTY \r stripped), or "".
+geometry_line() { tr -d '\r' <"$2" | grep -m1 -E "^CAPTURE_GEOMETRY seq=$1( |\$)" || true; }
+
+# request_geometry <launch_log> <seq>: post the capture-geometry hook and wait
+# (up to GEOMETRY_WAIT_SECONDS) for the app's line with that sequence number.
+request_geometry() {
+    local deadline=$(( SECONDS + GEOMETRY_WAIT_SECONDS ))
+    xcrun simctl spawn "$UDID" notifyutil -p "$GEOMETRY_NOTIFICATION" >/dev/null 2>&1 || return 1
+    while [[ -z "$(geometry_line "$2" "$1")" ]]; do
+        (( SECONDS < deadline )) && kill -0 "$LAUNCH_PID" 2>/dev/null || return 1
+        sleep 0.1
+    done
+}
+
 # First line of $2 starting with marker $1 AFTER the SCROLL_LANDED line (what
 # the app prints once the -scrollToFraction jump has landed), or "".
 landed_line() {
@@ -743,7 +796,20 @@ capture() {
         LAUNCH_PID=""
         return 1
     fi
+    # Arms B and C of a declared code capture: what is on screen right before
+    # and right after the screenshot (CAPTURE_GEOMETRY seq=1 and seq=2), so
+    # visual_diff.py can tie each scored code box to the row that drew it.
+    local bracket=0 geometry_note=""
+    [[ "$(arm_engine "$arm")" == "none" || -z "$(code_rule_for "$fixture" "$pos" "$step")" ]] || bracket=1
+    if (( bracket )); then
+        request_geometry "$launch_log" 1 || geometry_note="no CAPTURE_GEOMETRY seq=1 before the screenshot"
+    fi
     xcrun simctl io "$UDID" screenshot --type=png "$png" >/dev/null 2>&1
+    if (( bracket )); then
+        request_geometry "$launch_log" 2 ||
+            geometry_note="${geometry_note:+$geometry_note; }no CAPTURE_GEOMETRY seq=2 after the screenshot"
+    fi
+    [[ -z "$geometry_note" ]] || log "$cfg-$arm: $geometry_note: its code proof will be INVALID"
     xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
     wait "$LAUNCH_PID" 2>/dev/null || true
     LAUNCH_PID=""
@@ -776,7 +842,8 @@ capture() {
         "${stats:-}" "$( [[ -s "$png" ]] && sha256 "$png" || echo missing )" \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${problems:-ok}" \
         "$(marker_line SCROLL_LANDED "$launch_log")" "$(landed_line RENDERER_STATS "$launch_log")" \
-        "$(landed_line TK2_CODE_ROWS "$launch_log")" >>"$MANIFEST"
+        "$(landed_line TK2_CODE_ROWS "$launch_log")" "$(geometry_line 1 "$launch_log")" \
+        "$(geometry_line 2 "$launch_log")" >>"$MANIFEST"
 
     if [[ -n "$problems" ]]; then
         log "$cfg-$arm: $problems"
@@ -803,7 +870,7 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
         echo "device=$UDID $DEVICE_NAME $DEVICE_RUNTIME booted_by_this_run=$BOOTED_BY_US"
         echo "other_booted=${OTHER_BOOTED:-none} allow_other_booted=$ALLOW_OTHER_BOOTED"
         echo "list_fixtures=${LIST_FIXTURES[*]}"
-        echo "code_captures=${CODE_CAPTURES[*]:-none} require_owner_proof=$REQUIRE_OWNER_PROOF"
+        echo "code_captures=${CODE_CAPTURES[*]:-none}"
         echo "locale=$LOCALE content_size=$CONTENT_SIZE (device had: ${ORIG_CONTENT_SIZE:-?}, appearance ${ORIG_APPEARANCE:-?})"
         echo "ref_app=$REF_APP sha256=$(sha256 "$REF_APP/ADFReader")"
         if [[ -n "$APP" && -x "$APP/ADFReader" ]]; then
@@ -819,7 +886,7 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
     } >"$OUT/env.txt"
     tsv capture arm fixture position appearance size_step content_size app app_sha256 installed_sha256 \
         argv udid device runtime locale ready_line renderer_stats png_sha256 captured_utc status \
-        scroll_landed landed_renderer_stats landed_code_rows >"$MANIFEST"
+        scroll_landed landed_renderer_stats landed_code_rows geometry_before geometry_after >"$MANIFEST"
 
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
