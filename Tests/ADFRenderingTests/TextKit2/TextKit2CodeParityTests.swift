@@ -1183,10 +1183,13 @@ struct TextKit2CodeMeasureFirstTests {
     /// The TextKit 2 row's own exposure is always asserted. SwiftUI builds
     /// its accessibility tree for an assistive client; in a unit-test host
     /// with none it may expose nothing, or the badge and Copy without the
-    /// code text in its scroll view, and then the two trees cannot be
-    /// compared here: that is printed (`CODE_E5 observable=false`) and
-    /// recorded as a known issue, and the UI-test half (VoiceOver on an
-    /// iOS 27 simulator) owns the comparison.
+    /// code text in its scroll view. What is compared is decided by the
+    /// SwiftUI arm, the reference, alone: every element it lists the
+    /// TextKit 2 arm must list too, alike and in the same order, so a
+    /// TextKit 2 tree that loses one fails. Only a reference without the
+    /// code text is the known issue (printed `CODE_E5 observable=false`),
+    /// and the UI-test half (VoiceOver on an iOS 27 simulator) owns that
+    /// comparison.
     @Test("E5: a code block's accessibility elements are the same on both arms")
     func accessibilityElements() async throws {
         let block = try await TK2Parity.codeBlock(TK2CodeParity.eightLines, language: "swift")
@@ -1209,31 +1212,39 @@ struct TextKit2CodeMeasureFirstTests {
                 #expect(row.accessibilityIdentifier == "tk2-row:\(block.id)")
             }
         }
-        let copyOff = trees[0].contains { $0.label == "Copy code" }
-        let copyOn = trees[1].contains { $0.label == "Copy code" }
-        // The SwiftUI code text sits in SwiftUI's horizontal scroll view with
-        // no UIView of its own: without an assistive client the walk can
-        // list the badge and Copy and still miss it (26.3, 3x), while the
-        // row is a real subview and is always found. The trees compare only
-        // when the SwiftUI arm lists the code too.
-        let codeOff = trees[0].contains { $0.label == text }
-        let observable = copyOff && copyOn && codeOff
-        print("CODE_E5 observable=\(observable) os=\(TK2Parity.osVersion)")
-        if observable {
-            #expect(trees[0] == trees[1], "swiftUI=\(trees[0]) textKit2=\(trees[1])")
-            for (index, tree) in trees.enumerated() {
-                let badge = tree.firstIndex { $0.label == "swift" }
-                let copy = tree.firstIndex { $0.label == "Copy code" }
-                let code = tree.firstIndex { $0.label == text }
-                if let badge, let copy, let code {
-                    #expect(badge < copy && copy < code, "arm \(index): order badge=\(badge) Copy=\(copy) code=\(code)")
-                } else {
-                    Issue.record("arm \(index): badge, Copy or code element missing in \(tree)")
-                }
-            }
-        } else {
+        // The reference is the SwiftUI arm's tree alone; the TextKit 2 tree
+        // never decides what is compared. SwiftUI's code text sits in its
+        // horizontal scroll view with no UIView of its own: without an
+        // assistive client the walk can list the badge and Copy and still
+        // miss it (26.3, 3x), or list nothing (18.5 and 26.3, 3x and 2x),
+        // while the row is a real subview and is always found.
+        let reference = trees[0]
+        let candidate = trees[1]
+        let badge = "swift"
+        let copy = "Copy code"
+        let spokenOrder = [badge, copy, text]
+        let observable = reference.contains { $0.label == text }
+        print("CODE_E5 observable=\(observable) reference=\(reference.count) os=\(TK2Parity.osVersion)")
+        // Each element the reference lists, the TextKit 2 tree lists too.
+        for label in [badge, copy] where reference.contains(where: { $0.label == label }) {
+            #expect(candidate.contains { $0.label == label }, "the SwiftUI arm lists \"\(label)\", the TextKit 2 arm does not: \(candidate)")
+        }
+        // The code element is the TextKit 2 row's, listed once whatever the
+        // reference lists.
+        #expect(candidate.filter { $0.label == text }.count == 1, "the TextKit 2 arm's code element: \(candidate)")
+        // The trees are equal, labels and traits, in order. With no code
+        // text in the reference only the TextKit 2 row is left out, so the
+        // badge and Copy still compare.
+        let compared = observable ? candidate : candidate.filter { $0.label != text }
+        #expect(compared == reference, "swiftUI=\(reference) textKit2=\(candidate)")
+        // The order, badge then Copy then code, of what each tree lists.
+        for (arm, tree) in [("swiftUI", reference), ("textKit2", candidate)] {
+            let positions = spokenOrder.compactMap { label in tree.firstIndex { $0.label == label } }
+            #expect(positions == positions.sorted(), "\(arm): badge, Copy and code at \(positions) in \(tree)")
+        }
+        if !observable {
             withKnownIssue("SwiftUI exposes no accessibility element for its scrolled code text to a unit-test host without an assistive client") {
-                Issue.record("E5 hosted half not observable: swiftUI=\(trees[0]) textKit2=\(trees[1])")
+                Issue.record("E5: the code text is not compared; the SwiftUI arm lists \(reference.count) element(s): swiftUI=\(reference) textKit2=\(candidate)")
             }
         }
     }

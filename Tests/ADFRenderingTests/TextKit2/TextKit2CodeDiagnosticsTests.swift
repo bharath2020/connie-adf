@@ -39,6 +39,12 @@ struct TK2CodeNewFixturePins {
     /// and on a 2x display, on iOS 26 or later.
     var admittedAt3x: Int
     var admittedAt2x: Int
+    /// The same before iOS 26, of `eligibleBeforeIOS26`, as measured on
+    /// iOS 18.5 (`CODE_PINS` lines). The scale is an argument of the
+    /// admission and the code font's metrics do not depend on the device's
+    /// scale, so the 3x iOS 18.5 simulator measures the 2x counts too.
+    var admittedAt3xBeforeIOS26: Int
+    var admittedAt2xBeforeIOS26: Int
     /// Code blocks prepared below the top level (out of scope: in neither
     /// code count). An expand's body is not prepared with the document.
     var nestedCode: Int
@@ -186,17 +192,23 @@ struct TextKit2CodeCoverageTests {
         let nested = TextKit2CodeScopeRuleTests.nestedCodeIDs(blocks)
         #expect(nested.count == pins.nestedCode, "\(name): nested code \(nested.sorted())")
         #if canImport(UIKit)
-        for (scale, admitted) in [(CGFloat(3), pins.admittedAt3x), (CGFloat(2), pins.admittedAt2x)] {
+        // Each OS has its own admitted pins: before iOS 26 a block ending in
+        // two or more line feeds is not eligible, so it is in neither count.
+        let ios26 = TextKit2Eligibility.trailingBreaksMatchText
+        let atScales = ios26
+            ? [(CGFloat(3), pins.admittedAt3x), (CGFloat(2), pins.admittedAt2x)]
+            : [(CGFloat(3), pins.admittedAt3xBeforeIOS26), (CGFloat(2), pins.admittedAt2xBeforeIOS26)]
+        for (scale, admitted) in atScales {
             let admission = ADFTextRenderer.textKit2CodeAdmission(
                 of: blocks, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: scale, layoutDirection: .leftToRight
             )
+            print("CODE_PINS fixture=\(name) size=large scale=\(TK2CodeParity.scaleText(scale)) os=\(TK2Parity.osVersion) "
+                + "eligible=\(coverage.eligibleCodeRoots) admitted=\(admission.admittedCodeRoots) gated=\(admission.gatedCodeRoots)")
             #expect(admission.admittedCodeRoots + admission.gatedCodeRoots == coverage.eligibleCodeRoots, "\(name) @\(scale)x")
-            // The admitted pins are iOS 26's: before it a block ending in two
-            // or more line feeds is not eligible, so it is in neither count.
-            if TextKit2Eligibility.trailingBreaksMatchText {
-                #expect(admission.admittedCodeRoots == admitted, "\(name) @\(scale)x: admitted \(admission.admittedCodeRoots)")
-                #expect(admission.gatedCodeRoots == pins.eligible - admitted, "\(name) @\(scale)x: gated \(admission.gatedCodeRoots)")
-            }
+            #expect(admission.admittedCodeRoots == admitted,
+                    "\(name) @\(scale)x, \(ios26 ? "iOS 26 or later" : "before iOS 26"): admitted \(admission.admittedCodeRoots)")
+            #expect(admission.gatedCodeRoots == eligible - admitted,
+                    "\(name) @\(scale)x, \(ios26 ? "iOS 26 or later" : "before iOS 26"): gated \(admission.gatedCodeRoots)")
         }
         #endif
     }
@@ -211,7 +223,11 @@ struct TextKit2CodeCoverageTests {
             eligibleBeforeIOS26: 16, // the same without the blocks ending in two or more line feeds (CP-12, CP-13)
             admittedAt3x: 16,        // codeAdmitted at Large on 3x: not CP-15 (9,461 px wide), CP-17
             admittedAt2x: 17,        // codeAdmitted at Large on 2x: not CP-17
-            nestedCode: 2            // code in the list item (0.30.0.1) and the panel (0.31.1); the expand's is not prepared
+            // Before iOS 26 (measured on iOS 18.5): the same blocks gated, of
+            // the 16 eligible (CP-12 and CP-13 are in neither count).
+            admittedAt3xBeforeIOS26: 14, // gated: CP-15, CP-17
+            admittedAt2xBeforeIOS26: 15, // gated: CP-17
+            nestedCode: 2           // code in the list item (0.30.0.1) and the panel (0.31.1); the expand's is not prepared
         ))
     }
 
@@ -269,6 +285,10 @@ struct TextKit2CodeCoverageTests {
             // generator's 3 % metric band. If a run gates it (595), the
             // measured metrics moved: re-pin from the run, not from this count.
             admittedAt2x: 596,
+            // Before iOS 26 (measured on iOS 18.5): every block is eligible,
+            // and the same blocks are gated at each scale (CD-340 admitted).
+            admittedAt3xBeforeIOS26: 582,
+            admittedAt2xBeforeIOS26: 596,
             nestedCode: 0             // no nested code
         ))
     }
@@ -285,6 +305,8 @@ struct TextKit2CodeCoverageTests {
             eligibleBeforeIOS26: 11, // the same before iOS 26: no block ends in a line feed
             admittedAt3x: 10,        // codeAdmitted at Large on 3x: CT-TALL, the 400-line block, is over the height cap
             admittedAt2x: 10,        // codeAdmitted at Large on 2x: CT-TALL is over the height cap at any scale
+            admittedAt3xBeforeIOS26: 10, // measured on iOS 18.5: CT-TALL gated
+            admittedAt2xBeforeIOS26: 10, // measured on iOS 18.5: CT-TALL gated
             nestedCode: 0            // no nested code
         ))
     }
