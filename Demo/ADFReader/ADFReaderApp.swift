@@ -43,7 +43,7 @@ import UIKit
 ///   SwiftUI regardless of what a previous run left behind. With both flags
 ///   the reset applies first, then `-textkit2`.
 /// - `-rendererStats` prints one `RENDERER_STATS …` line (active renderer,
-///   live/cumulative TextKit 2 row counters, eligible/fallback roots) right
+///   live/cumulative TextKit 2 row counters, coverage counts) right
 ///   after READY and again right after `SCROLL_METRICS` — the perf gate's
 ///   proof of which engine drew (see `RendererStats`) — and, after a
 ///   `-scrollToFraction` jump, once more between `SCROLL_LANDED` and
