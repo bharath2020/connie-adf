@@ -189,7 +189,7 @@ struct ListRowView: View {
 /// size asked for, and it has no ▪ at all (the fallback draws an emoji, a
 /// large glossy square). A hidden • lays the marker out, so the column,
 /// first-baseline alignment and row height are the glyph's, and each mark
-/// is centred where that glyph's dot is centred: `midY` above the baseline,
+/// is centred where that glyph's dot is centred: `dotMidY` above the baseline,
 /// on the first line of the item's text.
 struct BulletMarkerView: View {
     let depth: Int
