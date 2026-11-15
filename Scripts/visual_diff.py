@@ -107,8 +107,12 @@ CODE BOXES (every pair)
     Color.gray.opacity(0.1), so its colour is the page background blended
     10 % toward system grey (142,142,147) - (244,244,244) on white,
     (14,14,15) on black (--code-fill overrides; +-1 per channel,
-    --code-fill-tolerance). A code box is found in the REFERENCE without any
-    help from the app: a solid rectangle (no page-background pixel inside,
+    --code-fill-tolerance). The page background is the commonest scorable
+    colour, except on a viewport of mostly code (code-parity, code-dense),
+    where the fill outnumbers the page: when the commonest colour is the
+    code fill of a runner-up colour that fills a whole scorable row (the
+    gap between two blocks), the runner-up is the page. A code box is
+    found in the REFERENCE without any help from the app: a solid rectangle (no page-background pixel inside,
     at least 20 % of the image wide and 20 pt tall) of which at least half
     the pixels are that fill, whose first ink band is the header (ends
     within 40 pt of the top and reaches within 30 pt of the right edge: the
@@ -494,15 +498,48 @@ CODE_COPY_INSET_MAX_PT = 30     # the Copy icon ends ~13 pt from the right edge
 CODE_OUTLINE_OUTER_PT = 2       # blocks are 8 pt apart: stays clear of the neighbours
 CODE_OUTLINE_INNER_PT = 8       # the corner radius; the padding inside the box is 8-12 pt
 CODE_LINE_GAP = 2               # ink-free rows that end a code line (lines sit >= 5 pt apart)
+CODE_PAGE_CANDIDATES = 4        # runner-up colours tried as the page when the fill is the commonest colour
 
 
-def dominant_rgb(rgb: np.ndarray, valid: np.ndarray) -> tuple[int, int, int]:
-    """The most common colour among the valid pixels (the page background)."""
+def ranked_rgb(rgb: np.ndarray, valid: np.ndarray, count: int) -> list[tuple[int, int, int]]:
+    """The `count` most common colours among the valid pixels, commonest
+    first (every 5th pixel is counted)."""
     px = rgb[valid][::5].astype(np.uint32)
     keys = (px[:, 0] << 16) | (px[:, 1] << 8) | px[:, 2]
     values, counts = np.unique(keys, return_counts=True)
-    key = int(values[counts.argmax()])
-    return key >> 16, (key >> 8) & 255, key & 255
+    order = np.argsort(-counts, kind="stable")[:count]
+    return [(int(k) >> 16, (int(k) >> 8) & 255, int(k) & 255) for k in values[order]]
+
+
+def code_fill_of(page: tuple[int, int, int], fill_override: tuple[int, int, int] | None) -> tuple[int, int, int]:
+    """The code-box fill on a page colour: the page blended CODE_FILL_ALPHA
+    toward system grey, unless --code-fill gives it."""
+    return fill_override or tuple(int(round(b + CODE_FILL_ALPHA * (g - b))) for b, g in zip(page, SYSTEM_GRAY))
+
+
+def page_background(rgb: np.ndarray, scorable: np.ndarray, fill_override: tuple[int, int, int] | None,
+                    tolerance: int) -> tuple[int, int, int]:
+    """The page colour the code boxes sit on: the most common scorable
+    colour, unless that colour is the code fill of a runner-up colour that
+    fills at least one whole scorable row - then the runner-up. A viewport
+    of mostly code shows more fill than page (code-parity and code-dense:
+    70-80 % fill, 13-25 % page), and the fill taken for the page hides
+    every box. A whole row of one colour is the gap between two blocks,
+    which no code box crosses; the fill alone never fills a row unless a
+    full-width box does, and then it is not the runner-up's fill."""
+    ranked = ranked_rgb(rgb, scorable, CODE_PAGE_CANDIDATES + 1)
+    dominant = ranked[0]
+    scored_rows = scorable.any(axis=1)
+    for colour in ranked[1:]:
+        fill = code_fill_of(colour, fill_override)
+        if max(abs(f - d) for f, d in zip(fill, dominant)) > tolerance:
+            continue   # the commonest colour is not this colour's code fill
+        if max(abs(f - c) for f, c in zip(fill, colour)) <= tolerance:
+            continue   # no fill depth on this colour
+        near = np.abs(rgb.astype(np.int16) - np.array(colour, dtype=np.int16)).max(axis=2) <= tolerance
+        if ((near | ~scorable).all(axis=1) & scored_rows).any():
+            return colour
+    return dominant
 
 
 def true_runs(row: np.ndarray, min_length: int) -> list[tuple[int, int]]:
@@ -520,8 +557,8 @@ def find_fill_boxes(rgb: np.ndarray, scorable: np.ndarray, fill_override: tuple[
     height, width = scorable.shape
     if not scorable.any():
         return []
-    background = dominant_rgb(rgb, scorable)
-    fill = fill_override or tuple(int(round(b + CODE_FILL_ALPHA * (g - b))) for b, g in zip(background, SYSTEM_GRAY))
+    background = page_background(rgb, scorable, fill_override, tolerance)
+    fill = code_fill_of(background, fill_override)
     depth = max(abs(f - b) for f, b in zip(fill, background))
     if depth <= tolerance:
         return []

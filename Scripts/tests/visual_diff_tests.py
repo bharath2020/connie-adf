@@ -152,16 +152,22 @@ BOX = (20, 80, 280, 200)   # x0, y0, x1, y1 (exclusive)
 def code_page(name: str, *, dark: bool = False, box: tuple[int, int, int, int] | None = BOX,
               lines: tuple[int, ...] = (200, 150, 110), text_dx: int = 0, text_dy: int = 0,
               tint: tuple[int, int, int] | None = None, copy: bool = True, top: int = 0,
-              second_box: bool = False, edits: tuple[tuple[int, int, int], ...] = ()) -> str:
+              second_box: bool = False, extra_boxes: tuple[tuple[int, int, int, int], ...] = (),
+              page_tint: tuple[tuple[int, int, int, int, tuple[int, int, int]], ...] = (),
+              edits: tuple[tuple[int, int, int], ...] = ()) -> str:
     """A 300x400 page with one text line and (unless `box` is None) a code
     box. `text_dx`/`text_dy` move the code lines only; `tint` replaces the
-    fill (a panel); `top` moves the whole box; `edits` are (y, x, delta)
-    one-pixel changes applied last."""
+    fill (a panel); `top` moves the whole box; `extra_boxes` are more code
+    boxes (x0, y0, x1, y1) with one line each; `page_tint` paints
+    (x0, y0, x1, y1, colour) rectangles on the page first; `edits` are
+    (y, x, delta) one-pixel changes applied last."""
     background = (0, 0, 0) if dark else (255, 255, 255)
     ink, secondary = (235, 150) if dark else (20, 120)
     fill = tuple(round(b + 0.1 * (g - b)) for b, g in zip(background, (142, 142, 147)))
     img = np.empty((400, 300, 3), dtype=np.uint8)
     img[:] = background
+    for tx0, ty0, tx1, ty1, colour in page_tint:
+        img[ty0:ty1, tx0:tx1] = colour
     img[30:40, 20:220] = ink   # page text, so no pair is blank
 
     def draw_box(x0: int, y0: int, x1: int, y1: int, widths: tuple[int, ...]) -> None:
@@ -185,6 +191,8 @@ def code_page(name: str, *, dark: bool = False, box: tuple[int, int, int, int] |
         draw_box(x0, y0 + top, x1, y1 + top, lines)
     if second_box:
         draw_box(20, 260, 280, 330, (90,))
+    for extra in extra_boxes:
+        draw_box(*extra, (90,))
     for y, x, delta in edits:
         img[y, x] = np.clip(img[y, x].astype(int) + delta, 0, 255)
     path = os.path.join(work, name + ".png")
@@ -255,6 +263,38 @@ dark_a, dark_b = code_page("code-dark-a", dark=True), code_page("code-dark-b", d
 code, pair = run_pair("cb-dark", "exact", dark_a, dark_b)
 check("dark appearance: the box is found on black", (code, pair["verdict"]), 0, "PASS")
 expect("dark code boxes", pair.get("code_boxes"), 1)
+
+# A viewport of mostly code (code-parity, code-dense: 70-80 % of the pixels
+# are fill) has more fill than page. The page is still found: the commonest
+# colour is the code fill of the runner-up, which fills whole rows (the gaps
+# between blocks).
+DENSE = dict(box=(4, 48, 296, 252), extra_boxes=((4, 268, 296, 396),))
+for label, dark in (("light", False), ("dark", True)):
+    dense_a = code_page(f"code-dense-{label}-a", dark=dark, **DENSE)
+    dense_b = code_page(f"code-dense-{label}-b", dark=dark, **DENSE)
+    pixels = np.asarray(Image.open(dense_a).convert("RGB")).reshape(-1, 3)
+    page_share = float((pixels == (0 if dark else 255)).all(axis=1).mean())
+    expect(f"fill-dominated page ({label}): the page is the minority colour", page_share < 0.3, True)
+    code, pair = run_pair(f"cb-dense-{label}", "tolerant", dense_a, dense_b,
+                          *code_capture(f"cb-dense-{label}", "positive", positive, "textkit2", good_log))
+    check(f"fill-dominated page ({label}), identical positive capture -> PASS", (code, pair["verdict"]), 0, "PASS")
+    expect(f"fill-dominated page ({label}): both boxes and their text crops",
+           (pair.get("code_boxes"), pair.get("code_text_crops")), (2, 2))
+dense_a = code_page("code-dense-light-a2", **DENSE)
+code, pair = run_pair("cb-dense-dx", "tolerant", dense_a, code_page("code-dense-1px-right", text_dx=1, **DENSE),
+                      *code_capture("cb-dense-dx", "positive", positive, "textkit2", good_log))
+check("fill-dominated page, code text moved 1 px right (tolerant) -> FAIL", (code, pair["verdict"]), 1, "FAIL")
+expect("... both boxes report it", pair.get("failing_code_boxes"), 2)
+check("fill-dominated page, the second box 1 px lower -> FAIL",
+      run("cb-dense-moved", "tolerant", dense_a,
+          code_page("code-dense-box-lower", box=DENSE["box"], extra_boxes=((4, 269, 296, 397),))), 1, "FAIL")
+# Guard: a page dominated by another tint (a decision row background, 246 on
+# white) is not taken for code fill; it holds no code box.
+tinted = dict(box=None, page_tint=((0, 48, 300, 400, (246, 246, 246)),))
+code, pair = run_pair("cb-tint-dominated", "exact", code_page("tint-dominated-a", **tinted),
+                      code_page("tint-dominated-b", **tinted))
+check("page dominated by a non-code tint -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... and no code box is found on it", pair.get("code_boxes"), 0)
 
 # Negative control: code text one pixel to the right.
 moved_x = code_page("code-text-1px-right", text_dx=1)
