@@ -627,9 +627,106 @@ struct LabelShift {
     }
 
     /// `tops` measured from `anchor`'s top (nil when `anchor` is absent).
+    /// The anchor's own entry is 0 by construction, so a `LabelShift` over
+    /// two relative snapshots counts it as a common label that cannot move
+    /// (Astra R2). The code tests C2 and C3 use `AnchoredShift` instead;
+    /// PR 2's L2, L3a and L4b still use this (follow-up: move them).
     static func relative(_ tops: [String: CGFloat], to anchor: String) -> [String: CGFloat]? {
         guard let origin = tops[anchor] else { return nil }
         return tops.mapValues { $0 - origin }
+    }
+}
+
+/// Code text geometry of one snapshot (C2, C3): each on-screen code
+/// text's top and bottom edge (points), by `CD-<iii>`, and the bottom of
+/// the viewport the snapshot was read with. An accessibility frame is the
+/// element's full frame, so a top above or a bottom below the viewport is
+/// still a measurement.
+struct CodeGeometry {
+    var tops: [String: CGFloat] = [:]
+    var bottoms: [String: CGFloat] = [:]
+    var viewportMaxY: CGFloat = 0
+}
+
+/// Displacement between two snapshots measured from an anchor text's top
+/// (C2's round trips, C3's legs; Astra R2).
+///
+/// The anchor's own top is zero by construction, so it is not a
+/// measurement. Measured: the top of every other common text, and the
+/// bottom of every common text, the anchor's included (its height).
+/// Proven only when something the normalisation did not zero is compared:
+/// at least one other common text, or, for an anchor that runs past the
+/// viewport bottom in both snapshots (no text can follow it on screen),
+/// its own bottom in both. Anything less is unproven, never a pass.
+struct AnchoredShift {
+    let anchor: String
+    /// Common texts other than the anchor (their tops are measured).
+    let otherLabels: Int
+    /// Values compared: other texts' tops plus every common text's bottom.
+    let measured: Int
+    /// The measured landmarks, "CD-<iii> top" / "CD-<iii> bottom", sorted.
+    let landmarks: [String]
+    /// Largest displacement over `landmarks`, in device pixels.
+    let maxPixels: CGFloat
+    let worst: String
+    /// The anchor runs past the viewport bottom in both snapshots.
+    let anchorFillsViewport: Bool
+    /// Why the comparison proves nothing (nil when it is proven).
+    let unproven: String?
+    var proven: Bool { unproven == nil }
+
+    init(from before: CodeGeometry, to after: CodeGeometry, anchor: String, scale: CGFloat) {
+        self.anchor = anchor
+        let fills = [before, after].allSatisfy { snap in
+            snap.bottoms[anchor].map { $0 >= snap.viewportMaxY } ?? false
+        }
+        guard let a0 = before.tops[anchor], let a1 = after.tops[anchor] else {
+            otherLabels = 0
+            measured = 0
+            landmarks = []
+            maxPixels = 0
+            worst = ""
+            anchorFillsViewport = false
+            unproven = "anchor \(anchor) is not on screen in both snapshots"
+            return
+        }
+        // Sorted, so that ties name the same worst landmark every run.
+        var values: [(String, CGFloat)] = []
+        var others = 0
+        for label in before.tops.keys.sorted() where label != anchor {
+            guard let top0 = before.tops[label], let top1 = after.tops[label] else { continue }
+            others += 1
+            values.append(("\(label) top", abs((top1 - a1) - (top0 - a0)) * scale))
+        }
+        for label in before.bottoms.keys.sorted() {
+            guard let bottom0 = before.bottoms[label], let bottom1 = after.bottoms[label] else { continue }
+            values.append(("\(label) bottom", abs((bottom1 - a1) - (bottom0 - a0)) * scale))
+        }
+        otherLabels = others
+        measured = values.count
+        landmarks = values.map { $0.0 }.sorted()
+        var top: (String, CGFloat)?
+        for value in values where value.1 > top?.1 ?? -1 {
+            top = value
+        }
+        maxPixels = top?.1 ?? 0
+        worst = top?.0 ?? ""
+        // `fills` implies both of the anchor's bottoms are present, so its
+        // height is among `values`.
+        anchorFillsViewport = fills
+        if others > 0 || fills {
+            unproven = nil
+        } else {
+            unproven = "anchor-only: no other common code text, and \(anchor) does not run past the viewport "
+                + "bottom in both snapshots"
+        }
+    }
+
+    /// The figures a check records for this comparison.
+    var figures: [String: Any] {
+        ["px": Double(maxPixels), "other_labels": otherLabels, "measured": measured, "landmarks": landmarks,
+         "worst": worst, "anchor_fills_viewport": anchorFillsViewport, "proven": proven,
+         "unproven": unproven ?? ""]
     }
 }
 

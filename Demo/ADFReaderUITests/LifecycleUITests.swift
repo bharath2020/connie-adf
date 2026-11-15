@@ -1709,8 +1709,14 @@ final class LifecycleUITests: XCTestCase {
     /// C2 — test1's method on code-dense with L2's label-anchored return
     /// (a re-jump park does not land repeatably this deep): "back" is
     /// `codeReturn` to the anchor (`codeAnchor`: the first code text whose
-    /// top edge is in view at the parked position), and a return trip is
-    /// measured from that text (every code text's top minus the anchor's).
+    /// top edge is in view, at least 40 pt below the viewport's top, at the
+    /// parked position), and a return trip is
+    /// measured from that text (`AnchoredShift`: every other code text's
+    /// top and every common code text's bottom, minus the anchor's top).
+    /// A return trip is proven only with another common code text, or an
+    /// anchor that runs past the viewport bottom in both snapshots (its
+    /// height measured); an anchor-only trip is unproven, a FAIL with its
+    /// own `failure_class` (Astra R2).
     /// A no-switch control trip first; forward — ON at the start, twelve
     /// 600 pt drags away until the parked code rows have left the render
     /// region (none of them is in the tree), OFF there, back; reverse — ON
@@ -1735,9 +1741,8 @@ final class LifecycleUITests: XCTestCase {
         func screen() throws -> CodeScreen {
             Self.codeScreen(try reader.documentSnapshot())
         }
-        func anchored(_ from: CodeScreen, _ to: CodeScreen) -> LabelShift {
-            LabelShift(from: LabelShift.relative(from.tops, to: anchor.key) ?? [:],
-                       to: LabelShift.relative(to.tops, to: anchor.key) ?? [:], scale: scale)
+        func anchored(_ from: CodeScreen, _ to: CodeScreen) -> AnchoredShift {
+            AnchoredShift(from: from.geometry, to: to.geometry, anchor: anchor.key, scale: scale)
         }
         /// The parked blocks still in the accessibility tree.
         func alive(_ parked: CodeScreen) -> [String] {
@@ -1794,35 +1799,58 @@ final class LifecycleUITests: XCTestCase {
         }
         let inversions = LabelShift.orderInversions(from: s1.tops, to: s3.tops)
             + LabelShift.orderInversions(from: s4.tops, to: s6.tops)
-        let switched = [forwardOn, forward, reverseOn, reverseOff, reverse]
-        let rendererOK = returns.count == 4 && control.common > 0
-            && switched.allSatisfy { $0.common > 0 && $0.maxPixels <= limit }
+        // Round trips: anchored, proven only by something the anchor's
+        // normalisation did not zero (Astra R2). Switches in place: absolute
+        // tops, where the anchor's top is itself a measurement.
+        let anchoredLegs: [(String, AnchoredShift)] = [("control", control), ("forward", forward), ("reverse", reverse)]
+        let unproven = anchoredLegs.compactMap { name, shift in shift.unproven.map { "\(name): \($0)" } }
+        let inPlace: [(String, LabelShift)] = [("forward ON", forwardOn), ("reverse ON", reverseOn),
+                                               ("reverse OFF", reverseOff)]
+        let rendererOK = returns.count == 4 && unproven.isEmpty
+            && forward.maxPixels <= limit && reverse.maxPixels <= limit
+            && inPlace.allSatisfy { $0.1.common > 0 && $0.1.maxPixels <= limit }
             && !s2.tops.isEmpty && !s5.tops.isEmpty && forwardAlive.isEmpty && reverseAlive.isEmpty
             && badProofs.isEmpty && inversions.isEmpty
         let pass = rendererOK && control.maxPixels <= limit
-        try agent.record("C2 code collapse round trip, both directions (code-dense @ \(anchor.key))", pass: pass, [
-            "failure_class": !pass && rendererOK ? Self.controlDriftClass : "",
-            "control_round_trip_px": Double(control.maxPixels), "control_labels": control.common,
-            "forward_switch_on_px": Double(forwardOn.maxPixels), "forward_round_trip_px": Double(forward.maxPixels),
-            "forward_worst": forward.worstLabel, "forward_labels": forward.common,
-            "reverse_switch_on_px": Double(reverseOn.maxPixels), "reverse_switch_off_px": Double(reverseOff.maxPixels),
-            "reverse_round_trip_px": Double(reverse.maxPixels), "reverse_worst": reverse.worstLabel,
-            "reverse_labels": reverse.common,
+        var figures: [String: Any] = [
+            // An unproven leg first: it is not F16's flake.
+            "failure_class": !unproven.isEmpty ? "unproven geometry: \(unproven.joined(separator: "; "))"
+                : (!pass && rendererOK ? Self.controlDriftClass : ""),
+            "unproven_legs": unproven,
+            "control_round_trip_px": Double(control.maxPixels),
+            "forward_switch_on_px": Double(forwardOn.maxPixels), "forward_switch_on_labels": forwardOn.common,
+            "forward_round_trip_px": Double(forward.maxPixels),
+            "reverse_switch_on_px": Double(reverseOn.maxPixels), "reverse_switch_on_labels": reverseOn.common,
+            "reverse_switch_off_px": Double(reverseOff.maxPixels), "reverse_switch_off_labels": reverseOff.common,
+            "reverse_round_trip_px": Double(reverse.maxPixels),
             "forward_parked_blocks": s2.tops.keys.sorted(), "forward_still_materialised_when_far": forwardAlive,
             "forward_tk2_blocks_parked": s2.drawnByTextKit2,
             "reverse_parked_blocks": s5.tops.keys.sorted(), "reverse_still_materialised_when_far": reverseAlive,
             "reverse_tk2_blocks_back": s6.drawnByTextKit2,
             "order_inversions": inversions, "proof_failures": badProofs,
             "scroll_away_pt": Double(CGFloat(Self.awayLegs) * Self.awayDistance),
-            "measure": "round trips: code text tops relative to the anchor after a label-anchored return; "
-                + "switches in place: absolute tops",
-            "anchor": anchor.key, "return_anchor_offsets_pt": returns,
-        ])
-        XCTAssertGreaterThan(control.common, 0, "no code text survived the control round trip")
+            "measure": "round trips: other code texts' tops and every common code text's bottom, relative to the "
+                + "anchor's top, after a label-anchored return; proven only with another common code text or an "
+                + "anchor that runs past the viewport bottom in both snapshots; switches in place: absolute tops",
+            "anchor": anchor.key, "anchor_top_pt": Double(anchor.top), "return_anchor_offsets_pt": returns,
+        ]
+        for (name, shift) in anchoredLegs {
+            figures["\(name)_other_labels"] = shift.otherLabels
+            figures["\(name)_measured"] = shift.measured
+            figures["\(name)_landmarks"] = shift.landmarks
+            figures["\(name)_worst"] = shift.worst
+            figures["\(name)_anchor_fills_viewport"] = shift.anchorFillsViewport
+        }
+        try agent.record("C2 code collapse round trip, both directions (code-dense @ \(anchor.key))", pass: pass,
+                         figures)
+        for (name, shift) in anchoredLegs {
+            XCTAssertTrue(shift.proven, "\(name) round trip: \(shift.unproven ?? "")")
+        }
         XCTAssertLessThanOrEqual(control.maxPixels, limit, "the return itself is not exact (F16 flake)")
-        for (name, shift) in zip(["forward ON", "forward round trip", "reverse ON", "reverse OFF", "reverse round trip"],
-                                 switched)
-        {
+        for (name, shift) in [("forward round trip", forward), ("reverse round trip", reverse)] {
+            XCTAssertLessThanOrEqual(shift.maxPixels, limit, "\(name): \(shift.worst) moved \(shift.maxPixels) px")
+        }
+        for (name, shift) in inPlace {
             XCTAssertGreaterThan(shift.common, 0, "\(name): no common code text")
             XCTAssertLessThanOrEqual(shift.maxPixels, limit, "\(name): \(shift.worstLabel) moved \(shift.maxPixels) px")
         }
@@ -1839,7 +1867,12 @@ final class LifecycleUITests: XCTestCase {
     /// ones cached heights (code rescales them by the size ratio); then
     /// Text Size 0→3 and a return trip at size 3, 3→0, return trip.
     /// Returns are label-anchored (`codeReturn`) and measured from the
-    /// anchor, as is the in-place size round trip. Every leg's TextKit 2
+    /// anchor, as is the in-place size round trip (`AnchoredShift`: other
+    /// code texts' tops and every common code text's bottom, so a height
+    /// change is seen). Every leg of both arms must be proven (another
+    /// common code text, or an anchor running past the viewport bottom in
+    /// both snapshots); an anchor-only leg is unproven, a FAIL with its own
+    /// `failure_class` (Astra R2). Every leg's TextKit 2
     /// excess over the SwiftUI arm ≤ 2 px; CPU settles ≤ 2 % within 5 s
     /// after each size change and the last return; the size readout moved
     /// and came back to 100 %; the code proof holds at the end. Last, a
@@ -1848,7 +1881,7 @@ final class LifecycleUITests: XCTestCase {
     func testC3CodeTextSizeDriftMatchesSwiftUI() throws {
         let agent = try HostAgent.fromEnvironment()
         let legs = ["size3_return", "size_round_trip", "size_return"]
-        var drift: [Bool: [String: LabelShift]] = [:]
+        var drift: [Bool: [String: AnchoredShift]] = [:]
         var arms: [String: Any] = [:]
         var settleOK = true, sizeOK = true, proofOK = true, returnsOK = true
         for textKit2 in [false, true] {
@@ -1857,32 +1890,31 @@ final class LifecycleUITests: XCTestCase {
             let scale = reader.pixelScale()
             let anchor = try codeAnchor(reader)
             var returned: [Bool] = []
-            func tops() throws -> [String: CGFloat] {
-                Self.codeScreen(try reader.documentSnapshot()).tops
+            func geometry() throws -> CodeGeometry {
+                Self.codeScreen(try reader.documentSnapshot()).geometry
             }
             func trip() throws {
                 try away(reader)
                 returned.append(try codeReturn(anchor, reader))
             }
-            func anchored(_ from: [String: CGFloat], _ to: [String: CGFloat]) -> LabelShift {
-                LabelShift(from: LabelShift.relative(from, to: anchor.key) ?? [:],
-                           to: LabelShift.relative(to, to: anchor.key) ?? [:], scale: scale)
+            func anchored(_ from: CodeGeometry, _ to: CodeGeometry) -> AnchoredShift {
+                AnchoredShift(from: from, to: to, anchor: anchor.key, scale: scale)
             }
             try trip()
-            let start = try tops()
+            let start = try geometry()
 
             let larger = reader.stepTextSize(3)
             reader.pause(1.5)
             let largerSettle = try agent.cpuSettleSeconds()
             returned.append(try alignCode(anchor, reader))
-            let large = try tops()
+            let large = try geometry()
             try trip()
-            let largeReturn = try tops()
+            let largeReturn = try geometry()
             let restored = reader.stepTextSize(-3)
             reader.pause(1.5)
             let sizeSettle = try agent.cpuSettleSeconds()
             returned.append(try alignCode(anchor, reader))
-            let sized = try tops()
+            let sized = try geometry()
             try trip()
             let final = Self.codeScreen(try reader.documentSnapshot())
             let finalSettle = try agent.cpuSettleSeconds()
@@ -1893,28 +1925,28 @@ final class LifecycleUITests: XCTestCase {
             reader.pause(2.5)
             try agent.request("rotate")
             reader.pause(2.5)
-            let rotated = try tops()
+            let rotated = try geometry()
             let rotatedBack = try alignCode(anchor, reader)
-            let rotatedAligned = try tops()
+            let rotatedAligned = try geometry()
             reader.app.terminate()
 
             let shifts = [
                 "size3_return": anchored(large, largeReturn),
                 "size_round_trip": anchored(start, sized),
-                "size_return": anchored(start, final.tops),
+                "size_return": anchored(start, final.geometry),
             ]
             drift[textKit2] = shifts
-            let displacement = LabelShift(from: final.tops, to: rotated, scale: scale)
-            let rotationLayout = anchored(final.tops, rotatedAligned)
+            let displacement = LabelShift(from: final.tops, to: rotated.tops, scale: scale)
+            let rotationLayout = anchored(final.geometry, rotatedAligned)
             let settles = [largerSettle, sizeSettle, finalSettle].map { $0.seconds ?? -1 }
             settleOK = settleOK && settles.allSatisfy { $0 >= 0 && $0 <= Self.maxSettleSeconds }
             sizeOK = sizeOK && larger != nil && larger != "100%" && restored == "100%"
             proofOK = proofOK && final.ok(textKit2: textKit2)
             returnsOK = returnsOK && returned.count == 5 && returned.allSatisfy { $0 }
             arms[arm] = [
-                "anchor": anchor.key,
-                "drift_px": shifts.mapValues { Double($0.maxPixels) }, "labels": shifts.mapValues(\.common),
-                "worst": shifts.mapValues(\.worstLabel),
+                "anchor": anchor.key, "anchor_top_pt": Double(anchor.top),
+                "drift_px": shifts.mapValues { Double($0.maxPixels) },
+                "legs": shifts.mapValues(\.figures),
                 "cpu_settle_s": ["size3": settles[0], "size": settles[1], "final": settles[2]],
                 "cpu_samples": ["size3": largerSettle.samples, "size": sizeSettle.samples,
                                 "final": finalSettle.samples],
@@ -1922,12 +1954,26 @@ final class LifecycleUITests: XCTestCase {
                 "anchor_back_in_view": returned,
                 "rotation_recorded_not_gated": [
                     "displacement_px": Double(displacement.maxPixels), "displacement_labels": displacement.common,
-                    "layout_px_anchor_aligned": Double(rotationLayout.maxPixels), "layout_labels": rotationLayout.common,
+                    "layout_anchor_aligned": rotationLayout.figures,
                     "anchor_back_in_view": rotatedBack,
                 ] as [String: Any],
             ] as [String: Any]
         }
         let swiftUI = try XCTUnwrap(drift[false]), textKit2 = try XCTUnwrap(drift[true])
+        // Every leg of both arms must compare something the anchor's
+        // normalisation did not zero (Astra R2); unproven is a FAIL.
+        var unproven: [String] = []
+        for (arm, shifts) in [("swiftui", swiftUI), ("textkit2", textKit2)] {
+            for leg in legs {
+                guard let shift = shifts[leg] else {
+                    unproven.append("\(arm) \(leg): not measured")
+                    continue
+                }
+                if let reason = shift.unproven {
+                    unproven.append("\(arm) \(leg): \(reason)")
+                }
+            }
+        }
         var excess: [String: Double] = [:]
         var driftOK = true
         for leg in legs {
@@ -1937,17 +1983,21 @@ final class LifecycleUITests: XCTestCase {
             }
             let value = candidate.maxPixels - base.maxPixels
             excess[leg] = Double(value)
-            driftOK = driftOK && base.common > 0 && candidate.common > 0 && value <= Self.shiftLimit
+            driftOK = driftOK && base.proven && candidate.proven && value <= Self.shiftLimit
         }
         let pass = driftOK && settleOK && sizeOK && proofOK && returnsOK
         try agent.record("C3 code Text Size 0→3→0 with cached heights (code-dense @ \(Self.codeKey(Self.codeArrival)))",
                          pass: pass, [
-            "gated": "per leg TextKit 2 drift minus SwiftUI drift <= 2.01 px; CPU <= 2 % within 5 s; size restored; "
-                + "final code proof; anchor back in view after every return",
-            "measure": "code text tops relative to the anchor (returns are label-anchored); "
-                + "rotation per arm: recorded, not gated",
+            "gated": "every leg of both arms proven; per leg TextKit 2 drift minus SwiftUI drift <= 2.01 px; "
+                + "CPU <= 2 % within 5 s; size restored; final code proof; anchor back in view after every return",
+            "measure": "other code texts' tops and every common code text's bottom, relative to the anchor's top "
+                + "(returns are label-anchored); proven only with another common code text or an anchor that "
+                + "runs past the viewport bottom in both snapshots; rotation per arm: recorded, not gated",
+            "failure_class": unproven.isEmpty ? "" : "unproven geometry: \(unproven.joined(separator: "; "))",
+            "unproven_legs": unproven,
             "excess_px": excess, "arms": arms,
         ])
+        XCTAssertTrue(unproven.isEmpty, "unproven geometry: \(unproven)")
         XCTAssertTrue(driftOK, "TextKit 2 drifts beyond SwiftUI + 2 px: \(excess)")
         XCTAssertTrue(settleOK, "CPU did not settle within 5 s: \(arms)")
         XCTAssertTrue(sizeOK, "Text Size did not step and return to 100 %: \(arms)")
@@ -2092,6 +2142,9 @@ final class LifecycleUITests: XCTestCase {
     /// block `codeArrival`, deep in the document.
     private static let codeFraction = "0.4808"
     private static let codeArrival = 288
+    /// The least distance (points) from the viewport's top to the top of
+    /// the code text C2 and C3 anchor on (`codeAnchor`).
+    private static let codeAnchorTopMargin: CGFloat = 40
     /// A wide block's text is at least this much wider than the window, so
     /// that it scrolls further than `codePanPoints`.
     private static let codeWideMargin: CGFloat = 240
@@ -2134,6 +2187,11 @@ final class LifecycleUITests: XCTestCase {
         /// the screen, so "fully in view" is not required.
         var tops: [String: CGFloat] = [:]
         var lefts: [String: CGFloat] = [:]
+        /// `CD-<iii>` → bottom edge (points) of the same element as `tops`
+        /// (its full frame: below the viewport for a text that runs past
+        /// it), and the viewport's bottom (C2, C3: `AnchoredShift`).
+        var bottoms: [String: CGFloat] = [:]
+        var viewportMaxY: CGFloat = 0
         /// The blocks on screen drawn by a TextKit 2 row.
         var drawnByTextKit2: [String] = []
         /// TextKit 2 rows, anywhere in the snapshot, whose text is not the
@@ -2151,6 +2209,10 @@ final class LifecycleUITests: XCTestCase {
                 : rows == 0
         }
 
+        var geometry: CodeGeometry {
+            CodeGeometry(tops: tops, bottoms: bottoms, viewportMaxY: viewportMaxY)
+        }
+
         var figures: [String: Any] {
             ["blocks_on_screen": tops.keys.sorted(), "tk2_blocks_on_screen": drawnByTextKit2,
              "wrong_owners": wrongOwners, "tk2_rows": rows, "code_owned": codeOwned, "root_owned": rootOwned,
@@ -2160,6 +2222,7 @@ final class LifecycleUITests: XCTestCase {
 
     private static func codeScreen(_ snapshot: DocumentSnapshot) -> CodeScreen {
         var screen = CodeScreen()
+        screen.viewportMaxY = snapshot.viewport.maxY
         for node in snapshot.all where snapshot.isOnScreen(node) {
             guard let block = codeBlock(node.label) else { continue }
             let key = codeKey(block)
@@ -2168,6 +2231,7 @@ final class LifecycleUITests: XCTestCase {
             if screen.tops[key] == nil {
                 screen.tops[key] = node.frame.minY
                 screen.lefts[key] = node.frame.minX
+                screen.bottoms[key] = node.frame.maxY
             }
             if node.owner != nil, !screen.drawnByTextKit2.contains(key) {
                 screen.drawnByTextKit2.append(key)
@@ -2216,16 +2280,20 @@ final class LifecycleUITests: XCTestCase {
         let top: CGFloat
     }
 
-    /// The first code text whose top edge is in view (and at least 60 pt
-    /// above the viewport's bottom), top to bottom.
+    /// The first code text whose top edge is in view, at least
+    /// `codeAnchorTopMargin` below the viewport's top and 60 pt above its
+    /// bottom, top to bottom. The top margin keeps a return's few points of
+    /// alignment error from pushing the anchor's top out of view
+    /// (`codeTopInView`): at code-dense's parked position CD-288's top sits
+    /// at the viewport's top edge in some launches.
     private func codeAnchor(_ reader: ReaderDriver) throws -> CodeAnchor {
         let snapshot = try reader.documentSnapshot()
         let viewport = snapshot.viewport
         var first: (block: Int, top: CGFloat)?
         for node in snapshot.all {
             let top = node.frame.minY
-            guard let block = Self.codeBlock(node.label), top >= viewport.minY, top <= viewport.maxY - 60,
-                  top < first?.top ?? .infinity else { continue }
+            guard let block = Self.codeBlock(node.label), top >= viewport.minY + Self.codeAnchorTopMargin,
+                  top <= viewport.maxY - 60, top < first?.top ?? .infinity else { continue }
             first = (block, top)
         }
         let found = try XCTUnwrap(first, "no code text starts in view at the parked position")
