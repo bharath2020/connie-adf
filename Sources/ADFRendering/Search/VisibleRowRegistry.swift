@@ -17,4 +17,8 @@ final class VisibleRowRegistry {
     func isVisible(_ id: String) -> Bool {
         visible.contains(id)
     }
+
+    /// The ids now reported visible: a read of the record, which adds no
+    /// observer and no state (diagnostics: `ADFDocumentModel.fullyVisibleRowIDs`).
+    var ids: Set<String> { visible }
 }

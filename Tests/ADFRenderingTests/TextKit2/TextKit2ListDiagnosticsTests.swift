@@ -95,18 +95,25 @@ struct TextKit2ListCoverageTests {
         // bullet list (3, one nested), the ordered list (2), the task list
         // (2) and the decision list (1), all plain; no list paragraphs. The
         // lists in the layout columns, table and expand are out of scope.
+        // The one top-level code block (0.12, two lines of printable ASCII)
+        // is an eligible code root: counted apart, in none of the text
+        // counts, and still one of the 28 legacy fallback roots.
         #expect(blocks.count == 38)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 10, fallbackRoots: 28, textFallbackRoots: 2, linkRoots: 1,
             eligibleTextLeaves: 18, linkedTextLeaves: 1, fallbackTextLeaves: 2,
-            listLeaderLeaves: 8, listTrailingLeaves: 0
+            listLeaderLeaves: 8, listTrailingLeaves: 0,
+            eligibleCodeRoots: 1, fallbackCodeRoots: 0
         ), rootLeaves: (10, 1)))
     }
 
     /// The iOS 26 gate is one verdict (`TextKit2Eligibility.verdict`,
     /// owner `.list`): before iOS 26 exactly the list leaves eligible on
     /// iOS 26 fall back as `.osGatedList` (lists-parity 40, kitchen-sink 8,
-    /// list-dense 3,537), never a root; from iOS 26 none does.
+    /// list-dense 3,537), never a root; from iOS 26 none does. A top-level
+    /// code block (kitchen-sink's 0.12) is not list text: it is judged by
+    /// the code rules and never takes the gate, so it counts with the roots
+    /// here.
     @Test("before iOS 26 list text that is otherwise eligible falls back as osGatedList; roots never do")
     func osGatedLists() async throws {
         for (name, listEligible) in [("lists-parity", 40), ("kitchen-sink", 8), ("list-dense", 3_537)] {
@@ -115,10 +122,11 @@ struct TextKit2ListCoverageTests {
             var gatedRoots = 0
             var otherwiseEligible = 0
             TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+                let isListText = leaf.position.ownerKind == .list
                 if case .fallback(.osGatedList) = leaf.verdict {
-                    if leaf.position == .root { gatedRoots += 1 } else { gated += 1 }
+                    if isListText { gated += 1 } else { gatedRoots += 1 }
                 }
-                if leaf.position != .root, case .eligible = TextKit2Eligibility.verdict(leaf.segments, owner: .root) {
+                if isListText, case .eligible = TextKit2Eligibility.verdict(leaf.segments, owner: .root) {
                     otherwiseEligible += 1
                 }
             }
@@ -178,7 +186,11 @@ struct TextKit2ListDiagnosticsTests {
         var eligibleList: Set<String> = []
         TextKit2Scope.forEachLeaf(in: model.blocks) { leaf in
             guard case .eligible = leaf.verdict else { return }
-            if leaf.position == .root { eligibleRoots.insert(leaf.ownerID) } else { eligibleList.insert(leaf.ownerID) }
+            switch leaf.position.ownerKind {
+            case .root: eligibleRoots.insert(leaf.ownerID)
+            case .list: eligibleList.insert(leaf.ownerID)
+            case .code: break // top-level code is PR 3's; not counted here
+            }
         }
         // Before iOS 26 no list text is eligible (`TextKit2Eligibility.listsMatchText`,
         // `.osGatedList`): list text draws on SwiftUI, roots as in PR 1.

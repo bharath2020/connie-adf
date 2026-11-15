@@ -3,14 +3,17 @@ import SwiftUI
 import UIKit
 import ADFPreparation
 
-/// The TextKit 2 arm of `RichTextBlockView` for eligible text: the TextKit 2
-/// row, unless the environment carries text styling the row does not
-/// reproduce, or the active search has highlights for this owner (the row
-/// paints no search highlight or arrival flash) — then `fallback` (the
-/// SwiftUI `Text` path). Only constructed when the switch is ON, so the
-/// SwiftUI arm reads none of these values.
+/// The TextKit 2 arm of a text leaf (`TextEngineLeaf`) for eligible text:
+/// the TextKit 2 row, unless the environment carries text styling the row
+/// does not reproduce, or the active search has highlights for this owner
+/// (the row paints no search highlight or arrival flash) — then `fallback`
+/// (the SwiftUI `Text` path). Only constructed when the switch is ON, so
+/// the SwiftUI arm reads none of these values.
 /// Under `View.adfRebuildControl` (diagnostics) the row's place holds
-/// `fallback` instead, counted. `ownerKind` is for diagnostics only.
+/// `fallback` instead, counted. `ownerKind` is whose text this is
+/// (`TextKit2OwnerKind`): the row counts itself by it and takes its layout
+/// policy from it, so code (`.code`) is laid out once and never wraps. Code
+/// reaches this view only through `TextKit2CodeGate`.
 struct TextKit2Leaf<Fallback: View>: View {
     let text: AttributedString
     let style: TextBlockStyle
@@ -77,10 +80,11 @@ struct TextKit2Leaf<Fallback: View>: View {
     }
 }
 
-/// A top-level paragraph or heading drawn by TextKit 2.
+/// A paragraph, heading, list text or code text drawn by TextKit 2.
 ///
 /// Sizing is `sizeThatFits` only — the memoized layout for the proposed
-/// width (natural width when none is proposed), computed synchronously in
+/// width (natural width when none is proposed, and for code at every
+/// width: `TextKit2LayoutPolicy.natural`), computed synchronously in
 /// the same layout pass from the `Hashable` render inputs. The first and
 /// last text baselines come from the same layout result, so a
 /// baseline-aligned container (list rows, PR 2) aligns with TextKit
@@ -153,7 +157,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
         handle.view = view
         view.ownerKind = ownerKind
         view.apply(
-            Self.inputs(text: text, style: style, environment: context.environment),
+            Self.inputs(text: text, style: style, environment: context.environment, layoutPolicy: ownerKind.layoutPolicy),
             colorScheme: context.environment.colorScheme,
             ownerID: ownerID
         )
@@ -163,7 +167,12 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
 
     /// The row's layout inputs; the colour scheme is applied apart, as a
     /// paint input (`TextKit2RowView.apply(_:colorScheme:ownerID:)`).
-    static func inputs(text: AttributedString, style: TextBlockStyle, environment: EnvironmentValues) -> TextKit2RenderInputs {
+    /// `layoutPolicy` is the owner kind's (`TextKit2OwnerKind.layoutPolicy`:
+    /// `.natural` for code, else `.wrapping`).
+    static func inputs(
+        text: AttributedString, style: TextBlockStyle, environment: EnvironmentValues,
+        layoutPolicy: TextKit2LayoutPolicy = .wrapping
+    ) -> TextKit2RenderInputs {
         TextKit2RenderInputs(
             text: text,
             alignment: style.alignment,
@@ -171,7 +180,8 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
             sizeCategory: environment.dynamicTypeSize.uiContentSizeCategory,
             layoutDirection: environment.layoutDirection,
             displayScale: environment.displayScale,
-            legibilityWeight: environment.legibilityWeight
+            legibilityWeight: environment.legibilityWeight,
+            layoutPolicy: layoutPolicy
         )
     }
 }

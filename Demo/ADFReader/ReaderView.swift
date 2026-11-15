@@ -7,7 +7,8 @@ import ADFYouTube
 /// Reads one fixture: owns the `ADFDocumentModel`, renders it with
 /// `ADFDocumentView`, and offers a table-of-contents toolbar menu that jumps
 /// via the library's `scrollTarget` hook. Also implements the launch-argument
-/// automation (READY line, `-scrollToFraction`, `-autoscroll`).
+/// automation (READY line, `-scrollToFraction` and its `SCROLL_LANDED` line,
+/// `-autoscroll`).
 ///
 /// The text renderer (SwiftUI or TextKit 2) is a live switch: flipping it in
 /// the toolbar menu re-renders the rows in place — same model, same scroll
@@ -113,6 +114,11 @@ struct ReaderView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: RejumpHook.notification)) { _ in
                 rejump()
+            }
+            // Posted only under -captureGeometryHook: one read of the key
+            // window per post, here on the host (never in a lazy row).
+            .onReceive(NotificationCenter.default.publisher(for: CaptureGeometryHook.notification)) { _ in
+                RendererStats.printCaptureGeometry(model: model)
             }
             .onDisappear { metrics.stop() }
     }
@@ -353,7 +359,28 @@ struct ReaderView: View {
         // has ended lands on the target row exactly, so screenshots compare.
         try? await Task.sleep(for: .milliseconds(1200))
         await ScrollAutomation.jumpWithoutAnimation(model: model, to: blocks[index].id)
+        // The proof of what this position shows (`Scripts/visual_diff.py`):
+        // the stats printed at READY predate the jump, so once the rows the
+        // jump brought in have laid out and drawn, name the block the jump
+        // went to and print the counters again, with the code rows by
+        // owner. The three lines are printed together, in this order.
+        try? await Task.sleep(for: Self.landedSettle)
+        print(
+            "SCROLL_LANDED fixture=\(source.title) fraction=\(fraction) index=\(index) "
+                + "block=\(blocks[index].id) blocks=\(blocks.count)"
+        )
+        fflush(stdout)
+        if options.rendererStats {
+            RendererStats.print(blocks: model.blocks)
+            RendererStats.printCodeRows()
+        }
     }
+
+    /// How long after the exact re-jump `SCROLL_LANDED` is printed: time for
+    /// the rows at the new position to materialize, lay out and draw, so
+    /// the counters printed with it describe the screen a capture takes.
+    /// A capture must wait for the line (about 2.6 s after READY).
+    private static let landedSettle: Duration = .milliseconds(1_000)
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
         let elapsed = start.duration(to: ContinuousClock.now)

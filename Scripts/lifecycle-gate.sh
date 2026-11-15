@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Scripts/lifecycle-gate.sh — the TextKit 2 stack's lifecycle checks (plan §3,
-# quantitative checks 2–6, and PR 2's list additions, Astra §6 items 1–6) as
-# one reproducible gate: runs
+# quantitative checks 2–6; PR 2's list additions, Astra §6 items 1–6; PR 3's
+# code-block additions, PR 3 plan §6 C1–C6) as one reproducible gate: runs
 # Demo/ADFReaderUITests/LifecycleUITests on one explicit simulator with the
 # host measurement agent (Scripts/lifecycle_agent.py) answering the tests'
 # requests (Darwin-hook rotation, `top` CPU settle, `footprint` memory, 60 s
-# idle soak), then writes lifecycle.md with every figure.
+# idle soak, the device pasteboard), then writes lifecycle.md with every
+# figure.
 #
 # USAGE
 #   Scripts/lifecycle-gate.sh --udid <UDID> --out <dir>
-#       [--derived-data <dir>] [--skip-build] [--only <testName>]...
-#       [--suite-timeout 9000] [--xcodebuild-grace 120] [--keep-booted]
+#       [--derived-data <dir>] [--skip-build] [--only <test>]...
+#       [--suite-timeout 13800] [--xcodebuild-grace 120] [--keep-booted]
 #       [--allow-other-booted] [--dry-run]
 #
 #   --udid          required; never creates devices; refuses when another
@@ -24,7 +25,14 @@
 #   --derived-data  isolated derived data (default <out>/DerivedData). A fresh
 #                   build refuses a dir that already holds an .xctestrun;
 #                   --skip-build reuses one (recorded in lifecycle.md).
-#   --only          run only these test methods (default: all, in order):
+#   --only          run only these tests (default: all, in order). A value is
+#                   a method name below; or its short form, the name up to
+#                   the first descriptive word (test7, testL3a, testC1 — the
+#                   one test whose name continues with an upper-case letter,
+#                   so testC1 never selects testC1b); or <Class>/<method>, a
+#                   UI test of another ADFReaderUITests class that needs the
+#                   host agent (CodeRendererUITests' Copy test reads the
+#                   device pasteboard through it). The methods:
 #                   test1CollapseRoundTripKeepsRows (§3.2),
 #                   test2RotationRoundTripDriftMatchesSwiftUI (§3.3),
 #                   test3SwitchDuringStreamingLoad (§3.4),
@@ -52,14 +60,33 @@
 #                   ~2 min), testL5aFlingThrashSoakListDenseSwiftUI,
 #                   testL5bFlingThrashSoakListDenseTextKit2 (6.5, ~3 each),
 #                   testL6TwentyFlipsListDense (6.6: test7's design on
-#                   list-dense plus F14 census, ~30 min)
+#                   list-dense plus F14 census, ~30 min);
+#                   PR 3 code blocks (PR 3 plan §6; fixture code-dense):
+#                   testC1CodeFiveRoundTripsCodeDense (C1: five ON/OFF round
+#                   trips at a deep position, ~2 min),
+#                   testC1bCodeFiveRoundTripsPannedWideBlock (C1b: the same
+#                   with one wide block panned 200 pt, ~2 min),
+#                   testC2CodeCollapseRoundTripBothDirections (C2, ~10 min),
+#                   testC3CodeTextSizeDriftMatchesSwiftUI (C3: Text Size
+#                   0 → 3 → 0, rotation recorded only, ~8 min),
+#                   testC4CodeSwitchDuringStreamingLoad (C4, ~1 min),
+#                   testC5aFlingThrashSoakCodeDenseSwiftUI,
+#                   testC5bFlingThrashSoakCodeDenseTextKit2 (C5: vertical
+#                   fling, horizontal fling inside a wide block, scene
+#                   thrash, 60 s soak; ~4 each),
+#                   testC6TwentyFlipsCodeDense (C6: test7's design on
+#                   code-dense, live code rows 0 after every OFF, ~30 min)
 #   --dry-run       print the plan; touch no simulator, run no xcodebuild.
+#                   With a built --derived-data it also checks that the
+#                   UI-test bundle holds every selected test.
 #
 # PASS (exit 0) only when every selected test case printed `passed` and every
 # recorded check passed. Exit 1 on any failure/skip/missing result, 2 on
-# usage errors. Estimated duration: ~43 min for tests 1-8 (test7 ~30, the
-# two soak tests ~3 each) + ~70 min for the list tests (testL6 ~30) = ~115
-# min, plus ~4 min for a fresh build; the default --suite-timeout (9000 s)
+# usage errors and when the built UI-test bundle lacks a selected test (the
+# run then stops before the device is touched). Estimated duration: ~43 min
+# for tests 1-8 (test7 ~30, the two soak tests ~3 each) + ~70 min for the
+# list tests (testL6 ~30) + ~61 min for the code tests (testC6 ~30) = ~176
+# min, plus ~4 min for a fresh build; the default --suite-timeout (13800 s)
 # leaves room for a loaded host. A failed check whose record carries
 # failure_class (a no-switch control drift over 2 px) is the known lifecycle
 # flake (Fable F16): rerun it with --only; limits are never re-tuned.
@@ -76,14 +103,79 @@ AGENT_PY="$SCRIPT_DIR/lifecycle_agent.py"
 BUNDLE_ID="com.connie.adfreader"
 XCODEGEN="${XCODEGEN:-xcodegen}"
 CLASS="LifecycleUITests"
-ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense"
+# PR 3's code-block tests (PR 3 plan §6, C1–C6). The method names are the
+# contract with Demo/ADFReaderUITests/LifecycleUITests.swift: when a test is
+# named differently there, change the name HERE (the run refuses a build
+# whose UI-test bundle lacks a selected test, so a mismatch cannot pass).
+CODE_TESTS="testC1CodeFiveRoundTripsCodeDense testC1bCodeFiveRoundTripsPannedWideBlock testC2CodeCollapseRoundTripBothDirections testC3CodeTextSizeDriftMatchesSwiftUI testC4CodeSwitchDuringStreamingLoad testC5aFlingThrashSoakCodeDenseSwiftUI testC5bFlingThrashSoakCodeDenseTextKit2 testC6TwentyFlipsCodeDense"
+ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense $CODE_TESTS"
 
-UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=9000; GRACE=120
+UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=13800; GRACE=120
 KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 log() { printf '[lifecycle-gate %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { log "error: $*"; exit 2; }
+
+# ------------------------------------------------------------ pure helpers --
+# (Sourced by tests with LIFECYCLE_GATE_SOURCED=1; no side effects.)
+
+# A selected test is "<method>" (of $CLASS) or "<Class>/<method>".
+test_class() { case "$1" in */*) printf '%s\n' "${1%%/*}" ;; *) printf '%s\n' "$CLASS" ;; esac; }
+test_method() { printf '%s\n' "${1##*/}"; }
+test_id() { printf 'ADFReaderUITests/%s/%s\n' "$(test_class "$1")" "$(test_method "$1")"; }
+# The verdict-line pattern (grep -E) of a selected test.
+test_verdict_pattern() {
+    printf "Test Case '-\\[ADFReaderUITests\\.%s %s\\]' (passed|failed|skipped)\n" \
+        "$(test_class "$1")" "$(test_method "$1")"
+}
+
+# resolve_test <--only value>: the selected test it names; returns 1 for
+# anything else. An ALL_TESTS method, exactly; or the one ALL_TESTS method
+# that is <value> followed by an upper-case letter (testC1 →
+# testC1Code…, never testC1b…); or <Class>/<method> for another class.
+resolve_test() {
+    local want="$1" t match="" count=0
+    if [[ "$want" == */* ]]; then
+        [[ "$want" =~ ^[A-Za-z][A-Za-z0-9_]*/test[A-Za-z0-9_]*$ ]] || return 1
+        if [[ "${want%%/*}" != "$CLASS" ]]; then printf '%s\n' "$want"; return 0; fi
+        want="${want##*/}"
+    fi
+    [[ "$want" =~ ^test[A-Za-z0-9_]*$ ]] || return 1
+    for t in $ALL_TESTS; do
+        if [[ "$t" == "$want" ]]; then printf '%s\n' "$t"; return 0; fi
+    done
+    for t in $ALL_TESTS; do
+        if [[ "$t" == "$want"[[:upper:]]* ]]; then match="$t"; count=$(( count + 1 )); fi
+    done
+    [[ $count -eq 1 ]] || return 1
+    printf '%s\n' "$match"
+}
+
+# ALL_TESTS methods that start with $1 (a hint for an unknown --only value).
+tests_starting_with() {
+    local t out=""
+    for t in $ALL_TESTS; do
+        [[ "$t" != "$1"* ]] || out="${out:+$out }$t"
+    done
+    printf '%s\n' "$out"
+}
+
+# missing_tests <UI-test bundle binary> <selected test>...: the selected
+# tests whose method name the binary does not hold (the selector XCTest
+# discovers a test by), one per line.
+missing_tests() {
+    local binary="$1" t
+    shift
+    for t in "$@"; do
+        LC_ALL=C grep -aqF -- "$(test_method "$t")" "$binary" 2>/dev/null || printf '%s\n' "$t"
+    done
+}
+
+if [[ "${LIFECYCLE_GATE_SOURCED:-0}" == "1" ]]; then
+    # shellcheck disable=SC2317  # reached only when executed, not sourced
+    return 0 2>/dev/null || exit 0
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -103,9 +195,14 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$UDID" ]] || die "--udid is required"
 [[ -n "$OUT" ]] || die "--out is required"
-TESTS="${ONLY:-$ALL_TESTS}"
-for t in $TESTS; do
-    case " $ALL_TESTS " in *" $t "*) ;; *) die "unknown test '$t'" ;; esac
+[[ "$SUITE_TIMEOUT" =~ ^[0-9]+$ && "$GRACE" =~ ^[0-9]+$ ]] || die "--suite-timeout and --xcodebuild-grace are whole seconds"
+TESTS=""
+for t in ${ONLY:-$ALL_TESTS}; do
+    resolved="$(resolve_test "$t")" || {
+        hint="$(tests_starting_with "$t")"
+        die "unknown test '$t'${hint:+ (did you mean: $hint)} (see --help)"
+    }
+    case " $TESTS " in *" $resolved "*) ;; *) TESTS="${TESTS:+$TESTS }$resolved" ;; esac
 done
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
@@ -113,9 +210,15 @@ OUT="$(cd "$OUT" && pwd)"
 CHANNEL="$OUT/channel"; RESULTS="$OUT/results.jsonl"; AGENT_LOG="$OUT/agent.log"
 TEST_LOG="$OUT/xcodebuild.log"; BUILD_LOG="$OUT/build.log"; RESULT_BUNDLE="$OUT/lifecycle.xcresult"
 APP="$DERIVED_DATA/Build/Products/Release-iphonesimulator/ADFReader.app"
+UITEST_BINARY="$DERIVED_DATA/Build/Products/Release-iphonesimulator/ADFReaderUITests-Runner.app/PlugIns/ADFReaderUITests.xctest/ADFReaderUITests"
 
 ONLY_ARGS=()
-for t in $TESTS; do ONLY_ARGS+=("-only-testing:ADFReaderUITests/$CLASS/$t"); done
+for t in $TESTS; do ONLY_ARGS+=("-only-testing:$(test_id "$t")"); done
+# Selected tests the built UI-test bundle lacks, space separated.
+bundle_missing() {
+    # shellcheck disable=SC2086  # $TESTS is a word list
+    missing_tests "$UITEST_BINARY" $TESTS | tr '\n' ' ' | sed 's/ *$//'
+}
 BUILD_CMD=(xcodebuild build-for-testing -project "$DEMO_DIR/ADFReader.xcodeproj" -scheme ADFReader
     -configuration Release -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath "$DERIVED_DATA"
     CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES)
@@ -127,6 +230,14 @@ if [[ $DRY_RUN -eq 1 ]]; then
     echo "agent:        python3 -I -u $AGENT_PY serve --udid $UDID --channel $CHANNEL --results $RESULTS --log $AGENT_LOG"
     echo "test:         TEST_RUNNER_ADF_LIFECYCLE_DIR=$CHANNEL xcodebuild test-without-building -xctestrun <exact> -destination 'platform=iOS Simulator,id=$UDID' ${ONLY_ARGS[*]} -resultBundlePath $RESULT_BUNDLE"
     echo "report:       python3 -I $AGENT_PY report --results $RESULTS --out $OUT/lifecycle.md"
+    echo "suite timeout: ${SUITE_TIMEOUT}s"
+    if [[ -f "$UITEST_BINARY" ]]; then
+        MISSING="$(bundle_missing)"
+        echo "bundle check: ${MISSING:+MISSING from $UITEST_BINARY: }${MISSING:-every selected test is in $UITEST_BINARY}"
+        [[ -z "$MISSING" ]] || exit 2
+    else
+        echo "bundle check: not built yet ($UITEST_BINARY)"
+    fi
     exit 0
 fi
 [[ ! -e "$RESULT_BUNDLE" && ! -s "$RESULTS" ]] || die "$OUT already holds results; use a fresh --out"
@@ -176,6 +287,9 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
     "${BUILD_CMD[@]}" >>"$BUILD_LOG" 2>&1 || die "build-for-testing failed (see $BUILD_LOG)"
 fi
 [[ -x "$APP/ADFReader" ]] || die "no Release app at $APP"
+[[ -f "$UITEST_BINARY" ]] || die "no UI-test bundle binary at $UITEST_BINARY"
+MISSING="$(bundle_missing)"
+[[ -z "$MISSING" ]] || die "the UI-test bundle has no $MISSING; was it built from a checkout without those tests, or are they named differently (see CODE_TESTS)?"
 XCTESTRUN="$(select_xctestrun "$DERIVED_DATA")" || die "cannot pick the xctestrun"
 BUILD_SHA="$(shasum -a 256 "$APP/ADFReader" | awk '{print $1}')"
 
@@ -212,7 +326,7 @@ XCODEBUILD_PID=$!
 verdict_count() {
     local n=0 t
     for t in $TESTS; do
-        if tr -d '\r' <"$TEST_LOG" 2>/dev/null | grep -Eq "Test Case '-\[ADFReaderUITests\.$CLASS $t\]' (passed|failed|skipped)"; then
+        if tr -d '\r' <"$TEST_LOG" 2>/dev/null | grep -Eq "$(test_verdict_pattern "$t")"; then
             n=$((n + 1))
         fi
     done
@@ -235,7 +349,7 @@ AGENT_PID=""
 # ------------------------------------------------------------------ report
 problems=0
 for t in $TESTS; do
-    line="$(tr -d '\r' <"$TEST_LOG" | grep -E "Test Case '-\[ADFReaderUITests\.$CLASS $t\]' (passed|failed|skipped)" | tail -n 1 || true)"
+    line="$(tr -d '\r' <"$TEST_LOG" | grep -E "$(test_verdict_pattern "$t")" | tail -n 1 || true)"
     case "$line" in
         *"' passed"*) log "PASS  $t" ;;
         "") log "FAIL  $t: no result line"; problems=$((problems + 1)) ;;

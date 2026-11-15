@@ -360,4 +360,327 @@ enum TK2Parity {
     }
 }
 
+// MARK: - Code blocks
+
+/// Plumbing for the code-block parity suites (`TextKit2CodeParityTests`):
+/// prepared code blocks, the real `BlockView` (so the real `CodeBlockView`)
+/// hosted on either arm in a window that stays up for inspection, the
+/// horizontal scroll view behind it, bitmaps of a window rectangle, and
+/// region ink / pixel comparison. Additions only: nothing above changes.
+extension TK2Parity {
+    // MARK: Prepared code blocks
+
+    /// An ADF `codeBlock` node. `language` nil leaves the attribute out, an
+    /// empty string passes through; empty `text` leaves the content out;
+    /// `breakout` is the mark's mode (`"wide"`, `"full-width"`).
+    static func codeBlockNode(_ text: String, language: String? = nil, breakout: String? = nil) -> [String: Any] {
+        var node: [String: Any] = ["type": "codeBlock"]
+        if let language {
+            let attrs: [String: Any] = ["language": language]
+            node["attrs"] = attrs
+        }
+        if !text.isEmpty {
+            let textNode: [String: Any] = ["type": "text", "text": text]
+            node["content"] = [textNode]
+        }
+        if let breakout {
+            let modeAttrs: [String: Any] = ["mode": breakout]
+            let mark: [String: Any] = ["type": "breakout", "attrs": modeAttrs]
+            node["marks"] = [mark]
+        }
+        return node
+    }
+
+    /// A `doc` holding `nodes`, as JSON. `JSONSerialization` does the
+    /// escaping, so tabs, CR, CRLF and non-ASCII text reach the parser as
+    /// written.
+    static func documentData(_ nodes: [[String: Any]]) throws -> Data {
+        let doc: [String: Any] = ["version": 1, "type": "doc", "content": nodes]
+        return try JSONSerialization.data(withJSONObject: doc, options: [.withoutEscapingSlashes])
+    }
+
+    /// The prepared blocks of a document.
+    @MainActor
+    static func blocks(json data: Data, theme: ADFTheme = TK2Parity.theme) async throws -> [RenderBlock] {
+        DocumentPreparer(theme: theme).prepare(try await ADFParser().parse(data))
+    }
+
+    /// One prepared code block: parsed and prepared as in a document, so it
+    /// carries the font spec and the code shape preparation stamps.
+    @MainActor
+    static func codeBlock(_ text: String, language: String? = nil, theme: ADFTheme = TK2Parity.theme) async throws -> RenderBlock {
+        let data = try documentData([codeBlockNode(text, language: language)])
+        let prepared = try await blocks(json: data, theme: theme)
+        guard let block = prepared.first, case .codeBlock = block.kind else {
+            throw TestFailure("the document's first block is not a code block")
+        }
+        return block
+    }
+
+    /// The prepared language and code string of a code block.
+    static func codeParts(_ block: RenderBlock) throws -> (language: String?, code: AttributedString) {
+        guard case .codeBlock(let language, let code) = block.kind else {
+            throw TestFailure("block \(block.id) is not a code block")
+        }
+        return (language, code)
+    }
+
+    /// The same block with `shape` stamped over its code in place of the
+    /// shape preparation measured. The content verdict trusts the stamped
+    /// shape (`TextKit2Eligibility.codeVerdict`), so this is the seam the
+    /// record-only experiments use to put text outside the admitted cohort
+    /// on the TextKit 2 row. The characters are untouched. An empty string
+    /// has no run to stamp and comes back unchanged.
+    static func restamped(_ block: RenderBlock, shape: ADFCodeShape) throws -> RenderBlock {
+        let parts = try codeParts(block)
+        var code = parts.code
+        code[AttributeScopes.ADFAttributes.CodeShapeAttribute.self] = shape
+        return RenderBlock(id: block.id, kind: .codeBlock(language: parts.language, code: code), breakout: block.breakout)
+    }
+
+    // MARK: Hosting
+
+    /// A code block as `ADFDocumentView`'s row hosts it: the real
+    /// `BlockView` (which builds the real `CodeBlockView`), the renderer
+    /// through the environment, at the top-leading corner.
+    @MainActor
+    static func hostedCode(_ block: RenderBlock, arm: ADFTextRenderer, env: Environment, theme: ADFTheme = TK2Parity.theme) -> some View {
+        BlockView(block: block)
+            .environment(\.adfTextRenderer, TextKit2Scope.inheritsRenderer(block.kind) ? arm : .swiftUI)
+            .environment(\.adfTheme, theme)
+            .environment(\.layoutDirection, env.direction)
+            .environment(\.legibilityWeight, env.legibility)
+            .dynamicTypeSize(env.size)
+    }
+
+    /// The size `view` takes at `width` and an unspecified height, from a
+    /// hosting controller that is in a window: the environment's display
+    /// scale is then the device's, as in the rendered hosts, so a rule that
+    /// reads it (the code canvas gate) decides the same in both.
+    @MainActor
+    static func attachedSize(_ view: some View, width: CGFloat) -> CGSize {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: max(width, 1), height: 600))
+        let host = UIHostingController(rootView: view)
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.isHidden = false
+        window.layoutIfNeeded()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        return host.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+    }
+
+    /// A view laid out at `width` and its own height at the top-leading
+    /// corner of a scene-less window at the device's native scale (the root
+    /// `TextKit2ListParityTests.render` uses), kept up until `close()` so
+    /// its UIKit tree can be inspected, panned and rendered.
+    @MainActor
+    final class Host {
+        let window: UIWindow
+        let controller: UIHostingController<AnyView>
+
+        init(_ view: some View, width: CGFloat, height: CGFloat, dark: Bool = false) {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: height))
+            window.overrideUserInterfaceStyle = dark ? .dark : .light
+            window.backgroundColor = dark ? .black : .white
+            let controller = UIHostingController(rootView: AnyView(
+                view
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: width, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .ignoresSafeArea()
+            ))
+            controller.view.backgroundColor = .clear
+            controller.safeAreaRegions = []
+            window.rootViewController = controller
+            window.isHidden = false
+            window.layoutIfNeeded()
+            controller.view.layoutIfNeeded()
+            self.window = window
+            self.controller = controller
+        }
+
+        var view: UIView { controller.view }
+        var scale: CGFloat { window.traitCollection.displayScale }
+
+        func layout() {
+            window.layoutIfNeeded()
+            controller.view.layoutIfNeeded()
+        }
+
+        /// Lays out until the scroll views' geometry and the TextKit 2 row
+        /// count stop changing (a `ScrollView` can take a run-loop turn to
+        /// size its content): at least two 10 ms turns, at most `turns`.
+        func settle(turns: Int = 15) async throws {
+            var last = ""
+            var stable = 0
+            for _ in 0..<turns {
+                layout()
+                let geometry = TK2Parity.scrollViews(in: view).map { "\($0.frame) \($0.contentSize) \($0.contentOffset)" }
+                let now = geometry.joined(separator: "|") + " rows=\(TextKit2FallbackTests.rows(in: view).count)"
+                stable = now == last ? stable + 1 : 0
+                if stable >= 2 { return }
+                last = now
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+
+        func close() {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+    }
+
+    /// Every scroll view under `view` that is not a text view, outermost
+    /// first. A hosted code block has one: its horizontal viewport.
+    @MainActor
+    static func scrollViews(in view: UIView) -> [UIScrollView] {
+        var found: [UIScrollView] = []
+        if let scroll = view as? UIScrollView, !(view is UITextView) { found.append(scroll) }
+        for subview in view.subviews { found += scrollViews(in: subview) }
+        return found
+    }
+
+    /// The scroll views nested in another scroll view: in a hosted
+    /// document, the code blocks' horizontal viewports (the first of
+    /// `scrollViews(in:)` is the document's own).
+    @MainActor
+    static func nestedScrollViews(in view: UIView) -> [UIScrollView] {
+        scrollViews(in: view).filter { scroll in
+            var ancestor = scroll.superview
+            while let current = ancestor {
+                if current is UIScrollView { return true }
+                ancestor = current.superview
+            }
+            return false
+        }
+    }
+
+    // MARK: Regions
+
+    /// A rectangle of a laid-out window (window coordinates) at the
+    /// device's native scale, cropped to its whole pixel columns:
+    /// `bitmap(of:width:)` for part of a window, as
+    /// `TextKit2ListParityTests.band(of:y:)` renders one. Throws instead of
+    /// recording an issue, so a record-only experiment can catch it.
+    @MainActor
+    static func bitmap(of window: UIWindow, in rect: CGRect) throws -> Bitmap {
+        let scale = window.traitCollection.displayScale
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(bounds: rect, format: format).image { context in
+            window.layer.render(in: context.cgContext)
+        }
+        guard let cgImage = image.cgImage else { throw TestFailure("no image for \(rect)") }
+        let pixelWidth = min(cgImage.width, Int((rect.width * scale + 0.01).rounded(.down)))
+        let pixelHeight = cgImage.height
+        guard pixelWidth > 0, pixelHeight > 0 else { throw TestFailure("empty image for \(rect)") }
+        var data = [UInt8](repeating: 0, count: pixelWidth * pixelHeight * 4)
+        guard let context = CGContext(
+            data: &data, width: pixelWidth, height: pixelHeight, bitsPerComponent: 8, bytesPerRow: pixelWidth * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw TestFailure("no bitmap context for \(rect)") }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: pixelHeight))
+        return Bitmap(width: pixelWidth, height: pixelHeight, scale: scale, rgba: data)
+    }
+
+    /// Ink in a region of a bitmap, per pixel row of the region: the count
+    /// and the first and last ink column (bitmap coordinates).
+    struct RowInk: Equatable {
+        var counts: [Int]
+        var extents: [ClosedRange<Int>?]
+
+        /// First and last pixel row with ink, relative to the region's top.
+        var firstRow: Int? { counts.firstIndex { $0 > 0 } }
+        var lastRow: Int? { counts.lastIndex { $0 > 0 } }
+
+        /// First and last ink column over a band of the region's rows, or
+        /// `nil` for an inkless band (an empty line).
+        func extent(rows band: Range<Int>) -> ClosedRange<Int>? {
+            var first: Int?
+            var last: Int?
+            for y in band.clamped(to: 0..<extents.count) {
+                guard let extent = extents[y] else { continue }
+                first = min(first ?? extent.lowerBound, extent.lowerBound)
+                last = max(last ?? extent.upperBound, extent.upperBound)
+            }
+            guard let first, let last else { return nil }
+            return first...last
+        }
+    }
+
+    /// Ink over `columns` × `rows` of a bitmap (both clamped to it). A pixel
+    /// is ink when any channel is more than `threshold` off `background`.
+    static func rowInk(
+        _ bitmap: Bitmap, columns: Range<Int>, rows: Range<Int>, background: (r: Int, g: Int, b: Int), threshold: Int = 8
+    ) -> RowInk {
+        let columns = columns.clamped(to: 0..<bitmap.width)
+        let rows = rows.clamped(to: 0..<bitmap.height)
+        var counts: [Int] = []
+        var extents: [ClosedRange<Int>?] = []
+        counts.reserveCapacity(rows.count)
+        extents.reserveCapacity(rows.count)
+        bitmap.rgba.withUnsafeBufferPointer { pixels in
+            for y in rows {
+                var count = 0
+                var first = -1
+                var last = -1
+                var i = (y * bitmap.width + columns.lowerBound) * 4
+                for x in columns {
+                    let r: Int = Int(pixels[i]) - background.r
+                    let g: Int = Int(pixels[i + 1]) - background.g
+                    let b: Int = Int(pixels[i + 2]) - background.b
+                    if abs(r) > threshold || abs(g) > threshold || abs(b) > threshold {
+                        count += 1
+                        if first < 0 { first = x }
+                        last = x
+                    }
+                    i += 4
+                }
+                counts.append(count)
+                extents.append(first < 0 ? nil : first...last)
+            }
+        }
+        return RowInk(counts: counts, extents: extents)
+    }
+
+    /// Pixels over `columns` × `rows` (clamped to what both bitmaps hold)
+    /// whose colour differs by more than `threshold` in any channel: 24 is
+    /// the parity rule's, 0 counts every difference.
+    static func differingPixels(
+        _ a: Bitmap, _ b: Bitmap, columns: Range<Int>, rows: Range<Int>, threshold: Int = 24
+    ) -> (count: Int, total: Int) {
+        let columns = columns.clamped(to: 0..<min(a.width, b.width))
+        let rows = rows.clamped(to: 0..<min(a.height, b.height))
+        var count = 0
+        a.rgba.withUnsafeBufferPointer { p in
+            b.rgba.withUnsafeBufferPointer { q in
+                for y in rows {
+                    var i = (y * a.width + columns.lowerBound) * 4
+                    var j = (y * b.width + columns.lowerBound) * 4
+                    for _ in columns {
+                        let dr: Int = Int(p[i]) - Int(q[j])
+                        let dg: Int = Int(p[i + 1]) - Int(q[j + 1])
+                        let db: Int = Int(p[i + 2]) - Int(q[j + 2])
+                        if abs(dr) > threshold || abs(dg) > threshold || abs(db) > threshold { count += 1 }
+                        i += 4
+                        j += 4
+                    }
+                }
+            }
+        }
+        return (count, columns.count * rows.count)
+    }
+
+    /// The OS a result line was measured on: "26.3", "18.5.1".
+    static var osVersion: String {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let base = "\(version.majorVersion).\(version.minorVersion)"
+        return version.patchVersion == 0 ? base : "\(base).\(version.patchVersion)"
+    }
+}
+
 #endif

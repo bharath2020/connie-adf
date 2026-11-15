@@ -76,6 +76,27 @@ struct HostAgent {
         let answer = try request("cpu_settle", ["threshold_pct": 2.0, "timeout_s": timeout], timeout: timeout + 30)
         return (answer["settle_s"] as? Double, answer["samples"] ?? [])
     }
+
+    /// The device pasteboard's string, read on the host
+    /// (`xcrun simctl pbpaste`): reading `UIPasteboard` in the test runner
+    /// raises the cross-app paste prompt and blocks the run.
+    func pasteboard() throws -> String {
+        let answer = try request(Self.pasteboardReadKind, timeout: 30)
+        guard let text = answer["text"] as? String else {
+            throw Failure(description: "\(Self.pasteboardReadKind) returned no text")
+        }
+        return text
+    }
+
+    /// Puts `text` on the device pasteboard from the host
+    /// (`xcrun simctl pbcopy`), so that a later read proves what replaced it.
+    func setPasteboard(_ text: String) throws {
+        try request(Self.pasteboardWriteKind, ["text": text], timeout: 30)
+    }
+
+    /// Request kinds of `Scripts/lifecycle_agent.py` for the pasteboard.
+    static let pasteboardReadKind = "pasteboard"
+    static let pasteboardWriteKind = "pasteboard_set"
 }
 
 /// Drives one launched ADFReader: renderer menu, About sheet, scrolling and
@@ -94,10 +115,15 @@ struct ReaderDriver {
         static let buildRenderer = "build-renderer"
         static let buildDone = "build-info-done"
         static let liveTextKit2Rows = "tk2-live-rows"
+        /// Live TextKit 2 rows drawing a code block's code (a subset of
+        /// `liveTextKit2Rows`; PR 3).
+        static let liveTextKit2CodeRows = "tk2-code-live-rows"
         static let rebuildControlRows = "rebuild-control-rows"
         static let loadSwitchBlocks = "load-switch-blocks"
         static let loadReadyBlocks = "load-ready-blocks"
         static let textKit2RowPrefix = "tk2-row:"
+        /// The accessibility label of a code block's Copy button.
+        static let copyCodeLabel = "Copy code"
         static let searchField = "search-field"
         static let searchCounter = "search-counter"
     }
@@ -208,6 +234,68 @@ struct ReaderDriver {
         return control ? (rest, value) : (value, rest)
     }
 
+    /// Opens About and reads the live TextKit 2 row count, waiting on
+    /// `condition` as `liveTextKit2Rows` does, then the live code-row count
+    /// (`readLiveCodeRows`, two agreeing reads with `settled`); closes
+    /// About. The row count is read first: it sits above the code count,
+    /// and `revealAboutField` only ever scrolls toward the end.
+    func liveCodeRows(until condition: (Int) -> Bool, settled: Bool = false, timeout: TimeInterval = 5)
+        -> (textKit2: Int?, code: Int?)
+    {
+        openAbout()
+        let live = readCount(Identifier.liveTextKit2Rows, until: condition, settled: settled, timeout: timeout)
+        let code = readLiveCodeRows(until: { _ in true }, settled: settled)
+        closeAbout()
+        return (live, code)
+    }
+
+    /// `liveRows(control:until:settled:timeout:)` plus the live code-row
+    /// count, read last (`readLiveCodeRows`): the same About queries for the
+    /// memory control and the TextKit 2 switches of a code series.
+    func liveRowsAndCode(control: Bool, until condition: (Int) -> Bool, settled: Bool = false,
+                         timeout: TimeInterval = 5) -> (textKit2: Int?, control: Int?, code: Int?)
+    {
+        openAbout()
+        let (waited, other) = control
+            ? (Identifier.rebuildControlRows, Identifier.liveTextKit2Rows)
+            : (Identifier.liveTextKit2Rows, Identifier.rebuildControlRows)
+        let value = readCount(waited, until: condition, settled: settled, timeout: timeout)
+        let rest = readCount(other, until: { _ in true })
+        let code = readLiveCodeRows(until: { _ in true }, settled: settled)
+        closeAbout()
+        return control ? (rest, value, code) : (value, rest, code)
+    }
+
+    /// The open About sheet's live code-row count (`tk2-code-live-rows`:
+    /// live TextKit 2 rows drawing a code block's code). Its section is
+    /// the one PR 3 added, below the executable checksum so that no row a
+    /// test reads without scrolling moved; it is scrolled into the sheet
+    /// first (`revealAboutField`), so read it after every row above it.
+    func readLiveCodeRows(until condition: (Int) -> Bool, settled: Bool = false, timeout: TimeInterval = 5) -> Int? {
+        revealAboutField(app.staticTexts[Identifier.liveTextKit2CodeRows])
+        return readCount(Identifier.liveTextKit2CodeRows, until: condition, settled: settled, timeout: timeout)
+    }
+
+    /// About This Build is a list, so a row is in the accessibility tree
+    /// only while it is on screen. Does nothing when `field` exists;
+    /// otherwise drags the sheet's content up 160 pt at a time (rows read
+    /// just before stay in view) until it does, at most `maxDrags` times.
+    /// Never scrolls back: a downward drag at the top would dismiss the
+    /// sheet, so read rows top to bottom.
+    func revealAboutField(_ field: XCUIElement, maxDrags: Int = 6) {
+        guard !field.waitForExistence(timeout: 2) else { return }
+        let window = app.windows.firstMatch.frame
+        let start = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: window.midX, dy: window.minY + window.height * 0.7))
+        var drags = 0
+        while !field.exists, drags < maxDrags {
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -160)),
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
+            pause(0.4)
+            drags += 1
+        }
+    }
+
     /// The open About sheet's count in the field `identifier` (see
     /// `readLiveTextKit2Rows`).
     func readCount(_ identifier: String, until condition: (Int) -> Bool, settled: Bool = false,
@@ -292,36 +380,83 @@ struct ReaderDriver {
         try documentSnapshot().tops
     }
 
-    /// One accessibility snapshot of the document scroll view: the labelled
-    /// elements fully inside the viewport, and every TextKit 2 row
-    /// (`tk2-row:<owner>`) anywhere in the snapshot.
+    /// One accessibility snapshot of the document scroll view: every
+    /// labelled element (those fully inside the viewport are `visible`),
+    /// and every TextKit 2 row (`tk2-row:<owner>`) anywhere in the snapshot.
+    /// An element inside a scroll view nested in the document's own is
+    /// marked (`inNestedScroll`): a code block's code sits in the block's
+    /// horizontal scroll view under either renderer, which is how a
+    /// TextKit 2 code row is told from a root paragraph's (their owners
+    /// have the same form, `0.<n>`).
     func documentSnapshot() throws -> DocumentSnapshot {
         let root = try app.scrollViews.firstMatch.snapshot()
         let viewport = viewport
-        var visible: [DocumentSnapshot.Node] = []
+        var all: [DocumentSnapshot.Node] = []
+        var nestedScrolls: [CGRect] = []
+        var copyButtons: [CGRect] = []
+        var rows: [(owner: String, frame: CGRect, nested: Bool)] = []
         var textKit2Rows: [String: String] = [:]
         var textKit2Nodes = 0
-        func walk(_ node: XCUIElementSnapshot) {
+        func walk(_ node: XCUIElementSnapshot, nested: Bool, isRoot: Bool) {
             let frame = node.frame
+            let isNestedScroll = !isRoot && node.elementType == .scrollView
+            if isNestedScroll {
+                nestedScrolls.append(frame)
+            }
+            if node.elementType == .button, node.label == Identifier.copyCodeLabel {
+                copyButtons.append(frame)
+            }
             let owner = node.identifier.hasPrefix(Identifier.textKit2RowPrefix)
                 ? String(node.identifier.dropFirst(Identifier.textKit2RowPrefix.count)) : nil
             if let owner {
                 textKit2Rows[owner] = node.label
                 textKit2Nodes += 1
+                rows.append((owner, frame, nested))
             }
             // Scroll indicators carry a page-count label that tracks the
             // estimated content height, not a row.
             let isIndicator = node.label.hasPrefix("Vertical scroll bar") || node.label.hasPrefix("Horizontal scroll bar")
-            if !node.label.isEmpty, !isIndicator, frame.height > 0,
-               frame.minY >= viewport.minY, frame.maxY <= viewport.maxY {
-                visible.append(DocumentSnapshot.Node(label: node.label, frame: frame, owner: owner))
+            if !node.label.isEmpty, !isIndicator, frame.height > 0 {
+                all.append(DocumentSnapshot.Node(
+                    label: node.label, frame: frame, owner: owner, type: node.elementType,
+                    value: (node.value as? String) ?? "", inNestedScroll: nested
+                ))
             }
             for child in node.children {
-                walk(child)
+                walk(child, nested: nested || isNestedScroll, isRoot: false)
             }
         }
-        walk(root)
-        return DocumentSnapshot(visible: visible, textKit2Rows: textKit2Rows, textKit2Nodes: textKit2Nodes)
+        walk(root, nested: false, isRoot: true)
+        // The same answer by geometry, for two shapes the accessibility
+        // tree could take instead (neither was run when this was written).
+        // A nested scroll view listed beside its content, not above it: an
+        // element is inside one when the scroll view's frame holds its
+        // whole height (the frame is the block's viewport: full content
+        // height, the visible width). No nested scroll view listed at all:
+        // a code block's code starts under its own Copy button (the header
+        // row, then the code's padding), nearer than any following block
+        // can be (a one-line block's text and both paddings lie between).
+        let noNestedScrolls = nestedScrolls.isEmpty
+        func inside(_ frame: CGRect) -> Bool {
+            if noNestedScrolls {
+                return copyButtons.contains { $0.maxY <= frame.minY + 1 && frame.minY - $0.maxY <= 40 }
+            }
+            return nestedScrolls.contains {
+                $0.minY <= frame.minY + 0.5 && frame.maxY <= $0.maxY + 0.5 && frame.maxX > $0.minX && frame.minX < $0.maxX
+            }
+        }
+        for index in all.indices where !all[index].inNestedScroll && all[index].type != .button
+            && inside(all[index].frame)
+        {
+            all[index].inNestedScroll = true
+        }
+        let codeRowOwners = Set(rows.filter {
+            DocumentSnapshot.isRootOwner($0.owner) && ($0.nested || inside($0.frame))
+        }.map { $0.owner })
+        return DocumentSnapshot(
+            all: all, viewport: viewport, textKit2Rows: textKit2Rows, textKit2Nodes: textKit2Nodes,
+            codeRowOwners: codeRowOwners
+        )
     }
 
     /// Waits up to `timeout` for `element` to be fully inside the viewport.
@@ -419,6 +554,36 @@ struct ReaderDriver {
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
     }
 
+    /// A horizontal pan that starts at `point` (screen points): `points`
+    /// > 0 moves the finger left (the content toward its end), < 0 right.
+    /// Held at the end by default, so no fling momentum follows; a fling
+    /// is `velocity: .fast, hold: 0`.
+    func pan(from point: CGPoint, by points: CGFloat, velocity: XCUIGestureVelocity = .slow,
+             hold: TimeInterval = 0.3)
+    {
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: point.x, dy: point.y))
+        let end = origin.withOffset(CGVector(dx: point.x - points, dy: point.y))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: velocity, thenHoldForDuration: hold)
+    }
+
+    /// Where a horizontal pan toward the end of the code whose text has
+    /// `frame` starts: 40 pt in from the viewport's trailing edge (the
+    /// finger then has the viewport's width to travel left), at the middle
+    /// of the part of the text's height that is in view. The bottom 60 pt
+    /// of the viewport do not count as in view: a horizontal swipe there
+    /// is the home indicator's (it switches apps). nil when under 20 pt of
+    /// the text's height is in view. A code block's horizontal scroll view
+    /// spans the block's width, so the point is on it whether or not a
+    /// line reaches that far.
+    func panStart(onCodeText frame: CGRect) -> CGPoint? {
+        let viewport = viewport
+        let top = max(frame.minY, viewport.minY + 8)
+        let bottom = min(frame.maxY, viewport.maxY - 60)
+        guard bottom - top >= 20 else { return nil }
+        return CGPoint(x: viewport.maxX - 40, y: (top + bottom) / 2)
+    }
+
     func waitForDisappearance(of element: XCUIElement, timeout: TimeInterval) -> Bool {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
         return XCTWaiter().wait(for: [gone], timeout: timeout) == .completed
@@ -462,9 +627,106 @@ struct LabelShift {
     }
 
     /// `tops` measured from `anchor`'s top (nil when `anchor` is absent).
+    /// The anchor's own entry is 0 by construction, so a `LabelShift` over
+    /// two relative snapshots counts it as a common label that cannot move
+    /// (Astra R2). The code tests C2 and C3 use `AnchoredShift` instead;
+    /// PR 2's L2, L3a and L4b still use this (follow-up: move them).
     static func relative(_ tops: [String: CGFloat], to anchor: String) -> [String: CGFloat]? {
         guard let origin = tops[anchor] else { return nil }
         return tops.mapValues { $0 - origin }
+    }
+}
+
+/// Code text geometry of one snapshot (C2, C3): each on-screen code
+/// text's top and bottom edge (points), by `CD-<iii>`, and the bottom of
+/// the viewport the snapshot was read with. An accessibility frame is the
+/// element's full frame, so a top above or a bottom below the viewport is
+/// still a measurement.
+struct CodeGeometry {
+    var tops: [String: CGFloat] = [:]
+    var bottoms: [String: CGFloat] = [:]
+    var viewportMaxY: CGFloat = 0
+}
+
+/// Displacement between two snapshots measured from an anchor text's top
+/// (C2's round trips, C3's legs; Astra R2).
+///
+/// The anchor's own top is zero by construction, so it is not a
+/// measurement. Measured: the top of every other common text, and the
+/// bottom of every common text, the anchor's included (its height).
+/// Proven only when something the normalisation did not zero is compared:
+/// at least one other common text, or, for an anchor that runs past the
+/// viewport bottom in both snapshots (no text can follow it on screen),
+/// its own bottom in both. Anything less is unproven, never a pass.
+struct AnchoredShift {
+    let anchor: String
+    /// Common texts other than the anchor (their tops are measured).
+    let otherLabels: Int
+    /// Values compared: other texts' tops plus every common text's bottom.
+    let measured: Int
+    /// The measured landmarks, "CD-<iii> top" / "CD-<iii> bottom", sorted.
+    let landmarks: [String]
+    /// Largest displacement over `landmarks`, in device pixels.
+    let maxPixels: CGFloat
+    let worst: String
+    /// The anchor runs past the viewport bottom in both snapshots.
+    let anchorFillsViewport: Bool
+    /// Why the comparison proves nothing (nil when it is proven).
+    let unproven: String?
+    var proven: Bool { unproven == nil }
+
+    init(from before: CodeGeometry, to after: CodeGeometry, anchor: String, scale: CGFloat) {
+        self.anchor = anchor
+        let fills = [before, after].allSatisfy { snap in
+            snap.bottoms[anchor].map { $0 >= snap.viewportMaxY } ?? false
+        }
+        guard let a0 = before.tops[anchor], let a1 = after.tops[anchor] else {
+            otherLabels = 0
+            measured = 0
+            landmarks = []
+            maxPixels = 0
+            worst = ""
+            anchorFillsViewport = false
+            unproven = "anchor \(anchor) is not on screen in both snapshots"
+            return
+        }
+        // Sorted, so that ties name the same worst landmark every run.
+        var values: [(String, CGFloat)] = []
+        var others = 0
+        for label in before.tops.keys.sorted() where label != anchor {
+            guard let top0 = before.tops[label], let top1 = after.tops[label] else { continue }
+            others += 1
+            values.append(("\(label) top", abs((top1 - a1) - (top0 - a0)) * scale))
+        }
+        for label in before.bottoms.keys.sorted() {
+            guard let bottom0 = before.bottoms[label], let bottom1 = after.bottoms[label] else { continue }
+            values.append(("\(label) bottom", abs((bottom1 - a1) - (bottom0 - a0)) * scale))
+        }
+        otherLabels = others
+        measured = values.count
+        landmarks = values.map { $0.0 }.sorted()
+        var top: (String, CGFloat)?
+        for value in values where value.1 > top?.1 ?? -1 {
+            top = value
+        }
+        maxPixels = top?.1 ?? 0
+        worst = top?.0 ?? ""
+        // `fills` implies both of the anchor's bottoms are present, so its
+        // height is among `values`.
+        anchorFillsViewport = fills
+        if others > 0 || fills {
+            unproven = nil
+        } else {
+            unproven = "anchor-only: no other common code text, and \(anchor) does not run past the viewport "
+                + "bottom in both snapshots"
+        }
+    }
+
+    /// The figures a check records for this comparison.
+    var figures: [String: Any] {
+        ["px": Double(maxPixels), "other_labels": otherLabels, "measured": measured, "landmarks": landmarks,
+         "worst": worst, "anchor_fills_viewport": anchorFillsViewport, "proven": proven,
+         "unproven": unproven ?? ""]
     }
 }
 
@@ -475,8 +737,22 @@ struct DocumentSnapshot {
         let frame: CGRect
         /// The owner ID when this element is a TextKit 2 row (`tk2-row:<owner>`).
         let owner: String?
+        /// Element type and value (the accessibility-tree comparisons).
+        var type: XCUIElement.ElementType = .any
+        var value = ""
+        /// Inside a scroll view nested in the document's own. In a document
+        /// whose only nested scroll views are code blocks' (code-parity,
+        /// code-dense, code-tall) that is a code block's code text, drawn
+        /// by either renderer: the badge and the Copy button sit above the
+        /// block's scroll view, not in it.
+        var inNestedScroll = false
     }
 
+    /// Every labelled element of the snapshot, in or out of the viewport,
+    /// in snapshot order (scroll indicators excluded).
+    let all: [Node]
+    /// The viewport the snapshot was read with (`ReaderDriver.viewport`).
+    let viewport: CGRect
     /// Labelled elements fully inside the viewport, in snapshot order.
     let visible: [Node]
     /// Owner → label of every TextKit 2 row in the snapshot, in or out of
@@ -485,6 +761,32 @@ struct DocumentSnapshot {
     /// TextKit 2 row elements in the snapshot, counted without merging
     /// owners (equals `textKit2Rows.count` unless an owner appears twice).
     let textKit2Nodes: Int
+    /// Owners of the TextKit 2 rows that draw a top-level code block's
+    /// code: root-form owners (`0.<n>`) whose row is inside a nested
+    /// scroll view, the code block's horizontal viewport (PR 3).
+    let codeRowOwners: Set<String>
+
+    init(all: [Node], viewport: CGRect, textKit2Rows: [String: String], textKit2Nodes: Int,
+         codeRowOwners: Set<String>)
+    {
+        self.all = all
+        self.viewport = viewport
+        visible = all.filter { $0.frame.minY >= viewport.minY && $0.frame.maxY <= viewport.maxY }
+        self.textKit2Rows = textKit2Rows
+        self.textKit2Nodes = textKit2Nodes
+        self.codeRowOwners = codeRowOwners
+    }
+
+    /// The elements inside a nested scroll view (`Node.inNestedScroll`):
+    /// the code texts of a code fixture, in document order.
+    var codeTexts: [Node] { all.filter { $0.inNestedScroll } }
+
+    /// Whether any part of `node` is inside the viewport. A code block can
+    /// be taller than the screen, so `visible` (fully inside) may never
+    /// hold for it.
+    func isOnScreen(_ node: Node) -> Bool {
+        node.frame.maxY > viewport.minY && node.frame.minY < viewport.maxY
+    }
 
     /// Top edge (points) of every uniquely labelled visible element; a label
     /// seen at two different tops is dropped (it recurs, so it cannot be
@@ -516,12 +818,18 @@ struct DocumentSnapshot {
         return owners
     }
 
-    /// TextKit 2 rows owned by a root block (`0.<n>`: a top-level paragraph
-    /// or heading, the PR 1 scope).
-    var rootOwnedRows: Int { textKit2Rows.keys.filter(Self.isRootOwner).count }
+    /// TextKit 2 rows that draw a top-level code block's code (PR 3). Their
+    /// owner is the block's id, which has the root form `0.<n>`.
+    var codeOwnedRows: Int { codeRowOwners.count }
+    /// TextKit 2 rows owned by a root text block (`0.<n>`: a top-level
+    /// paragraph or heading, the PR 1 scope). A code row's owner has the
+    /// same form, so code rows are taken out: on a document with top-level
+    /// code (kitchen-sink, the stress fixtures) this still counts root text
+    /// only, and on one without it nothing changes.
+    var rootOwnedRows: Int { textKit2Rows.keys.filter(Self.isRootOwner).count - codeOwnedRows }
     /// TextKit 2 rows owned below a root (list leaders, `PreparedListRow.id`,
     /// and list trailing text, its block's node path).
-    var listOwnedRows: Int { textKit2Rows.count - rootOwnedRows }
+    var listOwnedRows: Int { textKit2Rows.count - rootOwnedRows - codeOwnedRows }
 
     static func isRootOwner(_ owner: String) -> Bool {
         let parts = owner.split(separator: ".", omittingEmptySubsequences: false)

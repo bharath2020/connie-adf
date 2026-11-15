@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Host-side measurement agent for Demo/ADFReaderUITests/LifecycleUITests
-(plan §3 quantitative checks), driven by Scripts/lifecycle-gate.sh.
+(plan §3 quantitative checks; PR 2 list checks; PR 3 code checks C1–C6) and
+for the UI tests of other classes that need the host (CodeRendererUITests'
+Copy test), driven by Scripts/lifecycle-gate.sh.
 Standard library only; run with `python3 -I -u`.
 
 The UI test cannot rotate the simulator through the Darwin hook, read CPU
-or memory of the app process: this agent does it on request. Channel = a
+or memory of the app process, or read the device pasteboard without raising
+the paste prompt: this agent does it on request. Channel = a
 host directory shared through TEST_RUNNER_ADF_LIFECYCLE_DIR. The test writes
 `req-<n>.json` (atomically: tmp + rename); the agent answers with
 `resp-<n>.json` = {"ok": true, ...} or {"ok": false, "error": "..."}.
@@ -34,6 +37,20 @@ REQUESTS ({"kind": ..., params})
                                -> {start_kb, end_kb, growth_kb, cpu_mean,
                                    cpu_max, cpu_samples, footprint_series}
                                   start/end are settled footprints
+    pasteboard_set  text=<string>
+                               -> {utf8_bytes, sha256}: puts the text on the
+                                  device pasteboard (`xcrun simctl pbcopy
+                                  <udid>`), so a test can seed a sentinel
+                                  before it taps Copy
+    pasteboard                 -> {text, utf8_bytes, sha256}: the device
+                                  pasteboard's text exactly as `xcrun simctl
+                                  pbpaste <udid>` prints it (nothing stripped;
+                                  sha256 of the raw bytes). Read the sentinel
+                                  back first: that proves the channel returns
+                                  text unchanged and that a later read is not
+                                  a stale pasteboard.
+                                  (HostAgent.setPasteboard / .pasteboard in
+                                  Demo/ADFReaderUITests/LifecycleSupport.swift)
     record  check=<name> pass=<bool> + any fields
                                -> appended to --results (JSON lines)
 
@@ -45,6 +62,7 @@ SUBCOMMANDS
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -146,6 +164,26 @@ def soak(pid: int, seconds: float, threshold: float) -> dict:
             "footprint_series": series, "start": start, "end": end}
 
 
+def pasteboard_write(udid: str, text: str) -> dict:
+    raw = text.encode("utf-8")
+    res = subprocess.run(["xcrun", "simctl", "pbcopy", udid], input=raw, capture_output=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"simctl pbcopy failed: {res.stderr.decode('utf-8', 'replace').strip()}")
+    return {"utf8_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def pasteboard_read(udid: str) -> dict:
+    res = subprocess.run(["xcrun", "simctl", "pbpaste", udid], capture_output=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"simctl pbpaste failed: {res.stderr.decode('utf-8', 'replace').strip()}")
+    raw = res.stdout
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"pasteboard is not UTF-8 text ({len(raw)} bytes): {error}") from None
+    return {"text": text, "utf8_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
 def handle(req: dict, args: argparse.Namespace) -> dict:
     kind = req.get("kind")
     if kind == "record":
@@ -161,6 +199,13 @@ def handle(req: dict, args: argparse.Namespace) -> dict:
         if res.returncode != 0:
             raise RuntimeError(f"notifyutil failed: {res.stderr.strip()}")
         return {}
+    if kind == "pasteboard_set":
+        text = req.get("text")
+        if not isinstance(text, str):
+            raise RuntimeError("pasteboard_set needs text=<string>")
+        return pasteboard_write(args.udid, text)
+    if kind == "pasteboard":
+        return pasteboard_read(args.udid)
     pid = app_pid(args.udid)
     if pid is None:
         raise RuntimeError("ADFReader is not running on the device")
@@ -211,20 +256,29 @@ def serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def figure(value) -> str:
+    """One recorded figure as the text of a Markdown table cell. Lists and
+    dicts are JSON, and so is a string that would break the row (a line
+    break or a tab: the code a Copy test recorded); pipes are escaped."""
+    if isinstance(value, (list, dict)) or (isinstance(value, str) and any(c in value for c in "\n\r\t")):
+        value = json.dumps(value)
+    return str(value).replace("|", "\\|")
+
+
 def report(args: argparse.Namespace) -> int:
     entries = []
     if os.path.exists(args.results):
         with open(args.results, encoding="utf-8") as fh:
             entries = [json.loads(l) for l in fh if l.strip()]
     meta = dict(m.split("=", 1) for m in (args.meta or []) if "=" in m)
-    lines = ["# Lifecycle checks (plan §3, items 2–6; PR 2 lists: Astra §6, Fable F14/F16)", ""]
+    lines = ["# Lifecycle checks (plan §3, items 2–6; PR 2 lists: Astra §6, Fable F14/F16; "
+             "PR 3 code: plan §6, C1–C6)", ""]
     for k, v in meta.items():
         lines.append(f"- {k}: {v}")
     lines += ["", "| check | verdict | figures |", "|---|---|---|"]
     skip = {"check", "pass", "recorded_utc", "failure_class"}
     for e in entries:
-        figures = "; ".join(f"{k}={json.dumps(v) if isinstance(v, (list, dict)) else v}"
-                            for k, v in sorted(e.items()) if k not in skip)
+        figures = "; ".join(f"{k}={figure(v)}" for k, v in sorted(e.items()) if k not in skip)
         verdict = "PASS" if e.get("pass") else "**FAIL**"
         # A failure the test classified (Fable F16: a no-switch control
         # drift, the known lifecycle flake) says so next to the verdict.

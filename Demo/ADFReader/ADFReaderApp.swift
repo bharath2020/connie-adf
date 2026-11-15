@@ -6,7 +6,24 @@ import UIKit
 ///   (name without the `.json` extension).
 /// - `-scrollToFraction <f>` scrolls, once the document is ready, to the
 ///   block at fraction `f` of `model.blocks` (animated, then re-jumped
-///   without animation ~1.5 s after ready so the landing is exact).
+///   without animation ~1.5 s after ready so the landing is exact). About
+///   1 s after the re-jump (about 2.6 s after READY), once per launch, it
+///   prints these lines together, in this order:
+///
+///       SCROLL_LANDED fixture=<name> fraction=<f> index=<i> block=<id> blocks=<n>
+///       RENDERER_STATS …
+///       TK2_CODE_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+///
+///   `SCROLL_LANDED` names the block the jump went to (`block=`, the
+///   `RenderBlock.id` at `index=` of `blocks=`: the jump's target, not a
+///   measured position; `-captureGeometryHook` measures it) and is printed
+///   with or without `-rendererStats`; the other two only with it. `RENDERER_STATS` is the READY line's keys
+///   with fresh values (the stats printed at READY predate the jump).
+///   `TK2_CODE_ROWS` lists each live TextKit 2 row drawing a code block's
+///   code by owner, with its native draw passes; with none it is
+///   `TK2_CODE_ROWS live=0 owners=-`. `Scripts/visual_diff.py` reads the
+///   three as a capture's engine proof, so a capture must wait for them
+///   (see `RendererStats` and `ReaderView.scrollToFraction`).
 /// - `-autoscroll` waits 3s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
 ///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
@@ -28,7 +45,23 @@ import UIKit
 /// - `-rendererStats` prints one `RENDERER_STATS …` line (active renderer,
 ///   live/cumulative TextKit 2 row counters, coverage counts) right
 ///   after READY and again right after `SCROLL_METRICS` — the perf gate's
-///   proof of which engine drew (see `RendererStats`).
+///   proof of which engine drew (see `RendererStats`) — and, after a
+///   `-scrollToFraction` jump, once more between `SCROLL_LANDED` and
+///   `TK2_CODE_ROWS` (above). Since the code-block stage the line carries
+///   six code keys, after `listTrailingLeaves=` and before the optional
+///   rebuild-control keys, on both arms:
+///
+///       tk2CodeLive=<n> tk2CodeDraws=<n> eligibleCodeRoots=<n>
+///       fallbackCodeRoots=<n> codeAdmitted=<n> codeGated=<n>
+///
+///   `tk2CodeLive` counts the live TextKit 2 rows drawing a code block's
+///   code and `tk2CodeDraws` their native draw passes since launch (the
+///   code-native proof). `eligibleCodeRoots` / `fallbackCodeRoots` split
+///   the top-level code blocks by content (static). `codeAdmitted` /
+///   `codeGated` are measured: of the eligible ones, how many TextKit 2
+///   would draw, and how many a view-time rule keeps on SwiftUI, at this
+///   launch's text size, legibility weight, display scale and layout
+///   direction; the two sum to `eligibleCodeRoots`.
 /// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
 ///   streamed chunk arrives (the document is still loading) the way the
 ///   toolbar does, marked as automation's like `-textkit2` (the next launch
@@ -52,6 +85,21 @@ import UIKit
 ///   `probe-url-opens`, `probe-url-last`) and each prints a `PROBE …` line.
 ///   Without the flag nothing is recorded, no About rows appear and links
 ///   open as usual (see `InteractionProbe`).
+/// - `-captureGeometryHook` (the visual gate, arms B and C) installs
+///   `CaptureGeometryHook`: each post of the Darwin notification
+///   `com.connie.adfreader.geometry` prints one line describing the screen
+///   at that moment, from a one-shot read of the key window
+///   (`RendererStats.printCaptureGeometry`):
+///
+///       CAPTURE_GEOMETRY seq=<n> scale=<s> screen=<w>x<h> window=<x0>,<y0>,<x1>,<y1>
+///           visibleRows=<id>[,<id>…]|-|unavailable
+///           rows=<owner>|<root|list|code>|<frame>|<visible or ->|<draws or ->[;…]|-
+///
+///   `Scripts/visual-parity.sh` posts it right before and right after its
+///   screenshot, and `Scripts/visual_diff.py` ties each scored code box to
+///   the TextKit 2 row whose frame holds its pixels, and measures the
+///   landing from `visibleRows`. Without the flag no observer exists and
+///   nothing is read or printed.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -73,6 +121,7 @@ struct LaunchOptions: Sendable {
     var rebuildControlPicks: Int?
     var scenePhaseProbe = false
     var interactionProbe = false
+    var captureGeometryHook = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -114,6 +163,8 @@ struct LaunchOptions: Sendable {
                 scenePhaseProbe = true
             case "-interactionProbe":
                 interactionProbe = true
+            case "-captureGeometryHook":
+                captureGeometryHook = true
             default:
                 break
             }
@@ -137,6 +188,9 @@ struct ADFReaderApp: App {
         RejumpHook.install()
         if options.memoryReliefHook {
             MemoryReliefHook.install()
+        }
+        if options.captureGeometryHook {
+            CaptureGeometryHook.install()
         }
     }
 
@@ -217,6 +271,33 @@ enum RejumpHook {
                 Task { @MainActor in NotificationCenter.default.post(name: RejumpHook.notification, object: nil) }
             },
             "com.connie.adfreader.rejump" as CFString,
+            nil,
+            .deliverImmediately
+        )
+    }
+}
+
+/// Prints the screen's geometry on request:
+/// `xcrun simctl spawn <udid> notifyutil -p com.connie.adfreader.geometry`
+/// makes the open reader print one `CAPTURE_GEOMETRY` line
+/// (`RendererStats.printCaptureGeometry`): every TextKit 2 row in the key
+/// window with its window frame and visible part, and the top-level rows the
+/// reader reports fully visible. The visual gate posts it right before and
+/// right after each screenshot of arms B and C, so the scorer can tie each
+/// scored code box to the row that drew it. Installed only with
+/// `-captureGeometryHook`; each post is one read of the window, no state
+/// and no observer on any row (ADR §8, §16, §20).
+enum CaptureGeometryHook {
+    static let notification = Notification.Name("ADFReaderCaptureGeometry")
+
+    static func install() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            { _, _, _, _, _ in
+                Task { @MainActor in NotificationCenter.default.post(name: CaptureGeometryHook.notification, object: nil) }
+            },
+            "com.connie.adfreader.geometry" as CFString,
             nil,
             .deliverImmediately
         )

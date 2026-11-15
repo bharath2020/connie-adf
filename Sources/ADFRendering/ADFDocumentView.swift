@@ -36,10 +36,10 @@ public struct ADFDocumentView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// - Parameters:
-    ///   - textRenderer: The engine for top-level paragraphs and headings
-    ///     and the text of top-level lists (see `ADFTextRenderer`);
-    ///     `.textKit2` is opt-in and falls back to SwiftUI per text block
-    ///     for content it does not cover.
+    ///   - textRenderer: The engine for top-level paragraphs and headings,
+    ///     the text of top-level lists and the code of top-level code
+    ///     blocks (see `ADFTextRenderer`); `.textKit2` is opt-in and falls
+    ///     back to SwiftUI per text block for content it does not cover.
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -274,7 +274,8 @@ private struct DocumentRow: View {
     let containerWidth: CGFloat
     let visibility: VisibleRowRegistry
     /// The host's text engine choice. Applied to this row's environment only
-    /// when the block is a top-level `.richText` (paragraph/heading) or
+    /// when the block is a top-level `.richText` (paragraph/heading),
+    /// `.codeBlock` (which only reads it, for its code text) or
     /// `.listRows` (whose rows pass it on to their own text only,
     /// `ListRowView`; `TextKit2Scope`). Text inside panels, quotes,
     /// captions and table cells always renders with SwiftUI, so the

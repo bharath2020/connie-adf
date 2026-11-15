@@ -26,6 +26,22 @@ import XCTest
 /// `testL1`/`testL3b` failure with only that symptom is classified
 /// baseline; `testL1b` and `testL3c` carry the same assertions on the
 /// table-free `list-dense`, so a run still produces list evidence.
+///
+/// `testC1`…`testC6` are PR 3's code-block additions (PR 3 plan §6), on
+/// `code-dense`: 600 top-level code blocks and nothing else, so no table
+/// and no media. Block `i` has id `0.<i>` and its code starts with the
+/// line `// CD-<iii>`, so a code text's accessibility label names its
+/// block, and a TextKit 2 row drawing it must be `tk2-row:0.<i>` (the
+/// owner of a code row has the root form; `DocumentSnapshot.codeOwnedRows`
+/// tells code rows from root text by the block's horizontal scroll view).
+/// Which blocks TextKit 2 draws is decided at view time (the canvas
+/// admission caps keep the largest on SwiftUI), so these tests pin no
+/// block: they require a TextKit 2 code row on screen, every TextKit 2 row
+/// to be a code row drawing its own block, and none on SwiftUI. Limits,
+/// the no-switch SwiftUI controls and `failure_class` are tests 1–8's and
+/// L1–L6's. OFF is checked in two steps (stack doc §6.7): no `tk2-row`
+/// right after the switch with at most `unshownRowAllowance` rows still
+/// counted, then none counted once the lazy stack has come back past them.
 @MainActor
 final class LifecycleUITests: XCTestCase {
     /// Per switch / per round trip tolerance (plan §3), device pixels.
@@ -291,8 +307,13 @@ final class LifecycleUITests: XCTestCase {
     /// stress-5k by default (tests 5 and 6, unchanged); `testL5a`/`testL5b`
     /// run it on list-dense with `listProof`: after the thrash the TextKit 2
     /// arm must still draw list-owned TextKit 2 rows, the SwiftUI arm none.
+    /// `testC5a`/`testC5b` run it on code-dense with `codeProof`: after the
+    /// vertical fling's CPU check, a horizontal fling inside a wide code
+    /// block and the same CPU check (`codeHorizontalFling`); after the
+    /// thrash the TextKit 2 arm must still draw code rows and nothing but
+    /// code rows, the SwiftUI arm no TextKit 2 row.
     private func flingThrashSoak(textKit2: Bool, fixture: String = "stress-5k", landmark: String = "Section 0:",
-                                 listProof: Bool = false) throws
+                                 listProof: Bool = false, codeProof: Bool = false) throws
     {
         let agent = try HostAgent.fromEnvironment()
         let arm = textKit2 ? "textkit2" : "swiftui"
@@ -309,6 +330,10 @@ final class LifecycleUITests: XCTestCase {
             scroll.swipeUp(velocity: .fast)
         }
         let fling = try agent.cpuSettleSeconds()
+        var horizontal: CodeFling?
+        if codeProof {
+            horizontal = try codeHorizontalFling(reader, agent, textKit2: textKit2)
+        }
 
         var firstCycle: [String: String] = [:]
         var unconfirmed: [String] = []
@@ -328,6 +353,15 @@ final class LifecycleUITests: XCTestCase {
             listRows = ["list_owned_tk2_rows_after_thrash": census.listOwnedRows,
                         "root_owned_tk2_rows_after_thrash": census.rootOwnedRows]
         }
+        if codeProof {
+            let census = try reader.documentSnapshot()
+            rendererKept = rendererKept && (textKit2
+                ? census.codeOwnedRows > 0 && census.rootOwnedRows == 0 && census.listOwnedRows == 0
+                : census.textKit2Rows.isEmpty)
+            listRows = ["code_owned_tk2_rows_after_thrash": census.codeOwnedRows,
+                        "root_owned_tk2_rows_after_thrash": census.rootOwnedRows,
+                        "list_owned_tk2_rows_after_thrash": census.listOwnedRows]
+        }
 
         let soak = try agent.request("soak", ["seconds": 60, "threshold_pct": 2.0], timeout: 180)
         let growth = soak["growth_kb"] as? Int ?? Int.max
@@ -341,9 +375,10 @@ final class LifecycleUITests: XCTestCase {
         // phases (`-scenePhaseProbe`), not `XCUIApplication.state`, which
         // reads runningForeground at every stop on the simulator.
         let leftForeground = unconfirmed.isEmpty
+        let horizontalOK = horizontal.map { $0.ok(textKit2: textKit2, maxSettle: Self.maxSettleSeconds) } ?? true
         let pass = flingOK && thrashOK && leftForeground && growth <= Self.maxGrowthKB && cpuMean <= 2.0
-            && rendererKept
-        let check = fixture == "stress-5k" ? "3.5" : "6.5"
+            && rendererKept && horizontalOK
+        let check = codeProof ? "C5" : fixture == "stress-5k" ? "3.5" : "6.5"
         var figures: [String: Any] = [
             "fling_settle_s": fling.seconds ?? -1, "thrash_settle_s": thrashSettle.seconds ?? -1,
             "fling_samples": fling.samples, "thrash_samples": thrashSettle.samples,
@@ -354,8 +389,12 @@ final class LifecycleUITests: XCTestCase {
             "unconfirmed_stops": unconfirmed,
         ]
         figures.merge(listRows) { first, _ in first }
+        if let horizontal {
+            figures.merge(horizontal.figures) { first, _ in first }
+        }
         try agent.record("\(check) fling + thrash + 60 s soak (\(fixture), \(arm))", pass: pass, figures)
         XCTAssertTrue(flingOK, "CPU did not settle within 5 s after the fling: \(fling.samples)")
+        XCTAssertTrue(horizontalOK, "horizontal fling inside a wide code block: \(horizontal?.figures ?? [:])")
         XCTAssertTrue(thrashOK, "CPU did not settle within 5 s after the thrash: \(thrashSettle.samples)")
         XCTAssertTrue(leftForeground, "thrash stops the app's scene phases did not confirm: \(unconfirmed); "
             + "first cycle: \(firstCycle)")
@@ -548,12 +587,14 @@ final class LifecycleUITests: XCTestCase {
     /// Rule B's four launches — control and TextKit 2 twice, the arms'
     /// order alternating — each a `twentyFlips` series.
     private func twentyFlipDesign(_ agent: HostAgent, fixture: String = "stress-5k", landmark: String = "Section 0:",
-                                  census: Bool = false) -> (control: [TwentyFlipSeries], flips: [TwentyFlipSeries])
+                                  census: Bool = false, code: Bool = false)
+        -> (control: [TwentyFlipSeries], flips: [TwentyFlipSeries])
     {
         var control: [TwentyFlipSeries] = [], flips: [TwentyFlipSeries] = []
         for run in 1 ... 2 {
             for arm in run == 1 ? [true, false] : [false, true] {
-                let series = twentyFlips(agent, control: arm, fixture: fixture, landmark: landmark, census: census)
+                let series = twentyFlips(agent, control: arm, fixture: fixture, landmark: landmark, census: census,
+                                         code: code)
                 if arm { control.append(series) } else { flips.append(series) }
             }
         }
@@ -582,21 +623,52 @@ final class LifecycleUITests: XCTestCase {
         /// Taken after the last footprint, so it never touches the gated
         /// growth.
         var censusRows = -1, censusAXRows = -1, censusRootOwned = -1, censusListOwned = -1
+        /// Live rows an OFF pick may still count (0 unless the series is a
+        /// TextKit 2 code series: step 1 of the two-step OFF check, stack
+        /// doc §6.7 — rows the lazy stack built and never showed).
+        var offAllowance = 0
+        /// A code series (`code`) only. About's live code-row count after
+        /// each ON pick and each OFF pick; whether a `tk2-row` was still in
+        /// the accessibility tree after each OFF pick (1) or not (0); the
+        /// code-owned rows of the census and About's code count there; and
+        /// the two-step OFF check that ends the series, after the last
+        /// footprint (`codeOffCheck`).
+        var onCode: [Int] = [], offCode: [Int] = [], offInTree: [Int] = []
+        var censusCodeOwned = -1, censusCodeRows = -1
+        var offCheck: CodeOffCheck?
 
         /// Every ON pick showed the same nonzero count of its kind and none
-        /// of the other; every OFF pick, none of either.
+        /// of the other; every OFF pick, none of either (at most
+        /// `offAllowance`, when that is set).
         var rowsOK: Bool {
             !on.isEmpty && on.allSatisfy { $0 > 0 && $0 == on[0] }
-                && onOther.allSatisfy { $0 == 0 } && off.allSatisfy { $0 == 0 }
+                && onOther.allSatisfy { $0 == 0 } && off.allSatisfy { $0 >= 0 && $0 <= offAllowance }
+        }
+
+        /// A code series: under TextKit 2 every ON pick counted code rows,
+        /// no more than its live rows, and every OFF pick at most
+        /// `offAllowance`; the control never counted one. No OFF pick left
+        /// a `tk2-row` in the tree, and the closing OFF check passed.
+        var codeRowsOK: Bool {
+            let counted = control
+                ? (onCode + offCode).allSatisfy { $0 == 0 }
+                : onCode.count == on.count && zip(onCode, on).allSatisfy { $0 > 0 && $0 <= $1 }
+                    && offCode.allSatisfy { $0 >= 0 && $0 <= offAllowance }
+            return counted && !onCode.isEmpty && !offInTree.isEmpty && offInTree.allSatisfy { $0 == 0 }
+                && offCheck?.ok == true
         }
     }
 
     /// One launch, one series: twenty switches alternating ON/OFF through
     /// the renderer menu — rebuilding as SwiftUI (`control`) or as TextKit 2
     /// — About read after every pick, a settled footprint before the first
-    /// and after every OFF (ten, the last closing the series).
+    /// and after every OFF (ten, the last closing the series). With `code`
+    /// (C6) each About read also takes the live code-row count, each OFF
+    /// pick is checked for a `tk2-row` left in the tree and may still count
+    /// `unshownRowAllowance` live rows under TextKit 2, and the series ends
+    /// with the retraced OFF check — the control makes the same queries.
     private func twentyFlips(_ agent: HostAgent, control: Bool, fixture: String, landmark: String,
-                             census: Bool) -> TwentyFlipSeries
+                             census: Bool, code: Bool = false) -> TwentyFlipSeries
     {
         let reader = ReaderDriver(launching: [
             "-fixture", fixture, "-rendererReset", "-rendererStats", "-rebuildControlPicks", control ? "20" : "0",
@@ -607,23 +679,39 @@ final class LifecycleUITests: XCTestCase {
             reader.drag(by: 300)
         }
         var series = TwentyFlipSeries(control: control)
+        series.offAllowance = code && !control ? Self.unshownRowAllowance : 0
+        let offAllowance = series.offAllowance
+        /// One About visit: the arm's count waited for, the other kind's,
+        /// and with `code` the live code-row count.
+        func aboutRows(until condition: (Int) -> Bool, settled: Bool) -> (textKit2: Int?, control: Int?, code: Int?) {
+            if code {
+                return reader.liveRowsAndCode(control: control, until: condition, settled: settled)
+            }
+            let rows = reader.liveRows(control: control, until: condition, settled: settled)
+            return (rows.textKit2, rows.control, nil)
+        }
         do {
             let start = try agent.settledFootprintKB()
             var settled: [Int] = []
             for flip in 1 ... 20 {
                 let isOn = flip % 2 == 1
                 reader.chooseRenderer(textKit2: isOn)
+                if code, !isOn {
+                    series.offInTree.append(reader.waitForDisappearance(of: reader.anyTextKit2Row, timeout: 5) ? 0 : 1)
+                }
                 let first = series.on.first
-                let rows = reader.liveRows(control: control, until: { count in
-                    isOn ? count > 0 && (first == nil || count == first) : count == 0
+                let rows = aboutRows(until: { count in
+                    isOn ? count > 0 && (first == nil || count == first) : count <= offAllowance
                 }, settled: isOn)
                 let waited = (control ? rows.control : rows.textKit2) ?? -1
                 let other = (control ? rows.textKit2 : rows.control) ?? -1
                 if isOn {
                     series.on.append(waited)
                     series.onOther.append(other)
+                    if code { series.onCode.append(rows.code ?? -1) }
                 } else {
                     series.off.append(contentsOf: [waited, other])
+                    if code { series.offCode.append(rows.code ?? -1) }
                     settled.append(try agent.settledFootprintKB())
                 }
             }
@@ -647,7 +735,7 @@ final class LifecycleUITests: XCTestCase {
                         reader.drag(by: CGFloat(drag))
                         reader.pause(1.5)
                     }
-                    let rows = reader.liveRows(control: control, until: {
+                    let rows = aboutRows(until: {
                         $0 > 0 && (drag != 0 || first == nil || $0 == first)
                     }, settled: true)
                     let snapshot = try reader.documentSnapshot()
@@ -657,18 +745,41 @@ final class LifecycleUITests: XCTestCase {
                         series.censusAXRows = snapshot.textKit2Nodes
                         series.censusRootOwned = snapshot.rootOwnedRows
                         series.censusListOwned = snapshot.listOwnedRows
+                        if code {
+                            series.censusCodeOwned = snapshot.codeOwnedRows
+                            series.censusCodeRows = rows.code ?? -1
+                        }
                     }
                     let byRoot = Dictionary(grouping: snapshot.textKit2Rows.keys) {
                         $0.split(separator: ".").dropFirst().first.map(String.init) ?? $0
                     }.mapValues(\.count)
-                    points.append([
+                    var point: [String: Any] = [
                         "step": step, "about_rows": count, "about_tk2_live": rows.textKit2 ?? -1,
                         "ax_tk2_elements": snapshot.textKit2Nodes, "ax_tk2_owners": snapshot.textKit2Rows.count,
                         "ax_root_owned": snapshot.rootOwnedRows, "ax_list_owned": snapshot.listOwnedRows,
                         "ax_owners_per_root": byRoot,
-                    ])
+                    ]
+                    if code {
+                        point["about_tk2_code_live"] = rows.code ?? -1
+                        point["ax_code_owned"] = snapshot.codeOwnedRows
+                    }
+                    points.append(point)
                 }
                 series.figures["census_after_series"] = points
+            }
+            if code {
+                // Step 2 of the OFF check, after the last footprint (it
+                // never touches the gated growth): OFF from a TextKit 2
+                // viewport, then 600 pt on and back, so the lazy stack
+                // comes back past the rows it built and never showed.
+                if !census { reader.chooseRenderer(textKit2: true) }
+                let offCheck = try codeOffCheck(reader, allowance: offAllowance)
+                series.offCheck = offCheck
+                series.figures["code_rows"] = [
+                    "on_code_rows": series.onCode, "off_code_rows": series.offCode,
+                    "off_tk2_rows_in_tree": series.offInTree, "off_allowance": offAllowance,
+                    "closing_off_check": offCheck.figures,
+                ] as [String: Any]
             }
         } catch {
             XCTFail("twenty-flip series failed: \(error)")
@@ -1449,6 +1560,904 @@ final class LifecycleUITests: XCTestCase {
         XCTAssertTrue(controlCensus, "control census: \(control.map(\.figures))")
         XCTAssertLessThanOrEqual(excess, Self.maxGrowthKB,
                                  "flips grew \(flipMedian) KB vs the control's \(controlMedian) KB (medians; excess \(excess) KB)")
+    }
+
+    // MARK: - PR 3 code blocks (PR 3 plan §6, C1–C6)
+
+    /// C1 — five round trips (ON, OFF) parked deep in code-dense
+    /// (`codeFraction`: block 288 of 600, the arrival proved by its
+    /// `// CD-288` line). Gated: every switch moves every code text on
+    /// screen ≤ 2 px; no accumulation (each OFF within 2 px of the start,
+    /// each ON within 2 px of the first ON); the code proof of every state
+    /// (`CodeScreen.ok`). Then one more ON pick — About counts live code
+    /// rows, no more than its live rows, and the accessibility snapshot
+    /// holds code-owned rows and no root- or list-owned one — and the
+    /// two-step OFF check (`codeOffCheck`).
+    func testC1CodeFiveRoundTripsCodeDense() throws {
+        let failures = try codeFiveRoundTrips(panned: false, HostAgent.fromEnvironment())
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
+    }
+
+    /// C1b — C1 with one wide block panned first. The block is the first
+    /// one TextKit 2 draws, from the parked position on, whose text is at
+    /// least `codeWideMargin` wider than the window (`wideCode`; found with
+    /// the switch on, because the canvas admission is decided at view
+    /// time), panned on SwiftUI by a `codePanPoints` finger travel, which
+    /// must move it at least `codePanHeld` (200 pt). Also gated: the
+    /// block's leading edge moves ≤ 2 px per switch and does not
+    /// accumulate, and it is a TextKit 2 row with its own id at every ON.
+    func testC1bCodeFiveRoundTripsPannedWideBlock() throws {
+        let failures = try codeFiveRoundTrips(panned: true, HostAgent.fromEnvironment())
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
+    }
+
+    /// `testC1…` in one launch; records, then returns its failures.
+    private func codeFiveRoundTrips(panned: Bool, _ agent: HostAgent) throws -> [String] {
+        let name = (panned ? "C1b code five round trips, wide block panned" : "C1 code five round trips")
+            + " (code-dense @ \(Self.codeKey(Self.codeArrival)))"
+        let reader = try launchCodeDense(agent)
+        let scale = reader.pixelScale()
+        let limit = Double(Self.shiftLimit)
+        var failures: [String] = []
+        var wideKey: String?
+        var panOffset: CGFloat = 0
+        if panned {
+            reader.chooseRenderer(textKit2: true)
+            reader.pause()
+            let wide = try wideCode(reader, textKit2: true)
+            reader.chooseRenderer(textKit2: false)
+            reader.pause()
+            if let wide {
+                let text = reader.element(labelPrefix: Self.codeLabel(wide.block))
+                let rest = text.frame.minX
+                if let start = reader.panStart(onCodeText: text.frame) {
+                    reader.pan(from: start, by: Self.codePanPoints)
+                    reader.pause()
+                }
+                panOffset = rest - text.frame.minX
+                wideKey = Self.codeKey(wide.block)
+                if panOffset < Self.codePanHeld {
+                    failures.append("the pan moved \(Self.codeKey(wide.block)) \(panOffset) pt, under \(Self.codePanHeld) pt")
+                }
+            } else {
+                failures.append("no wide code block drawn by TextKit 2 within \(Self.codeWideSearchDrags) drags")
+            }
+        }
+
+        let start = Self.codeScreen(try reader.documentSnapshot())
+        var previous = start
+        var firstOn: CodeScreen?
+        var perSwitch: [Double] = [], net: [Double] = [], panShift: [Double] = [], panNet: [Double] = []
+        var worst = (label: "", pixels: CGFloat(0))
+        var minCommon = Int.max
+        var proofFailures: [String] = []
+        if !start.ok(textKit2: false) { proofFailures.append("start: \(start.figures)") }
+        for trip in 1 ... 5 {
+            for textKit2 in [true, false] {
+                reader.chooseRenderer(textKit2: textKit2)
+                reader.pause()
+                let screen = Self.codeScreen(try reader.documentSnapshot())
+                let step = LabelShift(from: previous.tops, to: screen.tops, scale: scale)
+                perSwitch.append(Double(step.maxPixels))
+                minCommon = min(minCommon, step.common)
+                if step.maxPixels > worst.pixels { worst = (step.worstLabel, step.maxPixels) }
+                if textKit2, firstOn == nil { firstOn = screen }
+                let reference = textKit2 ? firstOn ?? screen : start
+                net.append(Double(LabelShift(from: reference.tops, to: screen.tops, scale: scale).maxPixels))
+                var proof = screen.ok(textKit2: textKit2)
+                if let wideKey {
+                    if let x = screen.lefts[wideKey], let x0 = previous.lefts[wideKey], let xNet = reference.lefts[wideKey] {
+                        panShift.append(Double(abs(x - x0) * scale))
+                        panNet.append(Double(abs(x - xNet) * scale))
+                    }
+                    if textKit2 { proof = proof && screen.drawnByTextKit2.contains(wideKey) }
+                }
+                if !proof { proofFailures.append("trip \(trip) \(textKit2 ? "ON" : "OFF"): \(screen.figures)") }
+                previous = screen
+            }
+        }
+        attach(reader.app, panned ? "code-round-trips-panned" : "code-round-trips")
+        reader.chooseRenderer(textKit2: true)
+        let on = reader.liveCodeRows(until: { $0 > 0 }, settled: true)
+        let census = try reader.documentSnapshot()
+        let off = try codeOffCheck(reader, allowance: Self.unshownRowAllowance)
+        reader.app.terminate()
+
+        let live = on.textKit2 ?? -1, code = on.code ?? -1
+        if minCommon == 0 { failures.append("a switch left no common code text") }
+        if (perSwitch.max() ?? .infinity) > limit {
+            failures.append("a switch moved \(worst.label) \(worst.pixels) px")
+        }
+        if (net.max() ?? .infinity) > limit { failures.append("displacement accumulated: \(net) px") }
+        if wideKey != nil {
+            if panShift.count != perSwitch.count { failures.append("the panned block was not on screen at every switch") }
+            if (panShift.max() ?? .infinity) > limit {
+                failures.append("a switch moved the panned block sideways: \(panShift) px")
+            }
+            if (panNet.max() ?? .infinity) > limit {
+                failures.append("the horizontal offset accumulated: \(panNet) px")
+            }
+        }
+        failures += proofFailures
+        if !(live > 0 && code > 0 && code <= live && census.codeOwnedRows > 0 && census.rootOwnedRows == 0
+            && census.listOwnedRows == 0)
+        {
+            failures.append("code rows under TextKit 2: live \(live), of which code \(code); snapshot code-owned "
+                + "\(census.codeOwnedRows), root-owned \(census.rootOwnedRows), list-owned \(census.listOwnedRows)")
+        }
+        if !off.ok { failures.append("OFF check: \(off.figures)") }
+        var figures: [String: Any] = [
+            "gated": "per switch <= 2.01 px and net vs start / first ON <= 2.01 px over the code texts on screen; "
+                + "code proof per state; live code rows; two-step OFF check",
+            "per_switch_px": perSwitch, "net_px": net, "worst_label": worst.label, "worst_px": Double(worst.pixels),
+            "min_common_labels": minCommon == .max ? 0 : minCommon, "start": start.figures,
+            "proof_failures": proofFailures, "live_tk2_rows": live, "live_tk2_code_rows": code,
+            "ax_code_owned_tk2_rows": census.codeOwnedRows, "ax_root_owned_tk2_rows": census.rootOwnedRows,
+            "ax_list_owned_tk2_rows": census.listOwnedRows, "off_check": off.figures, "failures": failures,
+        ]
+        if panned {
+            figures["panned_block"] = wideKey ?? "none"
+            figures["pan_finger_travel_pt"] = Double(Self.codePanPoints)
+            figures["pan_offset_pt"] = Double(panOffset)
+            figures["pan_per_switch_px"] = panShift
+            figures["pan_net_px"] = panNet
+        }
+        try agent.record(name, pass: failures.isEmpty, figures)
+        return failures.map { "\(name): \($0)" }
+    }
+
+    /// C2 — test1's method on code-dense with L2's label-anchored return
+    /// (a re-jump park does not land repeatably this deep): "back" is
+    /// `codeReturn` to the anchor (`codeAnchor`: the first code text whose
+    /// top edge is in view, at least 40 pt below the viewport's top, at the
+    /// parked position), and a return trip is
+    /// measured from that text (`AnchoredShift`: every other code text's
+    /// top and every common code text's bottom, minus the anchor's top).
+    /// A return trip is proven only with another common code text, or an
+    /// anchor that runs past the viewport bottom in both snapshots (its
+    /// height measured); an anchor-only trip is unproven, a FAIL with its
+    /// own `failure_class` (Astra R2).
+    /// A no-switch control trip first; forward — ON at the start, twelve
+    /// 600 pt drags away until the parked code rows have left the render
+    /// region (none of them is in the tree), OFF there, back; reverse — ON
+    /// then OFF at the start, away, ON there, back, so the code
+    /// rematerialises naturally as TextKit 2 rows. Each return ≤ 2 px from
+    /// its start (control and forward: the SwiftUI start; reverse: the
+    /// TextKit 2 start); every in-place switch moves code texts ≤ 2 px; no
+    /// pair changes order across either trip; the code proof holds in
+    /// every state. A control drift over 2 px alone is F16's known flake
+    /// (`failure_class`).
+    func testC2CodeCollapseRoundTripBothDirections() throws {
+        let agent = try HostAgent.fromEnvironment()
+        let reader = try launchCodeDense(agent)
+        let scale = reader.pixelScale()
+        let limit = Self.shiftLimit
+        let anchor = try codeAnchor(reader)
+        var returns: [Double] = []
+        func back() throws {
+            XCTAssertTrue(try codeReturn(anchor, reader), "\(anchor.key) is not back in view")
+            returns.append(Double(reader.element(labelPrefix: anchor.label).frame.minY - anchor.top))
+        }
+        func screen() throws -> CodeScreen {
+            Self.codeScreen(try reader.documentSnapshot())
+        }
+        func anchored(_ from: CodeScreen, _ to: CodeScreen) -> AnchoredShift {
+            AnchoredShift(from: from.geometry, to: to.geometry, anchor: anchor.key, scale: scale)
+        }
+        /// The parked blocks still in the accessibility tree.
+        func alive(_ parked: CodeScreen) -> [String] {
+            parked.tops.keys.sorted().filter { reader.element(labelPrefix: "// " + $0).exists }
+        }
+        // One trip first, as test1: it measures the rows on the way.
+        try away(reader)
+        try back()
+
+        // Control: away and back, SwiftUI only.
+        let s0 = try screen()
+        try away(reader)
+        try back()
+        let s1 = try screen()
+        let control = anchored(s0, s1)
+
+        // Forward: ON in place, OFF far away, back.
+        reader.chooseRenderer(textKit2: true)
+        reader.pause()
+        let s2 = try screen()
+        let forwardOn = LabelShift(from: s1.tops, to: s2.tops, scale: scale)
+        try away(reader)
+        let forwardAlive = alive(s2)
+        reader.chooseRenderer(textKit2: false)
+        try back()
+        let s3 = try screen()
+        let forward = anchored(s1, s3)
+
+        // Reverse: TextKit 2 in place, OFF there, ON far away, back.
+        reader.chooseRenderer(textKit2: true)
+        reader.pause()
+        let s4 = try screen()
+        let reverseOn = LabelShift(from: s3.tops, to: s4.tops, scale: scale)
+        reader.chooseRenderer(textKit2: false)
+        reader.pause()
+        let s5 = try screen()
+        let reverseOff = LabelShift(from: s4.tops, to: s5.tops, scale: scale)
+        try away(reader)
+        let reverseAlive = alive(s5)
+        reader.chooseRenderer(textKit2: true)
+        try back()
+        let s6 = try screen()
+        let reverse = anchored(s4, s6)
+        attach(reader.app, "code-collapse-reverse-back")
+        reader.app.terminate()
+
+        let states: [(String, CodeScreen, Bool)] = [
+            ("control_start", s0, false), ("control_back", s1, false), ("forward_on", s2, true),
+            ("forward_back", s3, false), ("reverse_on", s4, true), ("reverse_off", s5, false),
+            ("reverse_back", s6, true),
+        ]
+        let badProofs = states.compactMap { state -> String? in
+            state.1.ok(textKit2: state.2) ? nil : "\(state.0): \(state.1.figures)"
+        }
+        let inversions = LabelShift.orderInversions(from: s1.tops, to: s3.tops)
+            + LabelShift.orderInversions(from: s4.tops, to: s6.tops)
+        // Round trips: anchored, proven only by something the anchor's
+        // normalisation did not zero (Astra R2). Switches in place: absolute
+        // tops, where the anchor's top is itself a measurement.
+        let anchoredLegs: [(String, AnchoredShift)] = [("control", control), ("forward", forward), ("reverse", reverse)]
+        let unproven = anchoredLegs.compactMap { name, shift in shift.unproven.map { "\(name): \($0)" } }
+        let inPlace: [(String, LabelShift)] = [("forward ON", forwardOn), ("reverse ON", reverseOn),
+                                               ("reverse OFF", reverseOff)]
+        let rendererOK = returns.count == 4 && unproven.isEmpty
+            && forward.maxPixels <= limit && reverse.maxPixels <= limit
+            && inPlace.allSatisfy { $0.1.common > 0 && $0.1.maxPixels <= limit }
+            && !s2.tops.isEmpty && !s5.tops.isEmpty && forwardAlive.isEmpty && reverseAlive.isEmpty
+            && badProofs.isEmpty && inversions.isEmpty
+        let pass = rendererOK && control.maxPixels <= limit
+        var figures: [String: Any] = [
+            // An unproven leg first: it is not F16's flake.
+            "failure_class": !unproven.isEmpty ? "unproven geometry: \(unproven.joined(separator: "; "))"
+                : (!pass && rendererOK ? Self.controlDriftClass : ""),
+            "unproven_legs": unproven,
+            "control_round_trip_px": Double(control.maxPixels),
+            "forward_switch_on_px": Double(forwardOn.maxPixels), "forward_switch_on_labels": forwardOn.common,
+            "forward_round_trip_px": Double(forward.maxPixels),
+            "reverse_switch_on_px": Double(reverseOn.maxPixels), "reverse_switch_on_labels": reverseOn.common,
+            "reverse_switch_off_px": Double(reverseOff.maxPixels), "reverse_switch_off_labels": reverseOff.common,
+            "reverse_round_trip_px": Double(reverse.maxPixels),
+            "forward_parked_blocks": s2.tops.keys.sorted(), "forward_still_materialised_when_far": forwardAlive,
+            "forward_tk2_blocks_parked": s2.drawnByTextKit2,
+            "reverse_parked_blocks": s5.tops.keys.sorted(), "reverse_still_materialised_when_far": reverseAlive,
+            "reverse_tk2_blocks_back": s6.drawnByTextKit2,
+            "order_inversions": inversions, "proof_failures": badProofs,
+            "scroll_away_pt": Double(CGFloat(Self.awayLegs) * Self.awayDistance),
+            "measure": "round trips: other code texts' tops and every common code text's bottom, relative to the "
+                + "anchor's top, after a label-anchored return; proven only with another common code text or an "
+                + "anchor that runs past the viewport bottom in both snapshots; switches in place: absolute tops",
+            "anchor": anchor.key, "anchor_top_pt": Double(anchor.top), "return_anchor_offsets_pt": returns,
+        ]
+        for (name, shift) in anchoredLegs {
+            figures["\(name)_other_labels"] = shift.otherLabels
+            figures["\(name)_measured"] = shift.measured
+            figures["\(name)_landmarks"] = shift.landmarks
+            figures["\(name)_worst"] = shift.worst
+            figures["\(name)_anchor_fills_viewport"] = shift.anchorFillsViewport
+        }
+        try agent.record("C2 code collapse round trip, both directions (code-dense @ \(anchor.key))", pass: pass,
+                         figures)
+        for (name, shift) in anchoredLegs {
+            XCTAssertTrue(shift.proven, "\(name) round trip: \(shift.unproven ?? "")")
+        }
+        XCTAssertLessThanOrEqual(control.maxPixels, limit, "the return itself is not exact (F16 flake)")
+        for (name, shift) in [("forward round trip", forward), ("reverse round trip", reverse)] {
+            XCTAssertLessThanOrEqual(shift.maxPixels, limit, "\(name): \(shift.worst) moved \(shift.maxPixels) px")
+        }
+        for (name, shift) in inPlace {
+            XCTAssertGreaterThan(shift.common, 0, "\(name): no common code text")
+            XCTAssertLessThanOrEqual(shift.maxPixels, limit, "\(name): \(shift.worstLabel) moved \(shift.maxPixels) px")
+        }
+        XCTAssertTrue(forwardAlive.isEmpty && reverseAlive.isEmpty,
+                      "the parked code never left the render region: \(forwardAlive + reverseAlive)")
+        XCTAssertTrue(inversions.isEmpty, "code blocks changed order: \(inversions)")
+        XCTAssertTrue(badProofs.isEmpty, "code proof: \(badProofs)")
+        XCTAssertEqual(returns.count, 4, "a return trip did not complete")
+    }
+
+    /// C3 — Text Size on code-dense, each arm in its own launch with
+    /// `-fontSizeStep 0` (the popover never writes the persisted size). A
+    /// trip away first gives distant code blocks (7,200 pt away) and nearby
+    /// ones cached heights (code rescales them by the size ratio); then
+    /// Text Size 0→3 and a return trip at size 3, 3→0, return trip.
+    /// Returns are label-anchored (`codeReturn`) and measured from the
+    /// anchor, as is the in-place size round trip (`AnchoredShift`: other
+    /// code texts' tops and every common code text's bottom, so a height
+    /// change is seen). Every leg of both arms must be proven (another
+    /// common code text, or an anchor running past the viewport bottom in
+    /// both snapshots); an anchor-only leg is unproven, a FAIL with its own
+    /// `failure_class` (Astra R2). Every leg's TextKit 2
+    /// excess over the SwiftUI arm ≤ 2 px; CPU settles ≤ 2 % within 5 s
+    /// after each size change and the last return; the size readout moved
+    /// and came back to 100 %; the code proof holds at the end. Last, a
+    /// rotation round trip, recorded per arm and not gated (PR 2's call
+    /// C11: the viewport re-anchors after the width change in both arms).
+    func testC3CodeTextSizeDriftMatchesSwiftUI() throws {
+        let agent = try HostAgent.fromEnvironment()
+        let legs = ["size3_return", "size_round_trip", "size_return"]
+        var drift: [Bool: [String: AnchoredShift]] = [:]
+        var arms: [String: Any] = [:]
+        var settleOK = true, sizeOK = true, proofOK = true, returnsOK = true
+        for textKit2 in [false, true] {
+            let arm = textKit2 ? "textkit2" : "swiftui"
+            let reader = try launchCodeDense(agent, textKit2: textKit2, extra: ["-fontSizeStep", "0"])
+            let scale = reader.pixelScale()
+            let anchor = try codeAnchor(reader)
+            var returned: [Bool] = []
+            func geometry() throws -> CodeGeometry {
+                Self.codeScreen(try reader.documentSnapshot()).geometry
+            }
+            func trip() throws {
+                try away(reader)
+                returned.append(try codeReturn(anchor, reader))
+            }
+            func anchored(_ from: CodeGeometry, _ to: CodeGeometry) -> AnchoredShift {
+                AnchoredShift(from: from, to: to, anchor: anchor.key, scale: scale)
+            }
+            try trip()
+            let start = try geometry()
+
+            let larger = reader.stepTextSize(3)
+            reader.pause(1.5)
+            let largerSettle = try agent.cpuSettleSeconds()
+            returned.append(try alignCode(anchor, reader))
+            let large = try geometry()
+            try trip()
+            let largeReturn = try geometry()
+            let restored = reader.stepTextSize(-3)
+            reader.pause(1.5)
+            let sizeSettle = try agent.cpuSettleSeconds()
+            returned.append(try alignCode(anchor, reader))
+            let sized = try geometry()
+            try trip()
+            let final = Self.codeScreen(try reader.documentSnapshot())
+            let finalSettle = try agent.cpuSettleSeconds()
+            attach(reader.app, "code-size-\(arm)")
+
+            // Recorded only: rotation round trip, then the anchor aligned back.
+            try agent.request("rotate")
+            reader.pause(2.5)
+            try agent.request("rotate")
+            reader.pause(2.5)
+            let rotated = try geometry()
+            let rotatedBack = try alignCode(anchor, reader)
+            let rotatedAligned = try geometry()
+            reader.app.terminate()
+
+            let shifts = [
+                "size3_return": anchored(large, largeReturn),
+                "size_round_trip": anchored(start, sized),
+                "size_return": anchored(start, final.geometry),
+            ]
+            drift[textKit2] = shifts
+            let displacement = LabelShift(from: final.tops, to: rotated.tops, scale: scale)
+            let rotationLayout = anchored(final.geometry, rotatedAligned)
+            let settles = [largerSettle, sizeSettle, finalSettle].map { $0.seconds ?? -1 }
+            settleOK = settleOK && settles.allSatisfy { $0 >= 0 && $0 <= Self.maxSettleSeconds }
+            sizeOK = sizeOK && larger != nil && larger != "100%" && restored == "100%"
+            proofOK = proofOK && final.ok(textKit2: textKit2)
+            returnsOK = returnsOK && returned.count == 5 && returned.allSatisfy { $0 }
+            arms[arm] = [
+                "anchor": anchor.key, "anchor_top_pt": Double(anchor.top),
+                "drift_px": shifts.mapValues { Double($0.maxPixels) },
+                "legs": shifts.mapValues(\.figures),
+                "cpu_settle_s": ["size3": settles[0], "size": settles[1], "final": settles[2]],
+                "cpu_samples": ["size3": largerSettle.samples, "size": sizeSettle.samples,
+                                "final": finalSettle.samples],
+                "size_readouts": [larger ?? "missing", restored ?? "missing"], "final_code_proof": final.figures,
+                "anchor_back_in_view": returned,
+                "rotation_recorded_not_gated": [
+                    "displacement_px": Double(displacement.maxPixels), "displacement_labels": displacement.common,
+                    "layout_anchor_aligned": rotationLayout.figures,
+                    "anchor_back_in_view": rotatedBack,
+                ] as [String: Any],
+            ] as [String: Any]
+        }
+        let swiftUI = try XCTUnwrap(drift[false]), textKit2 = try XCTUnwrap(drift[true])
+        // Every leg of both arms must compare something the anchor's
+        // normalisation did not zero (Astra R2); unproven is a FAIL.
+        var unproven: [String] = []
+        for (arm, shifts) in [("swiftui", swiftUI), ("textkit2", textKit2)] {
+            for leg in legs {
+                guard let shift = shifts[leg] else {
+                    unproven.append("\(arm) \(leg): not measured")
+                    continue
+                }
+                if let reason = shift.unproven {
+                    unproven.append("\(arm) \(leg): \(reason)")
+                }
+            }
+        }
+        var excess: [String: Double] = [:]
+        var driftOK = true
+        for leg in legs {
+            guard let base = swiftUI[leg], let candidate = textKit2[leg] else {
+                driftOK = false
+                continue
+            }
+            let value = candidate.maxPixels - base.maxPixels
+            excess[leg] = Double(value)
+            driftOK = driftOK && base.proven && candidate.proven && value <= Self.shiftLimit
+        }
+        let pass = driftOK && settleOK && sizeOK && proofOK && returnsOK
+        try agent.record("C3 code Text Size 0→3→0 with cached heights (code-dense @ \(Self.codeKey(Self.codeArrival)))",
+                         pass: pass, [
+            "gated": "every leg of both arms proven; per leg TextKit 2 drift minus SwiftUI drift <= 2.01 px; "
+                + "CPU <= 2 % within 5 s; size restored; final code proof; anchor back in view after every return",
+            "measure": "other code texts' tops and every common code text's bottom, relative to the anchor's top "
+                + "(returns are label-anchored); proven only with another common code text or an anchor that "
+                + "runs past the viewport bottom in both snapshots; rotation per arm: recorded, not gated",
+            "failure_class": unproven.isEmpty ? "" : "unproven geometry: \(unproven.joined(separator: "; "))",
+            "unproven_legs": unproven,
+            "excess_px": excess, "arms": arms,
+        ])
+        XCTAssertTrue(unproven.isEmpty, "unproven geometry: \(unproven)")
+        XCTAssertTrue(driftOK, "TextKit 2 drifts beyond SwiftUI + 2 px: \(excess)")
+        XCTAssertTrue(settleOK, "CPU did not settle within 5 s: \(arms)")
+        XCTAssertTrue(sizeOK, "Text Size did not step and return to 100 %: \(arms)")
+        XCTAssertTrue(proofOK, "code proof at the end: \(arms)")
+        XCTAssertTrue(returnsOK, "a label-anchored return lost the anchor: \(arms)")
+    }
+
+    /// C4 — switch during a streamed code-heavy load: `-switchDuringLoad`
+    /// flips to TextKit 2 on code-dense's first streamed chunk; after READY
+    /// About shows 600 blocks, live TextKit 2 rows and live code rows, and
+    /// `-scrollToFraction 0.9992` lands on the last block (`// CD-599`),
+    /// where a code row is on screen, every TextKit 2 row draws its own
+    /// block and none is a root or list row (code-dense has neither).
+    /// Replacement of a document with colliding ids is a hosted suite
+    /// (`TextKit2StableIDReplacementTests`), not exercised here.
+    func testC4CodeSwitchDuringStreamingLoad() throws {
+        let agent = try HostAgent.fromEnvironment()
+        let total = Self.codeBlocks
+        let reader = ReaderDriver(launching: [
+            "-fixture", Self.codeFixture, "-rendererReset", "-rendererStats", "-switchDuringLoad",
+            "-scrollToFraction", "0.9992",
+        ])
+        reader.waitForRenderer("TextKit 2", timeout: 30)
+        let last = Self.codeLabel(total - 1)
+        let landed = reader.element(labelPrefix: last).waitForExistence(timeout: 30)
+        reader.pause()
+        let screen = Self.codeScreen(try reader.documentSnapshot())
+        attach(reader.app, "code-switch-during-load-end")
+        reader.openAbout()
+        let switchField = reader.app.staticTexts[ReaderDriver.Identifier.loadSwitchBlocks]
+        let readyField = reader.app.staticTexts[ReaderDriver.Identifier.loadReadyBlocks]
+        let switched = switchField.waitForExistence(timeout: 5)
+        let ready = readyField.waitForExistence(timeout: 5)
+        let blocksAtSwitch = switched ? Int(switchField.label) ?? -1 : -1
+        let blocksAtReady = ready ? Int(readyField.label) ?? -1 : -1
+        let live = reader.readLiveTextKit2Rows(until: { $0 > 0 }, settled: true) ?? -1
+        let code = reader.readLiveCodeRows(until: { $0 > 0 }, settled: true) ?? -1
+        reader.closeAbout()
+        let proof = screen.ok(textKit2: true)
+        let pass = landed && proof && blocksAtSwitch > 0 && blocksAtSwitch < total && blocksAtReady == total
+            && live > 0 && code > 0 && code <= live
+        try agent.record("C4 switch during streaming code load (code-dense)", pass: pass, [
+            "blocks_loaded_at_switch": blocksAtSwitch, "blocks_at_ready": blocksAtReady, "total_blocks": total,
+            "landed_on": landed ? last : "not landed", "code_proof": screen.figures, "code_proof_ok": proof,
+            "live_tk2_rows": live, "live_tk2_code_rows": code,
+        ])
+        XCTAssertTrue(landed, "code-dense did not land on \(last)")
+        XCTAssertGreaterThan(blocksAtSwitch, 0, "the app never switched during the load")
+        XCTAssertLessThan(blocksAtSwitch, total, "the switch did not happen while blocks were still streaming")
+        XCTAssertEqual(blocksAtReady, total, "the load did not complete after the switch")
+        XCTAssertTrue(proof, "code rows at the end of the document: \(screen.figures)")
+        XCTAssertGreaterThan(live, 0, "no live TextKit 2 row after READY")
+        XCTAssertGreaterThan(code, 0, "no live TextKit 2 code row after READY")
+        XCTAssertLessThanOrEqual(code, live, "more live code rows than live rows")
+    }
+
+    /// C5 — test5/test6's fling, Home/lock/switcher ×5 and 60 s soak on
+    /// code-dense, plus a horizontal fling inside a wide code block with
+    /// the same instantaneous CPU check (the autoscroll gate scrolls
+    /// vertically only), and code rows after the thrash.
+    func testC5aFlingThrashSoakCodeDenseSwiftUI() throws {
+        try flingThrashSoak(textKit2: false, fixture: Self.codeFixture, landmark: Self.codeLabel(0), codeProof: true)
+    }
+
+    func testC5bFlingThrashSoakCodeDenseTextKit2() throws {
+        try flingThrashSoak(textKit2: true, fixture: Self.codeFixture, landmark: Self.codeLabel(0), codeProof: true)
+    }
+
+    /// C6 — test7's rule-B design (four launches, alternating, medians of
+    /// two; test7 itself stays on stress-5k) at code-dense three 300 pt
+    /// drags down, where every block is code. Gated as L6, like for like:
+    /// the control's rebuilt-row count equals the TextKit 2 rows on screen
+    /// (the accessibility census) in all four series; About's TextKit 2
+    /// count is ≥ the rows shown and at most `unshownRowAllowance` above
+    /// them; TextKit 2 growth ≤ 5,120 KB over the control's (medians, no
+    /// pressure relief). Code: every ON pick counts live code rows, the
+    /// census holds code-owned rows only, and the control never counts a
+    /// code row. OFF is the two-step check (`TwentyFlipSeries.codeRowsOK`):
+    /// after every OFF pick no `tk2-row` is in the tree and About counts at
+    /// most `unshownRowAllowance` live rows (rows the lazy stack built and
+    /// never showed keep their engine until it comes back to them); after
+    /// the series, once it has (`codeOffCheck`), the counts are 0.
+    func testC6TwentyFlipsCodeDense() throws {
+        let agent = try HostAgent.fromEnvironment()
+        let (control, flips) = twentyFlipDesign(agent, fixture: Self.codeFixture, landmark: Self.codeLabel(0),
+                                                census: true, code: true)
+        let controlMedian = Self.median(control.map(\.growth))
+        let flipMedian = Self.median(flips.map(\.growth))
+        let excess = flipMedian - controlMedian
+        let rowsOK = (control + flips).allSatisfy(\.rowsOK)
+        let codeRowsOK = (control + flips).allSatisfy(\.codeRowsOK)
+        let controlCounts = control.map { $0.on.first ?? -1 }
+        let textKit2OnScreen = flips.map(\.censusAXRows)
+        let matched = Set(controlCounts + textKit2OnScreen).count == 1
+        let codeProof = flips.allSatisfy {
+            $0.censusCodeOwned > 0 && $0.censusRootOwned == 0 && $0.censusListOwned == 0
+                && $0.censusCodeRows > 0 && $0.censusRows == $0.on.first
+        }
+        let controlCensus = control.allSatisfy {
+            $0.censusRootOwned == 0 && $0.censusListOwned == 0 && $0.censusCodeOwned == 0 && $0.censusAXRows == 0
+                && $0.censusCodeRows == 0 && $0.censusRows == $0.on.first
+        }
+        let liveOK = flips.allSatisfy {
+            $0.censusRows >= $0.censusAXRows && $0.censusRows - $0.censusAXRows <= Self.unshownRowAllowance
+        }
+        let pass = rowsOK && codeRowsOK && matched && liveOK && codeProof && controlCensus
+            && excess <= Self.maxGrowthKB
+        try agent.record("C6 twenty flips (code-dense)", pass: pass, [
+            "gated_metric": "median over 2 runs of raw settled phys_footprint growth over twenty switches, "
+                + "TextKit 2 minus a control that rebuilds the same rows as SwiftUI (<= 5,120 KB; no pressure relief); "
+                + "control rebuilt rows == TextKit 2 rows on screen; tk2Live allowance; code census; "
+                + "two-step OFF check (<= \(Self.unshownRowAllowance) unshown cached rows at an OFF pick, 0 after the retrace)",
+            "control_growth_median_kb": controlMedian, "flips_growth_median_kb": flipMedian,
+            "flips_minus_control_kb": excess, "control_rebuilt_rows": controlCounts,
+            "tk2_on_screen_rows_ax": textKit2OnScreen, "tk2_live_row_views": flips.map { $0.on.first ?? -1 },
+            "tk2_live_minus_on_screen": flips.map { $0.censusRows - $0.censusAXRows },
+            "tk2_code_owned_rows_ax": flips.map(\.censusCodeOwned), "tk2_live_code_rows": flips.map(\.censusCodeRows),
+            "control_runs": control.map(\.figures), "flip_runs": flips.map(\.figures),
+        ])
+        for (index, series) in (control + flips).enumerated() {
+            let arm = series.control ? "control" : "TextKit 2"
+            XCTAssertTrue(series.rowsOK, "series \(index + 1) (\(arm)): "
+                + "ON \(series.on) / other kind \(series.onOther), OFF \(series.off)")
+            XCTAssertTrue(series.codeRowsOK, "series \(index + 1) (\(arm)): code rows ON \(series.onCode), "
+                + "OFF \(series.offCode), tk2-rows in the tree after OFF \(series.offInTree), "
+                + "closing OFF check \(series.offCheck?.figures ?? [:])")
+        }
+        XCTAssertTrue(matched, "control rebuilt rows \(controlCounts) vs TextKit 2 on-screen rows \(textKit2OnScreen)")
+        XCTAssertTrue(liveOK, "tk2Live vs rows on screen: \(flips.map { ($0.censusRows, $0.censusAXRows) })")
+        XCTAssertTrue(codeProof, "TextKit 2 code census \(flips.map(\.figures))")
+        XCTAssertTrue(controlCensus, "control census: \(control.map(\.figures))")
+        XCTAssertLessThanOrEqual(excess, Self.maxGrowthKB,
+                                 "flips grew \(flipMedian) KB vs the control's \(controlMedian) KB (medians; excess \(excess) KB)")
+    }
+
+    // MARK: - Code positions and proof (code-dense)
+
+    private static let codeFixture = "code-dense"
+    /// code-dense's top-level code blocks: block `i` has id `0.<i>`.
+    private static let codeBlocks = 600
+    /// `-scrollToFraction` for the parked position: `Int(0.4808 × 600)` is
+    /// block `codeArrival`, deep in the document.
+    private static let codeFraction = "0.4808"
+    private static let codeArrival = 288
+    /// The least distance (points) from the viewport's top to the top of
+    /// the code text C2 and C3 anchor on (`codeAnchor`).
+    private static let codeAnchorTopMargin: CGFloat = 40
+    /// A wide block's text is at least this much wider than the window, so
+    /// that it scrolls further than `codePanPoints`.
+    private static let codeWideMargin: CGFloat = 240
+    /// 300 pt drags `wideCode` makes looking for a wide block (code-dense
+    /// has one every few blocks).
+    private static let codeWideSearchDrags = 20
+    /// C1b's pan: the finger travels `codePanPoints`; a scroll view starts
+    /// moving after a few points of travel, and the block must end at least
+    /// `codePanHeld` from rest (plan: panned 200 pt).
+    private static let codePanPoints: CGFloat = 230
+    private static let codePanHeld: CGFloat = 200
+    /// C5's horizontal fling: finger travel, and the least the block must
+    /// have moved for the fling to count.
+    private static let codeFlingPoints: CGFloat = 250
+    private static let codeFlingMoved: CGFloat = 40
+    /// Step 2 of the OFF check: 600 pt on and back, past the rows the lazy
+    /// stack prefetched below the viewport.
+    private static let codeRetrace: [CGFloat] = [600, -600]
+
+    /// The block number of a code-dense code text: its first line is
+    /// `// CD-<iii>`.
+    private static func codeBlock(_ label: String) -> Int? {
+        label.hasPrefix("// CD-") ? Int(label.dropFirst(6).prefix(3)) : nil
+    }
+
+    /// The start of block `block`'s code, through its number.
+    private static func codeLabel(_ block: Int) -> String {
+        String(format: "// CD-%03ld", block)
+    }
+
+    /// The name a check records block `block` under (`CD-<iii>`).
+    private static func codeKey(_ block: Int) -> String {
+        String(format: "CD-%03ld", block)
+    }
+
+    /// The code of one code-dense snapshot.
+    private struct CodeScreen {
+        /// `CD-<iii>` → top edge and leading edge (points) of each code
+        /// text with any part on screen. A code block can be taller than
+        /// the screen, so "fully in view" is not required.
+        var tops: [String: CGFloat] = [:]
+        var lefts: [String: CGFloat] = [:]
+        /// `CD-<iii>` → bottom edge (points) of the same element as `tops`
+        /// (its full frame: below the viewport for a text that runs past
+        /// it), and the viewport's bottom (C2, C3: `AnchoredShift`).
+        var bottoms: [String: CGFloat] = [:]
+        var viewportMaxY: CGFloat = 0
+        /// The blocks on screen drawn by a TextKit 2 row.
+        var drawnByTextKit2: [String] = []
+        /// TextKit 2 rows, anywhere in the snapshot, whose text is not the
+        /// code of the block their owner names (`0.<i>` ↔ `// CD-<iii>`).
+        var wrongOwners: [String] = []
+        /// The snapshot's TextKit 2 rows by kind, on screen or not.
+        var rows = 0, codeOwned = 0, rootOwned = 0, listOwned = 0
+
+        /// The code proof. Under TextKit 2: a code row is on screen, every
+        /// TextKit 2 row draws its own block and none is a root or list
+        /// row. Under SwiftUI: the snapshot holds no TextKit 2 row.
+        func ok(textKit2: Bool) -> Bool {
+            textKit2
+                ? !drawnByTextKit2.isEmpty && wrongOwners.isEmpty && codeOwned > 0 && rootOwned == 0 && listOwned == 0
+                : rows == 0
+        }
+
+        var geometry: CodeGeometry {
+            CodeGeometry(tops: tops, bottoms: bottoms, viewportMaxY: viewportMaxY)
+        }
+
+        var figures: [String: Any] {
+            ["blocks_on_screen": tops.keys.sorted(), "tk2_blocks_on_screen": drawnByTextKit2,
+             "wrong_owners": wrongOwners, "tk2_rows": rows, "code_owned": codeOwned, "root_owned": rootOwned,
+             "list_owned": listOwned]
+        }
+    }
+
+    private static func codeScreen(_ snapshot: DocumentSnapshot) -> CodeScreen {
+        var screen = CodeScreen()
+        screen.viewportMaxY = snapshot.viewport.maxY
+        for node in snapshot.all where snapshot.isOnScreen(node) {
+            guard let block = codeBlock(node.label) else { continue }
+            let key = codeKey(block)
+            // The first element with the text gives its place (SwiftUI may
+            // list a selectable text more than once).
+            if screen.tops[key] == nil {
+                screen.tops[key] = node.frame.minY
+                screen.lefts[key] = node.frame.minX
+                screen.bottoms[key] = node.frame.maxY
+            }
+            if node.owner != nil, !screen.drawnByTextKit2.contains(key) {
+                screen.drawnByTextKit2.append(key)
+            }
+        }
+        for (owner, label) in snapshot.textKit2Rows {
+            let named = codeBlock(label).map { "0.\($0)" }
+            if named != owner {
+                screen.wrongOwners.append("\(owner)=\(label.prefix(12))")
+            }
+        }
+        screen.wrongOwners.sort()
+        screen.rows = snapshot.textKit2Rows.count
+        screen.codeOwned = snapshot.codeOwnedRows
+        screen.rootOwned = snapshot.rootOwnedRows
+        screen.listOwned = snapshot.listOwnedRows
+        return screen
+    }
+
+    /// Launches code-dense (SwiftUI unless `textKit2`) parked at block
+    /// `codeArrival`, with code on screen.
+    private func launchCodeDense(_ agent: HostAgent, textKit2: Bool = false, extra: [String] = []) throws
+        -> ReaderDriver
+    {
+        var arguments = ["-fixture", Self.codeFixture, "-rendererReset", "-rendererStats",
+                         "-scrollToFraction", Self.codeFraction] + extra
+        if textKit2 { arguments.append("-textkit2") }
+        let reader = ReaderDriver(launching: arguments)
+        reader.waitForRenderer(textKit2 ? "TextKit 2" : "SwiftUI")
+        let arrival = Self.codeLabel(Self.codeArrival)
+        XCTAssertTrue(reader.element(labelPrefix: arrival).waitForExistence(timeout: 30),
+                      "code-dense did not land on \(arrival)")
+        try park(reader, agent)
+        let parked = Self.codeScreen(try reader.documentSnapshot())
+        XCTAssertFalse(parked.tops.isEmpty, "no code text on screen at the parked position")
+        return reader
+    }
+
+    /// The code text C2 and C3 return to.
+    private struct CodeAnchor {
+        let block: Int
+        /// `CD-<iii>`, and the start of the block's code.
+        let key: String
+        let label: String
+        /// Where its top edge was when it was chosen (points).
+        let top: CGFloat
+    }
+
+    /// The first code text whose top edge is in view, at least
+    /// `codeAnchorTopMargin` below the viewport's top and 60 pt above its
+    /// bottom, top to bottom. The top margin keeps a return's few points of
+    /// alignment error from pushing the anchor's top out of view
+    /// (`codeTopInView`): at code-dense's parked position CD-288's top sits
+    /// at the viewport's top edge in some launches.
+    private func codeAnchor(_ reader: ReaderDriver) throws -> CodeAnchor {
+        let snapshot = try reader.documentSnapshot()
+        let viewport = snapshot.viewport
+        var first: (block: Int, top: CGFloat)?
+        for node in snapshot.all {
+            let top = node.frame.minY
+            guard let block = Self.codeBlock(node.label), top >= viewport.minY + Self.codeAnchorTopMargin,
+                  top <= viewport.maxY - 60, top < first?.top ?? .infinity else { continue }
+            first = (block, top)
+        }
+        let found = try XCTUnwrap(first, "no code text starts in view at the parked position")
+        return CodeAnchor(block: found.block, key: Self.codeKey(found.block), label: Self.codeLabel(found.block),
+                          top: found.top)
+    }
+
+    /// Whether `element`'s top edge is inside the viewport (a code block
+    /// can be taller than the screen, so `ReaderDriver.isVisible` may never
+    /// hold for it).
+    private func codeTopInView(_ element: XCUIElement, _ reader: ReaderDriver) -> Bool {
+        guard element.exists else { return false }
+        let viewport = reader.viewport
+        let top = element.frame.minY
+        return top >= viewport.minY && top <= viewport.maxY - 20
+    }
+
+    /// Label-anchored return from `away`: twelve 600 pt drags back, then
+    /// `alignCode` (see `returnTo`).
+    private func codeReturn(_ anchor: CodeAnchor, _ reader: ReaderDriver) throws -> Bool {
+        for _ in 0 ..< Self.awayLegs {
+            reader.drag(by: -Self.awayDistance)
+        }
+        reader.pause()
+        return try alignCode(anchor, reader)
+    }
+
+    /// `align` for code-dense: drags until the anchor's top edge is in
+    /// view — toward it by the `CD-<iii>` blocks on screen while it is not
+    /// materialised, by its distance from `anchor.top` once it is — then up
+    /// to three corrective drags toward `anchor.top`.
+    @discardableResult
+    private func alignCode(_ anchor: CodeAnchor, _ reader: ReaderDriver) throws -> Bool {
+        let text = reader.element(labelPrefix: anchor.label)
+        var steps = 0
+        while !codeTopInView(text, reader), steps < 40 {
+            steps += 1
+            if text.exists {
+                reader.drag(by: text.frame.minY - anchor.top)
+            } else {
+                let blocks = Self.codeScreen(try reader.documentSnapshot()).tops.keys.compactMap { Int($0.dropFirst(3)) }
+                if let low = blocks.min(), let high = blocks.max() {
+                    reader.drag(by: high < anchor.block ? 300 : low > anchor.block ? -300 : 120)
+                } else {
+                    reader.drag(by: -300)
+                }
+            }
+            reader.pause(0.5)
+        }
+        for _ in 0 ..< 3 where text.exists && abs(text.frame.minY - anchor.top) > 3 {
+            reader.drag(by: text.frame.minY - anchor.top)
+            reader.pause(0.5)
+        }
+        reader.pause()
+        return codeTopInView(text, reader)
+    }
+
+    /// A code text at least `codeWideMargin` wider than the window with a
+    /// pan start on screen (`ReaderDriver.panStart`), drawn by a TextKit 2
+    /// row with its own id when `textKit2`: the first one from the current
+    /// viewport on, 300 pt at a time. nil when `codeWideSearchDrags` drags
+    /// show none.
+    private func wideCode(_ reader: ReaderDriver, textKit2: Bool) throws -> (block: Int, frame: CGRect)? {
+        let width = reader.app.windows.firstMatch.frame.width + Self.codeWideMargin
+        for attempt in 0 ... Self.codeWideSearchDrags {
+            if attempt > 0 {
+                reader.drag(by: 300)
+                reader.pause(0.5)
+            }
+            let snapshot = try reader.documentSnapshot()
+            for node in snapshot.all where node.frame.width >= width {
+                guard let block = Self.codeBlock(node.label), !textKit2 || node.owner == "0.\(block)",
+                      reader.panStart(onCodeText: node.frame) != nil else { continue }
+                return (block, node.frame)
+            }
+        }
+        return nil
+    }
+
+    /// C5's horizontal fling inside a wide code block.
+    private struct CodeFling {
+        /// `CD-<iii>`; empty when no wide block was found.
+        var block = ""
+        var drawnByTextKit2 = false
+        var movedPoints: CGFloat = 0
+        var leastMoved: CGFloat = 0
+        var settleSeconds: Double?
+        var samples: Any = [Any]()
+
+        /// A wide block was flung (drawn by a TextKit 2 row in that arm, by
+        /// SwiftUI in the other), it moved, and CPU settled in time.
+        func ok(textKit2: Bool, maxSettle: Double) -> Bool {
+            !block.isEmpty && drawnByTextKit2 == textKit2 && movedPoints >= leastMoved
+                && (settleSeconds ?? .infinity) <= maxSettle
+        }
+
+        var figures: [String: Any] {
+            ["horizontal_fling_block": block.isEmpty ? "none found" : block,
+             "horizontal_fling_block_is_tk2_row": drawnByTextKit2, "horizontal_fling_moved_pt": Double(movedPoints),
+             "horizontal_fling_settle_s": settleSeconds ?? -1, "horizontal_fling_samples": samples]
+        }
+    }
+
+    /// Finds a wide code block (`wideCode`; one TextKit 2 draws in that
+    /// arm), flings it sideways and takes the CPU check at once.
+    private func codeHorizontalFling(_ reader: ReaderDriver, _ agent: HostAgent, textKit2: Bool) throws -> CodeFling {
+        var fling = CodeFling(leastMoved: Self.codeFlingMoved)
+        guard let wide = try wideCode(reader, textKit2: textKit2),
+              let start = reader.panStart(onCodeText: wide.frame) else { return fling }
+        let label = Self.codeLabel(wide.block)
+        fling.block = Self.codeKey(wide.block)
+        fling.drawnByTextKit2 = reader.textKit2Row(labelPrefix: label).exists
+        reader.pan(from: start, by: Self.codeFlingPoints, velocity: .fast, hold: 0)
+        let settle = try agent.cpuSettleSeconds()
+        fling.settleSeconds = settle.seconds
+        fling.samples = settle.samples
+        let text = reader.element(labelPrefix: label)
+        fling.movedPoints = text.exists ? wide.frame.minX - text.frame.minX : 0
+        return fling
+    }
+
+    /// The two-step OFF check (stack doc §6.7).
+    private struct CodeOffCheck {
+        /// Step 1, right after the pick: `tk2-row`s in an accessibility
+        /// snapshot (none may remain), and About's live rows and live code
+        /// rows, each at most `allowance` (rows the lazy stack built and
+        /// never showed keep the engine they were built with).
+        var rowsInTree = -1, live = -1, code = -1
+        var allowance = 0
+        /// Step 2, once the stack has come back past those rows: both 0.
+        var retracedLive = -1, retracedCode = -1
+
+        var ok: Bool {
+            rowsInTree == 0 && live >= 0 && live <= allowance && code >= 0 && code <= allowance
+                && retracedLive == 0 && retracedCode == 0
+        }
+
+        var figures: [String: Any] {
+            ["tk2_rows_in_tree_after_off": rowsInTree, "live_tk2_rows_after_off": live,
+             "live_tk2_code_rows_after_off": code, "unshown_row_allowance": allowance,
+             "live_tk2_rows_after_retrace": retracedLive, "live_tk2_code_rows_after_retrace": retracedCode]
+        }
+    }
+
+    /// From a viewport TextKit 2 is drawing: picks SwiftUI and runs the
+    /// two-step OFF check, retracing with `codeRetrace` (the viewport ends
+    /// where it was).
+    private func codeOffCheck(_ reader: ReaderDriver, allowance: Int) throws -> CodeOffCheck {
+        var check = CodeOffCheck(allowance: allowance)
+        reader.chooseRenderer(textKit2: false)
+        reader.pause()
+        check.rowsInTree = try reader.documentSnapshot().textKit2Rows.count
+        let atSwitch = reader.liveCodeRows(until: { $0 <= allowance }, settled: true)
+        check.live = atSwitch.textKit2 ?? -1
+        check.code = atSwitch.code ?? -1
+        for distance in Self.codeRetrace {
+            reader.drag(by: distance)
+            reader.pause(0.5)
+        }
+        reader.pause()
+        let retraced = reader.liveCodeRows(until: { $0 == 0 }, settled: true)
+        check.retracedLive = retraced.textKit2 ?? -1
+        check.retracedCode = retraced.code ?? -1
+        return check
     }
 
     // MARK: - List positions and landmarks

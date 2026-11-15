@@ -22,7 +22,15 @@ import UIKit
 /// requests: a self-invalidating row in a lazy stack is the §16 livelock).
 /// The single layout manager may have been laid out for another width than
 /// the one being drawn, so drawing and hit-testing first re-sync the
-/// container to `bounds.width`.
+/// container to the width of the layout the row was placed from
+/// (`placedResult(for:)`).
+///
+/// **Text that never wraps** (`TextKit2LayoutPolicy.natural`: code) has one
+/// layout per set of inputs, the natural one in the unbounded container.
+/// It answers every proposal, and placement, the baseline guides, drawing
+/// and rectangle conversion all read it, so no second layout at the
+/// hugging width can wrap a line the measurement did not. Its lines are
+/// left-aligned and drawn with no shift. Wrapping text is unaffected.
 ///
 /// **Drawing** happens on `canvas`, a non-interactive subview covering the
 /// bounds plus the ink overhang (`inkBounds`), so glyphs that reach above
@@ -58,12 +66,16 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     }
     /// Whether the row's TextKit 1 stack lays out and draws its text.
     private(set) var isTextKit1Backed = false
-    /// Diagnostics only: whose text the row draws, set by the representable
-    /// (`TextKit2Diagnostics.liveListRowCount`).
+    /// Whose text the row draws, set by the representable. The row counts
+    /// itself by it (`TextKit2Diagnostics.liveListRowCount`,
+    /// `liveCodeRowCount`, `codeNativeDrawCount`, and for code the
+    /// per-owner proof `codeRowDraws`, with `ownerID`); the layout policy
+    /// the kind implies arrives in `inputs`
+    /// (`TextKit2RenderInputs.layoutPolicy`), never from here.
     var ownerKind: TextKit2OwnerKind = .root {
         didSet {
             guard ownerKind != oldValue else { return }
-            TextKit2Diagnostics.shared.row(listText: ownerKind == .list)
+            TextKit2Diagnostics.shared.row(ownerKind: ownerKind, was: oldValue, ownerID: ownerID)
         }
     }
     /// Width the layout manager is currently laid out at (`-1`: none).
@@ -97,7 +109,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = false
-        backgroundColor = .clear
+        // Never animated: the lazy stack builds rows off-window inside a
+        // rotation's animation block, and an animation on such a throwaway
+        // row can leave XCTest's animation count stuck above zero.
+        UIView.performWithoutAnimation { backgroundColor = .clear }
         clipsToBounds = false
         contentStorage.addTextLayoutManager(layoutManager)
         textContainer.lineFragmentPadding = 0
@@ -119,13 +134,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     deinit {
         let backed = isTextKit1Backed
-        let list = ownerKind == .list
+        let kind = ownerKind
+        let owner = ownerID
         // UIKit releases views on the main thread; hop there if a caller
         // ever drops the last reference elsewhere.
         if Thread.isMainThread {
-            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, listText: list) }
+            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
         } else {
-            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, listText: list) }
+            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
         }
     }
 
@@ -138,6 +154,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// or laying out its text (`applyColorScheme`).
     func apply(_ newInputs: TextKit2RenderInputs, colorScheme: ColorScheme = .light, ownerID newOwnerID: String? = nil) {
         if newOwnerID != ownerID {
+            TextKit2Diagnostics.shared.row(ownerID: newOwnerID, was: ownerID, ownerKind: ownerKind)
             ownerID = newOwnerID
             accessibilityIdentifier = newOwnerID.map { "tk2-row:\($0)" }
         }
@@ -199,11 +216,21 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// The layout for a proposed width: `nil` or infinite = natural width
     /// (unbounded container), zero = `.zero` without any layout. Pure in
     /// (inputs, width); memoized.
+    ///
+    /// Text that never wraps (`TextKit2LayoutPolicy.natural`: code) has the
+    /// natural layout only, and it answers every positive width as well: the
+    /// row is as wide as its longest line whatever it is proposed (its
+    /// horizontal scroll view shows the rest). A finite width of zero or
+    /// less still answers `.zero` without laying out. That layout's
+    /// container is `unboundedWidth` wide, which is finite: its lines stay
+    /// unwrapped only because the code gate admits text whose width is
+    /// bounded far below it (`TextKit2Scope.codeCanvasBound`, at most
+    /// `maximumCodeCanvasDimension` pixels).
     func layoutResult(forProposedWidth proposed: CGFloat?) -> TextKit2LayoutResult {
-        guard inputs != nil else { return .zero }
+        guard let inputs else { return .zero }
         if let proposed, proposed.isFinite {
             guard proposed > 0 else { return .zero }
-            return result(atWidth: proposed)
+            if inputs.layoutPolicy == .wrapping { return result(atWidth: proposed) }
         }
         if let natural = cache.value(for: .infinity) { return natural }
         let natural = compute(atContainerWidth: Self.unboundedWidth)
@@ -222,8 +249,15 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// differently — else one of that width (a parent that stretches the
     /// height), else a layout at `size.width`. (A natural-size
     /// measurement's container is unbounded, useless for alignment.)
+    ///
+    /// Text that never wraps is placed from its one natural layout, whatever
+    /// `size` is: laying it out again at the hugging width could wrap a
+    /// line that measures a fraction wider there, on screen but not in the
+    /// reported height. Its lines are left-aligned, so the unbounded
+    /// container needs no alignment shift (`syncToBounds`).
     func placedResult(for size: CGSize) -> TextKit2LayoutResult {
-        guard inputs != nil, size.width > 0 else { return .zero }
+        guard let inputs, size.width > 0 else { return .zero }
+        if inputs.layoutPolicy == .natural { return layoutResult(forProposedWidth: nil) }
         let bounded = { (result: TextKit2LayoutResult) in result.width != Self.unboundedWidth }
         return cache.mostRecent { $0.size == size && bounded($0) }
             ?? cache.mostRecent { $0.size.width == size.width && bounded($0) }
@@ -555,6 +589,9 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// line-initial "j" under an indentation loses its tail), except for
     /// linked text, which `Text` draws with TextKit 1 unclipped (measured:
     /// a list leader's line-initial "j" keeps the pixel left of its frame).
+    /// Text that never wraps is placed from its natural layout, so the
+    /// container stays unbounded and nothing is laid out again here; its
+    /// lines are left-aligned (`alignmentFactor` 0), so the shift is zero.
     /// Called on bounds changes, on new inputs, and before every draw and
     /// hit test.
     @discardableResult
@@ -628,7 +665,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             return true
         }
         context.restoreGState()
-        TextKit2Diagnostics.shared.didDraw(native: fragments > 0)
+        TextKit2Diagnostics.shared.didDraw(native: fragments > 0, code: ownerKind == .code, ownerID: ownerID)
     }
 
     /// Text containing a link, drawn as SwiftUI draws it: SwiftUI renders

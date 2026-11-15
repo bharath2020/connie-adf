@@ -116,6 +116,16 @@ struct BlockPreparer: Sendable {
         case .codeBlock(let language, let text, let marks):
             var code = AttributedString(text)
             code[AttributeScopes.SwiftUIAttributes.FontAttribute.self] = theme.code
+            // For a text engine other than `Text`, which ignores both: the
+            // semantic font (absent when the theme's code font is a raw
+            // `Font`) and the text's shape, measured here in one pass so no
+            // view ever scans the code. Both cover the whole string, which
+            // stays one uniform run with the same characters; an empty
+            // string has no run and carries neither.
+            if let spec = theme.codeFontSpec {
+                code.adfFontSpec = spec
+            }
+            code.adfCodeShape = ADFCodeShape(text)
             return [RenderBlock(
                 id: node.id,
                 kind: .codeBlock(language: language, code: code),

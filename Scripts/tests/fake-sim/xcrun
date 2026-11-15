@@ -5,15 +5,33 @@
 State lives in $FAKE_SIM_ROOT: one fake device, udid $FAKE_UDID. The
 installed "app" is a shell script; `launch` prints the demo app's READY /
 RENDERER_STATS / SCROLL_METRICS lines for the arm it infers from the flags
-(-textkit2 -> C, -rendererStats -> B, else A). Every arm prints the
-SCROLL_METRICS completion fields (main >= 86abd56 does); RENDERER_STATS
-carries the lists-stage fields (tk2ListLive and the leaf coverage). Like the
-demo's "Fixture Not Found" screen, a fixture whose JSON is not in the
-installed app never prints READY.
+(-textkit2 -> C, -rendererStats -> B, else A). An installed app that
+carries a `fake-pred` marker file is the predecessor build (PR 2's tip):
+with -textkit2 it is arm D, which behaves like C but prints no code keys.
+Every arm prints the SCROLL_METRICS completion fields (main >= 86abd56
+does); RENDERER_STATS carries the lists-stage fields (tk2ListLive,
+tk2Conversions and the leaf coverage) and, on a branch build, the
+code-block-stage fields (tk2CodeLive, tk2CodeDraws, eligibleCodeRoots,
+fallbackCodeRoots, codeAdmitted, codeGated). Like the demo's "Fixture Not
+Found" screen, a fixture whose JSON is not in the installed app never
+prints READY.
 
 FAKE_SCENARIO  normal | c_slow | c_crash | a_timeout | c_timeout | b_wrong_renderer
                | c_no_list_live (C reports tk2ListLive=0 on list-dense)
                | a_short (A's scroll stops one block early, completed=0)
+               | c_short (the same for C) | d_short (the same for D)
+               | c_no_code_live (C reports tk2CodeLive=0 and tk2CodeDraws=0
+                 on code-dense)
+               | c_code_all_gated (C reports codeAdmitted=0 and no code row
+                 on code-dense: every code root gated to SwiftUI)
+               | b_code_live (B reports live code rows on code-dense)
+               | no_code_keys (the branch build prints no code keys)
+               | list_debt (the accepted list cost: on list-dense C and D
+                 drop 70 frames, A and B 44)
+               | c_added (list_debt, and C drops 12 more frames than D)
+               | dc_added_only (on list-dense A, B and C drop 12 frames, D
+                 none: only the D/C rows differ, A/B/C stays within its
+                 bounds and ceilings)
 FAKE_OTHER_BOOTED  if set, a second device is reported Booted
 """
 import json
@@ -30,9 +48,15 @@ scenario = os.environ.get("FAKE_SCENARIO", "normal")
 os.makedirs(root, exist_ok=True)
 state_file = os.path.join(root, "state")
 container = os.path.join(root, "Devices", udid, "data", "Containers", "Bundle", "Application", "X", "ADFReader.app")
-BLOCKS = {"kitchen-sink": 38, "stress-1k": 1000, "stress-5k": 5000, "giant-table": 402, "list-dense": 640}
-ELIGIBLE = {"kitchen-sink": 10, "stress-1k": 480, "stress-5k": 2400, "giant-table": 1, "list-dense": 40}
+BLOCKS = {"kitchen-sink": 38, "stress-1k": 1000, "stress-5k": 5000, "giant-table": 402, "list-dense": 640,
+          "code-dense": 600}
+ELIGIBLE = {"kitchen-sink": 10, "stress-1k": 480, "stress-5k": 2400, "giant-table": 1, "list-dense": 40,
+            "code-dense": 0}
 LIST_LEAVES = {"kitchen-sink": 8, "stress-1k": 1815, "stress-5k": 8914, "list-dense": 3000}
+# Scroll frames (the dense fixtures are long enough for the dropped-rate
+# ceiling: >= 2,000 frames) and top-level code roots (eligible, fallback).
+FRAMES = {"list-dense": 6800, "code-dense": 6500}
+CODE_ROOTS = {"kitchen-sink": (1, 0), "stress-1k": (80, 0), "stress-5k": (400, 0), "code-dense": (552, 48)}
 
 
 def state():
@@ -73,6 +97,9 @@ elif cmd == "launch":
     assert rest[0] == "--console-pty"
     app_args = rest[3:]
     arm = "C" if "-textkit2" in app_args else ("B" if "-rendererStats" in app_args else "A")
+    pred_build = os.path.exists(os.path.join(container, "fake-pred"))
+    if pred_build and arm == "C":
+        arm = "D"
     fixture = app_args[app_args.index("-fixture") + 1]
     counter = os.path.join(root, "counter")
     n = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
@@ -90,24 +117,41 @@ elif cmd == "launch":
     print(f"READY fixture={fixture} blocks={blocks} firstChunkMs={12 + rng.randint(0, 1)}", flush=True)
 
     def stats(final: bool) -> str:
-        renderer = "textkit2" if arm == "C" else "swiftui"
+        renderer = "textkit2" if arm in ("C", "D") else "swiftui"
         if scenario == "b_wrong_renderer" and arm == "B" and not final:
             renderer = "textkit2"
-        c = arm == "C"
+        c = arm in ("C", "D")
         list_leaves = LIST_LEAVES.get(fixture, 0)
         list_live = min(list_leaves, 2 if final else 4) if c else 0
         if scenario == "c_no_list_live" and fixture == "list-dense":
             list_live = 0
+        code = ""
+        if not pred_build and scenario != "no_code_keys":
+            code_eligible, code_fallback = CODE_ROOTS.get(fixture, (0, 0))
+            code_gated = code_eligible // 50
+            code_live = min(code_eligible, 3 if final else 5) if arm == "C" else 0
+            code_draws = (code_eligible if final else min(code_eligible, 5)) if arm == "C" else 0
+            if fixture == "code-dense":
+                if scenario == "c_no_code_live" and arm == "C":
+                    code_live = code_draws = 0
+                if scenario == "c_code_all_gated":
+                    code_gated, code_live, code_draws = code_eligible, 0, 0
+                if scenario == "b_code_live" and arm == "B":
+                    code_live = 2
+            code = (f" tk2CodeLive={code_live} tk2CodeDraws={code_draws} eligibleCodeRoots={code_eligible} "
+                    f"fallbackCodeRoots={code_fallback} codeAdmitted={code_eligible - code_gated} "
+                    f"codeGated={code_gated}")
         return (f"RENDERER_STATS renderer={renderer} tk2Live={(3 if final else 9) if c else 0} "
                 f"tk2Layouts={eligible + 1 if c else 0} tk2Draws={eligible + 3 if c and final else 0} "
                 f"tk2NativeDraws={eligible + 2 if c and final else 0} tk1BackedRows={1 if c else 0} "
                 f"tk1BackedDraws={1 if c and final else 0} eligibleRoots={eligible} fallbackRoots={blocks - eligible} "
                 f"textFallbackRoots=2 linkRoots=1 tk2ListLive={list_live} "
+                f"tk2Conversions={(eligible + list_leaves) * 2 if c and final else 0} "
                 f"eligibleTextLeaves={eligible + list_leaves * 8 // 10} linkedTextLeaves={1 + list_leaves // 10} "
                 f"fallbackTextLeaves={2 + list_leaves // 10} listLeaderLeaves={list_leaves * 9 // 10} "
-                f"listTrailingLeaves={list_leaves // 10}")
+                f"listTrailingLeaves={list_leaves // 10}" + code)
 
-    if arm in ("B", "C"):
+    if arm in ("B", "C", "D"):
         print(stats(False), flush=True)
     if hang:
         time.sleep(3600)
@@ -119,11 +163,20 @@ elif cmd == "launch":
     dropped = 0
     if scenario == "c_slow" and arm == "C":
         dropped += 40
-    line = f"SCROLL_METRICS fixture={fixture} frames=600 dropped={dropped} hitchRatioMsPerS={dropped * 0.5:.2f}"
-    short = scenario == "a_short" and arm == "A"
+    if scenario in ("list_debt", "c_added") and fixture == "list-dense":
+        dropped = 70 if arm in ("C", "D") else 44
+        if scenario == "c_added" and arm == "C":
+            dropped += 12
+    if scenario == "dc_added_only" and fixture == "list-dense":
+        dropped = 0 if arm == "D" else 12
+    frames = FRAMES.get(fixture, 600)
+    # One frame interval (1/60 s) of hitch per dropped frame of a 60 Hz scroll.
+    line = (f"SCROLL_METRICS fixture={fixture} frames={frames} dropped={dropped} "
+            f"hitchRatioMsPerS={dropped * 1000 / frames:.2f}")
+    short = scenario in ("a_short", "c_short", "d_short") and arm == scenario[0].upper()
     line += f" startRow=0 endRow={blocks - (2 if short else 1)} scrollMs=500 completed={0 if short else 1}"
     print(line, flush=True)
-    if arm in ("B", "C"):
+    if arm in ("B", "C", "D"):
         print(stats(True), flush=True)
     time.sleep(0.4)
     proc.kill()

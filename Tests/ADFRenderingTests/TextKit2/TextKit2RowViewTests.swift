@@ -216,6 +216,8 @@ struct TextKit2RowViewTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/ADFRendering/TextKit2")
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasSuffix(".swift") }
+        // The code gate, the one view added for code blocks, is scanned too.
+        #expect(files.contains("TextKit2CodeGate.swift"), "TextKit2CodeGate.swift is not among the scanned files")
         #expect(files.count >= 6)
         for file in files {
             let source = try String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8)
@@ -223,6 +225,32 @@ struct TextKit2RowViewTests {
                 #expect(!source.contains(forbidden), "\(file) contains \(forbidden)")
             }
         }
+    }
+
+    /// The lazy stack builds rows (`makeUIView` inside `sizeThatFits`)
+    /// while a rotation's UIKit animation block is open, off-window, and
+    /// releases most of them at once. A UIView animation on such a
+    /// throwaway row can report `animationDidStart:` twice and
+    /// `animationDidStop:` once, which leaves XCTest's
+    /// `UIViewAnimationState` count above zero: the app never idles for
+    /// XCUITest again (C3 after its rotation round trip, rot-debug report).
+    /// Building a row must add no animation to its or its canvas's layer,
+    /// and neither must a canvas built on its own.
+    @Test("a row or canvas built inside an open animation block adds no animation (rotation)")
+    func rowBuiltInsideAnimationBlockAddsNoAnimation() {
+        var built: TextKit2RowView?
+        var builtCanvas: TextKit2CanvasView?
+        UIView.animate(withDuration: 0.3) {
+            built = TextKit2RowView()
+            builtCanvas = TextKit2CanvasView()
+        }
+        guard let row = built, let canvas = builtCanvas else { Issue.record("no row or canvas built"); return }
+        let layers = [row.layer] + row.subviews.map(\.layer) + [canvas.layer]
+        let animated = layers.flatMap { layer in
+            (layer.animationKeys() ?? []).map { "\(type(of: layer.delegate.map { $0 as AnyObject } ?? layer)).\($0)" }
+        }
+        #expect(row.subviews.count == 1, "the row has its canvas")
+        #expect(animated.isEmpty, "animations added while building the row or a canvas: \(animated)")
     }
 
     // MARK: Accessibility
