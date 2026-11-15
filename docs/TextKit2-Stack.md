@@ -163,7 +163,7 @@ A list leaf lays out **twice** on first materialisation; a root paragraph lays o
 
 - A TK2 list leaf is one element, like a root row (§7): label = its plain text, traits `staticText` (+ `header` for a heading in the text column), value `nil`, and one "Open link <host>" custom action per link.
 - Markers are SwiftUI chrome under either engine and keep main's exposure (`ListRowView.markerView`, `TaskMarkerView`). Bullet markers (`BulletMarkerView`, drawn as shapes) and continuation spacers are `accessibilityHidden(true)`. The ordered marker (`Text(text).monospacedDigit()`) is **not** hidden, so VoiceOver reads the number as its own element. The task checkbox reads "Task" or "Completed task", with the hint "Toggles the task" when the host handles toggles (no hint when read-only). The decision glyph reads "Decision".
-- Measured with VoiceOver on iOS 27.0 (`XCUIDevice.voiceOverService`, `ListRendererUITests.testVoiceOverTraversalOfTasksAndDecisions`): no marker glyph is spoken; the accepted differences are in §6.7, the missing heading level (a PR 1 residual) in §7. XCUITest lists the bullet glyphs even though they are hidden (both engines, main too), so the automated tree comparison only requires them to match between arms.
+- Measured with VoiceOver on iOS 27.0 (`XCUIDevice.voiceOverService`, `ListRendererUITests.testVoiceOverTraversalOfTasksAndDecisions`): no marker glyph is spoken; the accepted differences are in §6.7, the missing heading level (a PR 1 residual) in §7. A bullet marker is a drawn shape laid out by a hidden glyph that is the same under both engines (`BulletMarkerView`), so the automated tree comparison only requires the bullet elements to match between arms.
 
 #### Selection and copy
 
