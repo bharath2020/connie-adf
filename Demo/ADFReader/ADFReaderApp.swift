@@ -52,8 +52,6 @@ import UIKit
 ///   `probe-url-opens`, `probe-url-last`) and each prints a `PROBE …` line.
 ///   Without the flag nothing is recorded, no About rows appear and links
 ///   open as usual (see `InteractionProbe`).
-/// - `-showTaskHitAreas` tints each task checkbox's enlarged tap band
-///   (`adfShowsTaskHitAreas`), so screenshots show how far a tap reaches.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -75,7 +73,6 @@ struct LaunchOptions: Sendable {
     var rebuildControlPicks: Int?
     var scenePhaseProbe = false
     var interactionProbe = false
-    var showTaskHitAreas = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -117,8 +114,6 @@ struct LaunchOptions: Sendable {
                 scenePhaseProbe = true
             case "-interactionProbe":
                 interactionProbe = true
-            case "-showTaskHitAreas":
-                showTaskHitAreas = true
             default:
                 break
             }

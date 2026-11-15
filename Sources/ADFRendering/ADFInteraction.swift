@@ -17,10 +17,6 @@ private struct ADFTaskStatesKey: EnvironmentKey {
     static let defaultValue: [String: Bool] = [:]
 }
 
-private struct ADFShowsTaskHitAreasKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
 private struct ADFMentionContentKey: EnvironmentKey {
     static let defaultValue: (@MainActor (String) -> AnyView)? = nil
 }
@@ -38,13 +34,6 @@ public extension EnvironmentValues {
     var adfTaskStates: [String: Bool] {
         get { self[ADFTaskStatesKey.self] }
         set { self[ADFTaskStatesKey.self] = newValue }
-    }
-
-    /// Debug aid: tints each task checkbox's enlarged tap band so its reach
-    /// is visible. `false` (the default) draws nothing extra.
-    var adfShowsTaskHitAreas: Bool {
-        get { self[ADFShowsTaskHitAreasKey.self] }
-        set { self[ADFShowsTaskHitAreasKey.self] = newValue }
     }
 
     /// Host-supplied content shown when a mention is tapped, keyed by the
