@@ -102,8 +102,9 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
 /// Code is never in `eligibleRoots`, `eligibleTextLeaves` or
 /// `fallbackTextLeaves`. Code inside a list item or a container is out of
 /// scope and not counted. Whether an eligible code block is really drawn by
-/// TextKit 2 also depends on where it is drawn (layout direction, and the
-/// canvas bound at the text size, weight and display scale), which these
+/// TextKit 2 also depends on where it is drawn (layout direction, the
+/// canvas bound at the text size, weight and display scale, and before
+/// iOS 26 interior empty lines above AX3), which these
 /// static counts assume favourable: `ADFTextRenderer.textKit2CodeAdmission`
 /// measures that at an explicit environment.
 public struct ADFTextKit2Coverage: Sendable, Hashable {
@@ -239,9 +240,10 @@ extension ADFTextRenderer {
     /// Measures, at an explicit environment, how many of a document's
     /// content-eligible top-level code blocks the TextKit 2 renderer would
     /// really draw there (`admittedCodeRoots`) and how many a view-time
-    /// rule keeps on SwiftUI (`gatedCodeRoots`): right-to-left layout, or
-    /// no admitted canvas bound at this text size, legibility weight and
-    /// display scale. `admittedCodeRoots + gatedCodeRoots ==
+    /// rule keeps on SwiftUI (`gatedCodeRoots`): right-to-left layout, no
+    /// admitted canvas bound at this text size, legibility weight and
+    /// display scale, or, before iOS 26, an interior empty line above AX3
+    /// (`TextKit2Scope.CodeGate`). `admittedCodeRoots + gatedCodeRoots ==
     /// ADFTextKit2Coverage.eligibleCodeRoots`.
     ///
     /// It applies the rule the code views apply, to the same prepared text,

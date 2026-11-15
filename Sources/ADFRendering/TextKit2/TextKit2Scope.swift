@@ -13,7 +13,8 @@ import ADFPreparation
 /// coverage counts). A code block has no children and only reads the
 /// choice (`CodeBlockView`); its code goes to TextKit 2 when its content is
 /// eligible (`TextKit2Eligibility.codeVerdict`) and the code gate admits it
-/// where it is drawn (`codeGate`: left to right, within the canvas bound).
+/// where it is drawn (`codeGate`: left to right, within the canvas bound,
+/// and before iOS 26 no interior empty line above AX3).
 /// Every other top-level kind
 /// (panel, quote, table, media, expand, layout columns, card,
 /// extension, plugin, unknown) gets `.swiftUI`, and so does everything
@@ -224,7 +225,7 @@ enum TextKit2Scope {
 // MARK: - Code blocks
 
 /// The view-time rules for a code block's code text. The content rules are
-/// `TextKit2Eligibility.codeVerdict`; these two depend on where and how the
+/// `TextKit2Eligibility.codeVerdict`; these depend on where and how the
 /// block is drawn, so `TextKit2CodeGate` evaluates them when the switch is
 /// on, and `ADFTextRenderer.textKit2CodeAdmission` evaluates the same
 /// functions at an explicit environment.
@@ -238,6 +239,10 @@ extension TextKit2Scope {
         /// (`codeCanvasBound`): the bound is over a cap, or cannot be
         /// stated for this font.
         case canvas
+        /// Before iOS 26, above AX3: code with an interior empty line
+        /// (`codeEmptyLinesKeepRenderer`). On iOS 18.5 at AX5 the row was
+        /// 1.333 / 3.667 pt taller than `Text` for one / three such lines.
+        case osGatedEmptyLines
     }
 
     /// Whether code laid out in `direction` may use TextKit 2: left to

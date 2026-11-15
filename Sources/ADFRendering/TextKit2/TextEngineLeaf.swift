@@ -10,7 +10,8 @@ import ADFPreparation
 /// list text only from iOS 26, code by the code rules) goes to
 /// `TextKit2Leaf`, which makes the one engine decision (search highlights,
 /// inherited styling, the rebuild control); code passes the code gate first
-/// (`TextKit2CodeGate`: layout direction and the canvas bound). Anything
+/// (`TextKit2CodeGate`: layout direction, the canvas bound and, before
+/// iOS 26, interior empty lines above AX3). Anything
 /// else draws the caller's SwiftUI `fallback`. These are plain `if`/`else`
 /// branches, never `AnyView` or `#available` (§18's per-row erasure
 /// lesson). Without UIKit the fallback always runs.

@@ -45,8 +45,9 @@ import ADFPreparation
 /// `codeAdmitted`/`codeGated` are measured, not static: of the eligible
 /// code roots, how many TextKit 2 would really draw at this run's text
 /// size, legibility weight, display scale and layout direction, and how
-/// many a view-time rule keeps on SwiftUI there (right-to-left layout, or
-/// a canvas over the admission caps); `codeAdmitted + codeGated ==
+/// many a view-time rule keeps on SwiftUI there (right-to-left layout, a
+/// canvas over the admission caps, or before iOS 26 an interior empty line
+/// at AX4 and AX5); `codeAdmitted + codeGated ==
 /// eligibleCodeRoots` (`ADFTextRenderer.textKit2CodeAdmission`). The
 /// bracketed keys appear only under
 /// `-rebuildControlPicks` (`RebuildControl`). Parsed by

@@ -13,7 +13,8 @@ import Foundation
 ///
 /// **Lines** are split at LF (U+000A) only, the one line break an engine is
 /// admitted for. Every other scalar, a CR or a Unicode line separator
-/// included, counts as a UTF-16 unit of the line it sits on.
+/// included, counts as a UTF-16 unit of the line it sits on. A line is
+/// empty when it holds no scalar: a line of spaces, or of a CR, is not.
 ///
 /// **Newlines**, for `trailingNewlineCount` and `isAllNewlines`, are counted
 /// as `Character.isNewline` counts them, so the two facts answer exactly
@@ -31,6 +32,10 @@ package struct ADFCodeShape: Sendable, Hashable {
     package var maxLineUTF16: Int
     /// How many newline characters end the text (`Character.isNewline`).
     package var trailingNewlineCount: Int
+    /// How many empty lines lie inside the text: after the first line and
+    /// before the last line that is not empty. An empty first line, and the
+    /// empty lines the trailing line feeds open, are not counted.
+    package var interiorEmptyLineCount: Int
     /// Whether the text is non-empty and holds newline characters only.
     package var isAllNewlines: Bool
     /// Whether every scalar is printable ASCII (U+0020 to U+007E) or LF.
@@ -47,6 +52,7 @@ package struct ADFCodeShape: Sendable, Hashable {
         lineCount: Int,
         maxLineUTF16: Int,
         trailingNewlineCount: Int = 0,
+        interiorEmptyLineCount: Int = 0,
         isAllNewlines: Bool = false,
         isPrintableASCIIAndLF: Bool = true,
         hasTabs: Bool = false,
@@ -56,6 +62,7 @@ package struct ADFCodeShape: Sendable, Hashable {
         self.lineCount = lineCount
         self.maxLineUTF16 = maxLineUTF16
         self.trailingNewlineCount = trailingNewlineCount
+        self.interiorEmptyLineCount = interiorEmptyLineCount
         self.isAllNewlines = isAllNewlines
         self.isPrintableASCIIAndLF = isPrintableASCIIAndLF
         self.hasTabs = hasTabs
@@ -69,6 +76,10 @@ package struct ADFCodeShape: Sendable, Hashable {
         var line = 0
         var longest = 0
         var trailing = 0
+        var interiorEmpty = 0
+        // Empty lines after the first one that no non-empty line follows
+        // yet: interior once one does, trailing if none ever does.
+        var pendingEmpty = 0
         var allNewlines = true
         var printable = true
         var tabs = false
@@ -83,6 +94,8 @@ package struct ADFCodeShape: Sendable, Hashable {
             var isNewline = false
             switch value {
             case 0x0A:
+                // The line this LF ends is empty and not the first one.
+                if line == 0, lineCount > 1 { pendingEmpty += 1 }
                 lineCount += 1
                 if line > longest { longest = line }
                 line = 0
@@ -111,6 +124,12 @@ package struct ADFCodeShape: Sendable, Hashable {
                 trailing = 0
                 allNewlines = false
             }
+            if value != 0x0A {
+                // This line is not empty, so the empty ones before it are
+                // interior.
+                interiorEmpty += pendingEmpty
+                pendingEmpty = 0
+            }
             afterCarriageReturn = value == 0x0D
         }
         if line > longest { longest = line }
@@ -119,6 +138,7 @@ package struct ADFCodeShape: Sendable, Hashable {
             lineCount: lineCount,
             maxLineUTF16: longest,
             trailingNewlineCount: trailing,
+            interiorEmptyLineCount: interiorEmpty,
             isAllNewlines: allNewlines && !isEmpty,
             isPrintableASCIIAndLF: printable,
             hasTabs: tabs,

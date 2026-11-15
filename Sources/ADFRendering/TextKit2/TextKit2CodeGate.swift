@@ -7,7 +7,8 @@ import ADFPreparation
 /// The code-only step between `TextEngineLeaf` and `TextKit2Leaf`: code
 /// that is eligible by content (`TextKit2Eligibility.codeVerdict`) goes on
 /// to the TextKit 2 row only where it is drawn left to right and within the
-/// canvas bound at the current text size, weight and display scale
+/// canvas bound at the current text size, weight and display scale, and,
+/// before iOS 26, has no interior empty line above AX3
 /// (`TextKit2Scope.codeGate`); otherwise `fallback`, the SwiftUI `Text`
 /// exactly as on main.
 ///
@@ -51,22 +52,72 @@ struct TextKit2CodeGate<Fallback: View>: View {
 extension TextKit2Scope {
     /// What keeps prepared code on SwiftUI where it is drawn, or `nil` when
     /// the TextKit 2 row may draw it: the layout direction first, then the
-    /// canvas bound. `text` is a code string the content verdict found
-    /// eligible; the rule is a pure function of it and these four
-    /// environment values, the same ones the row's render inputs take. A
-    /// later metric input (a new environment value the font or layout
-    /// depends on) goes into this gate and into `TextKit2RenderInputs` in
-    /// the same change, or the gate admits a canvas the row then outgrows.
+    /// canvas bound, then (before iOS 26, above AX3) an interior empty
+    /// line. `text` is a code string the content verdict found eligible;
+    /// the rule is a pure function of it, these four environment values,
+    /// the same ones the row's render inputs take, and the OS
+    /// (`emptyLinesMatchText`, `codeEmptyLinesMatchText` unless a test
+    /// passes either answer). A later metric input (a new environment value
+    /// the font or layout depends on) goes into this gate and into
+    /// `TextKit2RenderInputs` in the same change, or the gate admits a
+    /// canvas the row then outgrows.
     @MainActor
     static func codeGate(
         _ text: AttributedString, sizeCategory: UIContentSizeCategory, legibilityWeight: LegibilityWeight?,
-        displayScale: CGFloat, layoutDirection: LayoutDirection
+        displayScale: CGFloat, layoutDirection: LayoutDirection,
+        emptyLinesMatchText: Bool = codeEmptyLinesMatchText
     ) -> CodeGate? {
         guard codeDirectionKeepsRenderer(layoutDirection) else { return .direction }
         guard codeFitsCanvas(
             text, sizeCategory: sizeCategory, legibilityWeight: legibilityWeight, displayScale: displayScale
         ) else { return .canvas }
+        guard codeEmptyLinesKeepRenderer(
+            text, sizeCategory: sizeCategory, emptyLinesMatchText: emptyLinesMatchText
+        ) else { return .osGatedEmptyLines }
         return nil
+    }
+
+    /// Whether `Text` sets code's interior empty lines as the row does at
+    /// every text size on this OS: from iOS 26 (`codeEmptyLinesKeepRenderer`).
+    static var codeEmptyLinesMatchText: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+
+    /// The largest text size at which code with an interior empty line may
+    /// use TextKit 2 before iOS 26: AX3.
+    static let largestEmptyLinesCodeSizeBeforeiOS26: UIContentSizeCategory = .accessibilityExtraLarge
+
+    /// Whether prepared code may use TextKit 2 at `sizeCategory` as far as
+    /// its interior empty lines go, read in constant time from its one
+    /// run's shape. `false` when the string is not one prepared run (fails
+    /// closed, as the canvas bound does).
+    static func codeEmptyLinesKeepRenderer(
+        _ text: AttributedString, sizeCategory: UIContentSizeCategory,
+        emptyLinesMatchText: Bool = codeEmptyLinesMatchText
+    ) -> Bool {
+        guard let run = text.runs.first, run.range.upperBound == text.endIndex,
+              let shape = run.adfCodeShape else { return false }
+        return codeEmptyLinesKeepRenderer(shape, sizeCategory: sizeCategory, emptyLinesMatchText: emptyLinesMatchText)
+    }
+
+    /// Whether code of `shape` may use TextKit 2 at `sizeCategory` as far as
+    /// its interior empty lines go (`ADFCodeShape.interiorEmptyLineCount`):
+    /// always where `emptyLinesMatchText` (iOS 26 and later); before it,
+    /// only without such a line or at a size up to AX3
+    /// (`largestEmptyLinesCodeSizeBeforeiOS26`).
+    ///
+    /// Measured on iOS 18.5 (3x), regular and Bold Text: at AX5 the row was
+    /// 1.333 pt taller than `Text` with one interior empty line and
+    /// 3.667 pt with three, 1.8–2.7 % of pixels apart; an empty first line,
+    /// one trailing line feed and every size through AX3 matched exactly,
+    /// as iOS 26.3 does at AX5. AX4 is not measured and stays with AX5.
+    static func codeEmptyLinesKeepRenderer(
+        _ shape: ADFCodeShape, sizeCategory: UIContentSizeCategory,
+        emptyLinesMatchText: Bool = codeEmptyLinesMatchText
+    ) -> Bool {
+        emptyLinesMatchText || shape.interiorEmptyLineCount == 0
+            || sizeCategory <= largestEmptyLinesCodeSizeBeforeiOS26
     }
 
     /// Whether prepared code has an admitted canvas bound at this text
