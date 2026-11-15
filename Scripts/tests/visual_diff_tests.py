@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -28,6 +29,7 @@ DIFF = os.path.join(SCRIPTS, "visual_diff.py")
 work = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.environ.get("TMPDIR", "/tmp"), "visual-diff-tests")
 os.makedirs(work, exist_ok=True)
 results: list[bool] = []
+CONTROL = False   # True from the code boxes on: see a_prime()
 
 
 def image(name: str, lines: list[tuple[int, int]], shift: int = 0) -> str:
@@ -63,10 +65,21 @@ def list_image(name: str, rows: list[int], marker_dx: int = 0, content_dy: int =
     return path
 
 
-def run_pair(name: str, kind: str, ref: str, cand: str, *extra: str) -> tuple[int, dict]:
+def a_prime(ref: str) -> str:
+    """The A' capture of a reference: an exact copy (capture noise 0)."""
+    path = ref[:-len(".png")] + "-a2.png"
+    shutil.copyfile(ref, path)
+    return path
+
+
+def run_pair(name: str, kind: str, ref: str, cand: str, *extra: str, control: bool | None = None) -> tuple[int, dict]:
+    """One pair (scores.json's first). With `control` (default CONTROL) a
+    non-noise pair also gets its matching A-A' noise pair, <name>-AA."""
     out = os.path.join(work, name)
-    res = subprocess.run([sys.executable, "-I", DIFF, "--out", out, "--pair", kind, name, ref, cand, *extra],
-                         capture_output=True, text=True)
+    command = [sys.executable, "-I", DIFF, "--out", out, "--pair", kind, name, ref, cand]
+    if (CONTROL if control is None else control) and kind != "noise":
+        command += ["--pair", "noise", name + "-AA", ref, a_prime(ref)]
+    res = subprocess.run(command + list(extra), capture_output=True, text=True)
     try:
         pair = json.load(open(os.path.join(out, "scores.json")))["pairs"][0]
     except (OSError, KeyError, IndexError, ValueError):
@@ -74,8 +87,8 @@ def run_pair(name: str, kind: str, ref: str, cand: str, *extra: str) -> tuple[in
     return res.returncode, pair
 
 
-def run(name: str, kind: str, ref: str, cand: str, *extra: str) -> tuple[int, str]:
-    code, pair = run_pair(name, kind, ref, cand, *extra)
+def run(name: str, kind: str, ref: str, cand: str, *extra: str, control: bool | None = None) -> tuple[int, str]:
+    code, pair = run_pair(name, kind, ref, cand, *extra, control=control)
     return code, pair["verdict"]
 
 
@@ -145,6 +158,11 @@ check("the same fill change outside --list-pair -> PASS (fill reported only)",
 # and right edges (steps of ~20 grey levels, under the tolerant threshold
 # 24), as anti-aliased glyphs do, so a 1 px sideways move changes no pixel
 # by the tolerant rule.
+# Exact chrome is judged only where A-A' proves it stable, so from here every
+# exact or tolerant pair runs with its matching A-A' pair (A' an exact copy
+# of the reference), as visual-parity.sh's default arms A A2 B C give every
+# A-B and A-C pair; control=False drops it (the negative controls below).
+CONTROL = True
 
 BOX = (20, 80, 280, 200)   # x0, y0, x1, y1 (exclusive)
 
@@ -342,6 +360,35 @@ expect("A-A' exact, A-C header pixel off: FAIL", scored.get("s-AC", {}).get("ver
 expect("... A-A' measured as 0 px",
        scored["s-AC"]["code_details"][0]["stable_header_px"] if scored.get("s-AC", {}).get("code_details") else None, 0)
 
+# Without its matching A-A' pair, stability is not proven: exact chrome is
+# not judged, and the pair is INVALID, never PASS (Astra review R4).
+code, pair = run_pair("cb-no-control", "tolerant", code_a, code_b,
+                      *code_capture("cb-no-control", "positive", positive, "textkit2", good_log), control=False)
+check("identical positive code capture without its A-A' pair -> INVALID (chrome stability not proven)",
+      (code, pair["verdict"]), 1, "INVALID")
+box = pair["code_details"][0] if pair.get("code_details") else {}
+expect("... the box is UNMEASURED, its chrome counts kept and A-A' not measured",
+       (box.get("verdict"), box.get("header_px"), box.get("outline_px"), box.get("stable_header_px"),
+        box.get("stable_outline_px")), ("UNMEASURED", 0, 0, -1, -1))
+expect("... and the pair says why", "no matching A-A' pair" in pair.get("notes", ""), True)
+code, pair = run_pair("cb-no-control-b", "exact", code_a, code_b,
+                      *code_capture("cb-no-control-b", "positive", positive, "swiftui",
+                                   proof_log("proof-swiftui-no-control", renderer="swiftui", live=0, draws=0,
+                                             rows="-")), control=False)
+check("the same for an A-B (exact) pair -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+code, scored = run_pairs("cb-other-control", [("noise", "o-AA", dark_a, dark_b), ("tolerant", "o-AC", code_a, code_b)])
+expect("an A-A' pair of another reference proves nothing here: INVALID", scored.get("o-AC", {}).get("verdict"),
+       "INVALID")
+small = os.path.join(work, "code-a2-short.png")
+Image.open(code_b).crop((0, 0, 300, 399)).save(small)
+code, scored = run_pairs("cb-short-control", [("noise", "sh-AA", code_a, small), ("tolerant", "sh-AC", code_a, code_b)])
+expect("an A' capture smaller than the reference proves nothing: INVALID", scored.get("sh-AC", {}).get("verdict"),
+       "INVALID")
+check("one header-strip pixel off without the A-A' pair -> INVALID (chrome not judged, not FAIL)",
+      run("cb-chrome-header-no-control", "tolerant", code_a, badge_pixel, control=False), 1, "INVALID")
+check("code text 1 px right without the A-A' pair -> FAIL (only the chrome rule waits for A-A')",
+      run("cb-text-dx-no-control", "tolerant", code_a, moved_x, control=False), 1, "FAIL")
+
 # A code capture without its crops is INVALID, never PASS.
 plain_a, plain_b = code_page("plain-a", box=None), code_page("plain-b", box=None)
 check("positive capture without any code box -> INVALID",
@@ -438,7 +485,8 @@ check("reference build (engine none): no proof asked -> PASS",
 
 # A fallback capture is never native coverage.
 code, scored = run_pairs(
-    "cb-coverage", [("tolerant", "cov-pos-AC", code_a, code_b), ("tolerant", "cov-fb-AC", code_a, code_b)],
+    "cb-coverage", [("noise", "cov-AA", code_a, code_b), ("tolerant", "cov-pos-AC", code_a, code_b),
+                    ("tolerant", "cov-fb-AC", code_a, code_b)],
     *code_capture("cov-pos-AC", "positive", positive, "textkit2", good_log),
     *code_capture("cov-fb-AC", "fallback", "0.12=swiftui", "textkit2", fallback_log))
 try:

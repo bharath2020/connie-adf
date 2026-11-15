@@ -134,7 +134,11 @@ CODE BOXES (every pair)
         kind. For exact and tolerant pairs the same regions of the noise
         pair with the same reference (A-A') are measured first: when they
         are not exactly stable the chrome rule is not evaluated and the
-        pair is INVALID with the A-A' count - never loosened;
+        pair is INVALID with the A-A' count - never loosened. Without
+        that noise pair (or with an A' capture smaller than the
+        reference) stability is not proven: the chrome rule is not
+        evaluated either, and the pair is INVALID with its own chrome
+        counts reported (box verdict UNMEASURED);
       geometry       the candidate must hold a code box at the same
                      rectangle (a moved, missing or extra box FAILs);
       code text      the union ink box below the header strip: differing
@@ -271,7 +275,7 @@ class CodeCrop:
     centroid_dy: float
     ref_ink: bool
     cand_ink: bool
-    verdict: str            # PASS | FAIL | UNSTABLE | INVALID
+    verdict: str            # PASS | FAIL | UNSTABLE | UNMEASURED | INVALID
     notes: str = ""
 
 
@@ -928,9 +932,15 @@ def score_code_boxes(kind: str, name: str, ref: np.ndarray, cand: np.ndarray, st
         if outline_area <= 0:
             invalid.append("outline has no scorable pixel")
         unstable = kind != "noise" and (stable_header > 0 or stable_outline > 0)
+        # No matching A-A' pair: stability is not proven, so exact chrome is
+        # not judged either way (the counts stay in the output).
+        unmeasured = kind != "noise" and steady is None
         if unstable:
             info.append(f"chrome not exactly stable in A-A' (header {stable_header} px, outline {stable_outline} px)"
                         f": chrome rule not evaluated (A-C header {header_px} px, outline {outline_px} px)")
+        elif unmeasured:
+            info.append(f"chrome stability not measured (no A-A' pair with this reference): chrome rule not "
+                        f"evaluated (this pair: header {header_px} px, outline {outline_px} px)")
         else:
             if header_px > MAX_CHROME_PX:
                 problems.append(f"header strip: {header_px} px differ at channel threshold {CHROME_THRESHOLD}")
@@ -987,7 +997,8 @@ def score_code_boxes(kind: str, name: str, ref: np.ndarray, cand: np.ndarray, st
         else:
             info.append("no code ink (an empty block): geometry and chrome only")
 
-        verdict = "FAIL" if problems else "INVALID" if invalid else "UNSTABLE" if unstable else "PASS"
+        verdict = ("FAIL" if problems else "INVALID" if invalid else "UNSTABLE" if unstable
+                   else "UNMEASURED" if unmeasured else "PASS")
         crop = CodeCrop(index, box_text(box), "bottom" if open_bottom else "", geometry[box],
                         box_text((x0, y0, x1, split)), header_px, outline_px, stable_header, stable_outline,
                         text_box, round(text_pct, 4), lines, worst[0], worst[1],
@@ -1228,6 +1239,11 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
                         f"(header {sum(c.stable_header_px for c in unstable_code)} px, "
                         f"outline {sum(c.stable_outline_px for c in unstable_code)} px): "
                         "chrome rule not evaluated, not loosened")
+    unmeasured_code = [c for c in code_crops if c.verdict == "UNMEASURED"]
+    if unmeasured_code:
+        unproven.append(f"code chrome stability not measured in {len(unmeasured_code)} box(es): no matching A-A' "
+                        f"pair (this pair: header {sum(c.header_px for c in unmeasured_code)} px, "
+                        f"outline {sum(c.outline_px for c in unmeasured_code)} px): chrome rule not evaluated")
     unscorable = [c for c in code_crops if c.verdict == "INVALID"]
     if unscorable:
         unproven.append(f"{len(unscorable)} code box(es) with a crop that has no scorable pixel")
