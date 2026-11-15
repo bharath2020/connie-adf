@@ -124,7 +124,7 @@ struct ListBulletSizeTests {
     @Test("A bullet is 0.48 of the capital height; only the third level is a square")
     func proportions() {
         #expect(ListRowView.bulletDiameterToCapHeight == 0.48)
-        #expect((0..<6).map(ListRowView.bulletIsSquare) == [false, false, true, false, false, true])
+        #expect((0..<6).map(ListRowView.bulletGlyph) == ["•", "◦", "▪", "•", "◦", "▪"])
     }
 
     @Test("Every depth's mark is 0.48 of the capital height, centred like the font's dot, flat and in the text colour, on both engines")
@@ -170,7 +170,7 @@ struct ListBulletSizeTests {
                     } else {
                         #expect(Self.isColour(centre, text), "\(label): centre \(centre) is not the text colour")
                     }
-                    if ListRowView.bulletIsSquare(depth: row.depth) {
+                    if ListRowView.bulletGlyph(depth: row.depth) == "▪" {
                         var off = 0
                         for y in drawn.marker.rows.dropFirst().dropLast() {
                             for x in drawn.marker.columns.dropFirst().dropLast() where !Self.isColour(rendered.bitmap[x, y], text) {

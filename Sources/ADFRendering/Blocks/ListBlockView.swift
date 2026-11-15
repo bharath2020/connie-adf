@@ -168,11 +168,6 @@ struct ListRowView: View {
     /// beside 37 px capitals); the system font's own • is about 0.28.
     static let bulletDiameterToCapHeight: CGFloat = 0.48
 
-    /// Whether a nesting level's bullet is the square (▪).
-    static func bulletIsSquare(depth: Int) -> Bool {
-        max(depth, 0) % 3 == 2
-    }
-
     /// Bullet glyph per bullet-list nesting level (ordered-list ancestors
     /// don't count): • ◦ ▪ cycling every three levels. `BulletMarkerView`
     /// draws each as a shape; this names it.
