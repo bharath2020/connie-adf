@@ -166,8 +166,9 @@ enum Help {
         in the app sends it yet). Prints each page's title, space and title emoji,
         and any GraphQL errors verbatim.
 
-        Title emoji needs the \(AtlassianTokenScopes.contentMetadata) scope, which
-        ADFReader's token doesn't ask for; that error is reported, not fatal.
+        Title emoji needs the \(AtlassianTokenScopes.contentMetadata) scope (one of
+        the scopes login asks for). A token created without it gets that error
+        reported, not treated as fatal.
 
         Options:
           --page <id>     A numeric page ID (repeat for more pages)

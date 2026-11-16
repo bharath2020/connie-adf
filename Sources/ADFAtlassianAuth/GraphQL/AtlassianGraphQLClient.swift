@@ -46,14 +46,14 @@ public struct PageProbeResult: Sendable, Equatable {
     /// Every `errors[].message`, verbatim.
     public let errorMessages: [String]
     /// True when an error shows that `metadata` (title emoji) needs
-    /// `read:content.metadata:confluence`, which ADFReader's token lacks.
+    /// `read:content.metadata:confluence` and this token was created without it.
     public let emojiNeedsMetadataScope: Bool
     /// The response JSON, pretty-printed with sorted keys. Never contains
     /// the token (it is the server's response, not the request).
     public let rawJSON: String
 
     /// Plain-language note for ``emojiNeedsMetadataScope``.
-    public static let metadataScopeNote = "Title emoji needs the \(AtlassianTokenScopes.contentMetadata) scope, which ADFReader's token doesn't have."
+    public static let metadataScopeNote = "Title emoji needs the \(AtlassianTokenScopes.contentMetadata) scope, which this token doesn't have. Create a new token with it (adf-auth rotate)."
 }
 
 /// Talks to the tenant GraphQL gateway (`https://<site>/gateway/api/graphql`)

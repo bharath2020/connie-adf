@@ -18,8 +18,9 @@ public enum GraphQLDocuments {
     public static let probePagesOperationName = "AdfProbePages"
 
     /// Page titles, spaces and title emoji. `metadata` needs
-    /// `read:content.metadata:confluence`, which ADFReader's token does not
-    /// have, so it usually comes back null with an error (partial success).
+    /// `read:content.metadata:confluence` (one of the requested scopes); a
+    /// token created without it gets `metadata` back as null with an error
+    /// (partial success).
     public static let probePages = """
         query AdfProbePages($ids: [ID!]!) {
           confluence {

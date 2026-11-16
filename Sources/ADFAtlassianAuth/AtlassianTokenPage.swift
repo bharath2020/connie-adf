@@ -2,15 +2,18 @@ import Foundation
 
 /// The scopes ADFReader asks for when the user creates a scoped API token.
 public enum AtlassianTokenScopes {
-    /// Read pages, spaces and blog posts. Nothing else.
+    /// Read pages, spaces, blog posts and content metadata (title emoji).
+    /// Nothing else.
     public static let required: [String] = [
         "read:page:confluence",
         "read:space:confluence",
         "read:blogpost:confluence",
+        contentMetadata,
     ]
 
-    /// The scope that guards `ConfluencePage.metadata` (title emoji). ADFReader
-    /// does not ask for it, so probes report the emoji as unavailable.
+    /// The scope that guards `ConfluencePage.metadata` (title emoji). It is in
+    /// ``required``; a token created without it gets the emoji reported as
+    /// unavailable by the probe.
     public static let contentMetadata = "read:content.metadata:confluence"
 
     /// Default token lifetime ADFReader suggests.

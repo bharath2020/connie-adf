@@ -136,7 +136,7 @@ enum LoginCommand {
         for (index, step) in AtlassianTokenPage.manualSteps(expiryDays: expiryDays).enumerated() {
             Terminal.out("  \(index + 1). \(step)")
         }
-        Terminal.out("Scopes (exactly these three):")
+        Terminal.out("Scopes (exactly these \(AtlassianTokenScopes.required.count)):")
         for scope in AtlassianTokenScopes.required {
             Terminal.out("  - \(scope)")
         }

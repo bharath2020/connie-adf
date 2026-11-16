@@ -286,5 +286,6 @@ struct GraphQLClientTests {
         #expect(AtlassianAuthError.unauthorized.message == "Atlassian rejected the email or token. Check both, and make sure the token was created for Confluence.")
         #expect(AtlassianAuthError.siteNotFound(host: "acme.atlassian.net").message.contains("No Atlassian Cloud site at acme.atlassian.net"))
         #expect(AtlassianAuthError.forbidden(missingScopes: []).message.contains("read:blogpost:confluence"))
+        #expect(AtlassianAuthError.forbidden(missingScopes: []).message.contains("read:content.metadata:confluence"))
     }
 }

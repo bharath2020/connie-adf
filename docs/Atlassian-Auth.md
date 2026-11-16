@@ -49,7 +49,9 @@ before it reads a saved token. Signing with a stable identity stops that.
 - Exit status: 0 success, 1 failure, 2 usage error, 3 scoped token rejected
   (`probe-graphql`). The token is never taken as an argument (`--token` exits 2).
 - **Scopes** (app "Confluence", exactly these): `read:page:confluence`,
-  `read:space:confluence`, `read:blogpost:confluence`. Default expiry 90 days
+  `read:space:confluence`, `read:blogpost:confluence`,
+  `read:content.metadata:confluence` (the last one is for page-title emoji).
+  Default expiry 90 days
   (`--expiry-days` 1–365). Scopes can't be added to a token; a new one means a new token.
 - **Token page:** `https://id.atlassian.com/manage-profile/security/api-tokens?autofillToken&expiryDays=<n>&appId=confluence&selectedScopes=<percent-encoded JSON array>`.
   Atlassian does not document these preselection parameters, so they are
@@ -155,7 +157,7 @@ Only `probe-graphql` runs `AdfProbePages` today; the app does not look up titles
 |---|---|
 | "scoped" (or API/container token, not on a 401) in an HTTP 401/403 body or a GraphQL error; checked first | `scopedTokenRejected(field:detail:)`; `probe-graphql` exits 3 |
 | HTTP 401, or GraphQL status 401 / unauthorized | `unauthorized` (wrong email or token, or not a Confluence token) |
-| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the three scopes) |
+| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the four scopes) |
 | HTTP 404, `CloudIdNotFoundException`, or no matching tenant | `siteNotFound` |
 | HTTP 429 | `rateLimited` (`Retry-After` seconds or HTTP date) |
 | 200 with pages and errors | Normal result, errors listed verbatim; a `metadata` error only marks the emoji unavailable. Errors are mapped only when no pages come back. |
@@ -178,7 +180,7 @@ adf-auth probe-graphql --page <id>  # items 3-5 (--site <site> if several; --raw
 | 1 | Does the token-page URL preselect Confluence, the scopes and 90 days? | Look at the page `login` opens. |
 | 2 | Does `tenantContexts` accept a scoped token? (Reportedly 403 without auth; we always send it.) | `login` saves = yes; a scoped-token, 401 or 403 message = no. |
 | 3 | Does `confluence.pages` accept a scoped token? | Exit 0 with titles = yes; exit 3 = no. |
-| 4 | Emoji: `ConfluenceContentMetadata` needs `read:content.metadata:confluence`, which we don't ask for. | Expect `Emoji: not available` plus the scope error. Adding the scope means a new token. |
+| 4 | Emoji: `ConfluenceContentMetadata` needs `read:content.metadata:confluence`, which `login` now asks for. Whether the gateway honours it for a scoped token is unverified. | Expect the emoji in the probe output. A token created without the scope shows `Emoji: not available` plus the scope error; replace it with `adf-auth rotate`. |
 | 5 | Batch cap for `pages(ids:)` | Repeat `--page` with 100, then 250 distinct IDs; look for a limit error. |
 
 ## 7. Export compliance
