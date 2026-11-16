@@ -1,8 +1,8 @@
+// adf-auth: create, check, store and hand off ADFReader's Atlassian
+// credentials. macOS only; on other platforms this target is empty.
 #if os(macOS)
-import ADFAtlassianAuth
 import Foundation
 
-// Placeholder: the real `adf-auth` command line is written separately.
-FileHandle.standardError.write(Data("adf-auth: not implemented yet\n".utf8))
-exit(1)
+let status = await CLI.run(Array(CommandLine.arguments.dropFirst()))
+exit(status)
 #endif
