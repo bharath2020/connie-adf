@@ -7,11 +7,19 @@ import ADFPreparation
 /// `Text(AttributedString)`. When atoms (mentions, statuses, dates, …) are
 /// present, a wrapping custom `Layout` interleaves word-level `Text` chunks
 /// with inline pill views.
+///
+/// Smart links (`smartLinkKeys`, the owner's prepared keys): the leaf reads
+/// the coordinator's entries for exactly those keys and draws the displayed
+/// text (`SmartLinkDisplay`) after search painting. Empty keys — nearly
+/// every owner — read nothing and do nothing.
 struct SegmentedTextView: View {
     let segments: [InlineSegment]
     /// ID search highlights are keyed by (`RenderBlock.id`, list-row id, or
     /// media id). `nil` opts out of search entirely (previews, chrome).
     var ownerID: String? = nil
+    /// The owner's smart links (`RenderBlock.smartLinkKeys`,
+    /// `PreparedListRow.smartLinkKeys`, `PreparedMedia.captionSmartLinkKeys`).
+    var smartLinkKeys: [SmartLinkKey] = []
 
     /// Gap between wrapped lines, scaled with Dynamic Type so line rhythm
     /// tracks the text size it separates.
@@ -24,29 +32,60 @@ struct SegmentedTextView: View {
     @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
 
     @Environment(\.adfDocumentSearch) private var search
+    @Environment(\.adfSmartLinks) private var smartLinks
     @Environment(\.adfTheme) private var theme
     /// Flash off-phase: while true the current match paints with the subtle
     /// color, so alternating it blinks the accent (§ arrival flash).
     @State private var flashDimmed = false
 
     var body: some View {
-        let displayed = displayedSegments
+        let stages = smartLinkStages
+        let displayed = displayedSegments(smartLinks: stages)
+        let composesSmartLinks = !stages.isEmpty
         Group {
             if let merged = Self.mergedText(displayed) {
-                Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+                Self.text(Self.scalingBaselineOffsets(in: merged, by: typeScale), composesSmartLinks: composesSmartLinks)
             } else {
                 WrappingInlineLayout(lineSpacing: lineSpacing) {
                     ForEach(Self.tokens(for: displayed)) { token in
                         InlineTokenView(
                             token: token,
                             typeScale: typeScale,
-                            atomHighlight: atomHighlight(for: token)
+                            atomHighlight: atomHighlight(for: token),
+                            composesSmartLinks: composesSmartLinks
                         )
                     }
                 }
             }
         }
         .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
+    }
+
+    /// One `Text` for a text run: the attributed string as is, or, when the
+    /// owner shows a smart link, composed with its icon and spoken text
+    /// (`SmartLinkDisplay.text`). Both are `Text`: no structural branch.
+    static func text(_ attributed: AttributedString, composesSmartLinks: Bool) -> Text {
+        composesSmartLinks ? SmartLinkDisplay.text(attributed) : Text(attributed)
+    }
+
+    // MARK: Smart links
+
+    /// The zero-work gate: an owner without smart links reads nothing.
+    /// Otherwise the entries for its own keys are read (its only
+    /// observation dependency on smart links), and only stages that change
+    /// the display come back.
+    private var smartLinkStages: [SmartLinkKey: SmartLinkStage] {
+        guard !smartLinkKeys.isEmpty, let smartLinks else { return [:] }
+        return smartLinks.displayStages(for: smartLinkKeys, owner: ownerID)
+    }
+
+    /// Search painting first, on the prepared segments its spans index;
+    /// then the smart-link substitution, so a match inside a link
+    /// highlights its whole title.
+    private func displayedSegments(smartLinks stages: [SmartLinkKey: SmartLinkStage]) -> [InlineSegment] {
+        let painted = displayedSegments
+        guard !stages.isEmpty else { return painted }
+        return SmartLinkDisplay.apply(stages, to: painted, theme: theme)
     }
 
     // MARK: Search highlighting
@@ -172,13 +211,19 @@ struct InlineTokenView: View {
     /// on word-chunk text tokens (see `SegmentedTextView`).
     var typeScale: CGFloat = 1
     var atomHighlight: AtomHighlightState? = nil
+    /// The owner shows a smart link: word chunks compose its icon and
+    /// spoken text (`SegmentedTextView.text`).
+    var composesSmartLinks = false
 
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
         switch token.kind {
         case .text(let text):
-            Text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale))
+            SegmentedTextView.text(
+                SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale),
+                composesSmartLinks: composesSmartLinks
+            )
         case .atom(let atom, _):
             AtomView(atom: atom)
                 .background {

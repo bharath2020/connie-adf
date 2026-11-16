@@ -39,6 +39,25 @@ public final class ADFDocumentModel {
     /// `clear`, streamed `matchCount`, highlight payload). One per model.
     public let search: ADFDocumentSearch
 
+    /// Smart-link resolution for this document: which links are on screen,
+    /// their lookups and their per-URL stages (`SmartLinkCoordinator`). Not
+    /// observable itself; owned here so a returning row draws its resolved
+    /// title on its first frame, and reset by `load` (block IDs repeat
+    /// across documents). The resolver comes from `ADFDocumentView`.
+    let smartLinks = SmartLinkCoordinator()
+
+    /// The smart-link counters of this model (resolver calls, cancellations,
+    /// calls in flight, resolved, failed, smart-link leaf redraws),
+    /// cumulative across its loads except `inFlight`. Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var smartLinkStats: ADFSmartLinkStats { smartLinks.stats }
+
+    /// Smart-link-driven redraws per text owner id (`RenderBlock.id`,
+    /// list-row id, media id): which leaves a resolution redrew, so a test
+    /// can show that leaves without that link did not. Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var smartLinkLeafRefreshesByOwner: [String: Int] { smartLinks.leafRefreshesByOwner }
+
     /// The top-level rows SwiftUI now reports at least 95 % inside the
     /// viewport (the visibility feed search navigation reads,
     /// `VisibleRowRegistry`), or nil before iOS 18 / macOS 15, where no
@@ -130,6 +149,7 @@ public final class ADFDocumentModel {
         scrollTargetPlacement = .top
         expandedBlocks = []
         search.reset()
+        smartLinks.reset()
         phase = .parsing
 
         let parser = self.parser

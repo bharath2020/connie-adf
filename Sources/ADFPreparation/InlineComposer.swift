@@ -55,8 +55,31 @@ public struct InlineComposer: Sendable {
     /// semantic spec (headings pass their level font and spec so unmarked
     /// runs inherit both). A `nil` spec marks those runs undescribable.
     public func compose(_ inline: [ADFNode], baseFont: Font, baseFontSpec: ADFFontSpec?) -> [InlineSegment] {
+        composeOwner(inline, baseFont: baseFont, baseFontSpec: baseFontSpec).segments
+    }
+
+    /// One text owner's composed content (a paragraph's, a heading's, a
+    /// list leader's or a caption's) and the smart links in it.
+    package struct ComposedInline: Sendable {
+        package var segments: [InlineSegment]
+        /// The keys of the smart-link runs in `segments`, de-duplicated, in
+        /// document order. Empty for the overwhelming majority of owners, so
+        /// every renderer gate is one `isEmpty` check.
+        package var smartLinkKeys: [SmartLinkKey]
+    }
+
+    /// `compose(_:)` plus the owner's smart-link keys.
+    package func composeOwner(_ inline: [ADFNode]) -> ComposedInline {
+        composeOwner(inline, baseFont: theme.body, baseFontSpec: theme.bodyFontSpec)
+    }
+
+    /// `compose(_:baseFont:baseFontSpec:)` plus the owner's smart-link keys:
+    /// qualifying bare links and inline cards (`SmartLinkQualification`) are
+    /// composed as link text runs carrying `adfSmartLink`.
+    package func composeOwner(_ inline: [ADFNode], baseFont: Font, baseFontSpec: ADFFontSpec?) -> ComposedInline {
         var segments: [InlineSegment] = []
         var pending = AttributedString()
+        let smartLinks = Self.smartLinkPlacements(in: inline)
 
         func flush() {
             if !pending.characters.isEmpty {
@@ -69,10 +92,27 @@ public struct InlineComposer: Sendable {
             segments.append(.atom(atom, id: id))
         }
 
-        for node in inline {
+        for (index, node) in inline.enumerated() {
             switch node.kind {
             case .text(let string, let marks):
-                pending.append(attributedRun(string, marks: marks, baseFont: baseFont, baseFontSpec: baseFontSpec))
+                var run = attributedRun(string, marks: marks, baseFont: baseFont, baseFontSpec: baseFontSpec)
+                if let placement = smartLinks.placements[index] {
+                    Self.mark(&run, with: placement)
+                }
+                pending.append(run)
+            case .inlineCard(let url, let data) where smartLinks.placements[index] != nil:
+                // A qualifying inline card is a smart link: link text (the
+                // URL, link styling) instead of the host-only chip atom, so
+                // its paragraph is not word-chunked and stays eligible for
+                // TextKit 2 (design §1.4).
+                if let placement = smartLinks.placements[index], let urlString = url ?? data?["url"]?.stringValue {
+                    var run = attributedRun(
+                        urlString, marks: [.link(href: urlString, title: nil)],
+                        baseFont: baseFont, baseFontSpec: baseFontSpec
+                    )
+                    Self.mark(&run, with: placement)
+                    pending.append(run)
+                }
             case .hardBreak:
                 pending.append(attributedRun("\n", marks: [], baseFont: baseFont, baseFontSpec: baseFontSpec))
             case .mention(_, let text, _):
@@ -110,13 +150,136 @@ public struct InlineComposer: Sendable {
             if case .atom = segment { return true }
             return false
         }
-        return containsAtom ? Self.splitForWrappingLayout(segments) : segments
+        return ComposedInline(
+            segments: containsAtom ? Self.splitForWrappingLayout(segments) : segments,
+            smartLinkKeys: smartLinks.keys
+        )
+    }
+
+    // MARK: - Smart links
+
+    /// Where one smart link sits in a text node: its run value and the
+    /// node-local Character range it covers (`nil`: the whole node).
+    struct SmartLinkPlacement {
+        let run: SmartLinkRun
+        let range: Range<Int>?
+    }
+
+    /// The smart links among an owner's inline nodes, by node index, and
+    /// their de-duplicated keys in document order. Occurrences are numbered
+    /// per owner in document order.
+    ///
+    /// A link may span several adjacent text nodes (part of it bold, say):
+    /// the maximal run of adjacent text nodes carrying the same `link` href
+    /// is one link, bare when its joined text is its href. Its attribute
+    /// covers the joined text's whitespace-trimmed core, so the
+    /// word-chunking of atom paragraphs (which splits only at whitespace and
+    /// line feeds) never cuts a smart link in two. Links with a `code` mark
+    /// are not candidates.
+    ///
+    /// Cost: nodes without a link mark or an inline card are passed over
+    /// with one scan of their marks; no URL is parsed unless the href
+    /// mentions `atlassian.net`.
+    static func smartLinkPlacements(in inline: [ADFNode]) -> (placements: [Int: SmartLinkPlacement], keys: [SmartLinkKey]) {
+        var placements: [Int: SmartLinkPlacement] = [:]
+        var keys: [SmartLinkKey] = []
+        var occurrence = 0
+
+        func next(_ key: SmartLinkKey) -> SmartLinkRun {
+            if !keys.contains(key) { keys.append(key) }
+            defer { occurrence += 1 }
+            return SmartLinkRun(key: key, occurrence: occurrence)
+        }
+
+        var index = 0
+        while index < inline.count {
+            let node = inline[index]
+            switch node.kind {
+            case .inlineCard(let url, let data):
+                if let urlString = url ?? data?["url"]?.stringValue,
+                   let key = SmartLinkQualification.key(for: urlString) {
+                    placements[index] = SmartLinkPlacement(run: next(key), range: nil)
+                }
+                index += 1
+            case .text(_, let marks):
+                guard let href = candidateHref(marks) else {
+                    index += 1
+                    continue
+                }
+                // The link's extent: adjacent text nodes with the same href.
+                var end = index + 1
+                while end < inline.count, case .text(_, let nextMarks) = inline[end].kind,
+                      candidateHref(nextMarks) == href {
+                    end += 1
+                }
+                defer { index = end }
+                let texts = inline[index..<end].map { node -> String in
+                    if case .text(let string, _) = node.kind { return string }
+                    return ""
+                }
+                let joined = texts.joined()
+                guard let key = SmartLinkQualification.key(for: href),
+                      SmartLinkQualification.isBare(text: joined, href: href) else { continue }
+                let run = next(key)
+                // Per node, so offsets agree with each node's own run even
+                // where a grapheme would join across a node boundary.
+                let characters = texts.flatMap { Array($0) }
+                let leading = characters.prefix(while: \.isWhitespace).count
+                let trailing = characters.reversed().prefix(while: \.isWhitespace).count
+                let core = leading..<max(leading, characters.count - trailing)
+                var start = 0
+                for (offset, text) in texts.enumerated() {
+                    let length = text.count
+                    let lower = max(core.lowerBound, start), upper = min(core.upperBound, start + length)
+                    if lower < upper {
+                        let local = (lower - start)..<(upper - start)
+                        placements[index + offset] = SmartLinkPlacement(
+                            run: run, range: local == 0..<length ? nil : local
+                        )
+                    }
+                    start += length
+                }
+            default:
+                index += 1
+            }
+        }
+        return (placements, keys)
+    }
+
+    /// The href of a text node's `link` mark when it may be a smart link: a
+    /// link without a `code` mark (links inside code are not candidates).
+    private static func candidateHref(_ marks: [ADFMark]) -> String? {
+        var href: String?
+        for mark in marks {
+            switch mark {
+            case .link(let value, _): href = value
+            case .code: return nil
+            default: break
+            }
+        }
+        return href
+    }
+
+    /// Stamps `adfSmartLink` over the placement's range of a node's run.
+    private static func mark(_ run: inout AttributedString, with placement: SmartLinkPlacement) {
+        guard let range = placement.range else {
+            run.adfSmartLink = placement.run
+            return
+        }
+        let characters = run.characters
+        let count = characters.count
+        let lowerBound = min(range.lowerBound, count), upperBound = min(range.upperBound, count)
+        guard lowerBound < upperBound else { return }
+        let lower = characters.index(run.startIndex, offsetBy: lowerBound)
+        let upper = characters.index(lower, offsetBy: upperBound - lowerBound)
+        run[lower..<upper].adfSmartLink = placement.run
     }
 
     /// Splits every text segment into word chunks (a word plus its trailing
     /// whitespace, attributes preserved) and standalone `"\n"` chunks, so the
-    /// wrapping layout consumes pre-computed values only.
-    static func splitForWrappingLayout(_ segments: [InlineSegment]) -> [InlineSegment] {
+    /// wrapping layout consumes pre-computed values only. The renderer
+    /// re-chunks a displayed smart-link title with it.
+    package static func splitForWrappingLayout(_ segments: [InlineSegment]) -> [InlineSegment] {
         var result: [InlineSegment] = []
         result.reserveCapacity(segments.count)
         for segment in segments {

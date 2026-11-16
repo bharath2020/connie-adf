@@ -1,0 +1,60 @@
+import Foundation
+
+/// Looks up the title of a smart link: a bare `https://<site>.atlassian.net/…`
+/// link, or an inline card with such a URL. The host injects it into
+/// `ADFDocumentView(smartLinkResolver:)`, the way it injects
+/// `ADFMediaProvider`: the library never sees tokens, tenants or the
+/// network, and a document without a resolver shows every link as authored.
+///
+/// Links resolve lazily, like images: a link is looked up only once its row
+/// is on screen (after a short dwell, so a fling past it starts nothing),
+/// and leaving the screen cancels the lookup, which leaves the link plain
+/// until it appears again. The result replaces the link's text with an icon
+/// and the title, in that one link's row only.
+public protocol ADFSmartLinkResolver: Sendable {
+    /// Called on a background executor while the URL is on screen, with at
+    /// most one call at a time per canonical URL (scheme and host
+    /// lowercased, fragment removed) and at most four calls at once. Must
+    /// honour task cancellation: a call cancelled because its link left the
+    /// screen is made again when the link returns. Once a call returns, the
+    /// URL is not asked about again in that document; throw
+    /// `ADFSmartLinkError` (or any error) to leave the link plain. Hosts
+    /// should cache across documents: the renderer keeps only a
+    /// per-document cache.
+    func resolve(_ url: URL) async throws -> ADFSmartLinkMetadata
+}
+
+/// What a resolved smart link shows: an icon by kind, then the title, as a
+/// link to the same URL.
+public struct ADFSmartLinkMetadata: Sendable, Hashable {
+    /// The kind of thing a link points at, drawn as an SF Symbol before the
+    /// title and spoken by VoiceOver ("Page, Q3 Roadmap").
+    public enum Icon: Sendable, Hashable {
+        /// A Confluence page.
+        case page
+        /// A Confluence blog post.
+        case blogPost
+        /// A Jira issue.
+        case issue
+        /// Anything else.
+        case generic
+    }
+
+    /// Shown in place of the link's URL text.
+    public var title: String
+    public var icon: Icon
+
+    public init(title: String, icon: Icon = .page) {
+        self.title = title
+        self.icon = icon
+    }
+}
+
+/// Errors a resolver throws to leave a link plain. Any other error does the
+/// same; these two name the common cases.
+public enum ADFSmartLinkError: Error, Sendable {
+    /// The reader may not see what the link points at.
+    case unauthorized
+    /// The link points at nothing the host can find.
+    case notFound
+}

@@ -54,7 +54,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     private(set) var inputs: TextKit2RenderInputs?
     private(set) var attributed = NSAttributedString()
-    private var links: [(range: NSRange, url: URL)] = []
+    private var links: [(range: NSRange, url: URL, title: String?)] = []
     /// Lays out and draws text containing a link (`textKit1Result`,
     /// `drawTextKit1`); nil otherwise.
     private var textKit1: TextKit1Stack? {
@@ -162,7 +162,9 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         guard newInputs != inputs else { return }
         inputs = newInputs
         rebuildText()
-        accessibilityLabel = String(newInputs.text.characters)
+        // The text as shown, a displayed smart link spoken by its kind and
+        // title (`SmartLinkDisplay.accessibilityText`).
+        accessibilityLabel = SmartLinkDisplay.accessibilityText(of: newInputs.text)
         accessibilityValue = nil
         accessibilityTraits = newInputs.isHeading ? [.staticText, .header] : [.staticText]
     }
@@ -699,9 +701,11 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     // MARK: Links
 
     private func rebuildLinks() {
-        var found: [(range: NSRange, url: URL)] = []
+        var found: [(range: NSRange, url: URL, title: String?)] = []
         attributed.enumerateAttribute(.adfLink, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
-            if let url = value as? URL { found.append((range, url)) }
+            guard let url = value as? URL else { return }
+            let title = attributed.attribute(.adfLinkTitle, at: range.location, effectiveRange: nil) as? String
+            found.append((range, url, title))
         }
         links = found
         if found.isEmpty, let recognizer = tapRecognizer {
@@ -715,7 +719,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             tapRecognizer = recognizer
         }
         accessibilityCustomActions = found.isEmpty ? nil : found.map { link in
-            UIAccessibilityCustomAction(name: Self.linkActionName(link.url)) { [weak self] _ in
+            UIAccessibilityCustomAction(name: Self.linkActionName(link.url, title: link.title)) { [weak self] _ in
                 guard let self, let openURL = self.openURL else { return false }
                 openURL(link.url)
                 return true
@@ -723,9 +727,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    /// VoiceOver custom action name for a link.
-    static func linkActionName(_ url: URL) -> String {
-        "Open link \(url.host ?? url.absoluteString)"
+    /// VoiceOver custom action name for a link: its host, or a resolved
+    /// smart link's title (`SmartLinkDisplay.linkActionName`).
+    static func linkActionName(_ url: URL, title: String? = nil) -> String {
+        SmartLinkDisplay.linkActionName(url, title: title)
     }
 
     /// Only a touch that starts on a link's glyphs begins the tap, so taps
