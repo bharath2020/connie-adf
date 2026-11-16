@@ -82,7 +82,10 @@
 #                            default "-rendererStats" (required unless --pilot)
 #   --no-candidate-markers   pilot only: do not require SCROLL_METRICS
 #                            completion fields or RENDERER_STATS from B/C
-#   --extra-args "<flags>"   appended for every arm (e.g. "-fontSizeStep 3")
+#   --extra-args "<flags>"   appended for every arm (e.g. "-fontSizeStep 3");
+#                            global to the run, so containers-expand, which
+#                            needs "-searchQuery CXOPENSENTINEL" to open its
+#                            block-0 chain, runs in a pilot of its own
 #   --expected-blocks "f=n …" READY block count each fixture must report
 #   --trial-timeout <s>      fallback per-trial deadline; default 120
 #   --trial-timeout-for "f=s …" per-fixture deadlines; defaults from the
@@ -90,7 +93,11 @@
 #                            kitchen-sink=45 stress-1k=180 stress-5k=775
 #                            giant-table=95 text-dense=425 long-paragraph=45;
 #                            list-dense=275 from its 2026-11-11 pilot;
-#                            code-dense=UNFROZEN until its pilot.
+#                            code-dense=UNFROZEN until its pilot;
+#                            containers-dense and containers-expand (PR 4)
+#                            UNFROZEN until their pilots (without an entry
+#                            they would silently take --trial-timeout, 120 s,
+#                            below containers-dense's ~124 s scroll).
 #                            A default of UNFROZEN (a new fixture until its
 #                            pilot) refuses every non-pilot run of it, with
 #                            or without this flag; a pilot must pass the
@@ -215,7 +222,7 @@ TRIAL_TIMEOUT=120
 # until the placeholder is replaced by the frozen number in a reviewed commit
 # (never a guess, never a command-line value standing in for it).
 TIMEOUT_UNFROZEN="UNFROZEN"
-DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45 list-dense=275 code-dense=$TIMEOUT_UNFROZEN"
+DEFAULT_TIMEOUTS="kitchen-sink=45 stress-1k=180 stress-5k=775 giant-table=95 text-dense=425 long-paragraph=45 list-dense=275 code-dense=$TIMEOUT_UNFROZEN containers-dense=$TIMEOUT_UNFROZEN containers-expand=$TIMEOUT_UNFROZEN"
 TIMEOUTS_FOR=""
 READY_TIMEOUT=60
 RSS_MS=200
