@@ -243,8 +243,8 @@ enum SmartLinkDisplay {
     /// Displayed text as VoiceOver reads it: every smart-link piece replaced
     /// by its spoken text (a `continuation` piece by nothing), everything
     /// else as shown. The label of a TextKit 2 row (`TextKit2RowView`), of a
-    /// SwiftUI leaf that shows a smart link (`text(_:)`) and of each word
-    /// chunk in an atom paragraph; text without a displayed smart link is
+    /// SwiftUI leaf that shows a smart link and of each word chunk in an atom
+    /// paragraph (`SmartLinkSpeech`); text without a displayed smart link is
     /// returned as its characters.
     static func accessibilityText(of text: AttributedString) -> String {
         let pieces = text.runs[SmartLinkShownAttribute.self]
@@ -287,26 +287,32 @@ enum SmartLinkDisplay {
         }
     }
 
+    /// One VoiceOver action per link in displayed text, in text order, named
+    /// as a TextKit 2 row names its actions (`TextKit2RowView.rebuildLinks`):
+    /// "Open link <title>" for a resolved smart link, else "Open link
+    /// <host>". A link that only continues in this word chunk (`continuation`)
+    /// is left out: its first chunk carries the action.
+    static func linkActions(in text: AttributedString) -> [SmartLinkAction] {
+        var actions: [SmartLinkAction] = []
+        for (url, range) in text.runs[\.link] {
+            guard let url else { continue }
+            let shown = text[range].runs.first?[SmartLinkShownAttribute.self]
+            if shown?.continuation == true { continue }
+            var title: String?
+            if case .resolved(_, let resolved)? = shown?.kind { title = resolved }
+            actions.append(SmartLinkAction(url: url, name: linkActionName(url, title: title)))
+        }
+        return actions
+    }
+
     // MARK: SwiftUI
-
-    /// The SwiftUI `Text` of displayed text holding smart-link pieces
-    /// (`composedText`), labelled for VoiceOver as a whole with its spoken
-    /// text (`accessibilityText(of:)`), word for word what a TextKit 2 row
-    /// says. The label sits on the leaf's whole `Text`: SwiftUI drops a
-    /// label set on one piece of a concatenated `Text` and reads the icon as
-    /// U+FFFC.
-    static func text(_ attributed: AttributedString) -> Text {
-        text(attributed, spoken: accessibilityText(of: attributed))
-    }
-
-    /// `composedText` labelled with `spoken`.
-    static func text(_ attributed: AttributedString, spoken: String) -> Text {
-        composedText(attributed).accessibilityLabel(Text(verbatim: spoken))
-    }
 
     /// Displayed text holding smart-link pieces as one `Text`: each resolved
     /// piece is `Text(Image(systemName:))` concatenated with its title;
-    /// everything else is the attributed text as is.
+    /// everything else is the attributed text as is. VoiceOver reads it
+    /// through `SmartLinkSpeech`, applied by the leaf: a `Text`-level label
+    /// here would be ignored once `textSelection(.enabled)` applies (call
+    /// #40), and SwiftUI reads the icon as U+FFFC.
     static func composedText(_ attributed: AttributedString) -> Text {
         var composed: Text?
         func add(_ piece: Text) {
@@ -338,5 +344,77 @@ enum SmartLinkDisplay {
             add(image.map { $0 + title } ?? title)
         }
         return composed ?? Text(attributed)
+    }
+}
+
+/// A VoiceOver action that opens one link of displayed text
+/// (`SmartLinkDisplay.linkActions`).
+struct SmartLinkAction: Hashable, Sendable {
+    let url: URL
+    let name: String
+}
+
+/// VoiceOver for a SwiftUI text leaf, or an atom paragraph's word chunk,
+/// that shows smart links (design §6): a view-level label with the spoken
+/// text (`SmartLinkDisplay.accessibilityText`) and one "Open link …" action
+/// per link (`SmartLinkDisplay.linkActions`), word for word what a TextKit 2
+/// row says and offers.
+///
+/// - The label is view-level because SwiftUI ignores a `Text`-level
+///   `accessibilityLabel` once `textSelection(.enabled)` applies to the
+///   text, and every paragraph, heading and list leader has it (call #40).
+/// - Any explicit label also takes SwiftUI's link rotor off the text, so
+///   while the label speaks, the links are reached through the actions, as
+///   on a TextKit 2 row.
+/// - `showsStage` is false while every link draws as prepared (plain,
+///   failed). From iOS 18 / macOS 15 the label is then disabled and the
+///   action list empty, so the leaf speaks and exposes its links exactly as
+///   a leaf without smart links does. iOS 17 / macOS 14 cannot disable a
+///   label: there the label (the characters, at a prepared stage) and the
+///   actions are always on.
+/// - Only the inputs change with the stage, never the modifier's shape, so
+///   a stage change keeps the leaf's view identity. `SegmentedTextView`
+///   applies it only in its branch for a merged leaf with smart-link keys
+///   (a constant for the leaf), and to an atom paragraph's link chunks; a
+///   leaf without keys draws its `Text` exactly as before.
+struct SmartLinkSpeech: ViewModifier {
+    /// The displayed text (`SmartLinkDisplay.apply`).
+    let text: AttributedString
+    /// Whether a link shows a stage other than its prepared text.
+    let showsStage: Bool
+
+    @Environment(\.openURL) private var openURL
+
+    /// False before iOS 18 / macOS 15: no `accessibilityLabel(_:isEnabled:)`.
+    static let labelsCanBeDisabled: Bool = {
+        if #available(iOS 18.0, macOS 15.0, *) { return true }
+        return false
+    }()
+
+    func body(content: Content) -> some View {
+        let speaks = showsStage || !Self.labelsCanBeDisabled
+        let actions = speaks ? SmartLinkDisplay.linkActions(in: text) : []
+        // SwiftUI lists one `accessibilityActions` block's actions in reverse
+        // (measured, iOS 26.3): fed reversed, VoiceOver offers them in text
+        // order, as a TextKit 2 row does (`SmartLinkAccessibilityTests`).
+        labelled(content, speaks: speaks)
+            .accessibilityActions {
+                ForEach(actions.indices.reversed(), id: \.self) { index in
+                    Button(actions[index].name) { openURL(actions[index].url) }
+                }
+            }
+    }
+
+    /// The label, disabled while nothing shows a stage. Both overloads
+    /// return the same type, so there is no `if #available` in a view
+    /// builder (which would erase the leaf to `AnyView`).
+    private func labelled(
+        _ content: Content, speaks: Bool
+    ) -> ModifiedContent<Content, AccessibilityAttachmentModifier> {
+        let label = Text(verbatim: speaks ? SmartLinkDisplay.accessibilityText(of: text) : "")
+        if #available(iOS 18.0, macOS 15.0, *) {
+            return content.accessibilityLabel(label, isEnabled: speaks)
+        }
+        return content.accessibilityLabel(label)
     }
 }

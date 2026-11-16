@@ -12,9 +12,10 @@ import ADFPreparation
 /// the coordinator's entries for exactly those keys and draws the displayed
 /// text (`SmartLinkDisplay`) after search painting. Empty keys — nearly
 /// every owner — read nothing and do nothing. While a link shows a stage
-/// other than its prepared text, the leaf's `Text` carries the spoken text
-/// as its VoiceOver label (in an atom paragraph, each word chunk does),
-/// word for word what a TextKit 2 row says.
+/// other than its prepared text, the leaf speaks the spoken text and offers
+/// an "Open link …" action per link (`SmartLinkSpeech`, view-level, so the
+/// callers' `textSelection(.enabled)` keeps it; in an atom paragraph each
+/// word chunk holding a link does), word for word what a TextKit 2 row says.
 struct SegmentedTextView: View {
     let segments: [InlineSegment]
     /// ID search highlights are keyed by (`RenderBlock.id`, list-row id, or
@@ -47,9 +48,17 @@ struct SegmentedTextView: View {
         let stages = smartLinkStages
         let displayed = displayedSegments(smartLinks: stages)
         let composesSmartLinks = !stages.isEmpty
+        let merged = Self.mergedText(displayed)
         Group {
-            if let merged = Self.mergedText(displayed) {
-                Self.text(Self.scalingBaselineOffsets(in: merged, by: typeScale), composesSmartLinks: composesSmartLinks)
+            if let merged, smartLinkKeys.isEmpty {
+                Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+            } else if let merged {
+                // A leaf with smart links (a constant for the leaf, so the
+                // branch never flips with a stage): VoiceOver hears the
+                // stage through `SmartLinkSpeech`, whose inputs alone change.
+                let text = Self.scalingBaselineOffsets(in: merged, by: typeScale)
+                Self.text(text, composesSmartLinks: composesSmartLinks)
+                    .modifier(SmartLinkSpeech(text: text, showsStage: composesSmartLinks))
             } else {
                 WrappingInlineLayout(lineSpacing: lineSpacing) {
                     ForEach(Self.tokens(for: displayed, composesSmartLinks: composesSmartLinks)) { token in
@@ -66,11 +75,11 @@ struct SegmentedTextView: View {
     }
 
     /// One `Text` for the leaf's merged text: the attributed string as is,
-    /// or, when the owner shows a smart link, composed with its icon and
-    /// labelled with the leaf's spoken text (`SmartLinkDisplay.text`). Both
-    /// are `Text`: no structural branch.
+    /// or, when the owner shows a smart link, composed with its icon
+    /// (`SmartLinkDisplay.composedText`). Both are `Text`: no structural
+    /// branch. VoiceOver's text for it is the leaf's `SmartLinkSpeech`.
     static func text(_ attributed: AttributedString, composesSmartLinks: Bool) -> Text {
-        composesSmartLinks ? SmartLinkDisplay.text(attributed) : Text(attributed)
+        composesSmartLinks ? SmartLinkDisplay.composedText(attributed) : Text(attributed)
     }
 
     // MARK: Smart links
@@ -293,7 +302,9 @@ struct InlineTokenView: View {
         case .text(let text):
             Text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale))
         case .smartLinkText(let text, let spoken):
-            SmartLinkDisplay.text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale), spoken: spoken)
+            let scaled = SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale)
+            SmartLinkDisplay.composedText(scaled)
+                .modifier(SmartLinkSpeech(text: scaled, showsStage: true))
                 .accessibilityHidden(spoken.allSatisfy(\.isWhitespace))
         case .atom(let atom, _):
             AtomView(atom: atom)

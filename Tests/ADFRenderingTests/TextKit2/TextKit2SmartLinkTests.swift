@@ -379,14 +379,12 @@ struct TextKit2SmartLinkTests {
                 try await hosted.settle()
             }
             let textKit2Label = textKit2.rows()["0.0"]?.accessibilityLabel
-            // The SwiftUI leaf's label, as its body composes it: the
-            // displayed segments for the stage, merged, labelled by
-            // `SmartLinkDisplay.text`. SwiftUI's accessibility tree cannot be
-            // read in a unit test without an assistive client (the code
-            // parity suite's E5 finding; switching the app's accessibility
-            // runtime on did not populate it either), so the label comes
-            // from the functions the body calls, and the live leaf is
-            // checked to be the one composing smart links.
+            // The SwiftUI leaf's label, as its body computes it: the
+            // displayed segments for the stage, merged, spoken by
+            // `SmartLinkDisplay.accessibilityText` (the text `SmartLinkSpeech`
+            // labels the leaf with), and the live leaf is checked to be the
+            // one composing smart links. What SwiftUI's accessibility tree
+            // actually holds is read in `SmartLinkAccessibilityTests`.
             let displayed = SmartLinkDisplay.apply([key: stage], to: segments, theme: swiftUI.model.theme)
             let merged = try #require(SegmentedTextView.mergedText(displayed))
             let swiftUILabel = SmartLinkDisplay.accessibilityText(of: merged)

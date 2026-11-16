@@ -12,8 +12,8 @@ import XCTest
 ///    host (design call #30) — and keeps showing it while its lookup runs
 ///    (four at once; the fifth waits for a slot, the cap of 4), then shows
 ///    its title. Separately, the design §6 spoken text is checked on both
-///    renderers (a TextKit 2 row's label; on SwiftUI the leaf's `Text`,
-///    which call #35 labels as a whole): "<prepared text>, loading title"
+///    renderers (a TextKit 2 row's label; on SwiftUI the leaf's view-level
+///    label, call #40): "<prepared text>, loading title"
 ///    while loading, then "<kind>, <title>", e.g. "Roadmap: Page, Q3
 ///    Roadmap" (a failed check is reported and the rest of the test still
 ///    runs). Under TextKit 2 each link stays a `tk2-row:` element.
@@ -45,6 +45,10 @@ import XCTest
 /// `testNoResolverKeepsLinksAndCardChips…`: with `-smartLinks off` (no
 /// resolver) nothing is looked up, bare links keep their URLs and the
 /// inline card is the host-only chip it is on main (call #30).
+///
+/// `testResolvedLinkOpensOnTapSwiftUI`: a resolved link, whose leaf speaks
+/// its §6 label (which takes SwiftUI's link rotor off the text, call #40),
+/// still opens exactly its URL when its title is tapped.
 ///
 /// `testFlingThrashSoak…` (host agent: `Scripts/lifecycle-gate.sh --only
 /// SmartLinkUITests/<method>`): a fling with the `top` CPU settle check,
@@ -425,6 +429,62 @@ final class SmartLinkUITests: XCTestCase {
             XCTAssertFalse(reader.anyTextKit2Row.exists, "a TextKit 2 row exists on the SwiftUI renderer")
         }
         attach(reader.app, "\(arm)-no-resolver-chip")
+    }
+
+    // MARK: - Activation: a speaking leaf's link still opens
+
+    /// Once the Roadmap link resolves, its SwiftUI leaf speaks "Roadmap:
+    /// Page, Q3 Roadmap" (design §6). That label takes SwiftUI's link rotor
+    /// off the text, and VoiceOver reaches the link through the leaf's
+    /// "Open link Q3 Roadmap" action instead (call #40). XCUITest cannot list
+    /// custom actions; `SmartLinkAccessibilityTests` performs them. Here a
+    /// tap on the title still opens exactly its URL: `-interactionProbe`
+    /// catches the `openURL` (no Safari), and About This Build shows it.
+    func testResolvedLinkOpensOnTapSwiftUI() throws {
+        continueAfterFailure = true
+        let roadmap = Self.intro[0]
+        let reader = ReaderDriver(launching: [
+            "-fixture", "smart-links", "-rendererReset", "-rendererStats", "-smartLinkProbe",
+            "-smartLinkDelay", "0.5", "-smartLinkFailureRate", "0", "-interactionProbe",
+        ])
+        reader.waitForRenderer("SwiftUI")
+        let leaf = reader.element(labelled: roadmap.resolved)
+        guard leaf.waitForExistence(timeout: 20) else {
+            XCTFail("the Roadmap link never spoke \(roadmap.resolved)")
+            return
+        }
+        reader.pause(1)
+        let before = readOpenedURLs(reader)
+        XCTAssertEqual(before.opens, 0, "a URL opened before the tap: \(before)")
+        // One line, "Roadmap: <icon> Q3 Roadmap": the title is its right
+        // half, the lead about the left 45 %.
+        let frame = leaf.frame
+        let point = leaf.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
+        note("swiftui resolved leaf \(leaf.label) frame \(frame); tap at \(point.screenPoint)")
+        point.tap()
+        reader.pause(1)
+        let after = readOpenedURLs(reader)
+        note("swiftui after the title tap: \(after)")
+        XCTAssertEqual(after.opens, 1, "the tap on the title opened \(after.opens) URLs")
+        XCTAssertEqual(after.last, roadmap.prepared, "the tap opened another URL")
+        attach(reader.app, "swiftui-resolved-link-tapped")
+    }
+
+    /// `-interactionProbe`'s URL count and last URL (About This Build).
+    private func readOpenedURLs(_ reader: ReaderDriver) -> (opens: Int, last: String) {
+        reader.openAbout()
+        defer { reader.closeAbout() }
+        let opens = reader.app.staticTexts["probe-url-opens"]
+        let last = reader.app.staticTexts["probe-url-last"]
+        // The probe rows sit at About's end, maybe below the sheet's fold.
+        var swipes = 0
+        while !(opens.exists && last.exists), swipes < 6 {
+            reader.app.swipeUp()
+            reader.pause(0.5)
+            swipes += 1
+        }
+        XCTAssertTrue(opens.waitForExistence(timeout: 5), "About has no probe-url-opens: -interactionProbe missing")
+        return (Int(opens.label) ?? -1, last.exists ? last.label : "")
     }
 
     /// Launches smart-links with the probe on.
