@@ -28,9 +28,21 @@ public enum InlineSegment: Sendable, Hashable {
 /// run inside a SwiftUI `body`.
 public struct InlineComposer: Sendable {
     public let theme: ADFTheme
+    /// Whether a qualifying inline card is composed as a smart-link run
+    /// showing its host (`SmartLinkQualification`), so a resolver can
+    /// replace it with an icon and the title. `false` (the default, and
+    /// every document loaded without a resolver) keeps the host chip atom,
+    /// exactly as without smart links. Bare links are smart-link runs
+    /// either way: plain, they draw exactly as authored.
+    package let inlineCardsAsSmartLinks: Bool
 
     public init(theme: ADFTheme) {
+        self.init(theme: theme, inlineCardsAsSmartLinks: false)
+    }
+
+    package init(theme: ADFTheme, inlineCardsAsSmartLinks: Bool) {
         self.theme = theme
+        self.inlineCardsAsSmartLinks = inlineCardsAsSmartLinks
     }
 
     /// Composes inline nodes using the theme body font as the base.
@@ -74,12 +86,13 @@ public struct InlineComposer: Sendable {
     }
 
     /// `compose(_:baseFont:baseFontSpec:)` plus the owner's smart-link keys:
-    /// qualifying bare links and inline cards (`SmartLinkQualification`) are
-    /// composed as link text runs carrying `adfSmartLink`.
+    /// qualifying bare links (and, with `inlineCardsAsSmartLinks`, inline
+    /// cards; `SmartLinkQualification`) are composed as link text runs
+    /// carrying `adfSmartLink`.
     package func composeOwner(_ inline: [ADFNode], baseFont: Font, baseFontSpec: ADFFontSpec?) -> ComposedInline {
         var segments: [InlineSegment] = []
         var pending = AttributedString()
-        let smartLinks = Self.smartLinkPlacements(in: inline)
+        let smartLinks = Self.smartLinkPlacements(in: inline, inlineCards: inlineCardsAsSmartLinks)
 
         func flush() {
             if !pending.characters.isEmpty {
@@ -101,13 +114,15 @@ public struct InlineComposer: Sendable {
                 }
                 pending.append(run)
             case .inlineCard(let url, let data) where smartLinks.placements[index] != nil:
-                // A qualifying inline card is a smart link: link text (the
-                // URL, link styling) instead of the host-only chip atom, so
-                // its paragraph is not word-chunked and stays eligible for
-                // TextKit 2 (design §1.4).
+                // A qualifying inline card, with a resolver installed, is a
+                // smart link: link text showing the host (what the chip
+                // shows), with the URL as its link, instead of the chip atom.
+                // Its paragraph is not word-chunked for it and stays
+                // eligible for TextKit 2 (design §1.4), and the host is one
+                // short word, so it never overflows a chunked line.
                 if let placement = smartLinks.placements[index], let urlString = url ?? data?["url"]?.stringValue {
                     var run = attributedRun(
-                        urlString, marks: [.link(href: urlString, title: nil)],
+                        Self.cardText(urlString), marks: [.link(href: urlString, title: nil)],
                         baseFont: baseFont, baseFontSpec: baseFontSpec
                     )
                     Self.mark(&run, with: placement)
@@ -177,10 +192,15 @@ public struct InlineComposer: Sendable {
     /// line feeds) never cuts a smart link in two. Links with a `code` mark
     /// are not candidates.
     ///
+    /// Inline cards are candidates only when `inlineCards` is set (a resolver
+    /// is installed); otherwise they keep their chip and are not counted.
+    ///
     /// Cost: nodes without a link mark or an inline card are passed over
     /// with one scan of their marks; no URL is parsed unless the href
     /// mentions `atlassian.net`.
-    static func smartLinkPlacements(in inline: [ADFNode]) -> (placements: [Int: SmartLinkPlacement], keys: [SmartLinkKey]) {
+    static func smartLinkPlacements(
+        in inline: [ADFNode], inlineCards: Bool
+    ) -> (placements: [Int: SmartLinkPlacement], keys: [SmartLinkKey]) {
         var placements: [Int: SmartLinkPlacement] = [:]
         var keys: [SmartLinkKey] = []
         var occurrence = 0
@@ -196,7 +216,7 @@ public struct InlineComposer: Sendable {
             let node = inline[index]
             switch node.kind {
             case .inlineCard(let url, let data):
-                if let urlString = url ?? data?["url"]?.stringValue,
+                if inlineCards, let urlString = url ?? data?["url"]?.stringValue,
                    let key = SmartLinkQualification.key(for: urlString) {
                     placements[index] = SmartLinkPlacement(run: next(key), range: nil)
                 }
@@ -260,6 +280,12 @@ public struct InlineComposer: Sendable {
         return href
     }
 
+    /// The text a smart-link inline card shows before it resolves: its URL's
+    /// host, as the chip shows it (`InlineCardChip`).
+    package static func cardText(_ urlString: String) -> String {
+        URL(string: urlString)?.host ?? urlString
+    }
+
     /// Stamps `adfSmartLink` over the placement's range of a node's run.
     private static func mark(_ run: inout AttributedString, with placement: SmartLinkPlacement) {
         guard let range = placement.range else {
@@ -277,9 +303,16 @@ public struct InlineComposer: Sendable {
 
     /// Splits every text segment into word chunks (a word plus its trailing
     /// whitespace, attributes preserved) and standalone `"\n"` chunks, so the
-    /// wrapping layout consumes pre-computed values only. The renderer
-    /// re-chunks a displayed smart-link title with it.
-    package static func splitForWrappingLayout(_ segments: [InlineSegment]) -> [InlineSegment] {
+    /// wrapping layout consumes pre-computed values only.
+    ///
+    /// `breaksAtNoBreakSpace: false` treats U+00A0 as part of a word (it is
+    /// `isWhitespace`, so it splits by default, as it always has for
+    /// prepared text). The renderer re-chunks a displayed smart-link title
+    /// that way, so its icon, the no-break space and the title's first word
+    /// stay in one chunk and the icon never wraps away from the title.
+    package static func splitForWrappingLayout(
+        _ segments: [InlineSegment], breaksAtNoBreakSpace: Bool = true
+    ) -> [InlineSegment] {
         var result: [InlineSegment] = []
         result.reserveCapacity(segments.count)
         for segment in segments {
@@ -287,13 +320,15 @@ public struct InlineComposer: Sendable {
             case .atom:
                 result.append(segment)
             case .text(let text):
-                appendWordChunks(of: text, to: &result)
+                appendWordChunks(of: text, breaksAtNoBreakSpace: breaksAtNoBreakSpace, to: &result)
             }
         }
         return result
     }
 
-    private static func appendWordChunks(of text: AttributedString, to result: inout [InlineSegment]) {
+    private static func appendWordChunks(
+        of text: AttributedString, breaksAtNoBreakSpace: Bool, to result: inout [InlineSegment]
+    ) {
         let characters = text.characters
         var chunkStart = text.startIndex
         var previousWasSpace = false
@@ -312,16 +347,22 @@ public struct InlineComposer: Sendable {
                 result.append(.text(AttributedString(text[index..<next])))
                 chunkStart = next
                 previousWasSpace = false
-            } else if previousWasSpace, !character.isWhitespace {
+            } else if previousWasSpace, !isBreakingSpace(character, breaksAtNoBreakSpace) {
                 flush(upTo: index)
                 chunkStart = index
                 previousWasSpace = false
             } else {
-                previousWasSpace = character.isWhitespace
+                previousWasSpace = isBreakingSpace(character, breaksAtNoBreakSpace)
             }
             index = next
         }
         flush(upTo: text.endIndex)
+    }
+
+    /// Whitespace a word chunk may end at: all of it, except U+00A0 when
+    /// `breaksAtNoBreakSpace` is off.
+    private static func isBreakingSpace(_ character: Character, _ breaksAtNoBreakSpace: Bool) -> Bool {
+        character.isWhitespace && (breaksAtNoBreakSpace || character != "\u{00A0}")
     }
 
     /// Fully text-only composition: atoms are replaced by plain-text

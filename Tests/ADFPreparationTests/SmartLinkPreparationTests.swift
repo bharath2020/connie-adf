@@ -11,7 +11,9 @@ private typealias SmartLinkAttribute = AttributeScopes.ADFAttributes.SmartLinkAt
 /// are prepared as smart-link runs with per-owner key lists.
 @Suite("Smart link preparation")
 struct SmartLinkPreparationTests {
-    private let composer = InlineComposer(theme: .default)
+    /// A composer for a document loaded with a resolver installed: inline
+    /// cards become smart links too.
+    private let composer = InlineComposer(theme: .default, inlineCardsAsSmartLinks: true)
 
     // MARK: Qualification
 
@@ -32,6 +34,12 @@ struct SmartLinkPreparationTests {
               ("mailto:someone@acme.atlassian.net", false),
               ("acme.atlassian.net/wiki/x", false),
               ("not a url atlassian.net", false),
+              ("https://user:pw@acme.atlassian.net/wiki/x", false),
+              ("https://user@acme.atlassian.net/wiki/x", false),
+              ("https://:pw@acme.atlassian.net/wiki/x", false),
+              ("https://evil.com@acme.atlassian.net/wiki/x", false),
+              ("https://acme.atlassian.net:443/wiki/x", true),
+              ("https://acme.atlassian.net:8443/wiki/x", true),
           ])
     func qualification(url: String, qualifies: Bool) {
         #expect((SmartLinkQualification.key(for: url) != nil) == qualifies, "\(url)")
@@ -43,6 +51,30 @@ struct SmartLinkPreparationTests {
         #expect(key.url.absoluteString == "https://acme.atlassian.net/wiki/Spaces/DOC/pages/1/Q3+Roadmap?focusedCommentId=7")
         #expect(SmartLinkKey("https://acme.atlassian.net/wiki/x#a") == SmartLinkKey("https://ACME.atlassian.net/wiki/x#b"))
         #expect(SmartLinkKey("https://acme.atlassian.net/wiki/X") != SmartLinkKey("https://acme.atlassian.net/wiki/x"))
+    }
+
+    @Test("the key drops a trailing host dot and the scheme's default port; other ports are kept")
+    func keyNormalisesHostAndPort() throws {
+        let plain = try #require(SmartLinkKey("https://acme.atlassian.net/wiki/x"))
+        #expect(try #require(SmartLinkKey("https://ACME.atlassian.net./wiki/x")) == plain)
+        #expect(SmartLinkKey("https://acme.atlassian.net./wiki/x")?.url.host == "acme.atlassian.net")
+        #expect(try #require(SmartLinkKey("https://acme.atlassian.net:443/wiki/x")) == plain)
+        #expect(try #require(SmartLinkKey("https://acme.atlassian.net.:443/wiki/x#f")) == plain)
+        #expect(SmartLinkKey("http://acme.atlassian.net:80/wiki/x")?.url.absoluteString == "http://acme.atlassian.net/wiki/x")
+        // Another port is part of the resource, and http's default is not https's.
+        #expect(SmartLinkKey("https://acme.atlassian.net:8443/wiki/x")?.url.absoluteString == "https://acme.atlassian.net:8443/wiki/x")
+        #expect(SmartLinkKey("https://acme.atlassian.net:80/wiki/x")?.url.absoluteString == "https://acme.atlassian.net:80/wiki/x")
+        #expect(SmartLinkKey("http://acme.atlassian.net:443/wiki/x")?.url.absoluteString == "http://acme.atlassian.net:443/wiki/x")
+    }
+
+    @Test("a bare link carrying user info stays an ordinary link")
+    func userInfoStaysPlain() async throws {
+        let url = "https://user:secret@acme.atlassian.net/wiki/x"
+        let composed = composer.composeOwner(try await paragraph(Self.link(url, url)))
+        #expect(composed.smartLinkKeys.isEmpty)
+        let text = try Self.onlyText(composed.segments)
+        #expect(Self.smartRuns(text).isEmpty)
+        #expect(text.runs.first?.link == URL(string: url))
     }
 
     @Test("a link is bare when its text is its href after normalising both",
@@ -138,12 +170,13 @@ struct SmartLinkPreparationTests {
         let keyA = try #require(SmartLinkKey(a)), keyB = try #require(SmartLinkKey(b))
         #expect(composed.smartLinkKeys == [keyA, keyB])
         let runs = Self.smartRuns(try Self.onlyText(composed.segments))
-        #expect(runs.map(\.0) == [a, a, b, a + "#frag"])
+        // The two cards show their host.
+        #expect(runs.map(\.0) == ["acme.atlassian.net", "acme.atlassian.net", b, a + "#frag"])
         #expect(runs.map(\.1.occurrence) == [0, 1, 2, 3])
         #expect(runs.map(\.1.key) == [keyA, keyA, keyB, keyA])
     }
 
-    @Test("a qualifying inline card is prepared as a smart-link text run, not a chip atom")
+    @Test("with a resolver, a qualifying inline card is a smart-link text run showing its host, not a chip atom")
     func inlineCardBecomesText() async throws {
         let url = "https://acme.atlassian.net/wiki/spaces/DOC/pages/1"
         let composed = composer.composeOwner(try await paragraph(
@@ -151,9 +184,9 @@ struct SmartLinkPreparationTests {
         ))
         // One merged text segment: no atom, so no word chunking.
         let text = try Self.onlyText(composed.segments)
-        #expect(String(text.characters) == "see \(url) now")
+        #expect(String(text.characters) == "see acme.atlassian.net now")
         let runs = Self.smartRuns(text)
-        #expect(runs.map(\.0) == [url])
+        #expect(runs.map(\.0) == ["acme.atlassian.net"])
         let run = try #require(text.runs.first { $0[SmartLinkAttribute.self] != nil })
         #expect(run.link == URL(string: url))
         #expect(run.underlineStyle == .single)
@@ -167,13 +200,33 @@ struct SmartLinkPreparationTests {
         let fromData = composer.composeOwner(try await paragraph(
             #"{"type":"inlineCard","attrs":{"data":{"url":"\#(url)"}}}"#
         ))
-        #expect(Self.smartRuns(try Self.onlyText(fromData.segments)).map(\.0) == [url])
+        #expect(Self.smartRuns(try Self.onlyText(fromData.segments)).map(\.0) == ["acme.atlassian.net"])
 
         let other = composer.composeOwner(try await paragraph(
             #"{"type":"text","text":"see "},{"type":"inlineCard","attrs":{"url":"https://example.com/x"}}"#
         ))
         #expect(other.smartLinkKeys.isEmpty)
         #expect(other.segments.contains { if case .atom(.inlineCard("https://example.com/x"), _) = $0 { return true }; return false })
+    }
+
+    @Test("without a resolver an inline card keeps its chip exactly as before, and is not a smart link")
+    func inlineCardWithoutResolverKeepsChip() async throws {
+        let url = "https://acme.atlassian.net/wiki/spaces/DOC/pages/1"
+        let inline = try await paragraph(
+            #"{"type":"text","text":"see "},{"type":"inlineCard","attrs":{"url":"\#(url)"}},{"type":"text","text":" now"}"#
+        )
+        for composer in [InlineComposer(theme: .default), InlineComposer(theme: .default, inlineCardsAsSmartLinks: false)] {
+            let composed = composer.composeOwner(inline)
+            #expect(composed.smartLinkKeys.isEmpty)
+            #expect(composed.segments.contains { if case .atom(.inlineCard(url), _) = $0 { return true }; return false })
+            #expect(composed.segments == composer.compose(inline))
+        }
+        // The public preparer keeps the chip; the model's, with a resolver, does not.
+        let json = #"{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"inlineCard","attrs":{"url":"\#(url)"}}]}]}"#
+        let doc = try await parseDoc(json)
+        #expect(DocumentPreparer(theme: .default).prepare(doc).first?.smartLinkKeys == [])
+        let smart = DocumentPreparer(theme: .default, inlineCardsAsSmartLinks: true).prepare(doc)
+        #expect(smart.first?.smartLinkKeys == [try #require(SmartLinkKey(url))])
     }
 
     @Test("a link split over adjacent text nodes is one smart link over its whitespace-trimmed text")

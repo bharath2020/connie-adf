@@ -46,6 +46,13 @@ public final class ADFDocumentModel {
     /// across documents). The resolver comes from `ADFDocumentView`.
     let smartLinks = SmartLinkCoordinator()
 
+    /// Whether this document's inline cards were prepared as smart-link runs
+    /// (they show their host until resolved) rather than chips: a resolver
+    /// was installed when the document's blocks began preparing (`load`).
+    /// Every preparer and indexer for the document reads it (the search
+    /// index, expand bodies), so render and index agree.
+    @ObservationIgnored private(set) var inlineCardsAsSmartLinks = false
+
     /// The smart-link counters of this model (resolver calls, cancellations,
     /// calls in flight, resolved, failed, smart-link leaf redraws),
     /// cumulative across its loads except `inFlight`. Diagnostics only.
@@ -123,7 +130,10 @@ public final class ADFDocumentModel {
     /// same plugins as the preparer, so expand bodies index exactly what the
     /// view renders.
     var searchIndexer: SearchIndexer {
-        SearchIndexer(theme: theme, customPreparers: customRenderers.preparers)
+        SearchIndexer(
+            theme: theme, customPreparers: customRenderers.preparers,
+            inlineCardsAsSmartLinks: inlineCardsAsSmartLinks
+        )
     }
 
     deinit {
@@ -153,7 +163,8 @@ public final class ADFDocumentModel {
         phase = .parsing
 
         let parser = self.parser
-        let preparer = DocumentPreparer(theme: theme, customPreparers: customRenderers.preparers)
+        let theme = self.theme
+        let customPreparers = customRenderers.preparers
         // `self` stays weak for the whole stream: holding it strongly across
         // the loop would keep the model (and the detached preparer feeding
         // it) alive after the owner releases it. Each iteration re-checks;
@@ -169,8 +180,20 @@ public final class ADFDocumentModel {
                 }
                 return
             }
-            guard self != nil, !Task.isCancelled else { return }
-            self?.phase = .preparing
+            let preparer: DocumentPreparer
+            do {
+                // Scoped, so the model is not held across the stream below.
+                guard let model = self, !Task.isCancelled else { return }
+                model.phase = .preparing
+                // Read once parsing is done, so a view built right after
+                // `load` has handed its resolver over: without one, inline
+                // cards keep their chips exactly as before smart links.
+                model.inlineCardsAsSmartLinks = model.smartLinks.resolver != nil
+                preparer = DocumentPreparer(
+                    theme: theme, customPreparers: customPreparers,
+                    inlineCardsAsSmartLinks: model.inlineCardsAsSmartLinks
+                )
+            }
             for await chunk in preparer.prepareStream(document, chunkSize: 50) {
                 guard let self, !Task.isCancelled else { return }
                 self.append(chunk)

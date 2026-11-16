@@ -6,21 +6,26 @@ import Foundation
 /// `ADFMediaProvider`: the library never sees tokens, tenants or the
 /// network, and a document without a resolver shows every link as authored.
 ///
-/// Links resolve lazily, like images: a link is looked up only once its row
-/// is on screen (after a short dwell, so a fling past it starts nothing),
-/// and leaving the screen cancels the lookup, which leaves the link plain
-/// until it appears again. The result replaces the link's text with an icon
-/// and the title, in that one link's row only.
+/// Links resolve lazily, like images: a link is looked up only once the text
+/// holding it (its paragraph, heading, list item or caption) is on screen,
+/// after a short dwell, so a fling past it starts nothing; leaving the
+/// screen cancels the lookup, which leaves the link plain until it appears
+/// again. The result replaces the link's text (an inline card's host) with
+/// an icon and the title, in the text that shows that link only.
 public protocol ADFSmartLinkResolver: Sendable {
     /// Called on a background executor while the URL is on screen, with at
     /// most one call at a time per canonical URL (scheme and host
-    /// lowercased, fragment removed) and at most four calls at once. Must
-    /// honour task cancellation: a call cancelled because its link left the
-    /// screen is made again when the link returns. Once a call returns, the
-    /// URL is not asked about again in that document; throw
-    /// `ADFSmartLinkError` (or any error) to leave the link plain. Hosts
-    /// should cache across documents: the renderer keeps only a
-    /// per-document cache.
+    /// lowercased, a trailing dot, the default port and the fragment
+    /// removed; URLs with user info are never passed) and at most four calls
+    /// at once. A cancelled call counts toward both limits until it
+    /// returns, so honour task cancellation promptly: a call cancelled
+    /// because its link left the screen is made again when the link
+    /// returns. Once a call returns, the URL is not asked about again in
+    /// that document; throw `ADFSmartLinkError` (or any error) to leave the
+    /// link plain. The title is shown on one line: control and bidirectional
+    /// formatting characters are removed and whitespace collapsed, and a
+    /// title left empty leaves the link plain. Hosts should cache across
+    /// documents: the renderer keeps only a per-document cache.
     func resolve(_ url: URL) async throws -> ADFSmartLinkMetadata
 }
 

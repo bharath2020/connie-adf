@@ -11,7 +11,10 @@ import ADFPreparation
 /// Smart links (`smartLinkKeys`, the owner's prepared keys): the leaf reads
 /// the coordinator's entries for exactly those keys and draws the displayed
 /// text (`SmartLinkDisplay`) after search painting. Empty keys — nearly
-/// every owner — read nothing and do nothing.
+/// every owner — read nothing and do nothing. While a link shows a stage
+/// other than its prepared text, the leaf's `Text` carries the spoken text
+/// as its VoiceOver label (in an atom paragraph, each word chunk does),
+/// word for word what a TextKit 2 row says.
 struct SegmentedTextView: View {
     let segments: [InlineSegment]
     /// ID search highlights are keyed by (`RenderBlock.id`, list-row id, or
@@ -40,6 +43,7 @@ struct SegmentedTextView: View {
 
     var body: some View {
         let _ = TextLeafDiagnostics.countSegmentedBody()
+        let _ = smartLinks?.noteLeafBody(ownerID, engine: false)
         let stages = smartLinkStages
         let displayed = displayedSegments(smartLinks: stages)
         let composesSmartLinks = !stages.isEmpty
@@ -48,12 +52,11 @@ struct SegmentedTextView: View {
                 Self.text(Self.scalingBaselineOffsets(in: merged, by: typeScale), composesSmartLinks: composesSmartLinks)
             } else {
                 WrappingInlineLayout(lineSpacing: lineSpacing) {
-                    ForEach(Self.tokens(for: displayed)) { token in
+                    ForEach(Self.tokens(for: displayed, composesSmartLinks: composesSmartLinks)) { token in
                         InlineTokenView(
                             token: token,
                             typeScale: typeScale,
-                            atomHighlight: atomHighlight(for: token),
-                            composesSmartLinks: composesSmartLinks
+                            atomHighlight: atomHighlight(for: token)
                         )
                     }
                 }
@@ -62,9 +65,10 @@ struct SegmentedTextView: View {
         .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
     }
 
-    /// One `Text` for a text run: the attributed string as is, or, when the
-    /// owner shows a smart link, composed with its icon and spoken text
-    /// (`SmartLinkDisplay.text`). Both are `Text`: no structural branch.
+    /// One `Text` for the leaf's merged text: the attributed string as is,
+    /// or, when the owner shows a smart link, composed with its icon and
+    /// labelled with the leaf's spoken text (`SmartLinkDisplay.text`). Both
+    /// are `Text`: no structural branch.
     static func text(_ attributed: AttributedString, composesSmartLinks: Bool) -> Text {
         composesSmartLinks ? SmartLinkDisplay.text(attributed) : Text(attributed)
     }
@@ -160,8 +164,11 @@ struct SegmentedTextView: View {
     /// Maps segments 1:1 to layout tokens. Word-level chunking already
     /// happened at preparation time (`InlineComposer.splitForWrappingLayout`),
     /// so no character scanning or attributed-string slicing runs here — a
-    /// standalone `"\n"` chunk becomes an explicit line break.
-    static func tokens(for segments: [InlineSegment]) -> [InlineToken] {
+    /// standalone `"\n"` chunk becomes an explicit line break. Only when the
+    /// owner shows a smart link (`composesSmartLinks`) are chunks looked
+    /// into: one holding a displayed link becomes a `smartLinkText` token
+    /// with its spoken text.
+    static func tokens(for segments: [InlineSegment], composesSmartLinks: Bool = false) -> [InlineToken] {
         var tokens: [InlineToken] = []
         tokens.reserveCapacity(segments.count)
         for segment in segments {
@@ -171,6 +178,9 @@ struct SegmentedTextView: View {
             case .text(let text):
                 if isLineBreak(text) {
                     tokens.append(InlineToken(id: tokens.count, kind: .lineBreak))
+                } else if composesSmartLinks, text.runs[SmartLinkShownAttribute.self].contains(where: { $0.0 != nil }) {
+                    let spoken = SmartLinkDisplay.accessibilityText(of: text)
+                    tokens.append(InlineToken(id: tokens.count, kind: .smartLinkText(text, spoken: spoken)))
                 } else {
                     tokens.append(InlineToken(id: tokens.count, kind: .text(text)))
                 }
@@ -250,6 +260,10 @@ extension ADFTextRenderer {
 struct InlineToken: Identifiable, Hashable {
     enum Kind: Hashable {
         case text(AttributedString)
+        /// A word chunk holding a displayed smart link, with the text
+        /// VoiceOver speaks for it: the link's whole spoken text on its
+        /// first chunk, nothing on a continuation chunk (hidden then).
+        case smartLinkText(AttributedString, spoken: String)
         case atom(InlineAtom, id: String)
         case lineBreak
     }
@@ -271,19 +285,16 @@ struct InlineTokenView: View {
     /// on word-chunk text tokens (see `SegmentedTextView`).
     var typeScale: CGFloat = 1
     var atomHighlight: AtomHighlightState? = nil
-    /// The owner shows a smart link: word chunks compose its icon and
-    /// spoken text (`SegmentedTextView.text`).
-    var composesSmartLinks = false
 
     @Environment(\.adfTheme) private var theme
 
     var body: some View {
         switch token.kind {
         case .text(let text):
-            SegmentedTextView.text(
-                SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale),
-                composesSmartLinks: composesSmartLinks
-            )
+            Text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale))
+        case .smartLinkText(let text, let spoken):
+            SmartLinkDisplay.text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale), spoken: spoken)
+                .accessibilityHidden(spoken.allSatisfy(\.isWhitespace))
         case .atom(let atom, _):
             AtomView(atom: atom)
                 .background {

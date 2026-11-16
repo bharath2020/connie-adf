@@ -41,11 +41,15 @@ public struct ADFDocumentView: View {
     ///     blocks (see `ADFTextRenderer`); `.textKit2` is opt-in and falls
     ///     back to SwiftUI per text block for content it does not cover.
     ///   - smartLinkResolver: Looks up the titles of smart links (bare
-    ///     `*.atlassian.net` links and inline cards) as their rows come on
-    ///     screen (see `ADFSmartLinkResolver`). `nil`: every link stays as
-    ///     authored and no lookup work is done. Handed to the model's
-    ///     per-document coordinator here, which is not observable, so
-    ///     passing it invalidates nothing.
+    ///     `*.atlassian.net` links and inline cards) as they come on screen
+    ///     (see `ADFSmartLinkResolver`). `nil`: every link stays as authored
+    ///     (inline cards keep their chips) and no lookup work is done. Handed
+    ///     to the model's per-document coordinator here, which is not
+    ///     observable, so passing it invalidates nothing. Inline cards
+    ///     become smart links only in documents whose blocks are prepared
+    ///     after a resolver is installed (build the view before calling
+    ///     `load`, or in the same main-actor turn); in a document loaded
+    ///     earlier they keep their chips while bare links still resolve.
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
@@ -207,17 +211,17 @@ public struct ADFDocumentView: View {
     @ViewBuilder
     private var rows: some View {
         if #available(iOS 18.0, macOS 15.0, *) {
-            stack(reporter: { ScrollVisibilityReporter(id: $0, registry: $1, smartLinks: $2) })
+            stack(reporter: { ScrollVisibilityReporter(id: $0, registry: $1) })
         } else {
             // Pre-18/15: no visibility feed exists, `VisibleRowRegistry`
             // stays empty, and search navigation always scrolls (graceful
-            // degradation); smart links treat an attached leaf as visible.
-            stack(reporter: { _, _, _ in EmptyModifier() })
+            // degradation).
+            stack(reporter: { _, _ in EmptyModifier() })
         }
     }
 
     private func stack<Reporter: ViewModifier>(
-        reporter: @escaping (String, VisibleRowRegistry, SmartLinkCoordinator) -> Reporter
+        reporter: @escaping (String, VisibleRowRegistry) -> Reporter
     ) -> some View {
         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(model.sections) { section in
@@ -228,10 +232,9 @@ public struct ADFDocumentView: View {
                             margin: model.theme.spacing * 2,
                             containerWidth: containerWidth,
                             visibility: model.search.visibleRows,
-                            smartLinks: model.smartLinks,
                             textRenderer: textRenderer
                         )
-                        .modifier(reporter(item.id, model.search.visibleRows, model.smartLinks))
+                        .modifier(reporter(item.id, model.search.visibleRows))
                     }
                 } header: {
                     if let item = section.header {
@@ -283,9 +286,6 @@ private struct DocumentRow: View {
     /// `ADFDocumentView`, constant during scroll).
     let containerWidth: CGFloat
     let visibility: VisibleRowRegistry
-    /// The document's smart-link coordinator: the row's render-region exit
-    /// is the backstop for its viewport visibility (`onDisappear`).
-    let smartLinks: SmartLinkCoordinator
     /// The host's text engine choice. Applied to this row's environment only
     /// when the block is a top-level `.richText` (paragraph/heading),
     /// `.codeBlock` (which only reads it, for its code text) or
@@ -333,10 +333,6 @@ private struct DocumentRow: View {
             if isInRenderRegion || heights.isEmpty {
                 BlockView(block: block)
                     .environment(\.adfTextRenderer, rowTextRenderer)
-                    // The row every smart-link leaf in this block attaches
-                    // to, however deep it sits (lists, table cells, panels,
-                    // expand bodies): its visibility gates their lookups.
-                    .environment(\.adfSmartLinkRowID, item.id)
                     // The width a top-level list is laid out at, so its
                     // rows can tell when their text column has no room
                     // (`TextKit2Scope.listTextFits`); unknown (0) until
@@ -399,7 +395,6 @@ private struct DocumentRow: View {
             // Render-region exit implies viewport exit; also covers removal
             // paths where the visibility callback never fires a final false.
             visibility.setVisible(item.id, false)
-            smartLinks.setRowVisible(item.id, false)
         }
         // The `ScrollVisibilityReporter` feed is applied by `stack(reporter:)`
         // around this row — see `rows` for why it must not attach in here.
@@ -490,14 +485,6 @@ extension View {
 /// visible": partially clipped matches still get a scroll that brings them
 /// fully inside the margin.
 ///
-/// A second feed at threshold 0.01 (any part on screen) tells the
-/// smart-link coordinator which rows are visible: the 0.95 feed never
-/// reports a row taller than the viewport, and `onAppear` fires for rows
-/// the lazy stack prefetches below the screen. Both callbacks write only
-/// non-observable state (§16/§20: a visibility callback writes no view
-/// state; the coordinator changes an observable stage at most once per real
-/// stage change, never per crossing).
-///
 /// `@available`-constrained ON THE TYPE, with a body containing NO
 /// conditional, deliberately: this modifier sits on every lazy row, and any
 /// `if #available` in its body (or at its call site) erases the row's
@@ -508,15 +495,10 @@ extension View {
 private struct ScrollVisibilityReporter: ViewModifier {
     let id: String
     let registry: VisibleRowRegistry
-    let smartLinks: SmartLinkCoordinator
 
     func body(content: Content) -> some View {
-        content
-            .onScrollVisibilityChange(threshold: 0.95) { visible in
-                registry.setVisible(id, visible)
-            }
-            .onScrollVisibilityChange(threshold: 0.01) { visible in
-                smartLinks.setRowVisible(id, visible)
-            }
+        content.onScrollVisibilityChange(threshold: 0.95) { visible in
+            registry.setVisible(id, visible)
+        }
     }
 }

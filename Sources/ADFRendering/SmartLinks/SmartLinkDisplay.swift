@@ -15,6 +15,10 @@ struct SmartLinkShown: Hashable, Sendable {
 
     let run: SmartLinkRun
     let kind: Kind
+    /// In a word-chunked (atom) paragraph, a chunk after the first that
+    /// carries part of the same displayed link: it speaks nothing, so
+    /// VoiceOver says the kind and title once, on the first chunk.
+    var continuation = false
 }
 
 /// The displayed-text attributes `SmartLinkDisplay` adds (rendering-only:
@@ -56,9 +60,14 @@ enum SmartLinkDisplay {
 
     /// `segments` with every run of a key in `stages` substituted: a
     /// resolving run dimmed, a resolved run replaced by icon + title.
-    /// Returns the input untouched when nothing changes. Word-chunked
-    /// segments (an atom paragraph) are chunked again where a title was
-    /// substituted, so a multi-word title still wraps.
+    /// Returns the input untouched when nothing changes.
+    ///
+    /// Word-chunked segments (an atom paragraph) are chunked again where a
+    /// title was substituted, so a multi-word title still wraps. The no-break
+    /// space after the icon is not a split point there, so the icon, the
+    /// space and the title's first word share a chunk and the icon never
+    /// wraps away from the title; later chunks of the same link are marked
+    /// `continuation` and speak nothing.
     static func apply(
         _ stages: [SmartLinkKey: SmartLinkStage],
         to segments: [InlineSegment],
@@ -70,6 +79,7 @@ enum SmartLinkDisplay {
             return false
         }
         var result: [InlineSegment]?
+        var started: Set<SmartLinkRun> = []
         for (index, segment) in segments.enumerated() {
             guard case .text(let text) = segment,
                   let displayed = apply(stages, to: text, theme: theme) else {
@@ -78,12 +88,33 @@ enum SmartLinkDisplay {
             }
             if result == nil { result = Array(segments[..<index]) }
             if chunked {
-                result?.append(contentsOf: InlineComposer.splitForWrappingLayout([.text(displayed)]))
+                for chunk in InlineComposer.splitForWrappingLayout([.text(displayed)], breaksAtNoBreakSpace: false) {
+                    guard case .text(let text) = chunk else {
+                        result?.append(chunk)
+                        continue
+                    }
+                    result?.append(.text(markingContinuations(in: text, started: &started)))
+                }
             } else {
                 result?.append(.text(displayed))
             }
         }
         return result ?? segments
+    }
+
+    /// Marks the pieces of `chunk` whose displayed link already began in an
+    /// earlier chunk as continuations (`SmartLinkShown.continuation`).
+    private static func markingContinuations(
+        in chunk: AttributedString, started: inout Set<SmartLinkRun>
+    ) -> AttributedString {
+        var marked = chunk
+        for (shown, range) in chunk.runs[SmartLinkShownAttribute.self] {
+            guard var shown else { continue }
+            if started.insert(shown.run).inserted { continue }
+            shown.continuation = true
+            marked[range][SmartLinkShownAttribute.self] = shown
+        }
+        return marked
     }
 
     /// One attributed string with its smart-link runs substituted, or `nil`
@@ -126,11 +157,10 @@ enum SmartLinkDisplay {
         _ slice: AttributedSubstring, run: SmartLinkRun, metadata: ADFSmartLinkMetadata, theme: ADFTheme
     ) -> AttributedString {
         let preparedText = String(slice.characters)
-        let cleaned = metadata.title
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        // An empty title would leave a bare icon: show the prepared text.
-        let title = cleaned.isEmpty ? preparedText : cleaned
+        // The coordinator lands only cleaned, non-empty titles (an empty one
+        // fails the lookup); a stage published another way is cleaned here
+        // too, and an empty title shows the prepared text after the icon.
+        let title = cleanedTitle(metadata.title) ?? preparedText
         var attributes = slice.runs.first?.attributes ?? AttributeContainer()
         // Highlight inheritance: a search match anywhere in the prepared
         // link paints the whole title, the current match's style winning.
@@ -158,27 +188,63 @@ enum SmartLinkDisplay {
         return result
     }
 
+    // MARK: Titles
+
+    /// A resolved title as displayed and spoken, or `nil` when nothing is
+    /// left (the lookup then fails, `SmartLinkFailure.emptyTitle`). Control
+    /// characters (line feeds, carriage returns, tabs, U+2028, U+2029) and
+    /// whitespace runs become one space; bidirectional formatting
+    /// characters (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C)
+    /// are dropped, so a title can neither break the author's paragraph
+    /// into lines nor reorder the text after it; the ends are trimmed.
+    nonisolated static func cleanedTitle(_ title: String) -> String? {
+        var cleaned = String.UnicodeScalarView()
+        var pendingSpace = false
+        for scalar in title.unicodeScalars {
+            if isBidiControl(scalar) { continue }
+            if scalar.properties.isWhitespace || scalar.properties.generalCategory == .control {
+                pendingSpace = !cleaned.isEmpty
+                continue
+            }
+            if pendingSpace {
+                cleaned.append(" ")
+                pendingSpace = false
+            }
+            cleaned.append(scalar)
+        }
+        return cleaned.isEmpty ? nil : String(cleaned)
+    }
+
+    nonisolated private static func isBidiControl(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x202A...0x202E, 0x2066...0x2069, 0x200E, 0x200F, 0x061C: return true
+        default: return false
+        }
+    }
+
     // MARK: Spoken text and actions
 
     /// The spoken text of one displayed smart-link piece whose visible text
     /// (without the icon) is `visibleText`: resolving says it is loading, a
-    /// resolved link speaks its kind, then its title — never the symbol's
-    /// name.
+    /// resolved link speaks its kind, then its whole title (whatever part of
+    /// it a word chunk shows) — never the symbol's name.
     static func spokenText(_ kind: SmartLinkShown.Kind, visibleText: String) -> String {
-        let visible = visibleText
-            .filter { $0 != iconCharacter }
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {
         case .resolving:
+            let visible = visibleText
+                .filter { $0 != iconCharacter }
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             return "\(visible), loading title"
-        case .resolved(let icon, _):
-            return "\(spokenName(icon)), \(visible)"
+        case .resolved(let icon, let title):
+            return "\(spokenName(icon)), \(title)"
         }
     }
 
     /// Displayed text as VoiceOver reads it: every smart-link piece replaced
-    /// by its spoken text, everything else as shown. The TextKit 2 row's
-    /// label (`TextKit2RowView`); text without a displayed smart link is
+    /// by its spoken text (a `continuation` piece by nothing), everything
+    /// else as shown. The label of a TextKit 2 row (`TextKit2RowView`), of a
+    /// SwiftUI leaf that shows a smart link (`text(_:)`) and of each word
+    /// chunk in an atom paragraph; text without a displayed smart link is
     /// returned as its characters.
     static func accessibilityText(of text: AttributedString) -> String {
         let pieces = text.runs[SmartLinkShownAttribute.self]
@@ -187,7 +253,7 @@ enum SmartLinkDisplay {
         for (shown, range) in pieces {
             let visible = String(text[range].characters)
             if let shown {
-                result += spokenText(shown.kind, visibleText: visible)
+                if !shown.continuation { result += spokenText(shown.kind, visibleText: visible) }
             } else {
                 result += visible
             }
@@ -223,18 +289,32 @@ enum SmartLinkDisplay {
 
     // MARK: SwiftUI
 
-    /// The SwiftUI `Text` of displayed text holding smart-link pieces: each
-    /// resolved piece is `Text(Image(systemName:))` concatenated with its
-    /// title, and every piece carries its spoken text as its accessibility
-    /// label; everything else is the attributed text as is.
+    /// The SwiftUI `Text` of displayed text holding smart-link pieces
+    /// (`composedText`), labelled for VoiceOver as a whole with its spoken
+    /// text (`accessibilityText(of:)`), word for word what a TextKit 2 row
+    /// says. The label sits on the leaf's whole `Text`: SwiftUI drops a
+    /// label set on one piece of a concatenated `Text` and reads the icon as
+    /// U+FFFC.
     static func text(_ attributed: AttributedString) -> Text {
+        text(attributed, spoken: accessibilityText(of: attributed))
+    }
+
+    /// `composedText` labelled with `spoken`.
+    static func text(_ attributed: AttributedString, spoken: String) -> Text {
+        composedText(attributed).accessibilityLabel(Text(verbatim: spoken))
+    }
+
+    /// Displayed text holding smart-link pieces as one `Text`: each resolved
+    /// piece is `Text(Image(systemName:))` concatenated with its title;
+    /// everything else is the attributed text as is.
+    static func composedText(_ attributed: AttributedString) -> Text {
         var composed: Text?
         func add(_ piece: Text) {
             composed = composed.map { $0 + piece } ?? piece
         }
         for (shown, range) in attributed.runs[SmartLinkShownAttribute.self] {
             let slice = attributed[range]
-            guard let shown else {
+            guard shown != nil else {
                 add(Text(AttributedString(slice)))
                 continue
             }
@@ -255,8 +335,7 @@ enum SmartLinkDisplay {
                 }
             }
             let title = Text(visible)
-            let piece = image.map { $0 + title } ?? title
-            add(piece.accessibilityLabel(Text(verbatim: spokenText(shown.kind, visibleText: String(visible.characters)))))
+            add(image.map { $0 + title } ?? title)
         }
         return composed ?? Text(attributed)
     }

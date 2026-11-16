@@ -17,14 +17,23 @@ struct SmartLinkDisplayTests {
     private static let key = SmartLinkKey(url)!
     private static let page = ADFSmartLinkMetadata(title: "Q3 Roadmap", icon: .page)
 
-    /// The prepared segments of one paragraph's inline JSON.
+    /// The prepared segments of one paragraph's inline JSON (inline cards
+    /// as smart links, as in a document loaded with a resolver).
     private func prepared(_ content: String) async throws -> [InlineSegment] {
         let json = #"{"version":1,"type":"doc","content":[{"type":"paragraph","content":[\#(content)]}]}"#
         let doc = try await ADFParser().parse(Data(json.utf8))
         guard case .paragraph(let inline, _) = try #require(doc.root.children.first).kind else {
             throw TestFailure("not a paragraph")
         }
-        return InlineComposer(theme: theme).composeOwner(inline).segments
+        return InlineComposer(theme: theme, inlineCardsAsSmartLinks: true).composeOwner(inline).segments
+    }
+
+    /// The characters of each text segment (atoms as `nil`).
+    private static func chunkTexts(_ segments: [InlineSegment]) -> [String?] {
+        segments.map { segment in
+            if case .text(let text) = segment { return String(text.characters) }
+            return nil
+        }
     }
 
     private static func link(_ text: String, _ href: String = url) -> String {
@@ -146,37 +155,104 @@ struct SmartLinkDisplayTests {
         #expect(try Self.slice(text, "Q3 Roadmap").runs.first?[SUI.BackgroundColorAttribute.self] == nil)
     }
 
-    @Test("an empty title shows the prepared text after the icon")
+    @Test("a stage published with an empty title shows the prepared text after the icon; a messy title is cleaned")
     func emptyTitleFallsBack() async throws {
+        // The coordinator fails such a lookup (`SmartLinkFailure.emptyTitle`);
+        // the display function stays safe for a stage published directly.
         let segments = try await sentence()
-        let blank = ADFSmartLinkMetadata(title: " \n ", icon: .issue)
+        let blank = ADFSmartLinkMetadata(title: " \n\u{202E} ", icon: .issue)
         let text = try Self.onlyText(SmartLinkDisplay.apply([Self.key: .resolved(blank)], to: segments, theme: theme))
         #expect(String(text.characters) == "See \u{FFFC}\u{00A0}\(Self.url) now")
-        let multiline = ADFSmartLinkMetadata(title: "Line one\nline two", icon: .issue)
+        let multiline = ADFSmartLinkMetadata(title: "Line one\r\nline\u{2028}two\u{202E}", icon: .issue)
         let joined = try Self.onlyText(SmartLinkDisplay.apply([Self.key: .resolved(multiline)], to: segments, theme: theme))
         #expect(String(joined.characters) == "See \u{FFFC}\u{00A0}Line one line two now")
     }
 
-    @Test("in a word-chunked (atom) paragraph the title is chunked again so it wraps")
+    @Test("in a word-chunked (atom) paragraph the title is chunked again so it wraps; the icon stays with the first word and VoiceOver hears it once")
+    @MainActor
     func atomParagraphRechunks() async throws {
         let segments = try await prepared(
-            Self.plain("Ping ") + #",{"type":"mention","attrs":{"id":"1","text":"@sam"}},"# + Self.plain(" see ") + "," + Self.link(Self.url)
+            Self.plain("Ping ") + #",{"type":"mention","attrs":{"id":"1","text":"@sam"}},"# + Self.plain(" see ") + ","
+                + Self.link(Self.url) + "," + Self.plain(", ok")
         )
         let long = ADFSmartLinkMetadata(title: "Q3 Roadmap planning notes", icon: .page)
         let displayed = SmartLinkDisplay.apply([Self.key: .resolved(long)], to: segments, theme: theme)
-        let texts = displayed.compactMap { segment -> String? in
-            if case .text(let text) = segment { return String(text.characters) }
+        let texts = Self.chunkTexts(displayed)
+        // The icon, the no-break space (`isWhitespace`, but no split point
+        // here) and the first title word share one chunk: the icon can
+        // never wrap away from the title.
+        #expect(texts == ["Ping ", nil, " ", "see ", "\u{FFFC}\u{00A0}Q3 ", "Roadmap ", "planning ", "notes, ", "ok"],
+                "chunks \(texts.map { $0.map { $0.debugDescription } ?? "atom" })")
+        // More than one chunk carries the title, so it still wraps.
+        let titleChunks = displayed.compactMap { segment -> AttributedString? in
+            guard case .text(let text) = segment,
+                  text.runs[SmartLinkShownAttribute.self].contains(where: { $0.0 != nil }) else { return nil }
+            return text
+        }
+        #expect(titleChunks.count == 4)
+        // VoiceOver: the first chunk says the kind and the whole title; the
+        // others repeat nothing (the last keeps its own comma).
+        let spoken = titleChunks.map(SmartLinkDisplay.accessibilityText(of:))
+        #expect(spoken == ["Page, Q3 Roadmap planning notes", "", "", ", "], "spoken \(spoken)")
+        #expect(SmartLinkDisplay.accessibilityText(of: titleChunks[0]).components(separatedBy: "Page").count == 2)
+        // The SwiftUI leaf's tokens: chunks with the link carry that text,
+        // and the chunk that says nothing is hidden (`InlineTokenView`).
+        let tokens = SegmentedTextView.tokens(for: displayed, composesSmartLinks: true)
+        let tokenSpeech = tokens.compactMap { token -> String? in
+            if case .smartLinkText(_, let spoken) = token.kind { return spoken }
             return nil
         }
-        #expect(texts.joined().contains("\u{FFFC}\u{00A0}Q3 Roadmap planning notes"))
-        // More than one chunk carries the title.
-        let titleChunks = displayed.filter { segment in
-            guard case .text(let text) = segment else { return false }
-            return text.runs[SmartLinkShownAttribute.self].contains { $0.0 != nil }
-        }
-        #expect(titleChunks.count > 1)
+        #expect(tokenSpeech == spoken)
+        // Without the smart-link flag nothing is looked into.
+        #expect(!SegmentedTextView.tokens(for: displayed).contains { if case .smartLinkText = $0.kind { return true } else { return false } })
         // The atom survives in place.
         #expect(displayed.contains { if case .atom = $0 { return true } else { return false } })
+        // Resolving keeps the URL in one chunk and speaks it once.
+        let resolving = SmartLinkDisplay.apply([Self.key: .resolving], to: segments, theme: theme)
+        #expect(Self.chunkTexts(resolving) == Self.chunkTexts(segments))
+        let resolvingChunk = try #require(resolving.compactMap { segment -> AttributedString? in
+            guard case .text(let text) = segment, text.runs[SmartLinkShownAttribute.self].contains(where: { $0.0 != nil }) else { return nil }
+            return text
+        }.first)
+        #expect(SmartLinkDisplay.accessibilityText(of: resolvingChunk) == "\(Self.url), loading title, ")
+    }
+
+    @Test("an inline card shows its host until resolved, one short chunk even in an atom paragraph")
+    func inlineCardShowsHost() async throws {
+        let card = #"{"type":"inlineCard","attrs":{"url":"\#(Self.url)"}}"#
+        let sentence = try Self.onlyText(try await prepared(Self.plain("See ") + "," + card + "," + Self.plain(" now")))
+        #expect(String(sentence.characters) == "See acme.atlassian.net now")
+        let resolving = try Self.onlyText(SmartLinkDisplay.apply([Self.key: .resolving], to: [.text(sentence)], theme: theme))
+        #expect(SmartLinkDisplay.accessibilityText(of: resolving) == "See acme.atlassian.net, loading title now")
+        let resolved = try Self.onlyText(SmartLinkDisplay.apply([Self.key: .resolved(Self.page)], to: [.text(sentence)], theme: theme))
+        #expect(String(resolved.characters) == "See \u{FFFC}\u{00A0}Q3 Roadmap now")
+        #expect(try Self.slice(resolved, "Q3 Roadmap").runs.first?.link == URL(string: Self.url))
+
+        let chunked = try await prepared(
+            Self.plain("Ping ") + #",{"type":"mention","attrs":{"id":"1","text":"@sam"}},"# + Self.plain(" see ") + "," + card
+        )
+        #expect(Self.chunkTexts(chunked) == ["Ping ", nil, " ", "see ", "acme.atlassian.net"])
+    }
+
+    @Test("titles are cleaned: controls and line separators become one space, bidi controls go, whitespace collapses",
+          arguments: [
+              ("Q3 Roadmap", "Q3 Roadmap"),
+              ("  Q3\r\nRoadmap\t ", "Q3 Roadmap"),
+              ("a\u{2028}b\u{2029}c", "a b c"),
+              ("bell\u{0007}rings", "bell rings"),
+              ("\u{202E}evil\u{202C} title", "evil title"),
+              ("\u{202A}\u{202B}\u{202D}x\u{2066}y\u{2067}\u{2068}z\u{2069}", "xyz"),
+              ("\u{200E}left\u{200F}right\u{061C}", "leftright"),
+              ("no\u{00A0}\u{00A0}break  spaces", "no break spaces"),
+              ("Ünïcödé café 東京", "Ünïcödé café 東京"),
+          ])
+    func titleCleaning(raw: String, cleaned: String) {
+        #expect(SmartLinkDisplay.cleanedTitle(raw) == cleaned, "\(raw.debugDescription)")
+    }
+
+    @Test("a title with nothing left once cleaned is empty", arguments: ["", "   ", "\n\r\t", "\u{202E}\u{2066}\u{200F}", " \u{2028} \u{061C} "])
+    func emptyTitles(raw: String) {
+        #expect(SmartLinkDisplay.cleanedTitle(raw) == nil, "\(raw.debugDescription)")
     }
 
     // MARK: Spoken text and actions

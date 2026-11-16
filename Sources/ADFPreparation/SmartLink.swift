@@ -1,7 +1,8 @@
 import Foundation
 
 /// The identity a smart link is looked up by: its canonical URL, with the
-/// scheme and host lowercased and the fragment removed, everything else as
+/// scheme and host lowercased, a trailing dot dropped from the host, the
+/// scheme's default port and the fragment removed, everything else as
 /// authored. Runs with the same key share one lookup and one displayed
 /// stage, wherever they sit in the document (`docs/Architecture-Decisions.md`
 /// §22).
@@ -46,23 +47,36 @@ package struct SmartLinkRun: Hashable, Sendable {
 /// A run qualifies when it is a `link` mark or an `inlineCard`, its URL is
 /// `http`/`https` on a host ending in `.atlassian.net` (lowercased, one
 /// trailing dot ignored, never `atlassian.net` itself or a lookalike such as
-/// `evilatlassian.net` or `atlassian.net.evil.com`), and, for a link mark,
-/// the link is bare: its text is its href (`isBare`). Labelled links keep
-/// the author's words. Qualification is by host only: the host's resolver
-/// decides what it can resolve and throws for the rest.
+/// `evilatlassian.net` or `atlassian.net.evil.com`) with no user info
+/// (`user:password@`), and, for a link mark, the link is bare: its text is
+/// its href (`isBare`). Labelled links keep the author's words.
+/// Qualification is by host only: the host's resolver decides what it can
+/// resolve and throws for the rest.
 package enum SmartLinkQualification {
     /// The key of `urlString` when it is an `http`/`https` URL on an
-    /// `*.atlassian.net` host, else `nil`. Cheap rejection first: no URL is
-    /// parsed unless the string mentions `atlassian.net`.
+    /// `*.atlassian.net` host without user info, else `nil`. Cheap rejection
+    /// first: no URL is parsed unless the string mentions `atlassian.net`.
+    ///
+    /// A URL carrying user info (`https://user:pw@acme.atlassian.net/…`)
+    /// stays a plain link: it is never handed to the resolver, and its key
+    /// would otherwise pass credentials along.
     package static func key(for urlString: String) -> SmartLinkKey? {
         guard urlString.range(of: "atlassian.net", options: .caseInsensitive) != nil,
               var components = URLComponents(string: urlString),
+              components.user == nil, components.password == nil,
               let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = components.host?.lowercased(), isAtlassianHost(host) else {
             return nil
         }
         components.scheme = scheme
-        components.host = host
+        // One trailing dot names the same host: `acme.atlassian.net.` and
+        // `acme.atlassian.net` share a key.
+        components.host = host.hasSuffix(".") ? String(host.dropLast()) : host
+        // The scheme's default port names the same resource; any other
+        // port is kept as authored.
+        if components.port == (scheme == "https" ? 443 : 80) {
+            components.port = nil
+        }
         components.fragment = nil
         guard let url = components.url else { return nil }
         return SmartLinkKey(canonicalURL: url)

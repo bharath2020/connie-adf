@@ -17,10 +17,19 @@ public struct DocumentPreparer: Sendable {
     /// load, expand bodies, and search indexing — or a claimed node inside an
     /// expand renders differently from how it was indexed.
     public init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = []) {
+        self.init(theme: theme, customPreparers: customPreparers, inlineCardsAsSmartLinks: false)
+    }
+
+    /// `inlineCardsAsSmartLinks`: qualifying inline cards become smart-link
+    /// runs showing their host (`InlineComposer.inlineCardsAsSmartLinks`).
+    /// `ADFDocumentModel` sets it when a resolver is installed as a document
+    /// loads, and every preparer and indexer for that document uses the same
+    /// value; public callers keep the chip.
+    package init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = [], inlineCardsAsSmartLinks: Bool) {
         self.theme = theme
         self.engine = BlockPreparer(
             theme: theme,
-            composer: InlineComposer(theme: theme),
+            composer: InlineComposer(theme: theme, inlineCardsAsSmartLinks: inlineCardsAsSmartLinks),
             customPreparers: customPreparers
         )
     }

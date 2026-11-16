@@ -7,6 +7,9 @@ import ADFPreparation
 enum SmartLinkFailure: Hashable, Sendable {
     case unauthorized
     case notFound
+    /// The resolver returned a title that is empty once cleaned
+    /// (`SmartLinkDisplay.cleanedTitle`): nothing to show beside an icon.
+    case emptyTitle
     /// Any other error the resolver threw.
     case other
 }
@@ -14,23 +17,23 @@ enum SmartLinkFailure: Hashable, Sendable {
 /// A smart link's stage in one loaded document (design §2):
 ///
 /// ```
-///             row visible + dwell             resolver returns
+///             leaf visible + dwell            resolver returns
 ///  .plain ───────────────────────▶ .resolving ─────────────────▶ .resolved   (terminal)
-///    ▲                               │   │ resolver throws
+///    ▲                               │   │ resolver throws, or an empty title
 ///    │  demand drops to 0 (cancel)   │   └──────────────────────▶ .failed     (terminal, drawn plain)
 ///    └───────────────────────────────┘
 /// ```
 enum SmartLinkStage: Hashable, Sendable {
-    /// The link as prepared (URL text, link colour). Also the stage of a
-    /// cancelled lookup: cancellation is not failure, the next appearance
-    /// retries.
+    /// The link as prepared (URL text, or an inline card's host; link
+    /// colour). Also the stage of a cancelled lookup: cancellation is not
+    /// failure, the next appearance retries.
     case plain
     /// A lookup is running: the same text, link colour at reduced opacity.
     case resolving
     /// An icon and the title, linking to the same URL.
     case resolved(ADFSmartLinkMetadata)
-    /// The resolver threw: drawn exactly as `.plain`, never asked again in
-    /// this document.
+    /// The resolver threw, or its title was empty: drawn exactly as
+    /// `.plain`, never asked again in this document.
     case failed(SmartLinkFailure)
 
     /// Whether the stage draws something other than the prepared text.
@@ -82,13 +85,15 @@ public struct ADFSmartLinkStats: Sendable, Hashable {
     /// Calls made to the host's resolver.
     public var resolverCalls = 0
     /// Calls cancelled because their link left the screen (or the document
-    /// was reloaded) before the resolver returned.
+    /// was reloaded) before the resolver returned, counted when the
+    /// cancelled call has ended.
     public var cancellations = 0
-    /// Calls running now.
+    /// Calls running now, including cancelled calls whose task has not
+    /// ended yet (each holds one of the four slots until it does).
     public var inFlight = 0
     /// Calls that returned a title.
     public var resolved = 0
-    /// Calls that threw.
+    /// Calls that threw, or returned a title that is empty once cleaned.
     public var failed = 0
     /// Text-leaf evaluations that drew a different smart-link display
     /// (plain, resolving, resolved) than the same leaf drew before: the
@@ -101,18 +106,23 @@ public struct ADFSmartLinkStats: Sendable, Hashable {
 /// Per-document smart-link resolution, owned by `ADFDocumentModel` and
 /// reached by leaves through `adfSmartLinks` (design §4).
 ///
-/// - Rows report viewport visibility (`setRowVisible`, from the row's
-///   0.01-threshold `onScrollVisibilityChange` and `DocumentRow.onDisappear`).
 /// - Text leaves whose owner has smart links attach on appear and detach on
-///   disappear, with their row (`adfSmartLinkRowID`) and keys.
-/// - A key's **demand** is the number of attached leaves holding it whose
-///   row is visible. A leaf with no row (a pinned header, a host rendering
-///   outside `DocumentRow`) and every leaf before iOS 18 / macOS 15 (no
-///   visibility feed) counts as visible once attached.
+///   disappear, with their keys (`SmartLinkTextLeaf.smartLinkAttachment`),
+///   and each reports its own viewport visibility (`setLeafVisible`, from
+///   the leaf's 0.01-threshold `onScrollVisibilityChange`). Visibility is
+///   per leaf, not per row: a tall list row resolves only the items on
+///   screen. Detaching (render-region exit) forgets the leaf's visibility,
+///   the backstop for a feed that never reports a final `false`.
+/// - A key's **demand** is the number of attached leaves holding it that
+///   are visible. Before iOS 18 / macOS 15 (no visibility feed) an attached
+///   leaf counts as visible.
 /// - A demanded `.plain` key dwells (`SmartLinkTiming.dwell`), then waits
 ///   for one of `maxConcurrent` slots, then goes `.resolving` and asks the
 ///   resolver. Losing all demand drops the dwell or queue place, or cancels
-///   the call and returns the key to `.plain`.
+///   the call and returns the key to `.plain`. A cancelled call keeps its
+///   slot until its task actually ends, so a resolver slow to stop can
+///   never push the calls past `maxConcurrent`, nor run two calls for one
+///   URL: a key asked for again meanwhile restarts once the old call ends.
 /// - `.resolved` and `.failed` are terminal until `reset()` (`load`), which
 ///   bumps the generation: every task is cancelled and late results are
 ///   dropped (block IDs repeat across documents).
@@ -127,8 +137,8 @@ final class SmartLinkCoordinator {
     /// every link stays plain and the coordinator does no work.
     var resolver: (any ADFSmartLinkResolver)?
     var timing: SmartLinkTiming
-    /// Whether rows report visibility (iOS 18 / macOS 15 and later). Without
-    /// a feed an attached leaf counts as visible.
+    /// Whether leaves report visibility (iOS 18 / macOS 15 and later).
+    /// Without a feed an attached leaf counts as visible.
     var hasVisibilityFeed: Bool
 
     /// Bumped by `reset()`; a lookup from an older generation never lands.
@@ -142,21 +152,33 @@ final class SmartLinkCoordinator {
     private var entries: [SmartLinkKey: SmartLinkEntry] = [:]
 
     private struct Leaf {
-        var rowID: String?
         var keys: [SmartLinkKey]
         /// Attachments under this leaf id still live (appear/disappear can
         /// overlap when a view is replaced).
         var count: Int
     }
     private var leaves: [String: Leaf] = [:]
-    private var leavesByRow: [String: Set<String>] = [:]
-    private var visibleRows: Set<String> = []
+    /// The last visibility each leaf reported, by leaf id. A report may
+    /// arrive before the leaf attaches; it is forgotten when the leaf
+    /// detaches (and a `false` for a detached leaf is not kept).
+    private var leafVisibility: [String: Bool] = [:]
     private var demand: [SmartLinkKey: Int] = [:]
 
     private enum Phase {
         case dwelling(Task<Void, Never>?)
         case queued
         case running(Task<Void, Never>)
+        /// Cancelled (demand ended, or `reset`), still holding its slot
+        /// until the resolver's task ends; its result is dropped.
+        case stopping(Task<Void, Never>)
+
+        var task: Task<Void, Never>? {
+            switch self {
+            case .dwelling(let task): return task
+            case .queued: return nil
+            case .running(let task), .stopping(let task): return task
+            }
+        }
     }
     private struct Lookup {
         let id: Int
@@ -165,6 +187,7 @@ final class SmartLinkCoordinator {
     }
     private var lookups: [SmartLinkKey: Lookup] = [:]
     private var queue: [SmartLinkKey] = []
+    /// Slots in use: calls running or stopping.
     private var running = 0
     private var nextLookupID = 0
     /// What each owner's leaf last drew, for `leafRefreshes`.
@@ -178,6 +201,14 @@ final class SmartLinkCoordinator {
             self.hasVisibilityFeed = true
         } else {
             self.hasVisibilityFeed = false
+        }
+    }
+
+    deinit {
+        // The document is gone: stop every dwell and resolver call. Their
+        // tasks hold the coordinator weakly, so nothing lands afterwards.
+        for lookup in lookups.values {
+            lookup.phase.task?.cancel()
         }
     }
 
@@ -224,43 +255,77 @@ final class SmartLinkCoordinator {
         leafRefreshesByOwner[owner, default: 0] += 1
     }
 
-    // MARK: Leaves and rows
+    // MARK: Leaf body diagnostics
+
+    /// Records text-leaf body evaluations per owner while on (tests; off by
+    /// default, when each leaf pays one Bool check). Unlike
+    /// `leafRefreshes`, it counts every leaf of this document, with smart
+    /// links or not, so a test can prove that leaves without the changed
+    /// link did not run their bodies at all. Turning it on starts empty.
+    var recordsLeafBodies = false {
+        didSet {
+            leafBodiesByOwner = [:]
+            engineLeafBodiesByOwner = [:]
+        }
+    }
+    /// `SegmentedTextView` bodies (SwiftUI-drawn text) per owner.
+    private(set) var leafBodiesByOwner: [String: Int] = [:]
+    /// `SmartLinkTextLeaf` bodies (every paragraph, heading and list
+    /// leader, before the engine choice) per owner.
+    private(set) var engineLeafBodiesByOwner: [String: Int] = [:]
+
+    /// One text-leaf body evaluation for `owner` (see `recordsLeafBodies`).
+    func noteLeafBody(_ owner: String?, engine: Bool) {
+        guard recordsLeafBodies, let owner else { return }
+        if engine {
+            engineLeafBodiesByOwner[owner, default: 0] += 1
+        } else {
+            leafBodiesByOwner[owner, default: 0] += 1
+        }
+    }
+
+    // MARK: Leaves
 
     /// A text leaf whose owner has smart links appeared (`onAppear`).
-    func attach(leaf id: String, row: String?, keys: [SmartLinkKey]) {
+    /// `visible` carries a visibility already known for this leaf (its
+    /// view moved here from another owner id or coordinator,
+    /// `SmartLinkTextLeaf`); a report the leaf already made wins.
+    func attach(leaf id: String, keys: [SmartLinkKey], visible: Bool? = nil) {
         guard resolver != nil, !keys.isEmpty else { return }
+        if hasVisibilityFeed, leafVisibility[id] == nil, let visible {
+            leafVisibility[id] = visible
+        }
         if var leaf = leaves[id] {
             leaf.count += 1
             leaves[id] = leaf
-            update(leaf: id, row: row, keys: keys)
+            update(leaf: id, keys: keys)
             return
         }
-        leaves[id] = Leaf(rowID: row, keys: keys, count: 1)
-        if let row { leavesByRow[row, default: []].insert(id) }
-        if isVisible(row) { addDemand(keys) }
+        leaves[id] = Leaf(keys: keys, count: 1)
+        if isVisible(id) { addDemand(keys) }
     }
 
-    /// A live leaf's keys or row changed (its owner's content was replaced
-    /// under a stable identity).
-    func update(leaf id: String, row: String?, keys: [SmartLinkKey]) {
+    /// A live leaf's keys changed (its owner's content was replaced under a
+    /// stable identity). Keys in both lists keep their demand throughout,
+    /// so their lookups are not cancelled and restarted.
+    func update(leaf id: String, keys: [SmartLinkKey]) {
         guard resolver != nil else { return }
         guard var leaf = leaves[id] else {
-            attach(leaf: id, row: row, keys: keys)
+            attach(leaf: id, keys: keys)
             return
         }
-        guard leaf.rowID != row || leaf.keys != keys else { return }
-        if isVisible(leaf.rowID) { removeDemand(leaf.keys) }
-        if leaf.rowID != row {
-            if let old = leaf.rowID { removeLeaf(id, fromRow: old) }
-            if let row { leavesByRow[row, default: []].insert(id) }
-        }
-        leaf.rowID = row
+        guard leaf.keys != keys else { return }
+        let old = leaf.keys
         leaf.keys = keys
         leaves[id] = leaf
-        if isVisible(row) { addDemand(keys) }
+        if isVisible(id) {
+            addDemand(keys)
+            removeDemand(old)
+        }
     }
 
-    /// A leaf disappeared (`onDisappear`).
+    /// A leaf disappeared (`onDisappear`). Once its last attachment goes,
+    /// its visibility is forgotten too (the render-region backstop).
     func detach(leaf id: String) {
         guard var leaf = leaves[id] else { return }
         leaf.count -= 1
@@ -268,36 +333,38 @@ final class SmartLinkCoordinator {
             leaves[id] = leaf
             return
         }
+        let wasVisible = isVisible(id)
         leaves[id] = nil
-        if let row = leaf.rowID { removeLeaf(id, fromRow: row) }
-        if isVisible(leaf.rowID) { removeDemand(leaf.keys) }
+        leafVisibility[id] = nil
+        if wasVisible { removeDemand(leaf.keys) }
     }
 
-    /// A row's viewport visibility (at least one point on screen). Called on
-    /// every crossing during a scroll: a set write and, only for rows with
-    /// attached smart-link leaves, demand bookkeeping.
-    func setRowVisible(_ row: String, _ visible: Bool) {
+    /// A leaf's viewport visibility (any point of it on screen), reported on
+    /// every crossing during a scroll: a dictionary write and, only for an
+    /// attached leaf whose visibility changed, demand bookkeeping.
+    func setLeafVisible(_ id: String, _ visible: Bool) {
         guard resolver != nil, hasVisibilityFeed else { return }
-        if visible {
-            guard visibleRows.insert(row).inserted else { return }
-        } else {
-            guard visibleRows.remove(row) != nil else { return }
+        let wasVisible = leafVisibility[id] == true
+        guard let keys = leaves[id]?.keys else {
+            // Not attached (yet): keep a `true` for the attach that
+            // follows; a `false` needs no record.
+            leafVisibility[id] = visible ? true : nil
+            return
         }
-        guard let ids = leavesByRow[row] else { return }
-        for id in ids {
-            guard let keys = leaves[id]?.keys else { continue }
-            if visible { addDemand(keys) } else { removeDemand(keys) }
-        }
+        leafVisibility[id] = visible
+        guard wasVisible != visible else { return }
+        if visible { addDemand(keys) } else { removeDemand(keys) }
     }
 
-    private func removeLeaf(_ id: String, fromRow row: String) {
-        leavesByRow[row]?.remove(id)
-        if leavesByRow[row]?.isEmpty == true { leavesByRow[row] = nil }
+    /// The visibility this coordinator knows for a leaf: `nil` when it has
+    /// had no report (or tracks nothing: no resolver, no feed).
+    func knownVisibility(of id: String) -> Bool? {
+        guard hasVisibilityFeed else { return nil }
+        return leafVisibility[id]
     }
 
-    private func isVisible(_ row: String?) -> Bool {
-        guard let row, hasVisibilityFeed else { return true }
-        return visibleRows.contains(row)
+    private func isVisible(_ id: String) -> Bool {
+        !hasVisibilityFeed || leafVisibility[id] == true
     }
 
     // MARK: Demand
@@ -322,7 +389,9 @@ final class SmartLinkCoordinator {
         }
     }
 
-    /// Demand appeared for `key`: a `.plain` key without a lookup dwells.
+    /// Demand appeared for `key`: a `.plain` key without a lookup dwells. A
+    /// key whose cancelled call is still stopping waits for it to end
+    /// (`finish` starts it again then).
     private func demandStarted(_ key: SmartLinkKey) {
         guard resolver != nil, lookups[key] == nil, entry(for: key).stage == .plain else { return }
         nextLookupID += 1
@@ -343,21 +412,23 @@ final class SmartLinkCoordinator {
     }
 
     /// Demand for `key` dropped to zero: drop its dwell or queue place, or
-    /// cancel its call (back to `.plain`).
+    /// cancel its call (back to `.plain`; the slot frees when the call's
+    /// task ends).
     private func demandEnded(_ key: SmartLinkKey) {
-        guard let lookup = lookups.removeValue(forKey: key) else { return }
+        guard let lookup = lookups[key] else { return }
         switch lookup.phase {
         case .dwelling(let task):
             task?.cancel()
+            lookups[key] = nil
         case .queued:
             queue.removeAll { $0 == key }
+            lookups[key] = nil
         case .running(let task):
             task.cancel()
-            running -= 1
-            stats.inFlight = running
-            stats.cancellations += 1
+            lookups[key]?.phase = .stopping(task)
             entry(for: key).publish(.plain)
-            startQueued()
+        case .stopping:
+            break
         }
     }
 
@@ -389,12 +460,13 @@ final class SmartLinkCoordinator {
         stats.resolverCalls += 1
         entry(for: key).publish(.resolving)
         let url = key.url
-        // Detached: the resolver runs off the main actor; only the result
-        // hops back. Cancelling this task cancels the resolver's work.
+        // Detached: the resolver runs off the main actor, and so does title
+        // cleaning; only the outcome hops back. Cancelling this task
+        // cancels the resolver's work.
         let task = Task.detached(priority: .userInitiated) { [weak self] in
             let outcome: SmartLinkStage
             do {
-                outcome = .resolved(try await resolver.resolve(url))
+                outcome = Self.outcome(for: try await resolver.resolve(url))
             } catch {
                 outcome = .failed(Self.failure(for: error))
             }
@@ -403,17 +475,41 @@ final class SmartLinkCoordinator {
         lookups[key] = Lookup(id: id, generation: generation, phase: .running(task))
     }
 
+    /// A call's task ended. A current call lands its outcome; a cancelled
+    /// one (stopping, possibly from an older generation) only frees its
+    /// slot, and its key starts over if it is in demand again.
     private func finish(_ key: SmartLinkKey, id: Int, outcome: SmartLinkStage) {
-        // A cancelled call (its lookup is gone) or one from an older
-        // generation (`reset` cleared it) never lands.
-        guard let lookup = lookups[key], lookup.id == id, lookup.generation == generation,
-              case .running = lookup.phase else { return }
-        lookups[key] = nil
-        running -= 1
-        stats.inFlight = running
-        if case .resolved = outcome { stats.resolved += 1 } else { stats.failed += 1 }
-        entry(for: key).publish(outcome)
+        guard let lookup = lookups[key], lookup.id == id else { return }
+        switch lookup.phase {
+        case .running where lookup.generation == generation:
+            lookups[key] = nil
+            running -= 1
+            stats.inFlight = running
+            if case .resolved = outcome { stats.resolved += 1 } else { stats.failed += 1 }
+            entry(for: key).publish(outcome)
+        case .running, .stopping:
+            lookups[key] = nil
+            running -= 1
+            stats.inFlight = running
+            stats.cancellations += 1
+            // The freed slot goes to the queue first; the key, if wanted
+            // again meanwhile, starts over behind it.
+            startQueued()
+            if demand[key] != nil { demandStarted(key) }
+            return
+        case .dwelling, .queued:
+            return
+        }
         startQueued()
+    }
+
+    /// What a returned lookup shows: its title cleaned for display
+    /// (`SmartLinkDisplay.cleanedTitle`), or a failure when nothing is left.
+    nonisolated static func outcome(for metadata: ADFSmartLinkMetadata) -> SmartLinkStage {
+        guard let title = SmartLinkDisplay.cleanedTitle(metadata.title) else {
+            return .failed(.emptyTitle)
+        }
+        return .resolved(ADFSmartLinkMetadata(title: title, icon: metadata.icon))
     }
 
     nonisolated private static func failure(for error: any Error) -> SmartLinkFailure {
@@ -428,25 +524,27 @@ final class SmartLinkCoordinator {
 
     /// A new document is loading (`ADFDocumentModel.load`): bump the
     /// generation, cancel every dwell, queue place and call, and return
-    /// every entry to `.plain`. Leaves and row visibility are kept — they
-    /// describe live views, which detach (or, under a reused identity, stay
-    /// and are asked about again) on their own — and keys still in demand
-    /// start over.
+    /// every entry to `.plain`. Cancelled calls keep their slots until their
+    /// tasks end. Leaves and their visibility are kept — they describe live
+    /// views, which detach (or, under a reused identity, stay and are asked
+    /// about again) on their own — and keys still in demand start over.
     func reset() {
         generation += 1
-        for lookup in lookups.values {
+        for (key, lookup) in lookups {
             switch lookup.phase {
-            case .dwelling(let task): task?.cancel()
-            case .queued: break
+            case .dwelling(let task):
+                task?.cancel()
+                lookups[key] = nil
+            case .queued:
+                lookups[key] = nil
             case .running(let task):
                 task.cancel()
-                stats.cancellations += 1
+                lookups[key]?.phase = .stopping(task)
+            case .stopping:
+                break
             }
         }
-        lookups = [:]
         queue = []
-        running = 0
-        stats.inFlight = 0
         shown = [:]
         for entry in entries.values { entry.publish(.plain) }
         for key in demand.keys.sorted(by: { $0.description < $1.description }) {
@@ -462,14 +560,12 @@ final class SmartLinkCoordinator {
     var queuedKeys: [SmartLinkKey] { queue }
     /// Current demand per key (tests).
     var demandCounts: [SmartLinkKey: Int] { demand }
+    /// Attached leaf ids (tests).
+    var attachedLeafIDs: Set<String> { Set(leaves.keys) }
 }
 
 private struct ADFSmartLinksKey: EnvironmentKey {
     static let defaultValue: SmartLinkCoordinator? = nil
-}
-
-private struct ADFSmartLinkRowIDKey: EnvironmentKey {
-    static let defaultValue: String? = nil
 }
 
 extension EnvironmentValues {
@@ -479,14 +575,5 @@ extension EnvironmentValues {
     var adfSmartLinks: SmartLinkCoordinator? {
         get { self[ADFSmartLinksKey.self] }
         set { self[ADFSmartLinksKey.self] = newValue }
-    }
-
-    /// The top-level row (`DocumentRow`) a view sits in, set by the row for
-    /// its block, so a smart-link leaf at any depth (list, table cell,
-    /// panel, expand body) attaches to the row whose visibility gates it.
-    /// `nil` outside a row (a pinned table header, a host's own layout).
-    var adfSmartLinkRowID: String? {
-        get { self[ADFSmartLinkRowIDKey.self] }
-        set { self[ADFSmartLinkRowIDKey.self] = newValue }
     }
 }
