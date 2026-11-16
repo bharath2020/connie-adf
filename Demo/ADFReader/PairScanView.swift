@@ -1,5 +1,6 @@
 import ADFAtlassianAuth
 import AVFoundation
+import CryptoKit
 import SwiftUI
 import UIKit
 
@@ -15,6 +16,10 @@ import UIKit
 struct PairScanView: View {
     private enum Phase: Equatable {
         case scanning
+        /// The camera is stopped after a Cancel; "Scan Again" restarts it.
+        /// Never restarted automatically, so a code still on the Mac's
+        /// screen is not re-read behind the user's back.
+        case paused(String)
         /// Waiting for the Mac, whose user must confirm the send.
         case fetching
         /// The credential arrived; nothing is saved until the user taps Add.
@@ -33,7 +38,14 @@ struct PairScanView: View {
         case unavailable(String)
     }
 
+    /// Where a payload came from: the camera reports a code every frame,
+    /// a paste is one explicit request.
+    private enum Source {
+        case camera, paste
+    }
+
     static let pairingPrefix = "adfreader://pair?"
+    static let spentMessage = "This code was already used — run adf-auth push again on your Mac."
 
     @Environment(AccountStore.self) private var accounts
     @Environment(\.dismiss) private var dismiss
@@ -41,8 +53,16 @@ struct PairScanView: View {
     @State private var camera = Camera.starting
     @State private var scanner: CameraScanner?
     /// The last payload ignored, so a code held in front of the camera (the
-    /// scanner reports it every frame) is judged once, not per frame.
-    @State private var lastIgnoredPayload: String?
+    /// scanner reports it every frame) is judged once, not per frame. A
+    /// SHA-256, so a pairing link's one-time key is never kept.
+    @State private var lastIgnoredDigest: SHA256.Digest?
+    /// Codes already sent to the Mac (SHA-256 of the payload). The camera
+    /// ignores them, so Cancel, Try Again or Scan Again never re-requests
+    /// the code still on the Mac's screen. Cleared for a code only by an
+    /// explicit Paste, or when the Mac declined it (403: still valid).
+    @State private var acceptedDigests: Set<SHA256.Digest> = []
+    /// Codes known to be spent: served once (200), or answered 404/410.
+    @State private var spentDigests: Set<SHA256.Digest> = []
     @State private var hint: String?
     /// The running fetch from the Mac, cancelled by its Cancel button or by
     /// leaving the screen.
@@ -50,8 +70,25 @@ struct PairScanView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            cameraArea
+            if showsCameraArea {
+                cameraArea
+            } else {
+                // Past scanning the camera (or its "unavailable" placeholder)
+                // is gone, and the state's content sits centred on its own.
+                Spacer(minLength: 0)
+                if case .success = phase {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 96))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.green)
+                        .transition(.scale.combined(with: .opacity))
+                        .accessibilityHidden(true)
+                }
+            }
             statusArea
+            if showsCameraArea == false {
+                Spacer(minLength: 0)
+            }
         }
         .padding()
         .navigationTitle("Scan from Mac")
@@ -66,6 +103,17 @@ struct PairScanView: View {
     }
 
     // MARK: - Camera
+
+    /// The camera preview or its placeholder shows only while the user is
+    /// choosing a code: scanning, or paused after a Cancel.
+    private var showsCameraArea: Bool {
+        switch phase {
+        case .scanning, .paused:
+            return true
+        case .fetching, .confirming, .checking, .success, .failure:
+            return false
+        }
+    }
 
     @ViewBuilder
     private var cameraArea: some View {
@@ -90,13 +138,6 @@ struct PairScanView: View {
                         )
                     }
                     .accessibilityIdentifier("pair-camera-unavailable")
-            }
-            if case .success = phase {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 96))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.green)
-                    .transition(.scale.combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -132,6 +173,23 @@ struct PairScanView: View {
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("pair-paste")
             }
+        case .paused(let message):
+            VStack(spacing: 10) {
+                Label(message, systemImage: "info.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("pair-paused")
+                HStack(spacing: 12) {
+                    Button("Scan Again", systemImage: "qrcode.viewfinder", action: scanAgain)
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("pair-scan-again")
+                    Button("Paste Link", systemImage: "doc.on.clipboard", action: pasteLink)
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("pair-paste")
+                }
+            }
         case .fetching:
             VStack(spacing: 12) {
                 ProgressView("Waiting for your Mac — confirm on the Mac")
@@ -166,7 +224,7 @@ struct PairScanView: View {
                     .multilineTextAlignment(.center)
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("pair-error")
-                Button("Try Again", action: tryAgain)
+                Button("Try Again", action: scanAgain)
                     .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("pair-try-again")
             }
@@ -211,14 +269,39 @@ struct PairScanView: View {
     // MARK: - Payloads
 
     /// Camera and paste both land here. Only `adfreader://pair?` payloads
-    /// are considered; the first one stops the scanner — a valid link starts
-    /// the fetch, a malformed or rejected one (for example a host outside
-    /// the private LAN ranges) shows why in `pair-error`.
-    private func handle(payload: String) {
-        guard phase == .scanning, payload != lastIgnoredPayload else { return }
+    /// are considered; the first new one stops the scanner — a valid link
+    /// starts the fetch, a malformed or rejected one (for example a host
+    /// outside the private LAN ranges) shows why in `pair-error`. A code
+    /// already sent to the Mac is never fetched again from the camera.
+    private func handle(payload: String, from source: Source) {
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        switch phase {
+        case .scanning:
+            break
+        case .paused, .failure:
+            // Only an explicit paste acts outside scanning.
+            guard source == .paste else { return }
+        case .fetching, .confirming, .checking, .success:
+            return
+        }
+        if source == .camera {
+            guard digest != lastIgnoredDigest else { return }
+        }
         guard payload.hasPrefix(Self.pairingPrefix) else {
-            lastIgnoredPayload = payload
+            lastIgnoredDigest = digest
             hint = "That code isn't an ADFReader pairing code. Scan the one adf-auth push shows."
+            return
+        }
+        if spentDigests.contains(digest) || (source == .camera && acceptedDigests.contains(digest)) {
+            // The code on the Mac's screen was already sent: say so and keep
+            // scanning for a new one (camera), or show it plainly (paste).
+            lastIgnoredDigest = digest
+            if source == .paste {
+                scanner?.stop()
+                phase = .failure(Self.spentMessage)
+            } else {
+                hint = Self.spentMessage
+            }
             return
         }
         scanner?.stop()
@@ -229,31 +312,44 @@ struct PairScanView: View {
         } catch {
             // Remembered so Try Again doesn't re-reject the same code
             // still in front of the camera on its next frame.
-            lastIgnoredPayload = payload
+            lastIgnoredDigest = digest
             phase = .failure(error.message)
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             return
         }
+        acceptedDigests.insert(digest)
         phase = .fetching
-        fetchTask = Task { await fetch(link) }
+        fetchTask = Task { await fetch(link, digest: digest) }
     }
 
     private func pasteLink() {
         let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard text.hasPrefix(Self.pairingPrefix) else {
-            hint = "The clipboard doesn't hold an ADFReader pairing link. On your Mac run adf-auth push --print-link and copy the link it prints."
+            let message = "The clipboard doesn't hold an ADFReader pairing link. On your Mac run adf-auth push --print-link and copy the link it prints."
+            // Paste Link shows only while scanning or paused; paused keeps
+            // the camera off.
+            if phase == .scanning {
+                hint = message
+            } else {
+                phase = .paused(message)
+            }
             return
         }
-        // A pasted link is judged again even if the camera ignored it.
-        lastIgnoredPayload = nil
-        handle(payload: text)
+        // An explicit paste is judged again even if the camera ignored it
+        // or sent it before (unless it is known to be spent).
+        let digest = SHA256.hash(data: Data(text.utf8))
+        acceptedDigests.remove(digest)
+        if lastIgnoredDigest == digest { lastIgnoredDigest = nil }
+        handle(payload: text, from: .paste)
     }
 
     /// One GET to the Mac (its user confirms there), then the confirmation
     /// step. Nothing is saved here.
-    private func fetch(_ link: PairingLink) async {
+    private func fetch(_ link: PairingLink, digest: SHA256.Digest) async {
         do {
             let credential = try await HandoffClient.fetch(link, session: accounts.session)
+            // Served once: the Mac's listener has stopped.
+            spentDigests.insert(digest)
             guard Task.isCancelled == false else { return }
             accounts.reload()
             let existing = accounts.summary(for: credential.site)
@@ -262,8 +358,19 @@ struct PairScanView: View {
             }
             phase = .confirming(credential, replacingEmail: replacingEmail)
         } catch {
+            switch error {
+            case .alreadyUsedOrExpired:
+                spentDigests.insert(digest)
+            case .declined:
+                // The Mac said no; the code stays valid until it expires.
+                acceptedDigests.remove(digest)
+            default:
+                break
+            }
             guard Task.isCancelled == false else { return }
-            phase = .failure(error.message)
+            phase = .failure(error == .alreadyUsedOrExpired
+                ? "This code was already used or has expired — run adf-auth push again on your Mac."
+                : error.message)
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         }
         fetchTask = nil
@@ -284,20 +391,24 @@ struct PairScanView: View {
         }
     }
 
+    /// Stops waiting for the Mac. The camera stays off ("Scan Again"
+    /// restarts it), and this code is not requested again from the camera.
     private func cancelFetch() {
         fetchTask?.cancel()
         fetchTask = nil
-        tryAgain()
+        phase = .paused("Cancelled. Nothing was saved. To add the account, run adf-auth push again on your Mac and scan the new code.")
     }
 
     /// Discards the fetched credential unsaved. The pairing code is spent,
     /// so adding it later takes a new `adf-auth push`.
     private func cancelConfirmation() {
-        tryAgain()
-        hint = "Nothing was saved. Run adf-auth push again to add the account."
+        phase = .paused("Nothing was saved. Run adf-auth push again on your Mac to add the account.")
     }
 
-    private func tryAgain() {
+    /// Back to scanning. Codes already sent to the Mac stay ignored by the
+    /// camera, so the one still on the Mac's screen shows the "already
+    /// used" hint instead of being fetched again.
+    private func scanAgain() {
         phase = .scanning
         hint = nil
         scanner?.start()
@@ -325,7 +436,7 @@ struct PairScanView: View {
             return
         }
         let scanner = CameraScanner { payload in
-            handle(payload: payload)
+            handle(payload: payload, from: .camera)
         }
         self.scanner = scanner
         camera = .running

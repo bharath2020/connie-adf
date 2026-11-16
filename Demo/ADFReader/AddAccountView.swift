@@ -24,7 +24,18 @@ struct AddAccountView: View {
     @State private var expiry: Date
     @State private var connecting = false
     @State private var errorMessage: String?
+    /// Set by a first Connect that would overwrite a stored account for
+    /// the same site; a second tap (now "Replace Account") goes ahead.
+    @State private var replaceWarning: ReplaceWarning?
     private let replacing: Bool
+    /// The site "Replace Token" opened this form for: replacing its token
+    /// needs no extra confirmation.
+    private let prefilledSite: AtlassianSite?
+
+    private struct ReplaceWarning: Equatable {
+        var site: AtlassianSite
+        var message: String
+    }
 
     init(prefill: AccountPrefill? = nil) {
         _site = State(initialValue: prefill?.site ?? "")
@@ -34,6 +45,7 @@ struct AddAccountView: View {
             ?? Date().addingTimeInterval(TimeInterval(days) * 86_400)
         _expiry = State(initialValue: defaultExpiry)
         replacing = prefill != nil
+        prefilledSite = prefill.flatMap { try? AtlassianSite(parsing: $0.site) }
     }
 
     var body: some View {
@@ -49,7 +61,13 @@ struct AddAccountView: View {
                 guard message != nil else { return }
                 withAnimation { proxy.scrollTo(ErrorAnchor.id, anchor: .bottom) }
             }
+            .onChange(of: replaceWarning) { _, warning in
+                guard warning != nil else { return }
+                withAnimation { proxy.scrollTo(ErrorAnchor.id, anchor: .bottom) }
+            }
         }
+        .onChange(of: site) { replaceWarning = nil }
+        .onChange(of: email) { replaceWarning = nil }
         .navigationTitle(replacing ? "Replace Token" : "Add Account")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(connecting)
@@ -133,7 +151,7 @@ struct AddAccountView: View {
                 .focused($focus, equals: .token)
                 .onSubmit(connect)
                 .accessibilityIdentifier("add-token")
-            DatePicker("Expires", selection: $expiry, displayedComponents: .date)
+            DatePicker("Expires", selection: $expiry, in: Date.now..., displayedComponents: .date)
                 .accessibilityIdentifier("add-expiry")
         } footer: {
             Text("Use the expiry date you picked on Atlassian's token page.")
@@ -144,7 +162,7 @@ struct AddAccountView: View {
         Section {
             Button(action: connect) {
                 HStack(spacing: 8) {
-                    Text(replacing ? "Replace Token" : "Connect")
+                    Text(connectTitle)
                     if connecting {
                         Spacer()
                         ProgressView()
@@ -153,19 +171,37 @@ struct AddAccountView: View {
             }
             .accessibilityIdentifier("add-connect")
         } footer: {
-            if let errorMessage {
-                Label {
-                    Text(errorMessage)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                if let replaceWarning {
+                    Label {
+                        Text(verbatim: replaceWarning.message)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(.orange)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("add-replace-warning")
                 }
-                .foregroundStyle(.red)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("add-error")
-                .id(ErrorAnchor.id)
+                if let errorMessage {
+                    Label {
+                        Text(errorMessage)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(.red)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("add-error")
+                }
             }
+            .id(ErrorAnchor.id)
         }
+    }
+
+    private var connectTitle: String {
+        if replaceWarning != nil { return "Replace Account" }
+        return replacing ? "Replace Token" : "Connect"
     }
 
     // MARK: - Connect
@@ -198,6 +234,20 @@ struct AddAccountView: View {
             try credential.validate()
         } catch {
             errorMessage = error.message
+            return
+        }
+        // Saving overwrites a stored account for the same site, so outside
+        // "Replace Token" for that site the first tap only warns.
+        accounts.reload()
+        if parsedSite != prefilledSite, replaceWarning?.site != parsedSite,
+           let existing = accounts.summary(for: parsedSite) {
+            let sameEmail = existing.email.caseInsensitiveCompare(credential.email) == .orderedSame
+            replaceWarning = ReplaceWarning(
+                site: parsedSite,
+                message: sameEmail
+                    ? "This replaces the saved token for \(parsedSite.host) (\(existing.email)). Tap Replace Account to continue."
+                    : "This replaces the account for \(parsedSite.host) signed in as \(existing.email). Tap Replace Account to continue."
+            )
             return
         }
         connecting = true
