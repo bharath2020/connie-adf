@@ -10,11 +10,17 @@ import SwiftUI
 /// many draw list text and how many draw a code block's code, and under
 /// `-rebuildControlPicks` the memory control's live rows, and under
 /// `-interactionProbe` the task dispatches and URL opens it recorded
-/// (`InteractionProbe`). The checksum lets a screen recording be
+/// (`InteractionProbe`), and last the open document's smart-link
+/// counters (`ADFDocumentModel.smartLinkStats`) and the mock resolver's
+/// own counts (`MockSmartLinkResolver`). The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
     let renderer: ADFTextRenderer
+    /// The open reader's model, for its smart-link counters; read only in
+    /// the polling task (never in `body`), so the sheet observes nothing on
+    /// it. `nil` hides the per-document smart-link section.
+    var model: ADFDocumentModel? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var executableSHA256: String?
@@ -40,6 +46,15 @@ struct BuildInfoView: View {
     @State private var probeLastTask = InteractionProbe.lastTask
     @State private var probeURLOpens = InteractionProbe.urlOpens
     @State private var probeLastURL = InteractionProbe.lastURL
+    /// The library's smart-link counters for this document
+    /// (`model.smartLinkStats`) and how many text owners a smart link
+    /// redrew (`model.smartLinkLeafRefreshesByOwner.count`), polled like
+    /// the counters above; `nil` until the first read.
+    @State private var smartLinkStats: ADFSmartLinkStats?
+    @State private var smartLinkRefreshedOwners: Int?
+    /// The demo mock resolver's own counts (`MockSmartLinkResolver.shared`),
+    /// polled likewise.
+    @State private var smartLinkCounts: MockSmartLinkResolver.Counts?
 
     var body: some View {
         NavigationStack {
@@ -107,6 +122,13 @@ struct BuildInfoView: View {
                 if InteractionProbe.enabled {
                     interactionProbeSection
                 }
+                // Last, so they move none of the rows above (UI tests read
+                // them without scrolling, and the probe section's reader
+                // expects it below the code row; see the note above it).
+                if model != nil {
+                    smartLinkStatsSection
+                }
+                smartLinksSection
             }
             .navigationTitle("About This Build")
             .navigationBarTitleDisplayMode(.inline)
@@ -135,6 +157,11 @@ struct BuildInfoView: View {
                     probeLastTask = InteractionProbe.lastTask
                     probeURLOpens = InteractionProbe.urlOpens
                     probeLastURL = InteractionProbe.lastURL
+                    if let model {
+                        smartLinkStats = model.smartLinkStats
+                        smartLinkRefreshedOwners = model.smartLinkLeafRefreshesByOwner.count
+                    }
+                    smartLinkCounts = MockSmartLinkResolver.shared?.snapshot
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }
@@ -172,6 +199,67 @@ struct BuildInfoView: View {
                     .truncationMode(.middle)
                     .accessibilityIdentifier("probe-url-last")
             }
+        }
+    }
+
+    /// The library's smart-link counters for the open document
+    /// (`ADFSmartLinkStats`: cumulative across its loads, except calls in
+    /// flight), plus how many text owners a smart-link stage change
+    /// redrew. Each value is its own element, `smartlink-stat-<field>`
+    /// (`resolverCalls`, `cancellations`, `inFlight`, `resolved`, `failed`,
+    /// `leafRefreshes`, `refreshedOwners`), for a UI test to read.
+    private var smartLinkStatsSection: some View {
+        Section("Smart Links (This Document)") {
+            countRow("Resolver Calls", smartLinkStats?.resolverCalls, id: "smartlink-stat-resolverCalls")
+            countRow("Cancellations", smartLinkStats?.cancellations, id: "smartlink-stat-cancellations")
+            countRow("In Flight", smartLinkStats?.inFlight, id: "smartlink-stat-inFlight")
+            countRow("Resolved", smartLinkStats?.resolved, id: "smartlink-stat-resolved")
+            countRow("Failed", smartLinkStats?.failed, id: "smartlink-stat-failed")
+            countRow("Leaf Refreshes", smartLinkStats?.leafRefreshes, id: "smartlink-stat-leafRefreshes")
+            countRow("Owners Refreshed", smartLinkRefreshedOwners, id: "smartlink-stat-refreshedOwners")
+        }
+    }
+
+    /// The mock resolver's view of smart-link lookups since launch: every
+    /// call the library made, how many it cancelled (a row left the screen
+    /// before the delay ran out), how many are waiting now, and how many
+    /// answered with a title or threw. Each value is its own element
+    /// (`smartlink-calls`, `-cancelled`, `-in-flight`, `-resolved`,
+    /// `-failed`) for a UI test to read; `smartlink-off` under
+    /// `-smartLinks off`.
+    @ViewBuilder
+    private var smartLinksSection: some View {
+        if let resolver = MockSmartLinkResolver.shared {
+            Section {
+                countRow("Calls", smartLinkCounts?.calls, id: "smartlink-calls")
+                countRow("Cancelled", smartLinkCounts?.cancelled, id: "smartlink-cancelled")
+                countRow("In Flight", smartLinkCounts?.inFlight, id: "smartlink-in-flight")
+                countRow("Resolved", smartLinkCounts?.resolved, id: "smartlink-resolved")
+                countRow("Failed", smartLinkCounts?.failed, id: "smartlink-failed")
+            } header: {
+                Text("Smart Links (Mock Resolver)")
+            } footer: {
+                Text(verbatim: resolver.configuration.summary)
+            }
+        } else {
+            Section("Smart Links") {
+                Text("Off (-smartLinks off)")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("smartlink-off")
+            }
+        }
+    }
+
+    /// A titled count; "…" until the first poll. The value is its own
+    /// element, identified by `id`.
+    private func countRow(_ title: String, _ value: Int?, id: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(verbatim: value.map(String.init) ?? "…")
+                .monospacedDigit()
+                .accessibilityIdentifier(id)
         }
     }
 

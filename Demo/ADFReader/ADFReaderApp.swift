@@ -104,6 +104,23 @@ import UIKit
 ///   to Atlassian Accounts (`AccountsView`), for UI tests and demo
 ///   recordings. Ignored with `-fixture` (the space list, which owns the
 ///   gear button, is not shown then).
+/// - Smart links: by default every reader (opened by `-fixture`, from the
+///   space list or from a beam) gets one shared `MockSmartLinkResolver` —
+///   titles derived from the URL, no network — so bare Atlassian links and
+///   inline cards turn into titled links once their rows are on screen.
+///   About This Build shows the mock's calls, cancellations, lookups in
+///   flight, resolved and failed counts since launch. The fixture made for
+///   it is `-fixture smart-links`.
+///   - `-smartLinks off` passes no resolver: every link stays as authored
+///     and the library does no lookup work. `-smartLinks on` (or no flag)
+///     is the default.
+///   - `-smartLinkDelay <seconds>` (default 0.8, clamped to 0…3600): how
+///     long each mock lookup takes. It is a `Task.sleep`, so a lookup the
+///     library cancels (its row left the screen) ends at once.
+///   - `-smartLinkFailureRate <0…1>` (default 0.1, clamped): the share of
+///     URLs whose lookup throws (`.unauthorized` or `.notFound`, about half
+///     each), picked by a stable hash of the URL — the same links fail on
+///     every launch and in every document.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -127,6 +144,13 @@ struct LaunchOptions: Sendable {
     var interactionProbe = false
     var captureGeometryHook = false
     var openAccounts = false
+    /// `-smartLinks off` turns the shared mock resolver off (see
+    /// `MockSmartLinkResolver.shared`).
+    var smartLinksEnabled = true
+    /// `-smartLinkDelay <seconds>`: each mock lookup's duration.
+    var smartLinkDelay = 0.8
+    /// `-smartLinkFailureRate <0…1>`: the share of URLs whose lookup fails.
+    var smartLinkFailureRate = 0.1
 
     static let none = LaunchOptions(arguments: [])
 
@@ -172,6 +196,19 @@ struct LaunchOptions: Sendable {
                 captureGeometryHook = true
             case "-openAccounts":
                 openAccounts = true
+            case "-smartLinks" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                smartLinksEnabled = arguments[index].lowercased() != "off"
+            case "-smartLinkDelay" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                if let seconds = Double(arguments[index]), seconds.isFinite {
+                    smartLinkDelay = min(max(seconds, 0), 3_600)
+                }
+            case "-smartLinkFailureRate" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                if let rate = Double(arguments[index]), rate.isFinite {
+                    smartLinkFailureRate = min(max(rate, 0), 1)
+                }
             default:
                 break
             }

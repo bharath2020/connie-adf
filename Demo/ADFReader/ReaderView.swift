@@ -41,6 +41,9 @@ struct ReaderView: View {
     @Environment(\.dynamicTypeSize) private var systemTypeSize
 
     private let mediaProvider = PlaceholderMediaProvider()
+    /// Shared by every reader this launch; `nil` under `-smartLinks off`
+    /// (see `MockSmartLinkResolver.shared`).
+    private let smartLinkResolver = MockSmartLinkResolver.shared
     private let taskStore = TaskStateStore()
     private let fontSizeStore = FontSizeStore()
 
@@ -64,7 +67,8 @@ struct ReaderView: View {
                         interactionHandler: handle,
                         taskStates: taskStates,
                         mentionContent: { AnyView(ProfileCard(name: $0)) },
-                        textRenderer: activeRenderer)
+                        textRenderer: activeRenderer,
+                        smartLinkResolver: smartLinkResolver)
             .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
             .adfRebuildControl(rebuildControl)
             .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
@@ -92,7 +96,7 @@ struct ReaderView: View {
                 }
             }
             .sheet(isPresented: $buildInfoPresented) {
-                BuildInfoView(renderer: activeRenderer)
+                BuildInfoView(renderer: activeRenderer, model: model)
             }
             .task { load() }
             .onChange(of: model.blocks.count) { _, count in
