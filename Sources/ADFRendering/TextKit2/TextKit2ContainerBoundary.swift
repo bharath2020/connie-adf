@@ -8,8 +8,9 @@ import ADFPreparation
 // `adfContainerChild`, at the five child sites; one allow list,
 // `TextKit2Scope.containerChildKinds`, that each stage of the container
 // work widens by one family. Paragraphs and headings in panels, quotes and
-// extension bodies joined first; every other container child still gets
-// `.swiftUI`, as before containers joined the renderer's scope.
+// extension bodies joined first, then open expand and nested-expand bodies;
+// every other container child still gets `.swiftUI`, as before containers
+// joined the renderer's scope.
 
 /// A `RenderBlock.Kind` case without its payload: what the container allow
 /// list (`TextKit2Scope.containerChildKinds`) holds.
@@ -118,14 +119,17 @@ extension TextKit2Scope {
     /// The child kinds a container passes the renderer to. Each family
     /// joins in its own change: paragraphs and headings, panels, quotes and
     /// extension bodies first, media for its caption (`captionsUseTextKit2`),
-    /// then layout columns, expands, lists, code; until a kind is listed
-    /// every child of that kind stays on SwiftUI, and so does everything
-    /// below it. `inheritsRenderer` reads it for top-level container rows,
+    /// expands (here: an expand or nested expand passes the renderer to its
+    /// open body, which is prepared on opening as before, so the coverage
+    /// walk reports it as unprepared rather than entering it), then layout
+    /// columns, lists, code; until a kind is listed every child of that kind
+    /// stays on SwiftUI, and so does everything below it.
+    /// `inheritsRenderer` reads it for top-level container rows,
     /// `adfContainerChild` (through `adfContainerChildKinds`) at every child
     /// boundary, and the coverage walk (`forEachLeaf`) for both. Before
     /// iOS 26 the text it reaches still stays on SwiftUI
     /// (`TextKit2Eligibility.containerTextMatchesText`).
-    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder, .media]
+    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand]
 
     /// Kinds that never join the container scope, whatever an allow list
     /// says: tables (a later stage), plugin blocks (their renderer owns

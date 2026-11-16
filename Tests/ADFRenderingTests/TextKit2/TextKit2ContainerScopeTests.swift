@@ -11,8 +11,8 @@ import ADFPreparation
 /// allow-list stage; the top-level rows reading the same list and rules
 /// (`inheritsRenderer`); the panel shape rule (`panelKeepsRenderer`); and
 /// the view-time rules (`containerGate`). The production allow list holds
-/// the first families (paragraphs and headings, panels, quotes, extension
-/// bodies). Cross-platform.
+/// the families enabled so far (paragraphs and headings, panels, quotes,
+/// extension bodies, expands). Cross-platform.
 @Suite("TextKit 2 container scope: rules")
 struct TextKit2ContainerScopeTests {
     /// The allow list at each stage of the container work (plan §5), and
@@ -218,12 +218,13 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies and captioned media")
+    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies, captioned media and expands")
     func topLevelRowsReadTheAllowList() async throws {
         // Step 3: paragraphs and headings in panels, quotes and extension
-        // bodies; step 8: captions. Each later stage changes this pin
-        // deliberately, with the family it enables.
-        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media])
+        // bodies; step 8: captions; step 5: expands (their open bodies).
+        // Each later stage changes this pin deliberately, with the family
+        // it enables.
+        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand])
         #expect(EnvironmentValues().adfContainerChildKinds == TextKit2Scope.containerChildKinds)
         #expect(EnvironmentValues().adfTextContainerContext == .none)
         #expect(TextKit2Scope.captionsUseTextKit2 == true)
@@ -233,7 +234,8 @@ struct TextKit2ContainerScopeTests {
             let family = Self.family(sample.kind)
             // In the app (the production list): PR 3's rows, and from
             // step 3 panels that pass their shape rule, quotes and bodied
-            // extensions; from step 8 media with a caption.
+            // extensions; from step 8 media with a caption; from step 5
+            // expands and nested expands.
             let pr3: Bool
             switch sample.kind {
             case .richText, .codeBlock: pr3 = true
@@ -243,7 +245,7 @@ struct TextKit2ContainerScopeTests {
             let production: Bool
             switch sample.kind {
             case .panel(_, let children): production = Self.expectedPanelKeeps(children)
-            case .quote: production = true
+            case .quote, .expand: production = true
             case .extensionPlaceholder(_, let body): production = !body.isEmpty
             case .media(let media): production = !(media.caption?.isEmpty ?? true)
             default: production = pr3
@@ -489,6 +491,7 @@ extension TextKit2ContainerScopeTests {
         }
         try #require(model.phase == .ready)
         model.expandedBlocks.formUnion(openExpands)
+        let reachesExpands = (allowed ?? TextKit2Scope.containerChildKinds).contains(.expand)
         let document = ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2)
             .transformEnvironment(\.adfContainerChildKinds) { kinds in
                 if let allowed { kinds = allowed }
@@ -496,7 +499,7 @@ extension TextKit2ContainerScopeTests {
         let hosted = TK2CodeLogic.Hosted(document, size: CGSize(width: 390, height: 2_400))
         defer { hosted.close() }
         try await hosted.settle()
-        if !openExpands.isEmpty, allowed != nil, TextKit2Eligibility.containerTextMatchesText {
+        if !openExpands.isEmpty, reachesExpands, TextKit2Eligibility.containerTextMatchesText {
             // The body is prepared off the main actor on first opening.
             for _ in 0..<100 where hosted.rows.isEmpty {
                 try await Task.sleep(for: .milliseconds(20))
@@ -545,22 +548,26 @@ extension TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("tableInExpandBody: a table in an open expand body stays on SwiftUI, beside body prose that migrates once expands are allowed")
+    @Test("tableInExpandBody: a table in an open expand body stays on SwiftUI, beside body prose that migrates (expands are allowed from step 5)")
     @MainActor
     func tableInExpandBody() async throws {
         let cell = "{\"type\":\"tableCell\",\"content\":[\(Self.paragraph("In a cell."))]}"
         let table = "{\"type\":\"table\",\"content\":[{\"type\":\"tableRow\",\"content\":[\(cell),\(cell)]}]}"
-        // The expand sits in a quote, whose boundary reads the (widened)
-        // allow list; a top-level row reads the production list only.
-        let expand = "{\"type\":\"nestedExpand\",\"attrs\":{\"title\":\"Open\"},\"content\":[\(Self.paragraph("Expand body prose.")),\(table)]}"
-        let content = ["{\"type\":\"blockquote\",\"content\":[\(expand)]}"]
-        // With the production list the expand is not a family yet: nothing.
-        let production = try await Self.hostedOwners(content, openExpands: ["0.0.0"])
-        #expect(production.all.isEmpty, "\(production.all.sorted())")
-        // Expands allowed: the body's paragraph migrates, the table does not.
-        let widened = try await Self.hostedOwners(content, allowed: Set(TextKit2BlockKind.allCases), openExpands: ["0.0.0"])
-        #expect(widened.container == Self.passing(["0.0.0.0"]), "\(widened.all.sorted())")
-        #expect(widened.all.allSatisfy { !$0.hasPrefix("0.0.0.1") }, "a table cell drew on TextKit 2: \(widened.all.sorted())")
+        // A nested expand in a quote (its boundary reads the allow list),
+        // and a top-level expand holding the same body (its row reads the
+        // production list, `inheritsRenderer`).
+        let nested = "{\"type\":\"nestedExpand\",\"attrs\":{\"title\":\"Open\"},\"content\":[\(Self.paragraph("Expand body prose.")),\(table)]}"
+        let root = "{\"type\":\"expand\",\"attrs\":{\"title\":\"Open root\"},\"content\":[\(Self.paragraph("Root expand prose.")),\(table)]}"
+        let content = ["{\"type\":\"blockquote\",\"content\":[\(nested)]}", root]
+        #expect(TextKit2Scope.containerChildKinds.contains(.expand), "expands are in the production list from step 5")
+        // The production list and every kind alike: each body's paragraph
+        // migrates, no table cell does.
+        for allowed in [nil, Set(TextKit2BlockKind.allCases)] {
+            let owners = try await Self.hostedOwners(content, allowed: allowed, openExpands: ["0.0.0", "0.1"])
+            #expect(owners.container == Self.passing(["0.0.0.0", "0.1.0"]), "\(String(describing: allowed)): \(owners.all.sorted())")
+            #expect(owners.all.allSatisfy { !$0.hasPrefix("0.0.0.1") && !$0.hasPrefix("0.1.1") },
+                    "\(String(describing: allowed)): a table cell drew on TextKit 2: \(owners.all.sorted())")
+        }
     }
 
     @Test("pluginBlockInPanel: a plugin block in a panel draws its own view; the panel's paragraph beside it migrates")

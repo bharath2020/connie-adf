@@ -38,37 +38,37 @@ enum ContainerLifecycleLimits {
     /// (so it includes XCUITest's idle wait and event synthesis, about
     /// 0.35 s, in both arms) to `CE-TALL-300` existing in the accessibility
     /// tree, polled every 50 ms; arm C's median of five launches must not
-    /// exceed it. Frozen 2026-11-16 from the B-only pilot below:
-    /// median 0.45888 s, range 0.01516 s, so max(2 × 0.45888,
-    /// 0.45888 + 2 × 0.01516) = 0.91777 s, rounded to the millisecond.
-    static let m2MountSeconds: Double? = 0.918
+    /// exceed it. Frozen 2026-11-16 (step 5) from the B-only pilot below:
+    /// median 0.44574 s, range 0.01360 s, so max(2 × 0.44574,
+    /// 0.44574 + 2 × 0.01360) = 0.89147 s, rounded to the millisecond.
+    static let m2MountSeconds: Double? = 0.891
     /// The B-only pilot samples `m2MountSeconds` was computed from, seconds
     /// (five SwiftUI launches with `-rebuildControlPicks 1`).
-    static let m2PilotSamples: [Double] = [0.449, 0.461, 0.460, 0.459, 0.446]
+    static let m2PilotSamples: [Double] = [0.454, 0.441, 0.446, 0.454, 0.444]
 
     // MARK: K7 — CE-OPEN open time (testK7ExpandOpenCloseCycles)
 
     /// Wall time, in seconds, from just before the tap on a `CE-OPEN-n`
     /// title to its last body paragraph existing, polled every 50 ms (first
     /// opens and reopens, ten per arm); arm C's median must not exceed it.
-    /// Frozen 2026-11-16 from the B-only pilot below: median 0.4015 s,
-    /// range 0.804 s, so max(2 × 0.4015, 0.4015 + 2 × 0.804) = 2.00889 s,
-    /// rounded to the millisecond. The range term dominates: the host was
-    /// shared (load average 8.5 at the start, 27 at the end).
-    static let k7OpenSeconds: Double? = 2.009
+    /// Frozen 2026-11-16 (step 5) from the B-only pilot below: median
+    /// 0.40011 s, range 0.88179 s, so max(2 × 0.40011, 0.40011 + 2 ×
+    /// 0.88179) = 2.16370 s, rounded to the millisecond. The range term
+    /// dominates: CE-OPEN-3's open and reopen take about 1.2 s on SwiftUI
+    /// (as in the first pilot), the others about 0.4 s.
+    static let k7OpenSeconds: Double? = 2.164
     /// The B-only pilot samples `k7OpenSeconds` was computed from, seconds,
     /// in cycle order (open, reopen for CE-OPEN-1 … 5).
-    static let k7PilotSamples: [Double] = [0.383, 0.388, 0.544, 0.396, 0.884, 1.187, 0.475, 0.391, 0.407, 0.393]
+    static let k7PilotSamples: [Double] = [0.381, 0.386, 0.430, 0.396, 1.263, 1.182, 0.417, 0.384, 0.392, 0.404]
 
     /// How the values above were derived (recorded with every K7/K8 run).
-    static let provenance = "B-only pilots, 2026-11-16, Release build-for-testing of the worktree at e69ef0f with "
-        + "step 2's then-uncommitted edits and the PR 4 UI tests (app executable sha256 d98b65fa…, no container "
-        + "family enabled), iPhone 17 Pro iOS 26.3 sim cadf3-tk2-stack-04-17pro-c, Scripts/lifecycle-gate.sh "
-        + "--allow-other-booted (shared host: other simulators booted, so provisional). M2: --only testK8, "
-        + "02:00–02:04Z, five SwiftUI launches (a first run, timed with waitForExistence, was killed by an "
-        + "outside SIGTERM in launch 2 and is not used). "
-        + "K7: --only testK7, 02:34–02:44Z, one SwiftUI launch, ten opens; an earlier complete K7 pilot "
-        + "(02:16–02:32Z, load average 15–17; samples 0.385, 0.386, 0.434, 0.394, 3.494, 2.095, 0.789, 0.712, "
-        + "0.910, 0.418, formula 6.791 s) was superseded because the test changed after it (cycles now end "
-        + "closed, footprint read as C minus B). Both limits predate any arm-C timing."
+    static let provenance = "B-only pilots, 2026-11-16, step 5: Release build-for-testing of an export of b1b829c "
+        + "with the step 5 patch (expands on the container allow list; app executable sha256 fe307fda…), iPhone 17 Pro "
+        + "iOS 26.3 sim cadf3-tk2-stack-04-17pro-c, Scripts/lifecycle-gate.sh --skip-build --allow-other-booted "
+        + "(shared host: two other simulators booted, so provisional; load average 5.5 → 3.7 for M2, 3.3 → 4.2 "
+        + "for K7). M2: --only testK8, 13:17–13:21Z, five SwiftUI launches. K7: --only testK7, 13:21–13:30Z, one "
+        + "SwiftUI launch, ten opens. Each replaced the uitests helper's earlier pilot of the same test (M2 0.918 s "
+        + "from 0.449, 0.461, 0.460, 0.459, 0.446; K7 2.009 s from 0.383, 0.388, 0.544, 0.396, 0.884, 1.187, "
+        + "0.475, 0.391, 0.407, 0.393, load average 8.5 → 27), whatever the direction, so no run was picked. "
+        + "Both limits predate any arm-C timing of the tall body and of the CE-OPEN cycles."
 }

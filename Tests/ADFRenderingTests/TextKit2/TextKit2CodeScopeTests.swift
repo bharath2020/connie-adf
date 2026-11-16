@@ -158,12 +158,13 @@ struct TextKit2CodeScopeRuleTests {
             case .listRows:
                 #expect(block.id == "0.1")
                 #expect(inherits, "\(block.id): the list keeps the choice for its own text")
-            case .panel, .quote:
+            case .panel, .quote, .expand:
                 // From PR 4 step 3 the panel (its body passes the shape
-                // rule) and the quote keep the choice for their prose; the
-                // code in them is not in the allow list yet.
-                #expect(["0.2", "0.4"].contains(block.id), "\(block.id)")
-                #expect(inherits, "\(block.id): panels and quotes are in the container allow list")
+                // rule) and the quote keep the choice for their prose, and
+                // from step 5 the expand for its open body's; the code in
+                // them is not in the allow list yet.
+                #expect(["0.2", "0.3", "0.4"].contains(block.id), "\(block.id)")
+                #expect(inherits, "\(block.id): panels, quotes and expands are in the container allow list")
             default:
                 #expect(!inherits, "\(block.id): a container must reset the choice")
             }
@@ -173,7 +174,7 @@ struct TextKit2CodeScopeRuleTests {
             default: children = []
             }
             for child in children where TextKit2CodeCoverageTests.isCode(child) {
-                for parent in [TextKit2ContainerParent.panel, .quote] {
+                for parent in [TextKit2ContainerParent.panel, .quote, .expandBody] {
                     let renderer = TextKit2Scope.childRenderer(
                         for: child.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight
                     )

@@ -2742,13 +2742,16 @@ final class LifecycleUITests: XCTestCase {
 extension LifecycleUITests {
     // MARK: Shared K helpers
 
-    /// Top edge (points) of every leaf in `leaves` fully inside the
-    /// viewport, by sentinel: the first element whose label starts with
-    /// the leaf's prefix.
+    /// Top edge (points) of every leaf in `leaves` in the snapshot, by
+    /// sentinel: the first element whose label starts with the leaf's
+    /// prefix. Read from every element, not only those fully inside the
+    /// viewport: K2's park leaves the outer title (its anchor) under the
+    /// navigation bar, and an accessibility frame is the element's full
+    /// frame there too (as `CodeGeometry` reads it).
     private static func kTops(_ snapshot: DocumentSnapshot, _ leaves: [ContainerLeaf]) -> [String: CGFloat] {
         var tops: [String: CGFloat] = [:]
         for leaf in leaves {
-            if let node = snapshot.visible.first(where: { $0.label.hasPrefix(leaf.prefix) }) {
+            if let node = snapshot.all.first(where: { $0.label.hasPrefix(leaf.prefix) }) {
                 tops[leaf.sentinel] = node.frame.minY
             }
         }
@@ -3240,8 +3243,11 @@ extension LifecycleUITests {
     // MARK: K4 — load and search
 
     /// K4 (plan §8.3), one launch on containers-parity:
-    /// `-switchDuringLoad` flips to TextKit 2 on the first streamed chunk
-    /// (`load-switch-blocks` < 87, `load-ready-blocks` == 87), landing on
+    /// `-switchDuringLoad` flips to TextKit 2 on the first block-count
+    /// change the reader sees while the document still loads; once
+    /// streaming has finished, `load-switch-blocks` is between 1 and the
+    /// document's full count and `load-ready-blocks` is the full count, 87
+    /// (call E9: how many blocks the switch sees is harness timing), landing on
     /// the panel at KP-NEG-PLUGIN-P (0.83.0), which must be a TextKit 2
     /// row. A task inside a quote (0.64.2.0) is toggled on TextKit 2 and
     /// keeps its state over OFF and ON. A search for
@@ -3264,14 +3270,27 @@ extension LifecycleUITests {
         let landed = driver.element(plugin).waitForExistence(timeout: 30)
         if !landed { failures.append("did not land on \(plugin)") }
         if !driver.isTextKit2(plugin) { failures.append("\(plugin) is not a TextKit 2 row after the load") }
+        // The switch during the load (call E9). `-switchDuringLoad` flips on
+        // the first block-count change the reader observes before READY, so
+        // it is a switch during the load by construction. How many blocks
+        // that first observation sees is harness timing, not the renderer:
+        // containers-parity streams in two chunks, and both can be appended
+        // before SwiftUI delivers the count change, so the switch may see
+        // every block. So the counts are read once streaming has finished
+        // (the ready count is recorded at READY; the reader waits for it
+        // below) and the switch's count is compared against the document's
+        // full count: at least one block, at most all of them. Whether the
+        // switch came before the last chunk is recorded, not gated.
         reader.openAbout()
         let switchField = reader.app.staticTexts[ReaderDriver.Identifier.loadSwitchBlocks]
         let readyField = reader.app.staticTexts[ReaderDriver.Identifier.loadReadyBlocks]
+        let atReady = readyField.waitForExistence(timeout: 30) ? Int(readyField.label) ?? -1 : -1
         let atSwitch = switchField.waitForExistence(timeout: 5) ? Int(switchField.label) ?? -1 : -1
-        let atReady = readyField.waitForExistence(timeout: 5) ? Int(readyField.label) ?? -1 : -1
         reader.closeAbout()
-        if !(atSwitch > 0 && atSwitch < KP.preparedBlocks) { failures.append("blocks at the switch: \(atSwitch)") }
-        if atReady != KP.preparedBlocks { failures.append("blocks at READY: \(atReady)") }
+        if atReady != KP.preparedBlocks { failures.append("blocks at READY: \(atReady), expected \(KP.preparedBlocks)") }
+        if !(atSwitch > 0 && atSwitch <= atReady) {
+            failures.append("blocks at the switch: \(atSwitch), expected 1…\(atReady) (the full count once streamed)")
+        }
 
         // Task state across switches.
         driver.jump(toHeading: KP.s9, settleDrag: 0)
@@ -3333,6 +3352,7 @@ extension LifecycleUITests {
 
         try agent.record("K4 switch during load, task state and search in containers", pass: failures.isEmpty, [
             "blocks_at_switch": atSwitch, "blocks_at_ready": atReady, "total_blocks": KP.preparedBlocks,
+            "switch_before_last_chunk": atSwitch > 0 && atSwitch < atReady,
             "landed_owner": plugin.owner, "task_owner": KP.taskOpen.owner, "task_states_off_on": taskStates,
             "search_owner": match.owner, "search_neighbour": neighbour.owner, "chain_values": chain,
             "caption_owner": caption.owner, "caption_neighbour": next.owner, "failures": failures,

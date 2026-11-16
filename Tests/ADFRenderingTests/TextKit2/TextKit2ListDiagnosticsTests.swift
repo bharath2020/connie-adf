@@ -66,12 +66,14 @@ struct TextKit2ListCoverageTests {
         // columns is out of scope. Container text (step 3): none. The panel
         // 0.14 holds a list, so its whole body stays on SwiftUI
         // (`panelKeepsRenderer`); the quote 0.15 holds only a list, which
-        // joins with nested lists.
+        // joins with nested lists. The expand 0.17 is reported unprepared
+        // (step 5: its body is prepared on opening).
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 8, fallbackRoots: 13, textFallbackRoots: 0, linkRoots: 0,
             eligibleTextLeaves: 48, linkedTextLeaves: 3, fallbackTextLeaves: 6,
             listLeaderLeaves: 46, listTrailingLeaves: 0,
-            eligibleContainerLeaves: 0, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0
+            eligibleContainerLeaves: 0, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0,
+            unpreparedExpands: 1
         ), rootLeaves: (8, 0)))
     }
 
@@ -112,11 +114,11 @@ struct TextKit2ListCoverageTests {
         // is an eligible code root: counted apart, in none of the text
         // counts, and still one of the 28 legacy fallback roots. Container
         // text (step 3): the paragraphs of the seven panels, the quote and
-        // the bodied extension, all plain; the column paragraphs and the
-        // expand wait for their families. The captioned image (0.23, "A
-        // captioned sunset") is one caption leaf, eligible from iOS 26
-        // (`osGatedContainer` before); the wide image after it has no
-        // caption.
+        // the bodied extension, all plain; the column paragraphs wait for
+        // their family. The expand 0.22 is reported unprepared (step 5).
+        // The captioned image (0.23, "A captioned sunset") is one caption
+        // leaf, eligible from iOS 26 (`osGatedContainer` before); the wide
+        // image after it has no caption.
         let captions = TextKit2Eligibility.containerTextMatchesText
         #expect(blocks.count == 38)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
@@ -125,7 +127,8 @@ struct TextKit2ListCoverageTests {
             listLeaderLeaves: 8, listTrailingLeaves: 0,
             eligibleCodeRoots: 1, fallbackCodeRoots: 0,
             eligibleContainerLeaves: 9, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0,
-            eligibleCaptionLeaves: captions ? 1 : 0, fallbackCaptionLeaves: captions ? 0 : 1
+            eligibleCaptionLeaves: captions ? 1 : 0, fallbackCaptionLeaves: captions ? 0 : 1,
+            unpreparedExpands: 1
         ), rootLeaves: (10, 1)))
     }
 

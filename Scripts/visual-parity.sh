@@ -226,6 +226,9 @@
 #                @0.4425 block 38, KP-S5: extension body 0.39
 #                @0.8103 block 70, KP-S10: panel 0.71, prose beside a code
 #                        block, stays on SwiftUI (the panel shape rule)
+#              Step 5 (expand bodies): containers-parity
+#                @0.6609 block 57, KP-S8: expands 0.58 and 0.59 and the
+#                        column's nested expand closed (no body row)
 #              Step 8 (captions): captions-parity (25 prepared blocks)
 #                @0.14   block 3: CAP-03 plain, CAP-04 marks
 #                @0.30   block 7: CAP-07 colour/highlight, CAP-08 placeholder
@@ -454,6 +457,15 @@ CONTAINER_CAPTURES_DEFAULT=(
     # stays on SwiftUI; no TextKit 2 container row is on screen (the quote,
     # panel and extension below it hold only code).
     "containers-parity@0.8103=container:fallback;0.71.0=swiftui;land=0.70"
+    # Step 5, expand bodies. KP-S8 at launch: expands 0.58 (a nested
+    # expand inside) and 0.59 closed, and the 50/50 section 0.60 (a
+    # closed nested expand in its first column). A closed body mounts no
+    # row, so its owners stay on SwiftUI on arm C; the column paragraphs
+    # stay on SwiftUI until columns join the allow list (step 4, which
+    # turns this capture positive for 0.60.0.0 and 0.60.1.0). Opened
+    # bodies get no three-arm crop (plan §7.4, P15): the hosted
+    # expandBody and nestedExpandBody suites are their proof.
+    "containers-parity@0.6609=container:fallback;0.58.0=swiftui,0.58.3.0=swiftui,0.59.0.0=swiftui,0.60.0.0=swiftui,0.60.1.0=swiftui;land=0.57"
     # Captions (step 8): captions-parity, 25 prepared blocks (`Int(f x 25)`).
     # Each landing, owner and live caption row was checked on the enabled
     # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions

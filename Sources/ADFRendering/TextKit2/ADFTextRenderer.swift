@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Which text engine draws top-level paragraphs and headings, the text of
 /// top-level lists, the code of top-level code blocks, and the paragraphs
-/// and headings in panels, quotes and extension bodies.
+/// and headings in panels, quotes, extension bodies and open expand bodies.
 ///
 /// `.swiftUI` is the shipping path (`Text(AttributedString)`). `.textKit2`
 /// routes plain (atom-free) top-level paragraphs and headings, the
@@ -27,12 +27,15 @@ import SwiftUI
 /// laid out right to left, matched by the active search, or would need a
 /// drawing surface over the admission caps at the current text size.
 ///
-/// From iOS 26, paragraphs and headings in a panel, a quote or a bodied
-/// extension, and in those nested in one another, go to TextKit 2 too; the
-/// container's icon, bar, fill, border, padding and title stay SwiftUI. A
-/// panel whose body holds a list, a heading, or a sub/superscript or
-/// small-text run or a code block beside another block keeps its whole
-/// body on SwiftUI.
+/// From iOS 26, paragraphs and headings in a panel, a quote, a bodied
+/// extension or an open expand's (or nested expand's) body, and in those
+/// nested in one another, go to TextKit 2 too; the container's icon, bar,
+/// fill, border, padding and title (an expand's title and chevron
+/// included) stay SwiftUI. A panel whose body holds a list, a heading, or a
+/// sub/superscript or small-text run or a code block beside another block
+/// keeps its whole body on SwiftUI. An expand body is prepared when it
+/// opens, as before; the renderer never starts or restarts that
+/// preparation.
 ///
 /// A media caption's text follows the setting from iOS 26 when its text
 /// is eligible and its media is in scope (a top-level row, or a child a
@@ -40,9 +43,9 @@ import SwiftUI
 /// secondary foreground; the media box is SwiftUI.
 ///
 /// Everything else stays on SwiftUI regardless of the setting: layout
-/// columns, expands, the lists and code inside any container, table
-/// cells, and atom-bearing text. On platforms without UIKit, `.textKit2`
-/// behaves as `.swiftUI`.
+/// columns, the lists and code inside any container, table cells, and
+/// atom-bearing text. On platforms without UIKit, `.textKit2` behaves as
+/// `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
     case swiftUI = "swiftui"
     case textKit2 = "textkit2"
