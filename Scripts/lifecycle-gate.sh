@@ -11,7 +11,7 @@
 # USAGE
 #   Scripts/lifecycle-gate.sh --udid <UDID> --out <dir>
 #       [--derived-data <dir>] [--skip-build] [--only <test>]...
-#       [--suite-timeout 13800] [--xcodebuild-grace 120] [--keep-booted]
+#       [--suite-timeout 22600] [--xcodebuild-grace 120] [--keep-booted]
 #       [--allow-other-booted] [--dry-run]
 #
 #   --udid          required; never creates devices; refuses when another
@@ -76,12 +76,42 @@
 #                   thrash, 60 s soak; ~4 each),
 #                   testC6TwentyFlipsCodeDense (C6: test7's design on
 #                   code-dense, live code rows 0 after every OFF, ~30 min);
-#                   PR 4 containers (PR 4 plan §8.2, CONTAINER_TESTS; the
-#                   testK names, each with its fixture, section and
-#                   duration): none yet — each step that writes a K test
-#                   adds it here and to CONTAINER_TESTS in one commit.
+#                   PR 4 containers (PR 4 plan §8.2, CONTAINER_TESTS):
+#                   testK1SwitchRoundTripsAtContainerLandmarks (8.2 K1:
+#                   five ON/OFF round trips at panel, quote, column and
+#                   open-expand landmarks of containers-parity, then a
+#                   caption of captions-parity; ~6 min),
+#                   testK2OpenExpandRoundTripAcrossSwitch (K2: an open
+#                   outer and nested expand of containers-parity away and
+#                   back across a switch, both directions, plus a panned
+#                   code child; ~8 min),
+#                   testK3WidthAndTypeSizeChangesInContainers (K3: rotation
+#                   and Text Size 0 → 3 → 0 at the columns of
+#                   containers-parity, per arm; ~10 min),
+#                   testK4SwitchDuringLoadAndSearchInContainers (K4: a
+#                   switch during the streaming load, task state, a search
+#                   in a nested expand and in a caption; ~4 min),
+#                   testK5aFlingOpenExpandsSwiftUI,
+#                   testK5bFlingOpenExpandsTextKit2 (K5: end-to-end flings
+#                   over containers-expand with five expands open, scene
+#                   thrash, 60 s soak, then a walk of the open bodies;
+#                   ~6 each),
+#                   testK6TwentyFlipsContainers (K6: test7's design on
+#                   containers-expand with CE-OPEN-1 open, live rows 0 after
+#                   the closing OFF; ~35 min),
+#                   testK7ExpandOpenCloseCycles (K7: five open/close/reopen
+#                   cycles of each CE-OPEN expand, per arm, open time and
+#                   footprint growth; ~14 min),
+#                   testK8TallExpandMountAndFlip (K8: the 300-paragraph
+#                   CE-TALL expand mounted and flipped, five launches per
+#                   arm alternating, M2-M4; ~15 min),
+#                   testK10aFlingThrashSoakContainersSwiftUI,
+#                   testK10bFlingThrashSoakContainersTextKit2 (K10: test5's
+#                   fling, thrash and soak on containers-dense plus the
+#                   container census; ~4 each).
 #                   testK1 never selects testK10a (the short-name rule
-#                   above).
+#                   above). K9 (MediaRowGuardUITests) is not in the list:
+#                   --only MediaRowGuardUITests/testK9MediaRowScrollBackSettles.
 #   --dry-run       print the plan; touch no simulator, run no xcodebuild.
 #                   With a built --derived-data it also checks that the
 #                   UI-test bundle holds every selected test.
@@ -91,11 +121,13 @@
 # usage errors and when the built UI-test bundle lacks a selected test (the
 # run then stops before the device is touched). Estimated duration: ~43 min
 # for tests 1-8 (test7 ~30, the two soak tests ~3 each) + ~70 min for the
-# list tests (testL6 ~30) + ~61 min for the code tests (testC6 ~30) = ~176
-# min, plus ~4 min for a fresh build; the default --suite-timeout (13800 s)
-# leaves room for a loaded host. A failed check whose record carries
-# failure_class (a no-switch control drift over 2 px) is the known lifecycle
-# flake (Fable F16): rerun it with --only; limits are never re-tuned.
+# list tests (testL6 ~30) + ~61 min for the code tests (testC6 ~30) + ~112
+# min for the container tests (testK6 ~35) = ~288 min, plus ~4 min for a
+# fresh build; the default --suite-timeout (22600 s, the 13800 s that
+# covered ~176 min scaled to ~288) leaves room for a loaded host. A failed
+# check whose record carries failure_class (a no-switch control drift over
+# 2 px) is the known lifecycle flake (Fable F16): rerun it with --only;
+# limits are never re-tuned.
 #
 # bash 3.2 compatible; needs Xcode, xcodegen, python3.
 set -euo pipefail
@@ -120,10 +152,10 @@ CODE_TESTS="testC1CodeFiveRoundTripsCodeDense testC1bCodeFiveRoundTripsPannedWid
 # above, SUITE_TIMEOUT (sized from the estimate above plus the test's pilot
 # duration) and the pins of Scripts/tests/gate-scripts-tests.sh
 # (CONTAINER_TESTS_EXPECTED, EXPECTED_SUITE_TIMEOUT).
-CONTAINER_TESTS=""
+CONTAINER_TESTS="testK1SwitchRoundTripsAtContainerLandmarks testK2OpenExpandRoundTripAcrossSwitch testK3WidthAndTypeSizeChangesInContainers testK4SwitchDuringLoadAndSearchInContainers testK5aFlingOpenExpandsSwiftUI testK5bFlingOpenExpandsTextKit2 testK6TwentyFlipsContainers testK7ExpandOpenCloseCycles testK8TallExpandMountAndFlip testK10aFlingThrashSoakContainersSwiftUI testK10bFlingThrashSoakContainersTextKit2"
 ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense $CODE_TESTS${CONTAINER_TESTS:+ $CONTAINER_TESTS}"
 
-UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=13800; GRACE=120
+UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=22600; GRACE=120
 KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }

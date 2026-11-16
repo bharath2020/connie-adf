@@ -119,8 +119,57 @@ final class TextKit2RowClassifierTests: XCTestCase {
                        ["unclassified TextKit 2 rows (owner table: containers-dense): 0.6.0"])
     }
 
+    /// A table's `root` owners (a sync block's children, emitted as
+    /// top-level blocks) are root rows, exactly and with their `#`
+    /// continuations; anything below them is not.
+    func testRootExtrasAreRoot() {
+        let table = RowOwnerTable(container: ["0.4"], list: ["0.84"], root: ["0.43.0"])
+        let result = census([("0.43.0", false), ("0.43.0#cont1", false), ("0.43.0.1", false), ("0.4.0", false)],
+                            table: table)
+        XCTAssertEqual(result.owners(.root), ["0.43.0", "0.43.0#cont1"])
+        XCTAssertEqual(result.owners(.container), ["0.4.0"])
+        XCTAssertEqual(result.unclassified, ["0.43.0.1"])
+    }
+
+    /// A caption inside a container (a captioned image in a panel, column or
+    /// expand: captions-parity CAP-12..14, every stress caption) is a
+    /// caption row: the census checks caption before container.
+    func testCaptionInsideAContainerIsCaption() {
+        let table = RowOwnerTable(container: ["0.13"], caption: ["0.13.1.0"], list: [])
+        let result = census([("0.13.1.0", false), ("0.13.0", false)], table: table)
+        XCTAssertEqual(result.owners(.caption), ["0.13.1.0"])
+        XCTAssertEqual(result.owners(.container), ["0.13.0"])
+    }
+
+    /// PR 4's fixtures and the inherited fixtures holding containers or
+    /// captions all have a table (without one a container row would count
+    /// as a list row), with an explicit list class.
+    func testInheritedAndPR4FixturesHaveTables() {
+        for fixture in ["containers-parity", "containers-dense", "containers-expand", "captions-parity",
+                        "kitchen-sink", "lists-parity", "code-parity", "media-gallery", "stress-1k", "stress-5k"]
+        {
+            let table = RowOwnerTable.byFixture[fixture]
+            XCTAssertNotNil(table, "\(fixture) has no owner table")
+            XCTAssertNotNil(table?.list, "\(fixture)'s table leaves list nil")
+        }
+        // Spot checks against the fixtures (landmarks.md).
+        let parity = RowOwnerTable.byFixture["containers-parity"]
+        XCTAssertEqual(TextKit2RowCensus.classify(owner: "0.11.2", inNestedScroll: false, table: parity), .container)
+        XCTAssertEqual(TextKit2RowCensus.classify(owner: "0.58.3.0", inNestedScroll: false, table: parity), .container)
+        XCTAssertEqual(TextKit2RowCensus.classify(owner: "0.64.2.0", inNestedScroll: false, table: parity), .container)
+        XCTAssertEqual(TextKit2RowCensus.classify(owner: "0.43.0", inNestedScroll: false, table: parity), .root)
+        XCTAssertEqual(TextKit2RowCensus.classify(owner: "0.84.0.0", inNestedScroll: false, table: parity), .list)
+        let stress = RowOwnerTable.byFixture["stress-5k"]
+        XCTAssertEqual(stress?.container.count, 1_300)
+        XCTAssertEqual(stress?.caption.count, 50)
+        XCTAssertEqual(stress?.caption.first, "0.95.0.0")
+        XCTAssertEqual(RowOwnerTable.byFixture["containers-dense"]?.container.count, 840)
+    }
+
     /// Every registered owner table is self-consistent: no owner prefix is
-    /// in two classes, and nested lists sit inside a container entry.
+    /// in two classes (a caption may sit inside a container: the census
+    /// checks caption first), nested lists sit inside a container entry,
+    /// and root owners are in no other class.
     func testRegisteredOwnerTablesAreConsistent() {
         for (fixture, table) in RowOwnerTable.byFixture {
             let lists = table.list ?? []
@@ -132,8 +181,11 @@ final class TextKit2RowClassifierTests: XCTestCase {
                 XCTAssertFalse(RowOwnerTable.covers(table.container, entry), "\(fixture): list \(entry) is in a container")
             }
             for entry in table.caption {
-                XCTAssertFalse(RowOwnerTable.covers(table.container + lists, entry),
-                               "\(fixture): caption \(entry) is also container or list")
+                XCTAssertFalse(RowOwnerTable.covers(lists, entry), "\(fixture): caption \(entry) is inside a list")
+            }
+            for entry in table.root {
+                XCTAssertFalse(RowOwnerTable.covers(table.container + table.caption + lists, entry),
+                               "\(fixture): root owner \(entry) is also in another class")
             }
             for entry in table.containerList {
                 XCTAssertTrue(RowOwnerTable.covers(table.container, entry),

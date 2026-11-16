@@ -975,21 +975,41 @@ struct RowOwnerTable: Sendable {
     /// nowhere else is a list row, which is right only for a table that
     /// names every container and caption owner of the fixture.
     var list: [String]?
+    /// Prepared top-level text blocks whose owner is not of the `0.<n>`
+    /// form: the children of a transparent sync block (`0.43.0`), which the
+    /// preparer emits as top-level blocks (owner kind root, no context).
+    /// Exact owners (and their `#` continuations), never prefixes.
+    var root: [String] = []
 
     /// Whether `owner` is one of `prefixes` or below one of them.
     static func covers(_ prefixes: [String], _ owner: String) -> Bool {
         prefixes.contains { owner == $0 || owner.hasPrefix($0 + ".") || owner.hasPrefix($0 + "#") }
     }
 
-    /// The owner tables by fixture name. A fixture without one is
+    /// Whether `owner` is one of `table.root`'s owners.
+    static func isRootExtra(_ owner: String, _ table: RowOwnerTable) -> Bool {
+        table.root.contains { owner == $0 || owner.hasPrefix($0 + "#") }
+    }
+
+    /// The owner tables by fixture name (`RowOwnerTables.swift`, written
+    /// from each fixture's structure). A fixture without one is
     /// container-free for the census: every row that is neither code nor
-    /// root is a list row (the PR 2/PR 3 meaning). Each PR 4 step that adds
-    /// a fixture with containers or captions adds its table here in the
-    /// same commit; kitchen-sink, stress-1k, stress-5k, lists-parity and
-    /// code-parity hold containers too and need theirs from the step whose
-    /// family first draws their container text on TextKit 2 (without one,
-    /// a container row would count as a list row).
-    static let byFixture: [String: RowOwnerTable] = [:]
+    /// root is a list row (the PR 2/PR 3 meaning). PR 4's fixtures and every
+    /// inherited fixture that holds container or caption text have one, so
+    /// a container row never counts as a list row once its family draws on
+    /// TextKit 2; list-dense, code-dense and code-tall hold neither.
+    static let byFixture: [String: RowOwnerTable] = [
+        "containers-parity": containersParity,
+        "containers-dense": containersDense,
+        "containers-expand": containersExpand,
+        "captions-parity": captionsParity,
+        "kitchen-sink": kitchenSink,
+        "lists-parity": listsParity,
+        "code-parity": codeParity,
+        "media-gallery": mediaGallery,
+        "stress-1k": stress1k,
+        "stress-5k": stress5k,
+    ]
 }
 
 /// The live counters a census is checked against (About sheet;
@@ -1043,14 +1063,16 @@ struct TextKit2RowCensus: Sendable {
 
     /// The class of one row (nil: the owner table places it nowhere). In
     /// order: code (inside a nested scroll view, whatever the owner's
-    /// form); root (a root-form owner `0.<n>`: a top-level block's own
-    /// text is never container or caption text); caption and container by
+    /// form); root (a root-form owner `0.<n>`, or one of the table's
+    /// `root` owners: a top-level block's own text is never container or
+    /// caption text); caption and container by
     /// the table; list (the table's lists, or every remaining row when
     /// there is no table or the table leaves `list` nil).
     static func classify(owner: String, inNestedScroll: Bool, table: RowOwnerTable?) -> TextKit2RowClass? {
         if inNestedScroll { return .code }
         if isRootOwner(owner) { return .root }
         guard let table else { return .list }
+        if RowOwnerTable.isRootExtra(owner, table) { return .root }
         if RowOwnerTable.covers(table.caption, owner) { return .caption }
         if RowOwnerTable.covers(table.container, owner) || RowOwnerTable.covers(table.containerList, owner) {
             return .container

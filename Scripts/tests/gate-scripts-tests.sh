@@ -432,8 +432,8 @@ NEW_TESTS="testC1CodeFiveRoundTripsCodeDense testC1bCodeFiveRoundTripsPannedWide
 # pins that move with them. A step that adds a K test changes these three
 # lines with the script, in one commit: the name here, the suite timeout
 # the script sizes for it.
-CONTAINER_TESTS_EXPECTED=""
-EXPECTED_SUITE_TIMEOUT=13800
+CONTAINER_TESTS_EXPECTED="testK1SwitchRoundTripsAtContainerLandmarks testK2OpenExpandRoundTripAcrossSwitch testK3WidthAndTypeSizeChangesInContainers testK4SwitchDuringLoadAndSearchInContainers testK5aFlingOpenExpandsSwiftUI testK5bFlingOpenExpandsTextKit2 testK6TwentyFlipsContainers testK7ExpandOpenCloseCycles testK8TallExpandMountAndFlip testK10aFlingThrashSoakContainersSwiftUI testK10bFlingThrashSoakContainersTextKit2"
+EXPECTED_SUITE_TIMEOUT=22600
 # shellcheck disable=SC2086  # word list
 set -- $OLD_TESTS $NEW_TESTS $CONTAINER_TESTS_EXPECTED
 EXPECTED_COUNT=$#
@@ -486,12 +486,18 @@ resolves testC5a testC5aFlingThrashSoakCodeDenseSwiftUI
 resolves testC5b testC5bFlingThrashSoakCodeDenseTextKit2
 resolves testC6 testC6TwentyFlipsCodeDense
 resolves testC6TwentyFlipsCodeDense testC6TwentyFlipsCodeDense
+resolves testK1 testK1SwitchRoundTripsAtContainerLandmarks
+resolves testK2 testK2OpenExpandRoundTripAcrossSwitch
+resolves testK5b testK5bFlingOpenExpandsTextKit2
+resolves testK8 testK8TallExpandMountAndFlip
+resolves testK10a testK10aFlingThrashSoakContainersSwiftUI
+resolves MediaRowGuardUITests/testK9MediaRowScrollBackSettles MediaRowGuardUITests/testK9MediaRowScrollBackSettles
 resolves test1 test1CollapseRoundTripKeepsRows
 resolves testL1 testL1ListFiveRoundTripsAtParkedPositions
 resolves testL1b testL1bListFiveRoundTripsListDense
 resolves LifecycleUITests/testC4 testC4CodeSwitchDuringStreamingLoad
 resolves CodeRendererUITests/testCopyPutsExactCodeOnPasteboard CodeRendererUITests/testCopyPutsExactCodeOnPasteboard
-for unknown in testC5 testL3 testC7 testC testc1 C1 "CodeRendererUITests/copy" "A/B/testX" "LifecycleUITests/testNope" 'test*'; do
+for unknown in testC5 testL3 testC7 testC testc1 C1 testK5 testK10 testK9 "CodeRendererUITests/copy" "A/B/testX" "LifecycleUITests/testNope" 'test*'; do
     gate resolve_test "$unknown" >/dev/null 2>&1
     expect_eq "--only '$unknown' is refused" "$?" "1"
 done
