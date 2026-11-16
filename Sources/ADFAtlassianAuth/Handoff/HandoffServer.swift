@@ -11,10 +11,15 @@ import os
 /// listening for good; no → `403` and it keeps listening. Every other
 /// request gets `404` and a ``Event/rejected(peer:path:)`` event. When the
 /// timeout passes the server stops; the outcome is ``Outcome/declined(peer:)``
-/// if someone was declined, otherwise ``Outcome/timedOut``. The server drops
-/// its copy of the sealed bytes once it finishes.
+/// if someone was declined, otherwise ``Outcome/timedOut``. The server zeroes
+/// and drops its copy of the sealed bytes once it finishes.
 ///
-/// While one confirmation is pending, other matching requests get `404`.
+/// While one confirmation is pending, other matching requests get `404`. If
+/// the requesting phone disconnects while the person at the Mac is still
+/// deciding, the confirmation task is cancelled, nothing is served, and the
+/// code stays usable. At most ``maxConnections`` connections are open at a
+/// time (extras are closed at once), and a connection that has not sent a
+/// complete request head within ``headTimeout`` is closed.
 public final class HandoffServer: Sendable {
     public enum Event: Sendable, Equatable {
         /// The listener is ready on this port.
@@ -40,12 +45,26 @@ public final class HandoffServer: Sendable {
     /// The path reported in events for the matching request.
     public static let redactedPath = "/h/\(Redaction.placeholder)"
 
+    /// Default cap on simultaneously open connections.
+    public static let defaultMaxConnections = 8
+
+    /// Default time a connection may take to send its request head.
+    public static let defaultHeadTimeout: Duration = .seconds(10)
+
+    private struct Confirmation: Sendable {
+        let connectionID: ObjectIdentifier
+        var task: Task<Void, Never>?
+    }
+
     private struct State: Sendable {
         var sealed: Data?
         var listener: NWListener?
         var connections: [ObjectIdentifier: NWConnection] = [:]
+        var awaitingHead: Set<ObjectIdentifier> = []
         var started = false
+        /// A confirmation is pending or the 200 is being sent.
         var busy = false
+        var confirming: Confirmation?
         var lastDeclinedPeer: String?
         var outcome: Outcome?
         var waiters: [CheckedContinuation<Outcome, Never>] = []
@@ -57,19 +76,28 @@ public final class HandoffServer: Sendable {
     private let bindHost: String
     private let port: UInt16
     private let timeout: Duration
+    /// Connections beyond this many are closed on arrival.
+    public let maxConnections: Int
+    /// Connections without a complete request head after this are closed.
+    public let headTimeout: Duration
     private let confirm: @Sendable (_ peer: String) async -> Bool
     private let onEvent: @Sendable (Event) -> Void
     private let queue = DispatchQueue(label: "com.connie.adfreader.handoff-server")
     private let state: OSAllocatedUnfairLock<State>
 
     /// - Parameters:
-    ///   - sealed: The `HandoffSeal` box to serve once.
+    ///   - sealed: The `HandoffSeal` box to serve once. The server keeps its
+    ///     own copy and zeroes it when it finishes.
     ///   - bindHost: The IPv4 address to listen on (for example the Mac's
     ///     Wi-Fi address, or `127.0.0.1` in tests).
     ///   - port: 0 picks a free port; ``start()`` returns the real one.
+    ///   - timeout: How long the code stays valid. Keep it below
+    ///     ``HandoffClient/defaultTimeout`` so a phone never gives up first.
     ///   - confirm: Asked for each matching request; return true to send.
+    ///     The task running it is cancelled if the phone disconnects or the
+    ///     server finishes first; the answer is then ignored.
     ///   - onEvent: Called on the server's queue.
-    public init(
+    public convenience init(
         sealed: Data,
         sessionId: String,
         bindHost: String,
@@ -78,22 +106,54 @@ public final class HandoffServer: Sendable {
         confirm: @escaping @Sendable (_ peer: String) async -> Bool,
         onEvent: @escaping @Sendable (Event) -> Void
     ) {
+        self.init(
+            sealed: sealed, sessionId: sessionId, bindHost: bindHost, port: port, timeout: timeout,
+            maxConnections: Self.defaultMaxConnections, headTimeout: Self.defaultHeadTimeout,
+            confirm: confirm, onEvent: onEvent
+        )
+    }
+
+    /// Like the other initializer, with the connection limits exposed.
+    public init(
+        sealed: Data,
+        sessionId: String,
+        bindHost: String,
+        port: UInt16 = 0,
+        timeout: Duration = .seconds(120),
+        maxConnections: Int,
+        headTimeout: Duration,
+        confirm: @escaping @Sendable (_ peer: String) async -> Bool,
+        onEvent: @escaping @Sendable (Event) -> Void
+    ) {
         self.sessionId = sessionId
         self.bindHost = bindHost
         self.port = port
         self.timeout = timeout
+        self.maxConnections = max(1, maxConnections)
+        self.headTimeout = headTimeout
         self.confirm = confirm
         self.onEvent = onEvent
-        self.state = OSAllocatedUnfairLock(initialState: State(sealed: sealed))
+        // A private buffer, so zeroing it later never touches the caller's.
+        var ownCopy = Data(count: sealed.count)
+        ownCopy.withUnsafeMutableBytes { destination in _ = sealed.copyBytes(to: destination) }
+        self.state = OSAllocatedUnfairLock(initialState: State(sealed: ownCopy))
     }
 
     deinit {
-        let leftovers = state.withLock { state -> (NWListener?, [NWConnection], Task<Void, Never>?) in
-            (state.listener, Array(state.connections.values), state.timeoutTask)
+        let leftovers = state.withLock { state -> (NWListener?, [NWConnection], Task<Void, Never>?, Task<Void, Never>?) in
+            state.sealed?.zeroize()
+            state.sealed = nil
+            return (state.listener, Array(state.connections.values), state.timeoutTask, state.confirming?.task)
         }
         leftovers.0?.cancel()
         leftovers.1.forEach { $0.cancel() }
         leftovers.2?.cancel()
+        leftovers.3?.cancel()
+    }
+
+    /// Open connections right now (for tests and diagnostics).
+    var openConnectionCount: Int {
+        state.withLock { $0.connections.count }
     }
 
     // MARK: Lifecycle
@@ -206,35 +266,56 @@ public final class HandoffServer: Sendable {
         finish(declinedPeer.map { .declined(peer: $0) } ?? .timedOut)
     }
 
+    private struct Teardown: Sendable {
+        let listener: NWListener?
+        let connections: [NWConnection]
+        let waiters: [CheckedContinuation<Outcome, Never>]
+        let timeoutTask: Task<Void, Never>?
+        let confirmTask: Task<Void, Never>?
+        let startContinuation: CheckedContinuation<Result<UInt16, HandoffError>, Never>?
+    }
+
     private func finish(_ outcome: Outcome) {
-        let teardown = state.withLock { state -> (NWListener?, [NWConnection], [CheckedContinuation<Outcome, Never>], Task<Void, Never>?, CheckedContinuation<Result<UInt16, HandoffError>, Never>?)? in
+        let teardown = state.withLock { state -> Teardown? in
             guard state.outcome == nil else { return nil }
             state.outcome = outcome
+            state.sealed?.zeroize()
             state.sealed = nil
-            defer {
-                state.listener = nil
-                state.connections = [:]
-                state.waiters = []
-                state.timeoutTask = nil
-                state.startContinuation = nil
-            }
-            return (state.listener, Array(state.connections.values), state.waiters, state.timeoutTask, state.startContinuation)
+            let teardown = Teardown(
+                listener: state.listener,
+                connections: Array(state.connections.values),
+                waiters: state.waiters,
+                timeoutTask: state.timeoutTask,
+                confirmTask: state.confirming?.task,
+                startContinuation: state.startContinuation
+            )
+            state.listener = nil
+            state.connections = [:]
+            state.awaitingHead = []
+            state.waiters = []
+            state.timeoutTask = nil
+            state.confirming = nil
+            state.startContinuation = nil
+            return teardown
         }
         guard let teardown else { return }
-        teardown.0?.cancel()
-        teardown.1.forEach { $0.cancel() }
-        teardown.3?.cancel()
-        teardown.4?.resume(returning: .failure(.listenerFailed("the server stopped before it was ready")))
-        teardown.2.forEach { $0.resume(returning: outcome) }
+        teardown.listener?.cancel()
+        teardown.connections.forEach { $0.cancel() }
+        teardown.timeoutTask?.cancel()
+        teardown.confirmTask?.cancel()
+        teardown.startContinuation?.resume(returning: .failure(.listenerFailed("the server stopped before it was ready")))
+        teardown.waiters.forEach { $0.resume(returning: outcome) }
     }
 
     // MARK: Connections
 
     private func accept(_ connection: NWConnection) {
         let id = ObjectIdentifier(connection)
+        let maxConnections = self.maxConnections
         let accepted = state.withLock { state -> Bool in
-            guard state.outcome == nil else { return false }
+            guard state.outcome == nil, state.connections.count < maxConnections else { return false }
             state.connections[id] = connection
+            state.awaitingHead.insert(id)
             return true
         }
         guard accepted else {
@@ -244,13 +325,33 @@ public final class HandoffServer: Sendable {
         connection.stateUpdateHandler = { [weak self] newState in
             switch newState {
             case .failed, .cancelled:
-                self?.state.withLock { _ = $0.connections.removeValue(forKey: id) }
+                self?.forget(connection)
             default:
                 break
             }
         }
         connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + headTimeout.timeInterval) { [weak self] in
+            let stillWaiting = self?.state.withLock { $0.awaitingHead.remove(id) != nil } ?? false
+            if stillWaiting { connection.cancel() }
+        }
         receiveHead(on: connection, buffer: Data())
+    }
+
+    /// Drops a closed connection; if it was the one being confirmed, the
+    /// confirmation is abandoned and the code becomes usable again.
+    private func forget(_ connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        let abandoned = state.withLock { state -> Task<Void, Never>?? in
+            state.connections.removeValue(forKey: id)
+            state.awaitingHead.remove(id)
+            guard state.confirming?.connectionID == id else { return nil }
+            let task = state.confirming?.task
+            state.confirming = nil
+            state.busy = false
+            return .some(task)
+        }
+        if let abandoned { abandoned?.cancel() }
     }
 
     private func receiveHead(on connection: NWConnection, buffer: Data) {
@@ -262,8 +363,10 @@ public final class HandoffServer: Sendable {
             var buffer = buffer
             if let content { buffer.append(content) }
             if let length = HTTPRequestLine.headLength(in: buffer), length <= HTTPRequestLine.maxHeadBytes {
+                self.state.withLock { _ = $0.awaitingHead.remove(ObjectIdentifier(connection)) }
                 self.handle(head: buffer.prefix(length), on: connection)
             } else if buffer.count >= HTTPRequestLine.maxHeadBytes {
+                self.state.withLock { _ = $0.awaitingHead.remove(ObjectIdentifier(connection)) }
                 self.reject(connection, peer: Self.peer(of: connection), path: "<oversized request>")
             } else if isComplete || error != nil {
                 connection.cancel()
@@ -285,19 +388,46 @@ public final class HandoffServer: Sendable {
             reject(connection, peer: peer, path: line.target)
             return
         }
+        let id = ObjectIdentifier(connection)
         let mayConfirm = state.withLock { state -> Bool in
-            guard state.outcome == nil, !state.busy, state.sealed != nil else { return false }
+            guard state.outcome == nil, !state.busy, state.sealed != nil, state.connections[id] != nil else { return false }
             state.busy = true
+            state.confirming = Confirmation(connectionID: id, task: nil)
             return true
         }
         guard mayConfirm else {
             reject(connection, peer: peer, path: Self.redactedPath)
             return
         }
+        watchForDisconnect(connection)
         let confirm = self.confirm
-        Task { [weak self] in
+        let task = Task { [weak self] in
             let approved = await confirm(peer)
+            guard !Task.isCancelled else { return }
             self?.confirmed(approved, peer: peer, on: connection)
+        }
+        let stillConfirming = state.withLock { state -> Bool in
+            guard state.confirming?.connectionID == id else { return false }
+            state.confirming?.task = task
+            return true
+        }
+        if !stillConfirming { task.cancel() }
+    }
+
+    /// Keeps a receive pending while the person at the Mac decides, so a
+    /// phone that gives up (closes or resets) is noticed at once.
+    private func watchForDisconnect(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { [weak self] _, _, isComplete, error in
+            guard let self else { return }
+            let id = ObjectIdentifier(connection)
+            let confirming = self.state.withLock { $0.confirming?.connectionID == id }
+            guard confirming else { return }
+            if isComplete || error != nil {
+                self.forget(connection)
+                connection.cancel()
+            } else {
+                self.watchForDisconnect(connection)
+            }
         }
     }
 
@@ -305,10 +435,15 @@ public final class HandoffServer: Sendable {
         case send(Data)
         case decline
         case finished
+        case abandoned
     }
 
     private func confirmed(_ approved: Bool, peer: String, on connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
         let decision = state.withLock { state -> Decision in
+            // The phone left, or the server finished, while we were asking.
+            guard state.confirming?.connectionID == id else { return .abandoned }
+            state.confirming = nil
             guard state.outcome == nil, let sealed = state.sealed else {
                 state.busy = false
                 return .finished
@@ -321,14 +456,18 @@ public final class HandoffServer: Sendable {
             return .send(sealed)
         }
         switch decision {
+        case .abandoned:
+            connection.cancel()
         case .finished:
             respond(connection, status: 404)
         case .decline:
             respond(connection, status: 403)
         case .send(let sealed):
-            connection.send(content: Self.response(status: 200, body: sealed), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] error in
+            let response = OSAllocatedUnfairLock(initialState: Self.response(status: 200, body: sealed))
+            connection.send(content: response.withLock { $0 }, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] error in
+                response.withLock { $0.zeroize() }
                 if error == nil {
-                    self?.state.withLock { _ = $0.connections.removeValue(forKey: ObjectIdentifier(connection)) }
+                    self?.state.withLock { _ = $0.connections.removeValue(forKey: id) }
                     self?.finish(.served(peer: peer, at: Date()))
                 } else {
                     self?.state.withLock { $0.busy = false }
@@ -396,7 +535,18 @@ public final class HandoffServer: Sendable {
         head += "Content-Length: \(body.count)\r\n"
         head += "Cache-Control: no-store\r\n"
         head += "Connection: close\r\n\r\n"
-        return Data(head.utf8) + body
+        var response = Data(capacity: head.utf8.count + body.count)
+        response.append(contentsOf: head.utf8)
+        response.append(body)
+        return response
+    }
+}
+
+extension Duration {
+    /// Seconds as a `TimeInterval`, for Dispatch deadlines.
+    var timeInterval: TimeInterval {
+        let parts = components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
 }
 #endif

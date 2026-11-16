@@ -67,6 +67,58 @@ struct PairingLinkTests {
         #expect(throws: expected) { try PairingLink(string: link) }
     }
 
+    static func link(host: String) -> String {
+        "adfreader://pair?v=1&h=\(host)&s=\(sid)#k=\(key)"
+    }
+
+    @Test("hosts with signs, spaces, leading zeros or bad ports are rejected without crashing", arguments: [
+        "1.2.3.4:+80", "192.168.1.20:+80", "192.168.1.20:-1", "192.168.1.20: 80", "192.168.1.20:8%2080",
+        "192.168.1.20:080", "192.168.1.20:0", "192.168.1.20:65536", "192.168.1.20:", "192.168.1.20:80:80",
+        "010.0.0.1", "10.0.0.01", "192.168.001.1", "+10.0.0.1", "10.0.0", "10.0.0.1.5", "10..0.1",
+        "１０.0.0.1", "10.0.0.1%00", "0x0a.0.0.1", "[::1]", "localhost",
+    ])
+    func rejectsMalformedHosts(host: String) {
+        #expect(throws: PairingLink.ParseError.self) { try PairingLink(string: Self.link(host: host)) }
+        #expect(!PairingLink.isValidHost(host.removingPercentEncoding ?? host))
+    }
+
+    @Test("the phone only accepts private local-network addresses", arguments: [
+        ("10.0.0.1", true), ("10.255.255.254:9", true),
+        ("172.16.0.1", true), ("172.31.255.255:65535", true), ("172.15.0.1", false), ("172.32.0.1", false),
+        ("192.168.0.1", true), ("192.168.1.40:54321", true), ("192.169.0.1", false),
+        ("100.64.0.1", true), ("100.127.255.255", true), ("100.63.0.1", false), ("100.128.0.1", false),
+        ("127.0.0.1", false), ("127.0.0.1:8080", false), ("0.0.0.0", false), ("0.1.2.3", false),
+        ("169.254.1.1", false), ("224.0.0.1", false), ("239.255.255.250", false), ("255.255.255.255", false),
+        ("8.8.8.8", false), ("1.2.3.4:80", false),
+    ])
+    func localNetworkRange(host: String, accepted: Bool) throws {
+        #expect(PairingLink.isLocalNetworkHost(host) == accepted)
+        #expect(PairingLink.isValidHost(host))
+        if accepted {
+            #expect(try PairingLink(string: Self.link(host: host)).host == host)
+        } else {
+            #expect(throws: PairingLink.ParseError.invalidHost(host)) { try PairingLink(string: Self.link(host: host)) }
+        }
+    }
+
+    @Test("Mac-side generate accepts loopback, but the phone refuses that link")
+    func loopbackGenerate() throws {
+        let link = PairingLink.generate(host: "127.0.0.1:8080")
+        #expect(link.fetchURL.absoluteString == "http://127.0.0.1:8080/h/\(link.sessionId)")
+        #expect(throws: PairingLink.ParseError.invalidHost("127.0.0.1:8080")) { try PairingLink(url: link.url) }
+        #expect(try PairingLink(host: "127.0.0.1:8080", sessionId: link.sessionId, key: link.key) == link)
+    }
+
+    @Test("malformed generate hosts give unusable URLs instead of crashing", arguments: [
+        "1.2.3.4:+80", "not a host", "a/b?c#d", "", "[::1]:80", "\u{0}",
+    ])
+    func generateNeverCrashes(host: String) {
+        let link = PairingLink.generate(host: host)
+        #expect(link.fetchURL.scheme != "http")
+        #expect(link.url.scheme == "adfreader" || link.url.isFileURL)
+        #expect(throws: PairingLink.ParseError.self) { try PairingLink(url: link.url) }
+    }
+
     @Test("the link and its description never contain a token, and descriptions redact the key")
     func noSecrets() throws {
         let link = PairingLink.generate(host: "192.168.1.20:54321")
@@ -144,7 +196,7 @@ struct HandoffSealTests {
 struct HandoffClientTests {
     @Test("200 opens the sealed box with one GET to the fetch URL")
     func success() async throws {
-        let link = PairingLink.generate(host: "192.168.1.20:54321")
+        let link = PairingLink.generate(host: "192.168.1.40:54321")
         let credential = Fixture.credential()
         let sealed = try HandoffSeal.seal(credential, link: link)
         let stub = AuthStubProtocol.session(responding: .init(status: 200, headers: ["Content-Type": "application/octet-stream"], body: sealed))
@@ -159,14 +211,14 @@ struct HandoffClientTests {
     func spent(status: Int) async {
         let stub = AuthStubProtocol.session(responding: .init(status: status, headers: [:], body: Data()))
         await #expect(throws: HandoffError.alreadyUsedOrExpired) {
-            try await HandoffClient.fetch(PairingLink.generate(host: "192.168.1.20:1"), session: stub.session)
+            try await HandoffClient.fetch(PairingLink.generate(host: "192.168.1.40:1"), session: stub.session)
         }
         #expect(HandoffError.alreadyUsedOrExpired.message == "This pairing code was already used or expired. Run `adf-auth push` again.")
     }
 
     @Test("other failures map to declined, http and network errors")
     func otherFailures() async {
-        let link = PairingLink.generate(host: "192.168.1.20:1")
+        let link = PairingLink.generate(host: "192.168.1.40:1")
         await #expect(throws: HandoffError.declined) {
             try await HandoffClient.fetch(link, session: AuthStubProtocol.session(responding: .init(status: 403, headers: [:], body: Data())).session)
         }
@@ -183,6 +235,67 @@ struct HandoffClientTests {
             return false
         }
     }
+}
+
+extension HandoffClientTests {
+    @Test("the default timeout outlasts the Mac's 120 s listener")
+    func defaultTimeout() {
+        #expect(HandoffClient.defaultTimeout >= 130)
+    }
+
+    @Test("bodies over 64 KiB are refused; up to 64 KiB are read")
+    func bodyCap() async {
+        let link = PairingLink.generate(host: "192.168.1.40:54321")
+        let tooBig = AuthStubProtocol.session(responding: .init(status: 200, headers: [:], body: Data(repeating: 0x41, count: HandoffClient.maxResponseBytes + 1)))
+        await #expect(throws: HandoffError.responseTooLarge(limit: 64 * 1024)) {
+            try await HandoffClient.fetch(link, session: tooBig.session)
+        }
+        let atLimit = AuthStubProtocol.session(responding: .init(status: 200, headers: [:], body: Data(repeating: 0x41, count: HandoffClient.maxResponseBytes)))
+        await #expect(throws: HandoffError.decryptionFailed) {
+            try await HandoffClient.fetch(link, session: atLimit.session)
+        }
+    }
+
+    @Test("a link with a malformed host is refused before any request")
+    func malformedHost() async {
+        let stub = AuthStubProtocol.session(responding: .init(status: 200, headers: [:], body: Data()))
+        await #expect(throws: HandoffError.invalidLink(.invalidHost("1.2.3.4:+80"))) {
+            try await HandoffClient.fetch(PairingLink.generate(host: "1.2.3.4:+80"), session: stub.session)
+        }
+        #expect(stub.requests.isEmpty)
+    }
+
+    #if os(macOS)
+    @Test("redirects are refused and the redirect target is never fetched", .timeLimit(.minutes(1)))
+    func refusesRedirects() async throws {
+        let server = try CannedHTTPServer()
+        let port = await server.start()
+        defer { server.stop() }
+        let link = PairingLink.generate(host: "127.0.0.1:\(port)")
+        let sealed = try HandoffSeal.seal(Fixture.credential(), link: link)
+        server.route(link.fetchPath, raw: "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:\(port)/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        server.route("/elsewhere", raw: HandoffServer.response(status: 200, body: sealed))
+
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        await #expect(throws: HandoffError.http(status: 302)) {
+            try await HandoffClient.fetch(link, session: session)
+        }
+        #expect(server.hits == [link.fetchPath])
+    }
+
+    @Test("a real loopback fetch succeeds end to end", .timeLimit(.minutes(1)))
+    func loopbackSuccess() async throws {
+        let server = try CannedHTTPServer()
+        let port = await server.start()
+        defer { server.stop() }
+        let link = PairingLink.generate(host: "127.0.0.1:\(port)")
+        server.route(link.fetchPath, raw: HandoffServer.response(status: 200, body: try HandoffSeal.seal(Fixture.credential(), link: link)))
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        #expect(try await HandoffClient.fetch(link, session: session) == Fixture.credential())
+    }
+    #endif
 }
 
 @Suite("HTTP request line")

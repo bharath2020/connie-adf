@@ -77,6 +77,24 @@ struct GraphQLClientTests {
         #expect(try await check(responding: .json(body)).cloudId == "22222222-2222-2222-2222-222222222222")
     }
 
+    @Test("a tenant for another host is never accepted", arguments: [
+        #"{"data":{"tenantContexts":[{"cloudId":"11111111-1111-1111-1111-111111111111","hostName":"other.atlassian.net"}]}}"#,
+        #"{"data":{"tenantContexts":[{"cloudId":"11111111-1111-1111-1111-111111111111","hostName":"acme.atlassian.net.evil.com"}]}}"#,
+        #"{"data":{"tenantContexts":[{"cloudId":"11111111-1111-1111-1111-111111111111"},{"cloudId":"22222222-2222-2222-2222-222222222222"}]}}"#,
+        #"{"data":{"tenantContexts":[{"cloudId":"11111111-1111-1111-1111-111111111111"},{"cloudId":"22222222-2222-2222-2222-222222222222","hostName":"other.atlassian.net"}]}}"#,
+    ])
+    func hostNameMismatch(body: String) async {
+        await #expect(throws: AtlassianAuthError.siteNotFound(host: "acme.atlassian.net")) {
+            try await check(responding: .json(body))
+        }
+    }
+
+    @Test("a sole tenant without a hostName is accepted")
+    func soleTenantWithoutHostName() async throws {
+        let body = #"{"data":{"tenantContexts":[{"cloudId":"11111111-1111-1111-1111-111111111111"}]}}"#
+        #expect(try await check(responding: .json(body)) == TokenCheckResult(cloudId: "11111111-1111-1111-1111-111111111111", hostName: nil))
+    }
+
     @Test("HTTP statuses map to errors", arguments: [
         (401, AtlassianAuthError.unauthorized),
         (403, .forbidden(missingScopes: AtlassianTokenScopes.required)),

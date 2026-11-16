@@ -265,12 +265,18 @@ public struct AtlassianGraphQLClient: Sendable {
         if let error = httpError(status: status, headers: headers, body: body, field: operation.field, host: host) { throw error }
         guard let response = decodeGatewayBody(body) else { throw .invalidResponse("the body is not a JSON object") }
         let contexts = response.data?["tenantContexts"] as? [Any]
-        let candidates = (contexts ?? []).compactMap { $0 as? [String: Any] }.compactMap { context -> TokenCheckResult? in
+        let entries = (contexts ?? []).compactMap { $0 as? [String: Any] }
+        let candidates = entries.compactMap { context -> TokenCheckResult? in
             guard let cloudId = context["cloudId"] as? String, !cloudId.isEmpty else { return nil }
             return TokenCheckResult(cloudId: cloudId, hostName: context["hostName"] as? String)
         }
-        if let match = candidates.first(where: { $0.hostName?.lowercased() == host }) ?? candidates.first {
+        // Only a tenant for this exact host counts. A tenant without a
+        // hostName is accepted only when it is the sole entry.
+        if let match = candidates.first(where: { $0.hostName?.lowercased() == host }) {
             return match
+        }
+        if entries.count == 1, let only = candidates.first, only.hostName == nil {
+            return only
         }
         if !response.errors.isEmpty {
             throw classify(response.errors, field: operation.field, host: host, notFoundMeansSite: true)
