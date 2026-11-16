@@ -118,15 +118,16 @@ struct TextKit2ContainerScopeTests {
     /// The whole-block rules as this stage has them (plan §4.1, P17),
     /// written out independently of `blockKeepsRenderer`: a list by rule B;
     /// a panel by the panel shape probes (`expectedPanelKeeps`); an
-    /// extension with a body; no caption yet; tables, plugins, dividers,
-    /// media strips, cards and unknown nodes never.
+    /// extension with a body; media with a caption (captions are on);
+    /// tables, plugins, dividers, media strips, cards and unknown nodes
+    /// never.
     static func expectedWholeBlock(_ kind: RenderBlock.Kind) -> Bool {
         switch kind {
         case .richText, .codeBlock, .quote, .expand, .layoutColumns: return true
         case .listRows(let rows): return TextKit2Scope.listKeepsRenderer(rows)
         case .panel(_, let children): return expectedPanelKeeps(children)
         case .extensionPlaceholder(_, let body): return !body.isEmpty
-        case .media: return false
+        case .media(let media): return !(media.caption?.isEmpty ?? true)
         case .divider, .tableSlice, .mediaStrip, .card, .custom, .unknown: return false
         }
     }
@@ -217,22 +218,22 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes and extension bodies")
+    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies and captioned media")
     func topLevelRowsReadTheAllowList() async throws {
         // Step 3: paragraphs and headings in panels, quotes and extension
-        // bodies. Each later stage changes this pin deliberately, with the
-        // family it enables.
-        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder])
+        // bodies; step 8: captions. Each later stage changes this pin
+        // deliberately, with the family it enables.
+        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media])
         #expect(EnvironmentValues().adfContainerChildKinds == TextKit2Scope.containerChildKinds)
         #expect(EnvironmentValues().adfTextContainerContext == .none)
-        #expect(TextKit2Scope.captionsUseTextKit2 == false)
+        #expect(TextKit2Scope.captionsUseTextKit2 == true)
 
         let samples = try await Self.samples()
         for sample in samples {
             let family = Self.family(sample.kind)
             // In the app (the production list): PR 3's rows, and from
             // step 3 panels that pass their shape rule, quotes and bodied
-            // extensions.
+            // extensions; from step 8 media with a caption.
             let pr3: Bool
             switch sample.kind {
             case .richText, .codeBlock: pr3 = true
@@ -244,6 +245,7 @@ struct TextKit2ContainerScopeTests {
             case .panel(_, let children): production = Self.expectedPanelKeeps(children)
             case .quote: production = true
             case .extensionPlaceholder(_, let body): production = !body.isEmpty
+            case .media(let media): production = !(media.caption?.isEmpty ?? true)
             default: production = pr3
             }
             #expect(TextKit2Scope.inheritsRenderer(sample.kind) == production, "\(sample.id) \(family)")

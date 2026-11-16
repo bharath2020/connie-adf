@@ -31,12 +31,18 @@ import SwiftUI
 /// extension, and in those nested in one another, go to TextKit 2 too; the
 /// container's icon, bar, fill, border, padding and title stay SwiftUI. A
 /// panel whose body holds a list, a heading, or a sub/superscript or
-/// small-text run beside another block keeps its whole body on SwiftUI.
+/// small-text run or a code block beside another block keeps its whole
+/// body on SwiftUI.
+///
+/// A media caption's text follows the setting from iOS 26 when its text
+/// is eligible and its media is in scope (a top-level row, or a child a
+/// container's boundary passes the setting to), drawn in the caption's
+/// secondary foreground; the media box is SwiftUI.
 ///
 /// Everything else stays on SwiftUI regardless of the setting: layout
-/// columns, expands, the lists and code inside any container, captions,
-/// table cells, and atom-bearing text. On platforms without UIKit,
-/// `.textKit2` behaves as `.swiftUI`.
+/// columns, expands, the lists and code inside any container, table
+/// cells, and atom-bearing text. On platforms without UIKit, `.textKit2`
+/// behaves as `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
     case swiftUI = "swiftui"
     case textKit2 = "textkit2"
@@ -139,6 +145,10 @@ private struct ADFTextWidthBoundKey: EnvironmentKey {
     static let defaultValue: TextKit2WidthBound = .pending
 }
 
+private struct ADFTextForegroundKey: EnvironmentKey {
+    static let defaultValue: Color? = nil
+}
+
 extension EnvironmentValues {
     /// The text engine a text leaf (`TextEngineLeaf`) should use.
     /// `ADFDocumentView`'s rows set it to the host's choice for top-level
@@ -180,6 +190,20 @@ extension EnvironmentValues {
     var adfTextWidthBound: TextKit2WidthBound {
         get { self[ADFTextWidthBoundKey.self] }
         set { self[ADFTextWidthBoundKey.self] = newValue }
+    }
+
+    /// The foreground colour text below inherits where the library styles
+    /// its SwiftUI text with a foreground style: `.secondary` on a media
+    /// caption (`View.adfCaptionLeaf`, its one setter); `nil`, the
+    /// default, everywhere else. SwiftUI does not expose an inherited
+    /// foreground style to UIKit, so a TextKit 2 row reads this explicit
+    /// copy (`TextKit2RenderInputs.inheritedForeground`) for the runs the
+    /// preparer did not colour. Internal: there is no public styling
+    /// channel. A host's `.foregroundStyle`, `.tint` or `.fontWeight`
+    /// around the document is still not observed by TextKit 2 rows.
+    var adfTextForeground: Color? {
+        get { self[ADFTextForegroundKey.self] }
+        set { self[ADFTextForegroundKey.self] = newValue }
     }
 }
 

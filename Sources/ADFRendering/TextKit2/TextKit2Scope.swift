@@ -1,4 +1,5 @@
 import SwiftUI
+import ADFModel
 import ADFPreparation
 
 /// Where the host's text engine choice applies. `DocumentRow` passes it to
@@ -17,17 +18,19 @@ import ADFPreparation
 /// and before iOS 26 no interior empty line above AX3).
 /// A container (panel, quote, expand, layout columns, extension, and media
 /// for its caption) keeps the choice at the top level only when its kind
-/// is in the container allow list (`containerChildKinds`: panels, quotes
-/// and extension bodies so far) and passes its whole-block rule
+/// is in the container allow list (`containerChildKinds`: panels, quotes,
+/// extension bodies and media so far) and passes its whole-block rule
 /// (`blockKeepsRenderer`, for a panel `panelKeepsRenderer`); its child
 /// boundary (`View.adfContainerChild`, `childRenderer`) then passes the
 /// choice to the children the same list and rules allow (paragraphs and
-/// headings, and nested panels, quotes and extensions so far). Every other
-/// top-level kind (table, media, expand, layout columns, card, plugin,
-/// unknown) gets `.swiftUI`, and so does everything inside it, and so does
-/// every child kind the list does not hold (lists and code in a container
+/// headings, media, and nested panels, quotes and extensions so far). A
+/// media block's only text is its caption (`MediaBlockView.caption`,
+/// `captionsUseTextKit2`, `captionLayoutKeepsRenderer`). Every other
+/// top-level kind (table, expand, layout columns, card, plugin, unknown)
+/// gets `.swiftUI`, and so does everything inside it, and so does every
+/// child kind the list does not hold (lists and code in a container
 /// included); code inside a list item gets `.swiftUI` from its row. Before
-/// iOS 26 container text stays on SwiftUI at the leaf
+/// iOS 26 container text and captions stay on SwiftUI at the leaf
 /// (`TextKit2Eligibility.containerTextMatchesText`). Those three places are
 /// the only ones that set `adfTextRenderer`. The coverage walk
 /// (`forEachLeaf`) follows the same rules, so the diagnostics count
@@ -243,18 +246,29 @@ enum TextKit2Scope {
         /// leaf, as the view hands it to its leaf; `nil` at every other
         /// position.
         var code: AttributedString? = nil
+        /// The media layout of a `.caption` leaf; `nil` at every other
+        /// position.
+        var mediaLayout: ADFMediaLayout? = nil
 
         /// The engine verdict for this leaf where it sits: what
         /// `TextEngineLeaf` decides for it. Paragraphs, headings, list
         /// text and captions are judged from their segments
-        /// (`TextKit2Eligibility.verdict(_:owner:context:)`); code is judged
+        /// (`TextKit2Eligibility.verdict(_:owner:context:)`), a caption
+        /// then by its media layout (`captionLayoutKeepsRenderer`, which
+        /// the caption's view passes as `allowsTextKit2`); code is judged
         /// from its prepared string by the code rules
         /// (`TextKit2Eligibility.codeVerdict`, and below a container
         /// `containerCodeVerdict`), never by a list rule.
         var verdict: TextKit2Eligibility.Verdict {
             switch position {
-            case .root, .listLeader, .listTrailing, .containerProse, .containerListLeader, .containerListTrailing, .caption:
+            case .root, .listLeader, .listTrailing, .containerProse, .containerListLeader, .containerListTrailing:
                 return TextKit2Eligibility.verdict(segments, owner: position.ownerKind, context: position.context)
+            case .caption:
+                let verdict = TextKit2Eligibility.verdict(segments, owner: position.ownerKind, context: position.context)
+                if case .eligible = verdict, let mediaLayout, !TextKit2Scope.captionLayoutKeepsRenderer(mediaLayout) {
+                    return .fallback(.captionLayout)
+                }
+                return verdict
             case .codeRoot:
                 return TextKit2Eligibility.codeVerdict(code ?? AttributedString())
             case .containerCode:
@@ -343,7 +357,7 @@ enum TextKit2Scope {
         case .expand: unpreparedExpand(block)
         case .media(let media):
             if let caption = media.caption, !caption.isEmpty {
-                visit(Leaf(ownerID: media.id, segments: caption, style: nil, position: .caption))
+                visit(Leaf(ownerID: media.id, segments: caption, style: nil, position: .caption, mediaLayout: media.layout))
             }
         case .richText, .codeBlock, .listRows, .divider, .tableSlice, .mediaStrip, .card, .custom, .unknown:
             break

@@ -195,7 +195,8 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
     /// The row's layout inputs; the colour scheme is applied apart, as a
     /// paint input (`TextKit2RowView.apply(_:colorScheme:ownerID:)`).
     /// `layoutPolicy` is the owner kind's (`TextKit2OwnerKind.layoutPolicy`:
-    /// `.natural` for code, else `.wrapping`).
+    /// `.natural` for code, else `.wrapping`). The inherited foreground is
+    /// the library's own copy (`adfTextForeground`, set on captions only).
     static func inputs(
         text: AttributedString, style: TextBlockStyle, environment: EnvironmentValues,
         layoutPolicy: TextKit2LayoutPolicy = .wrapping
@@ -208,7 +209,8 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
             layoutDirection: environment.layoutDirection,
             displayScale: environment.displayScale,
             legibilityWeight: environment.legibilityWeight,
-            layoutPolicy: layoutPolicy
+            layoutPolicy: layoutPolicy,
+            inheritedForeground: environment.adfTextForeground
         )
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import ADFModel
 import ADFPreparation
 
 // The container boundary: where a container (panel, quote, expand body,
@@ -89,7 +90,8 @@ private struct ADFContainerChildKindsKey: EnvironmentKey {
 
 extension EnvironmentValues {
     /// Where the text below sits (`TextKit2ContainerContext`). Written only
-    /// in this file: `.container` by `adfContainerChild`. A TextKit 2 row
+    /// in this file: `.container` by `adfContainerChild`, `.caption` by
+    /// `adfCaptionLeaf`. A TextKit 2 row
     /// counts itself by it (`TextKit2Diagnostics`), so container text is
     /// proved apart from top-level text. Not the renderer choice: setting
     /// it never turns TextKit 2 on.
@@ -115,15 +117,15 @@ extension EnvironmentValues {
 extension TextKit2Scope {
     /// The child kinds a container passes the renderer to. Each family
     /// joins in its own change: paragraphs and headings, panels, quotes and
-    /// extension bodies first (here), then layout columns, expands, lists,
-    /// code, media captions; until a kind is listed every child of that
-    /// kind stays on SwiftUI, and so does everything below it.
-    /// `inheritsRenderer` reads it for top-level container rows,
+    /// extension bodies first, media for its caption (`captionsUseTextKit2`),
+    /// then layout columns, expands, lists, code; until a kind is listed
+    /// every child of that kind stays on SwiftUI, and so does everything
+    /// below it. `inheritsRenderer` reads it for top-level container rows,
     /// `adfContainerChild` (through `adfContainerChildKinds`) at every child
     /// boundary, and the coverage walk (`forEachLeaf`) for both. Before
     /// iOS 26 the text it reaches still stays on SwiftUI
     /// (`TextKit2Eligibility.containerTextMatchesText`).
-    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder]
+    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder, .media]
 
     /// Kinds that never join the container scope, whatever an allow list
     /// says: tables (a later stage), plugin blocks (their renderer owns
@@ -194,10 +196,23 @@ extension TextKit2Scope {
         return !((smallRun || code) && children.count > 1)
     }
 
-    /// Whether media captions may use TextKit 2 at all. Off until the
-    /// caption family's own stage, which is separately droppable: no
-    /// caption leaf exists yet.
-    static let captionsUseTextKit2 = false
+    /// Whether media captions may use TextKit 2 at all: the caption
+    /// family's switch, separately droppable (false keeps every caption on
+    /// SwiftUI, with `.media` in the allow list or not).
+    static let captionsUseTextKit2 = true
+
+    /// Which media layouts keep a caption on TextKit 2 where its renderer
+    /// is: those whose caption and media box sit where SwiftUI puts them
+    /// (`TextKit2CaptionParityTests.captionFrameMatches`). A layout that
+    /// does not keeps its captions on SwiftUI, reason `captionLayout`. The
+    /// caption's view (`MediaBlockView.caption`) and the coverage walk
+    /// (`Leaf.verdict`) both read it. Exhaustive, so a new layout is
+    /// decided here.
+    static func captionLayoutKeepsRenderer(_ layout: ADFMediaLayout) -> Bool {
+        switch layout {
+        case .center, .wrapLeft, .wrapRight, .alignStart, .alignEnd, .wide, .fullWidth: return true
+        }
+    }
 
     /// The renderer a container hands a child block of `kind` in `parent`:
     /// `.swiftUI` whenever it inherited `.swiftUI` (so a container never
@@ -318,6 +333,20 @@ extension View {
     /// width arithmetic.
     func adfContainerChild(_ block: RenderBlock, in parent: TextKit2ContainerParent, widthBound: TextKit2WidthBound) -> some View {
         modifier(TextKit2ContainerChild(kind: block.kind, parent: parent, widthBound: widthBound))
+    }
+}
+
+extension View {
+    /// A media caption's text leaf (`MediaBlockView.caption`), its one
+    /// use: writes the context `.caption` and the foreground the caption's
+    /// SwiftUI text is drawn in, `.secondary` (`adfTextForeground`, which
+    /// nothing else sets), so a TextKit 2 row draws the caption's uncoloured
+    /// runs as `Text` does and counts itself as a caption. Writes no
+    /// renderer: the caption takes the one its media row, or the boundary
+    /// of the container it sits in, passed down.
+    func adfCaptionLeaf() -> some View {
+        environment(\.adfTextContainerContext, .caption)
+            .environment(\.adfTextForeground, .secondary)
     }
 }
 

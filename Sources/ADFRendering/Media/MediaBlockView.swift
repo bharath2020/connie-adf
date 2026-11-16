@@ -30,9 +30,7 @@ struct MediaBlockView: View {
         VStack(alignment: stackAlignment, spacing: theme.spacing * 0.75) {
             mediaBox
             if let caption = media.caption, !caption.isEmpty {
-                SegmentedTextView(segments: caption, ownerID: media.id)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Self.caption(caption, ownerID: media.id, layout: media.layout, theme: theme)
             }
         }
         .frame(maxWidth: .infinity, alignment: frameAlignment)
@@ -42,6 +40,38 @@ struct MediaBlockView: View {
             containerWidth = width
         }
         .lightbox(isPresented: $showsLightbox, media: media)
+    }
+
+    // MARK: - Caption
+
+    /// The caption below the box: a text leaf (`TextEngineLeaf`) owned by
+    /// the media's id, the owner search highlights. Its SwiftUI text is the
+    /// `.footnote`, `.secondary` caption; under the TextKit 2 renderer an
+    /// eligible caption is a TextKit 2 row in the caption context, drawing
+    /// its uncoloured runs in the same foreground (`adfCaptionLeaf`). Every
+    /// prepared caption run carries its own font, so `.footnote` sets no
+    /// caption metric and the row needs no font of its own. A layout whose
+    /// caption frame does not match keeps it on SwiftUI
+    /// (`TextKit2Scope.captionLayoutKeepsRenderer`). No selection: the
+    /// caption has none on either engine.
+    static func caption(_ segments: [InlineSegment], ownerID: String, layout: ADFMediaLayout, theme: ADFTheme) -> some View {
+        TextEngineLeaf(
+            segments: segments, style: captionStyle(theme: theme), ownerID: ownerID,
+            allowsTextKit2: TextKit2Scope.captionLayoutKeepsRenderer(layout)
+        ) {
+            SegmentedTextView(segments: segments, ownerID: ownerID)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .adfCaptionLeaf()
+    }
+
+    /// The caption leaf's block style, for every media layout: the list
+    /// leader's (`ListRowView.leaderStyle(theme:)`), body text with no
+    /// alignment, as the caption's `Text` has none. A TextKit 2 row reads
+    /// only its alignment and heading flag; fonts come from the runs.
+    static func captionStyle(theme: ADFTheme) -> TextBlockStyle {
+        TextBlockStyle(font: theme.body, isHeading: false, headingLevel: nil, alignment: nil, indentation: 0, breakout: nil)
     }
 
     // MARK: - Box

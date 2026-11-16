@@ -18,6 +18,14 @@ import ADFPreparation
 /// out once at its natural width and never wraps (`.natural`: code, see
 /// `TextKit2OwnerKind.layoutPolicy`). It is part of the key, so changing
 /// it rebuilds the row's text and lays it out again.
+///
+/// `inheritedForeground` is the colour `Text` would inherit for runs the
+/// preparer did not colour (`adfTextForeground`: `.secondary` on a media
+/// caption, `nil` everywhere else). A colour only, never a metric: it
+/// enters no width, height or code canvas bound. It is constant per leaf,
+/// so it stays an ordinary input (a change would rebuild the text; none
+/// happens at run time), and its colour is dynamic like every other, so a
+/// light/dark flip still only repaints.
 struct TextKit2RenderInputs: Hashable {
     var text: AttributedString
     var alignment: ADFAlignment?
@@ -27,6 +35,7 @@ struct TextKit2RenderInputs: Hashable {
     var displayScale: CGFloat
     var legibilityWeight: LegibilityWeight?
     var layoutPolicy: TextKit2LayoutPolicy
+    var inheritedForeground: Color?
 
     init(
         text: AttributedString,
@@ -36,7 +45,8 @@ struct TextKit2RenderInputs: Hashable {
         layoutDirection: LayoutDirection = .leftToRight,
         displayScale: CGFloat = 3,
         legibilityWeight: LegibilityWeight? = nil,
-        layoutPolicy: TextKit2LayoutPolicy = .wrapping
+        layoutPolicy: TextKit2LayoutPolicy = .wrapping,
+        inheritedForeground: Color? = nil
     ) {
         self.text = text
         self.alignment = alignment
@@ -46,6 +56,7 @@ struct TextKit2RenderInputs: Hashable {
         self.displayScale = displayScale
         self.legibilityWeight = legibilityWeight
         self.layoutPolicy = layoutPolicy
+        self.inheritedForeground = inheritedForeground
     }
 }
 
@@ -83,12 +94,14 @@ enum TextKit2TextBuilder {
     /// prepared foreground (an author `textColor`, or the contrast colour
     /// the composer derived from a `backgroundColor` mark) first; then, for
     /// a link run, `linkColor` (`Text` colours links with the tint, which a
-    /// foreground style does not override); else `.label`.
+    /// foreground style does not override); then the inherited foreground
+    /// (`inputs.inheritedForeground`); else `.label`.
     static func attributedString(for inputs: TextKit2RenderInputs, linkColor: UIColor) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let scale = baselineScale(for: inputs.sizeCategory)
         let fallbackSpec = ADFFontSpec(textStyle: .body)
         let hasLink = inputs.text.runs.contains { $0.link != nil }
+        let inheritedForeground = inputs.inheritedForeground.map(UIColor.init)
 
         for run in inputs.text.runs {
             let string = String(inputs.text[run.range].characters)
@@ -104,6 +117,8 @@ enum TextKit2TextBuilder {
                 attributes[.foregroundColor] = UIColor(foreground)
             } else if run.link != nil {
                 attributes[.foregroundColor] = linkColor
+            } else if let inheritedForeground {
+                attributes[.foregroundColor] = inheritedForeground
             } else {
                 attributes[.foregroundColor] = UIColor.label
             }

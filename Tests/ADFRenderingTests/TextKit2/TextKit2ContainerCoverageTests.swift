@@ -39,7 +39,7 @@ enum TK2ContainerCoverage {
     /// | 0.6 | panel: nested expand | an unprepared expand |
     /// | 0.7 | bodied extension: paragraph | container prose |
     /// | 0.8 | extension without a body | nothing |
-    /// | 0.9 | media with a caption | nothing until captions are enabled (step 8) |
+    /// | 0.9 | media with a caption | caption: eligible from iOS 26, `osGatedContainer` before |
     /// | 0.10 | table: paragraph | nothing (tables are excluded) |
     /// | 0.11 | list: leader, trailing paragraph | list leader, list trailing |
     /// | 0.12 | panel: paragraph with a mention | container prose, fallback (inline atom) |
@@ -48,8 +48,9 @@ enum TK2ContainerCoverage {
     /// | 0.15 | panel: heading, paragraph | nothing (`panelKeepsRenderer`: a heading) |
     ///
     /// With the production list (step 3: prose, panels, quotes, extension
-    /// bodies) only 0.2.0, 0.3.0, 0.3.1, 0.7.0 and 0.12.0 are container
-    /// leaves: lists, code, columns and expands are not listed yet.
+    /// bodies; step 8: media) only 0.2.0, 0.3.0, 0.3.1, 0.7.0 and 0.12.0 are
+    /// container leaves, and 0.9's caption is the one caption leaf: lists,
+    /// code, columns and expands are not listed yet.
     static func content() -> [[String: Any]] {
         let paragraph = TK2CodeLogic.paragraph
         return [
@@ -138,6 +139,26 @@ enum TK2ContainerCoverage {
         )
     }
 
+    /// Captioned media the production list (step 3 and captions) reaches,
+    /// written out independently of the walk: at the top level, and in
+    /// quotes, bodied extensions and panels whose body the probes kept
+    /// (`TextKit2ContainerScopeTests.expectedPanelKeeps`), nested in one
+    /// another; never in a list, table, expand or layout column.
+    static func captionsInScope(_ blocks: [RenderBlock]) -> Int {
+        var count = 0
+        for block in blocks {
+            switch block.kind {
+            case .media(let media): if !(media.caption?.isEmpty ?? true) { count += 1 }
+            case .quote(let children): count += captionsInScope(children)
+            case .extensionPlaceholder(_, let body): count += captionsInScope(body)
+            case .panel(_, let children):
+                if TextKit2ContainerScopeTests.expectedPanelKeeps(children) { count += captionsInScope(children) }
+            default: continue
+            }
+        }
+        return count
+    }
+
     /// Leaves the walk visits, by position.
     static func visits(_ blocks: [RenderBlock], allowed: Set<TextKit2BlockKind>) -> [TextKit2Scope.Position: Int] {
         var visits: [TextKit2Scope.Position: Int] = [:]
@@ -155,9 +176,10 @@ enum TK2ContainerCoverage {
 /// nested code and captions count only in their own fields; the legacy
 /// fields keep their depth-0 meaning; the sums hold at every allow-list
 /// stage; unprepared expands are counted, not entered; the walk visits
-/// owners in search's order. With the production list (step 3) only the
-/// container leaf fields move, and only where a panel, quote or extension
-/// body holds prose.
+/// owners in search's order. With the production list (step 3 and
+/// captions) only the container leaf fields move, where a panel, quote or
+/// extension body holds prose, and the caption fields, where captioned
+/// media is in scope.
 @Suite("TextKit 2 container coverage")
 @MainActor
 struct TextKit2ContainerCoverageTests {
@@ -179,7 +201,7 @@ struct TextKit2ContainerCoverageTests {
             eligibleTextLeaves: lists ? 3 : 1, linkedTextLeaves: 0, fallbackTextLeaves: lists ? 0 : 2,
             listLeaderLeaves: 1, listTrailingLeaves: 1, eligibleCodeRoots: 1, fallbackCodeRoots: 0,
             eligibleContainerLeaves: containers ? 8 : 0, linkedContainerLeaves: containers ? 1 : 0, fallbackContainerLeaves: containers ? 1 : 9,
-            containerListLeaves: 1, eligibleCaptionLeaves: 0, fallbackCaptionLeaves: 0,
+            containerListLeaves: 1, eligibleCaptionLeaves: containers ? 1 : 0, fallbackCaptionLeaves: containers ? 0 : 1,
             eligibleNestedCode: 1, fallbackNestedCode: 1, unpreparedExpands: 2
         )
         #expect(all == expected)
@@ -187,13 +209,17 @@ struct TextKit2ContainerCoverageTests {
         // The empty list: the legacy fields only.
         let legacy = TK2ContainerCoverage.legacy(expected)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks, allowed: []) == legacy)
-        // The production list (step 3): prose in the quotes 0.2 and 0.3,
-        // the extension 0.7 and the panel 0.12 (an atom: a fallback); the
-        // panel 0.15 holds a heading, so its body stays on SwiftUI.
+        // The production list (step 3 and captions): prose in the quotes
+        // 0.2 and 0.3, the extension 0.7 and the panel 0.12 (an atom: a
+        // fallback); the panel 0.15 holds a heading, so its body stays on
+        // SwiftUI. The caption of the top-level media 0.9 (from iOS 26;
+        // `osGatedContainer` before).
         var production = legacy
         production.eligibleContainerLeaves = containers ? 4 : 0
         production.linkedContainerLeaves = containers ? 1 : 0
         production.fallbackContainerLeaves = containers ? 1 : 5
+        production.eligibleCaptionLeaves = containers ? 1 : 0
+        production.fallbackCaptionLeaves = containers ? 0 : 1
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == production)
         var visitedProduction: [String] = []
         TextKit2Scope.forEachLeaf(in: blocks) { if $0.position.context == .container { visitedProduction.append($0.ownerID) } }
@@ -211,12 +237,17 @@ struct TextKit2ContainerCoverageTests {
             return rows.first?.id
         }()
         let listRow = try #require(rowIDs.first)
+        guard case .media(let media) = blocks[9].kind else {
+            Issue.record("0.9 is not media")
+            return
+        }
         let expectedVisits: [(String, TextKit2Scope.Position)] = [
             ("0.0", .root), ("0.1", .codeRoot),
             ("0.2.0", .containerProse), ("0.2.1", .containerCode), (try #require(panelRow), .containerListLeader),
             ("0.3.0", .containerProse), ("0.3.1", .containerProse),
             ("0.4.0.0", .containerProse), ("0.4.1.0", .containerProse), ("0.4.1.1.0", .containerProse),
             ("0.7.0", .containerProse),
+            (media.id, .caption),
             (listRow, .listLeader), ("0.11.0.1", .listTrailing),
             ("0.12.0", .containerProse), ("0.13.0", .containerCode),
         ]
@@ -237,7 +268,7 @@ struct TextKit2ContainerCoverageTests {
             #expect(production == empty, "\(name): the production list moved a legacy field")
             for (stage, allowed) in Self.stages {
                 let coverage = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: allowed)
-                #expect(TK2ContainerCoverage.legacy(coverage) == production, "\(name) at \(stage)")
+                #expect(TK2ContainerCoverage.legacy(coverage) == TK2ContainerCoverage.legacy(production), "\(name) at \(stage)")
                 // Depth 0: the roots are the top-level blocks.
                 #expect(coverage.eligibleRoots + coverage.fallbackRoots == blocks.count, "\(name) at \(stage)")
             }
@@ -263,8 +294,8 @@ struct TextKit2ContainerCoverageTests {
                 #expect(coverage.containerListLeaves == listText, "\(label)")
                 #expect(coverage.eligibleCaptionLeaves + coverage.fallbackCaptionLeaves == visits[.caption, default: 0], "\(label)")
                 #expect(coverage.eligibleNestedCode + coverage.fallbackNestedCode == visits[.containerCode, default: 0], "\(label)")
-                // No caption leaf before captions are enabled (step 8).
-                #expect(visits[.caption, default: 0] == 0, "\(label)")
+                // No caption leaf where media is not allowed.
+                if !allowed.contains(.media) { #expect(visits[.caption, default: 0] == 0, "\(label)") }
                 if allowed.isEmpty {
                     #expect(prose + listText + visits[.containerCode, default: 0] == 0, "\(label): nothing below a container")
                 }
@@ -372,6 +403,10 @@ struct TextKit2ContainerCoverageTests {
         let linked: Int
         let atoms: Int
         let panelShapeExcluded: [String]
+        /// Plain captions in scope (step 8): on captioned media at the top
+        /// level or in a panel, quote or extension body that passes the
+        /// renderer; eligible from iOS 26.
+        var captions = 0
         /// Leaves expected to stay on SwiftUI for a view-time reason on the
         /// gate device (iPhone, left to right, the demo's environment): none
         /// at step 3. No panel is right to left, the demo sets no font or
@@ -400,10 +435,13 @@ struct TextKit2ContainerCoverageTests {
     /// stress-1k: 80 top-level one-paragraph panels and 80 top-level quotes
     /// of one to three paragraphs (119 leaves); its other panels and quotes
     /// sit in list items, expands and columns, out of scope at step 3.
+    /// Captions (step 8, counted from the JSON): containers-parity has
+    /// none; kitchen-sink's one (0.23, plain) is top-level; stress-1k's ten
+    /// (0.95, 0.195, … 0.995) are all in expands, out of scope.
     static let pins: [FixturePin] = [
         FixturePin(name: "containers-parity", panel: 17, quote: 16, extensionBody: 7, headings: 2, linked: 3, atoms: 2,
                    panelShapeExcluded: ["0.11", "0.12", "0.15", "0.63", "0.71", "0.77", "0.78"]),
-        FixturePin(name: "kitchen-sink", panel: 7, quote: 1, extensionBody: 1, headings: 0, linked: 0, atoms: 0, panelShapeExcluded: []),
+        FixturePin(name: "kitchen-sink", panel: 7, quote: 1, extensionBody: 1, headings: 0, linked: 0, atoms: 0, panelShapeExcluded: [], captions: 1),
         FixturePin(name: "stress-1k", panel: 80, quote: 119, extensionBody: 0, headings: 0, linked: 43, atoms: 0, panelShapeExcluded: []),
     ]
 
@@ -426,7 +464,7 @@ struct TextKit2ContainerCoverageTests {
         return found
     }
 
-    @Test("fixturePins: hand-counted container leaves of containers-parity, kitchen-sink and stress-1k at step 3, by container, with the excluded panel shapes; before iOS 26 every one is gated")
+    @Test("fixturePins: hand-counted container leaves of containers-parity, kitchen-sink and stress-1k at step 3, by container, with the excluded panel shapes, and their captions; before iOS 26 every one is gated")
     func fixturePins() async throws {
         let containers = TextKit2Eligibility.containerTextMatchesText
         for pin in Self.pins {
@@ -438,7 +476,8 @@ struct TextKit2ContainerCoverageTests {
             #expect(coverage.fallbackContainerLeaves == (containers ? pin.atoms : pin.leaves), "\(pin.name): \(coverage)")
             #expect(coverage.containerListLeaves == 0, "\(pin.name)")
             #expect(coverage.eligibleNestedCode + coverage.fallbackNestedCode + coverage.unpreparedExpands == 0, "\(pin.name)")
-            #expect(coverage.eligibleCaptionLeaves + coverage.fallbackCaptionLeaves == 0, "\(pin.name)")
+            #expect(coverage.eligibleCaptionLeaves == (containers ? pin.captions : 0), "\(pin.name): \(coverage)")
+            #expect(coverage.fallbackCaptionLeaves == (containers ? 0 : pin.captions), "\(pin.name): \(coverage)")
 
             // The leaves by their innermost container, and the reasons.
             let kinds = Self.innermostContainers(blocks)
@@ -529,19 +568,28 @@ struct TextKit2ContainerCoverageTests {
         }
     }
 
-    @Test("with the production list (step 3) only the container leaf fields move, as the step-3 stage counts them; no caption, nested code, container list leaf or unprepared expand on any fixture; the legacy fields are the empty list's")
+    @Test("with the production list (step 3 and captions) only the container leaf fields, as the step-3 stage counts them, and the caption fields, for the captioned media in scope, move; no nested code, container list leaf or unprepared expand on any fixture; the legacy fields are the empty list's")
     func newFieldsReadZeroOnEveryFixture() async throws {
         let step3 = try #require(Self.stages.first { $0.name.hasPrefix("step 3") }).kinds
-        #expect(step3 == TextKit2Scope.containerChildKinds)
+        let production = step3.union([.media])
+        #expect(production == TextKit2Scope.containerChildKinds)
         for name in try TK2ContainerCoverage.allFixtures() {
             let blocks = try await TextKit2ListCoverageTests.blocks(name)
             let coverage = ADFTextRenderer.textKit2Coverage(of: blocks)
-            #expect(coverage == ADFTextRenderer.textKit2Coverage(of: blocks, allowed: step3), "\(name)")
+            #expect(coverage == ADFTextRenderer.textKit2Coverage(of: blocks, allowed: production), "\(name)")
+            // Media adds captions only: the container leaf fields are the
+            // step-3 stage's.
+            let atStep3 = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: step3)
+            #expect(coverage.eligibleContainerLeaves == atStep3.eligibleContainerLeaves
+                && coverage.linkedContainerLeaves == atStep3.linkedContainerLeaves
+                && coverage.fallbackContainerLeaves == atStep3.fallbackContainerLeaves, "\(name): \(coverage)")
             #expect(TK2ContainerCoverage.legacy(coverage) == ADFTextRenderer.textKit2Coverage(of: blocks, allowed: []), "\(name)")
-            #expect(coverage.containerListLeaves == 0 && coverage.eligibleCaptionLeaves + coverage.fallbackCaptionLeaves == 0, "\(name): \(coverage)")
+            #expect(coverage.containerListLeaves == 0, "\(name): \(coverage)")
             #expect(coverage.eligibleNestedCode + coverage.fallbackNestedCode == 0 && coverage.unpreparedExpands == 0, "\(name): \(coverage)")
+            #expect(coverage.eligibleCaptionLeaves + coverage.fallbackCaptionLeaves == TK2ContainerCoverage.captionsInScope(blocks), "\(name): \(coverage)")
             if !TextKit2Eligibility.containerTextMatchesText {
                 #expect(coverage.eligibleContainerLeaves == 0 && coverage.linkedContainerLeaves == 0, "\(name): container text is gated before iOS 26")
+                #expect(coverage.eligibleCaptionLeaves == 0, "\(name): captions are gated before iOS 26")
             }
             #expect(coverage.eligibleCodeRoots + coverage.fallbackCodeRoots == TK2ContainerCoverage.topLevelCode(blocks), "\(name)")
             let admission = ADFTextRenderer.textKit2CodeAdmission(
@@ -752,8 +800,8 @@ struct TextKit2ContainerDiagnosticsTests {
         #expect(ADFTextRenderer.textKit2ContainerRowDraws[prose] == nil, "its owner goes with its row")
         #expect(ADFTextRenderer.textKit2CodeRowDraws[code] == nil)
 
-        // Captions: no caption row exists until step 8, so the record is
-        // driven as a row reports itself. No suspension from here on.
+        // Captions: the record is driven as a row reports itself. No
+        // suspension from here on.
         let caption = "tk2-container-coverage.records.caption"
         let liveCaption = diagnostics.liveCaptionRowCount
         let captionNative = diagnostics.captionNativeDrawCount

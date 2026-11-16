@@ -226,6 +226,15 @@
 #                @0.4425 block 38, KP-S5: extension body 0.39
 #                @0.8103 block 70, KP-S10: panel 0.71, prose beside a code
 #                        block, stays on SwiftUI (the panel shape rule)
+#              Step 8 (captions): captions-parity (25 prepared blocks)
+#                @0.14   block 3: CAP-03 plain, CAP-04 marks
+#                @0.30   block 7: CAP-07 colour/highlight, CAP-08 placeholder
+#                @0.38   block 9: CAP-09 atoms (SwiftUI), CAP-10 wrapping
+#                @0.46   block 11: CAP-11 mixed scripts and emoji
+#                @0.54   block 13: CAP-12 in a panel, CAP-13 in a column
+#                        (SwiftUI until step 4)
+#                @0.70, @0.78, @0.86  blocks 17, 19, 21: one caption per
+#                        media layout
 #   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
 #              replaces the set; pairs of other fixtures are not list pairs)
 #   masks      --top-band 330 (status bar + inline nav bar/toolbar, where the
@@ -445,6 +454,32 @@ CONTAINER_CAPTURES_DEFAULT=(
     # stays on SwiftUI; no TextKit 2 container row is on screen (the quote,
     # panel and extension below it hold only code).
     "containers-parity@0.8103=container:fallback;0.71.0=swiftui;land=0.70"
+    # Captions (step 8): captions-parity, 25 prepared blocks (`Int(f x 25)`).
+    # Each landing, owner and live caption row was checked on the enabled
+    # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions
+    # (CAP-05 0.5.0, CAP-06 0.6.0) are TextKit 1-backed rows with no native
+    # draws, never proof: they are not named.
+    # CAP-03 plain, CAP-04 bold, italic, inline code, strike, underline,
+    # sub/superscript.
+    "captions-parity@0.14=caption:positive;0.3.0=tk2,0.4.0=tk2;land=0.3"
+    # CAP-07 author colour and highlight, CAP-08 placeholder.
+    "captions-parity@0.30=caption:positive;0.7.0=tk2,0.8.0=tk2;land=0.7"
+    # CAP-09 (mention, date, status: atoms) stays on SwiftUI beside CAP-10
+    # (wrapping, hard break).
+    "captions-parity@0.38=caption:positive;0.9.0=swiftui,0.10.0=tk2;land=0.9"
+    # CAP-11 accents, CJK, emoji, Hebrew and Arabic in one caption.
+    "captions-parity@0.46=caption:positive;0.11.0=tk2;land=0.11"
+    # CAP-12 in a panel (TextKit 2: panels and media are in the allow list
+    # from steps 3 and 8) and CAP-13 in a column (stacked at phone width;
+    # SwiftUI until step 4 adds layout columns, which flips it to tk2).
+    "captions-parity@0.54=caption:positive;0.13.1.0=tk2,0.14.0.0.0=swiftui;land=0.13"
+    # CAP-S3, one caption per layout: center, wrap-left; wrap-right,
+    # align-start; align-end, wide, full-width. The document ends below
+    # CAP-L-FULL-WIDTH: 0.86 is the last landing with at most one block
+    # above it (0.90 lands on the same screen).
+    "captions-parity@0.70=caption:positive;0.17.0=tk2,0.18.0=tk2;land=0.17"
+    "captions-parity@0.78=caption:positive;0.19.0=tk2,0.20.0=tk2;land=0.19"
+    "captions-parity@0.86=caption:positive;0.21.0=tk2,0.22.0=tk2,0.23.0=tk2;land=0.21"
 )
 CODE_CAPTURES=()
 CODE_CAPTURES_EXPLICIT=()

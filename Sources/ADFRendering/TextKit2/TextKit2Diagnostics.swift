@@ -499,6 +499,9 @@ enum TextKit2Eligibility {
         /// .container`) or a caption (`.caption`) before iOS 26
         /// (`containerTextMatchesText`).
         case osGatedContainer
+        /// A caption under a media layout whose caption frame does not match
+        /// `Text`'s (`TextKit2Scope.captionLayoutKeepsRenderer`).
+        case captionLayout
         /// Non-empty code that is not one plain prepared run: no
         /// `ADFCodeShape` over all of it (text assembled outside
         /// `DocumentPreparer`), more than one run, or a link or baseline

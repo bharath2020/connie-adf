@@ -100,7 +100,7 @@ struct TextKit2ListCoverageTests {
         ), rootLeaves: (0, 0)))
     }
 
-    @Test("kitchen-sink: the PR 1 root counts plus 8 plain list leaders")
+    @Test("kitchen-sink: the PR 1 root counts plus 8 plain list leaders and one caption")
     func kitchenSink() async throws {
         let blocks = try await Self.blocks("kitchen-sink")
         // Roots as pinned since PR 1 (10 eligible, 1 linked; the atom
@@ -113,14 +113,19 @@ struct TextKit2ListCoverageTests {
         // counts, and still one of the 28 legacy fallback roots. Container
         // text (step 3): the paragraphs of the seven panels, the quote and
         // the bodied extension, all plain; the column paragraphs and the
-        // expand wait for their families.
+        // expand wait for their families. The captioned image (0.23, "A
+        // captioned sunset") is one caption leaf, eligible from iOS 26
+        // (`osGatedContainer` before); the wide image after it has no
+        // caption.
+        let captions = TextKit2Eligibility.containerTextMatchesText
         #expect(blocks.count == 38)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 10, fallbackRoots: 28, textFallbackRoots: 2, linkRoots: 1,
             eligibleTextLeaves: 18, linkedTextLeaves: 1, fallbackTextLeaves: 2,
             listLeaderLeaves: 8, listTrailingLeaves: 0,
             eligibleCodeRoots: 1, fallbackCodeRoots: 0,
-            eligibleContainerLeaves: 9, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0
+            eligibleContainerLeaves: 9, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0,
+            eligibleCaptionLeaves: captions ? 1 : 0, fallbackCaptionLeaves: captions ? 0 : 1
         ), rootLeaves: (10, 1)))
     }
 
