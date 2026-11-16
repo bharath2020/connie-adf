@@ -10,9 +10,10 @@ import ADFPreparation
 /// `.textKit2` an eligible top-level paragraph, heading and list item are
 /// drawn by live TextKit 2 rows (identified `tk2-row:<owner id>`) that
 /// TextKit 2 itself draws; a linked paragraph gets a row its TextKit 1
-/// stack draws, counted apart and never as a native draw; an atom-bearing
-/// paragraph, a paragraph inside a container and a media caption get no
-/// row; switching back to `.swiftUI` releases every row.
+/// stack draws, counted apart and never as a native draw; from iOS 26 a
+/// panel's paragraph gets a row too, counted as container text; an
+/// atom-bearing paragraph and a media caption get no row; switching back
+/// to `.swiftUI` releases every row.
 @Suite("TextKit 2 diagnostics", .serialized)
 @MainActor
 struct TextKit2DiagnosticsTests {
@@ -92,11 +93,18 @@ struct TextKit2DiagnosticsTests {
 
         // Leaves: the three eligible roots and the list leader (from iOS 26;
         // before it list text falls back, `TextKit2Eligibility.listsMatchText`);
-        // the atom root falls back; panel and caption text are out of scope.
+        // the atom root falls back; the panel's paragraph is container text
+        // (from iOS 26, `containerTextMatchesText`); caption text is out of
+        // scope.
         let lists = TextKit2Eligibility.listsMatchText
+        let containers = TextKit2Eligibility.containerTextMatchesText
+        let panel = try #require(blocks.first { if case .panel = $0.kind { return true } else { return false } })
+        guard case .panel(_, let panelChildren) = panel.kind else { throw TestFailure("not a panel") }
+        let panelParagraph = try #require(panelChildren.first)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == ADFTextKit2Coverage(
             eligibleRoots: 3, fallbackRoots: blocks.count - 3, textFallbackRoots: 1, linkRoots: 1,
-            eligibleTextLeaves: lists ? 4 : 3, linkedTextLeaves: 1, fallbackTextLeaves: lists ? 1 : 2, listLeaderLeaves: 1, listTrailingLeaves: 0
+            eligibleTextLeaves: lists ? 4 : 3, linkedTextLeaves: 1, fallbackTextLeaves: lists ? 1 : 2, listLeaderLeaves: 1, listTrailingLeaves: 0,
+            eligibleContainerLeaves: containers ? 1 : 0, fallbackContainerLeaves: containers ? 0 : 1
         ))
 
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 1_600))
@@ -105,13 +113,18 @@ struct TextKit2DiagnosticsTests {
         window.isHidden = false
         try await Self.settle(window)
 
-        // Every other block (atom paragraph, panel, caption) stays on SwiftUI.
-        let rootRows: Set<String> = ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)", "tk2-row:\(linked.id)"]
-        #expect(Self.identifiers(in: host.view) == (lists ? rootRows.union(["tk2-row:\(listItem.id)"]) : rootRows))
+        // Every other block (atom paragraph, caption) stays on SwiftUI; the
+        // panel's paragraph draws on TextKit 2 from iOS 26.
+        var expectedRows: Set<String> = ["tk2-row:\(paragraph.id)", "tk2-row:\(heading.id)", "tk2-row:\(linked.id)"]
+        if lists { expectedRows.insert("tk2-row:\(listItem.id)") }
+        if containers { expectedRows.insert("tk2-row:\(panelParagraph.id)") }
+        #expect(Self.identifiers(in: host.view) == expectedRows)
         var rows = TextKit2FallbackTests.rows(in: host.view)
-        #expect(rows.count == (lists ? 4 : 3))
+        let rowCount = 3 + (lists ? 1 : 0) + (containers ? 1 : 0)
+        #expect(rows.count == rowCount)
         #expect(rows.filter(\.isTextKit1Backed).map(\.ownerID) == [linked.id])
         #expect(rows.filter { $0.ownerKind == .list }.map(\.ownerID) == (lists ? [listItem.id] : []))
+        #expect(rows.filter { $0.containerContext == .container }.map(\.ownerID) == (containers ? [panelParagraph.id] : []))
         for row in rows {
             #expect(row.relayoutCount >= 1, "\(row.ownerID ?? "?") never laid out")
         }
@@ -128,7 +141,7 @@ struct TextKit2DiagnosticsTests {
         }
         let native = diagnostics.nativeDrawCount - nativeDrawsBefore
         let backed = diagnostics.textKit1BackedDrawCount - backedDrawsBefore
-        #expect(native == (lists ? 3 : 2), "native draws: \(native)")
+        #expect(native == rowCount - 1, "native draws: \(native)")
         #expect(backed == 1, "TextKit 1 draws: \(backed)")
         // Every draw is one or the other, never both.
         #expect(diagnostics.drawCount - drawsBefore == native + backed)
@@ -144,10 +157,12 @@ struct TextKit2DiagnosticsTests {
         let live = diagnostics.liveRowCount
         let backedRows = diagnostics.textKit1BackedRowCount
         let listRows = diagnostics.liveListRowCount
+        let containerRows = diagnostics.liveContainerRowCount
         rows.removeAll()
-        #expect(live - diagnostics.liveRowCount == (lists ? 4 : 3), "rows released: \(live - diagnostics.liveRowCount)")
+        #expect(live - diagnostics.liveRowCount == rowCount, "rows released: \(live - diagnostics.liveRowCount)")
         #expect(backedRows - diagnostics.textKit1BackedRowCount == 1)
         #expect(listRows - diagnostics.liveListRowCount == (lists ? 1 : 0))
+        #expect(containerRows - diagnostics.liveContainerRowCount == (containers ? 1 : 0))
 
         window.isHidden = true
         window.rootViewController = nil
@@ -170,13 +185,15 @@ struct TextKit2DiagnosticsTests {
             window.rootViewController = nil
         }
 
-        // Each switch to `.textKit2` under the control rebuilds the four
+        // Each switch to `.textKit2` under the control rebuilds the five
         // eligible leaves (paragraph, heading, linked paragraph, list
-        // leader; before iOS 26 the list leader is not eligible,
-        // `TextKit2Eligibility.listsMatchText`) as `Text`.
+        // leader, the panel's paragraph; before iOS 26 the list leader and
+        // the panel's paragraph are not eligible,
+        // `TextKit2Eligibility.listsMatchText`, `containerTextMatchesText`)
+        // as `Text`.
         // (Other suites' rows can come and go across a suspension: only
         // this window's rows and the control's own counters are checked.)
-        let leaves = TextKit2Eligibility.listsMatchText ? 4 : 3
+        let leaves = 3 + (TextKit2Eligibility.listsMatchText ? 1 : 0) + (TextKit2Eligibility.containerTextMatchesText ? 1 : 0)
         for round in 1...2 {
             host.rootView = document(.textKit2, control: true)
             try await Self.settle(window)

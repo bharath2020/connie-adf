@@ -15,7 +15,9 @@ import ADFPreparation
 /// (`TextKit2Eligibility`), so it never reaches this check. List text (list
 /// leaders and a list row's paragraphs) is swept the same way, and so is
 /// every top-level code block the code gate hands to TextKit 2: the block's
-/// size and its code's scroll extent (`everyAdmittedCodeRoot`).
+/// size and its code's scroll extent (`everyAdmittedCodeRoot`). Container
+/// text (paragraphs and headings in panels, quotes and extension bodies) is
+/// swept at the widths its containers give it (`everyEligibleContainerLeaf`).
 @Suite("TextKit 2 fixture sweep", .serialized)
 @MainActor
 struct TextKit2FixtureSweepTests {
@@ -145,6 +147,120 @@ struct TextKit2FixtureSweepTests {
         }
         #expect(checked > 0)
         print("TK2 list sweep: \(checked) measurements, worst |Δ| = \(worst.delta) \(worst.description); list text on SwiftUI: \(fallbacks)")
+    }
+
+    // MARK: Container leaves
+
+    nonisolated static let containerDocuments = ["containers-parity", "kitchen-sink", "stress-1k", "stress-5k"]
+    /// Container prose leaves in scope per document (step 3: paragraphs and
+    /// headings in panels, quotes and bodied extensions), as hand-counted
+    /// from the JSON (`TextKit2ContainerCoverageTests.fixturePins`; stress-5k
+    /// 400 one-paragraph panels and 400 quotes of 606 paragraphs), with the
+    /// eligible ones (containers-parity has two atom paragraphs).
+    nonisolated static let expectedContainerLeaves: [String: (leaves: Int, eligible: Int)] = [
+        "containers-parity": (40, 38), "kitchen-sink": (9, 9), "stress-1k": (199, 199), "stress-5k": (1_006, 1_006),
+    ]
+    /// The document widths whose rows (16 pt in from each side) the
+    /// container leaves are swept in: an iPhone SE and an iPhone 17 Pro.
+    nonisolated static let containerDocumentWidths: [CGFloat] = [320, 402]
+
+    /// One container a leaf sits in, outermost first: what it takes from
+    /// the width it is given (`PanelBlockView`: padding on both sides, the
+    /// stack spacing and its icon; `QuoteBlockView`: its leading inset;
+    /// the extension body: its inset).
+    enum Inset: Hashable {
+        case panel(symbol: String)
+        case quote
+        case extensionBody
+
+        @MainActor
+        func points(_ env: TK2Parity.Environment) -> CGFloat {
+            let spacing = TK2Parity.theme.spacing
+            switch self {
+            case .panel(let symbol): return spacing * 4.5 + TK2ContainerProbe.iconWidth(symbol, env: env)
+            case .quote: return spacing * 2
+            case .extensionBody: return spacing * 3
+            }
+        }
+    }
+
+    /// The paragraphs and headings below panels, quotes and extension
+    /// bodies in `blocks`, with the containers above each, outermost first.
+    static func containerChains(_ blocks: [RenderBlock], chain: [Inset] = []) -> [String: (segments: [InlineSegment], style: TextBlockStyle, chain: [Inset])] {
+        var found: [String: (segments: [InlineSegment], style: TextBlockStyle, chain: [Inset])] = [:]
+        for block in blocks {
+            switch block.kind {
+            case .richText(let segments, let style): if !chain.isEmpty { found[block.id] = (segments, style, chain) }
+            case .panel(let palette, let children): found.merge(containerChains(children, chain: chain + [.panel(symbol: palette.iconSystemName)])) { a, _ in a }
+            case .quote(let children): found.merge(containerChains(children, chain: chain + [.quote])) { a, _ in a }
+            case .extensionPlaceholder(_, let body): found.merge(containerChains(body, chain: chain + [.extensionBody])) { a, _ in a }
+            default: continue
+            }
+        }
+        return found
+    }
+
+    /// Every container leaf the production scope hands to TextKit 2, swept
+    /// at the width its containers actually give it (the row width less
+    /// each container's inset, the panel's icon measured at that size) on
+    /// two document widths, each distinct (text, style, width) once. Before
+    /// iOS 26 container text is gated: every leaf must fall back as
+    /// `osGatedContainer`, which the sweep asserts instead of measuring.
+    @Test("every eligible container leaf of the demo documents measures as Text does at its effective child width")
+    func everyEligibleContainerLeaf() async throws {
+        struct Key: Hashable {
+            let segments: [InlineSegment]
+            let style: TextBlockStyle
+            let width: CGFloat
+            let size: DynamicTypeSize
+        }
+        var checked = 0
+        var worst: (delta: CGFloat, description: String) = (0, "")
+        var widthsSeen: Set<CGFloat> = []
+        for document in Self.containerDocuments {
+            let doc = try await ADFParser().parse(try Self.fixtureData(document))
+            let blocks = DocumentPreparer(theme: TK2Parity.theme).prepare(doc)
+            var leaves: [TextKit2Scope.Leaf] = []
+            TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+                if leaf.position == .containerProse { leaves.append(leaf) }
+            }
+            let chains = Self.containerChains(blocks)
+            let pin = try #require(Self.expectedContainerLeaves[document])
+            #expect(leaves.count == pin.leaves, "\(document): \(leaves.count) container leaves")
+            var eligible = 0
+            var gated = 0
+            var measured: Set<Key> = []
+            for leaf in leaves {
+                switch leaf.verdict {
+                case .fallback(.osGatedContainer): gated += 1; continue
+                case .fallback: continue
+                case .eligible: eligible += 1
+                }
+                let entry = try #require(chains[leaf.ownerID], "\(document) \(leaf.ownerID): no container chain")
+                for documentWidth in Self.containerDocumentWidths {
+                    for size in Self.sizes {
+                        let env = TK2Parity.Environment(size: size)
+                        let width = documentWidth - 4 * TK2Parity.theme.spacing - entry.chain.reduce(0) { $0 + $1.points(env) }
+                        guard measured.insert(Key(segments: entry.segments, style: entry.style, width: width, size: size)).inserted else { continue }
+                        widthsSeen.insert(width)
+                        let h = TK2Parity.heights(TK2Parity.Fixture(name: leaf.ownerID, segments: entry.segments, style: entry.style), size: size, width: width)
+                        let delta = abs(h.swiftUI - h.textKit2)
+                        let label = "\(document) \(leaf.ownerID) in \(entry.chain) \(size) W=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)"
+                        checked += 1
+                        if delta > worst.delta { worst = (delta, label) }
+                        #expect(delta <= Self.tolerance, "\(label)")
+                    }
+                }
+            }
+            if TextKit2Eligibility.containerTextMatchesText {
+                #expect(eligible == pin.eligible && gated == 0, "\(document): \(eligible) eligible container leaves")
+                #expect(!measured.isEmpty, "\(document): no container leaf measured")
+            } else {
+                #expect(eligible == 0 && gated == pin.eligible, "\(document): before iOS 26 \(gated) gated, \(eligible) eligible")
+            }
+            print("TK2 container sweep \(document): \(leaves.count) container leaves, \(eligible) eligible, \(gated) gated, \(measured.count) distinct measured")
+        }
+        print("TK2 container sweep: \(checked) measurements at \(widthsSeen.count) child widths (\(widthsSeen.sorted().map { String(format: "%.2f", $0) }.joined(separator: ","))), worst |Δ| = \(worst.delta) \(worst.description)")
     }
 
     // MARK: Code roots

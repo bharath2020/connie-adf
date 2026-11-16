@@ -161,7 +161,8 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
 /// columns) can still keep counted text on SwiftUI. Expand bodies are not
 /// prepared with the document, so their text is never counted:
 /// `unpreparedExpands` counts the expands in scope whose bodies the count
-/// could not enter. All of them are zero while the allow list is empty.
+/// could not enter. Before iOS 26 the container leaves and captions in
+/// scope count as fallbacks (`TextKit2Eligibility.containerTextMatchesText`).
 public struct ADFTextKit2Coverage: Sendable, Hashable {
     /// Top-level paragraphs and headings TextKit 2 draws (root richText,
     /// legacy).
@@ -494,6 +495,10 @@ enum TextKit2Eligibility {
         /// text column) before iOS 26, where list rows miss `Text`'s
         /// placement (`listsMatchText`).
         case osGatedList
+        /// Text below a container's boundary (`TextKit2ContainerContext
+        /// .container`) or a caption (`.caption`) before iOS 26
+        /// (`containerTextMatchesText`).
+        case osGatedContainer
         /// Non-empty code that is not one plain prepared run: no
         /// `ADFCodeShape` over all of it (text assembled outside
         /// `DocumentPreparer`), more than one run, or a link or baseline
@@ -616,11 +621,11 @@ enum TextKit2Eligibility {
     /// The engine verdict for text drawn for `owner` (top-level or list
     /// text, or a caption) in `context` (`TextKit2ContainerContext`). The
     /// views (`TextEngineLeaf`) and the coverage walk
-    /// (`TextKit2Scope.Leaf.verdict`) both decide through it. No rule reads
-    /// the context yet: it is the input the container stage's OS rule for
-    /// container text and captions needs, which joins with its own
-    /// evidence. List text in a container is still `.list`, so the list
-    /// rules below apply to it unchanged.
+    /// (`TextKit2Scope.Leaf.verdict`) both decide through it. Before
+    /// iOS 26, text below a container's boundary and captions fall back as
+    /// `.osGatedContainer` (`containerTextMatchesText`), after the content
+    /// reasons and the list gate. List text in a container is still
+    /// `.list`, so the list rules below apply to it unchanged.
     static func verdict(
         _ segments: [InlineSegment], owner: TextKit2OwnerKind = .root, context: TextKit2ContainerContext = .none
     ) -> Verdict {
@@ -638,6 +643,7 @@ enum TextKit2Eligibility {
             return .fallback(.trailingBreaks)
         }
         if owner == .list, !listsMatchText { return .fallback(.osGatedList) }
+        if context != .none, !containerTextMatchesText { return .fallback(.osGatedContainer) }
         return .eligible(text)
     }
 
@@ -660,6 +666,18 @@ enum TextKit2Eligibility {
     /// text that would otherwise be eligible falls back as `.osGatedList`;
     /// top-level paragraphs and headings are unaffected.
     static var listsMatchText: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+
+    /// Whether text below a container's boundary and captions may use
+    /// TextKit 2 on this OS: from iOS 26, where the container parity suites
+    /// (`TextKit2ContainerParityTests`) were measured. Before iOS 26 such
+    /// text that would otherwise be eligible falls back as
+    /// `.osGatedContainer`, and the coverage counts it; only a hosted sweep
+    /// at real container widths on that runtime may lift the gate. Root
+    /// text, top-level lists and top-level code are unaffected.
+    static var containerTextMatchesText: Bool {
         if #available(iOS 26.0, *) { return true }
         return false
     }

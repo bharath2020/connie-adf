@@ -22,7 +22,12 @@ import ADFPreparation
 /// - (b) a replacement document (`load`) whose rows reuse every structural
 ///   ID with different content;
 /// - (c) the root-paragraph control: the same replacement of a top-level
-///   paragraph (PR 1's path).
+///   paragraph (PR 1's path);
+/// - (d) container children: a panel's and a quote's paragraphs (and a
+///   paragraph in a panel nested in the quote) replaced under their stable
+///   IDs, from iOS 26 (before it container text stays on SwiftUI, which
+///   the case then asserts). Layout column children join with the column
+///   family.
 ///
 /// Every check compares each row with the same owner's row in a document
 /// loaded fresh with the new content (same window, same width). A row whose
@@ -320,6 +325,61 @@ struct TextKit2StableIDReplacementTests {
         let figures = Self.verify("(c) root replace", replaced: hosted, fresh: fresh, start: start,
                                   expected: expected, changed: changed, stable: true)
         Self.evidence("(c) root replace", conversions: converted, changed: changed, figures)
+    }
+
+    /// A panel (`0.0`: `0.0.0` grows, `0.0.1` unchanged), a quote (`0.1`:
+    /// `0.1.0` shrinks, a nested panel `0.1.1` whose `0.1.1.0` keeps its
+    /// length with new words) and a root paragraph (`0.2`, unchanged).
+    static func containerJSON(_ content: Content) -> String {
+        func paragraph(_ text: String) -> String {
+            #"{"type":"paragraph","content":[{"type":"text","text":"\#(text)"}]}"#
+        }
+        let panel = #"{"type":"panel","attrs":{"panelType":"info"},"content":[\#(paragraph(content.leader0)),\#(paragraph(content.nested))]}"#
+        let inner = #"{"type":"panel","attrs":{"panelType":"note"},"content":[\#(paragraph(content.continuation))]}"#
+        let quote = #"{"type":"blockquote","content":[\#(paragraph(content.leader1)),\#(inner)]}"#
+        return #"{"version":1,"type":"doc","content":[\#(panel),\#(quote),\#(paragraph(content.rootTail))]}"#
+    }
+
+    static func containerTexts(_ content: Content) -> [String: String] {
+        ["0.0.0": content.leader0, "0.0.1": content.nested, "0.1.0": content.leader1, "0.1.1.0": content.continuation, "0.2": content.rootTail]
+    }
+
+    @Test("(d) container children (a panel's, a quote's and a nested panel's paragraphs) replaced under their stable IDs draw, label and lay out the new text")
+    func containerStableIDReplacement() async throws {
+        let oldJSON = Self.containerJSON(Self.before)
+        let newJSON = Self.containerJSON(Self.after)
+        let old = Self.containerTexts(Self.before), new = Self.containerTexts(Self.after)
+        let changed = Self.changed(old, new)
+        #expect(changed == ["0.0.0", "0.1.0", "0.1.1.0"])
+
+        let hosted = try await Self.host(oldJSON)
+        defer { hosted.close() }
+        // Before iOS 26 container text stays on SwiftUI: only the root row.
+        let containers = TextKit2Eligibility.containerTextMatchesText
+        let owners = containers ? Set(old.keys) : ["0.2"]
+        let startRows = hosted.rows()
+        #expect(Set(startRows.keys) == owners, "the old document's rows: \(startRows.keys.sorted())")
+        let start = Self.before(startRows)
+        let conversions = TextKit2Diagnostics.shared.conversionCount
+        var revision: UInt64 = 0
+        for id in ["0.0", "0.1"] {
+            revision += 1
+            let replacement = try await Self.block(id, of: newJSON, for: hosted.model)
+            try await hosted.model.apply([.replace(itemID: id, block: replacement)], revision: revision)
+        }
+        try await hosted.settle()
+        let converted = TextKit2Diagnostics.shared.conversionCount - conversions
+        #expect(converted >= (containers ? changed.count : 0), "conversions \(converted)")
+
+        let fresh = try await Self.host(newJSON)
+        defer { fresh.close() }
+        let expected = new.filter { owners.contains($0.key) }
+        let figures = Self.verify("(d) container replace", replaced: hosted, fresh: fresh, start: start,
+                                  expected: expected, changed: containers ? changed : [], stable: true)
+        for row in hosted.rows().values where row.ownerID != "0.2" {
+            #expect(row.containerContext == .container, "\(row.ownerID ?? "?")")
+        }
+        Self.evidence("(d) container replace", conversions: converted, changed: changed, figures)
     }
 }
 #endif

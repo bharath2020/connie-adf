@@ -9,9 +9,10 @@ import ADFPreparation
 /// renderer a container hands each child (`TextKit2Scope.childRenderer`)
 /// over every block kind, every parent, both inherited values and every
 /// allow-list stage; the top-level rows reading the same list and rules
-/// (`inheritsRenderer`); and the view-time rules (`containerGate`). The
-/// production allow list is empty at this stage, so no container child
-/// keeps TextKit 2 in the app. Cross-platform.
+/// (`inheritsRenderer`); the panel shape rule (`panelKeepsRenderer`); and
+/// the view-time rules (`containerGate`). The production allow list holds
+/// the first families (paragraphs and headings, panels, quotes, extension
+/// bodies). Cross-platform.
 @Suite("TextKit 2 container scope: rules")
 struct TextKit2ContainerScopeTests {
     /// The allow list at each stage of the container work (plan §5), and
@@ -116,18 +117,43 @@ struct TextKit2ContainerScopeTests {
 
     /// The whole-block rules as this stage has them (plan §4.1, P17),
     /// written out independently of `blockKeepsRenderer`: a list by rule B;
-    /// a panel always, until the panel shapes are decided; an extension
-    /// with a body; no caption yet; tables, plugins, dividers, media
-    /// strips, cards and unknown nodes never.
+    /// a panel by the panel shape probes (`expectedPanelKeeps`); an
+    /// extension with a body; no caption yet; tables, plugins, dividers,
+    /// media strips, cards and unknown nodes never.
     static func expectedWholeBlock(_ kind: RenderBlock.Kind) -> Bool {
         switch kind {
         case .richText, .codeBlock, .quote, .expand, .layoutColumns: return true
         case .listRows(let rows): return TextKit2Scope.listKeepsRenderer(rows)
-        case .panel: return true
+        case .panel(_, let children): return expectedPanelKeeps(children)
         case .extensionPlaceholder(_, let body): return !body.isEmpty
         case .media: return false
         case .divider, .tableSlice, .mediaStrip, .card, .custom, .unknown: return false
         }
+    }
+
+    /// The panel shape rule as the probes decided it (`probes/results.md`
+    /// §1) and the step 3 parity run added (a code block beside prose),
+    /// written out from the run attributes rather than through
+    /// `isBodyText`: no list, no heading, and neither a code block nor a
+    /// superscript, subscript or small-text run (a `.footnote` or
+    /// `.subheadline` font spec) unless it is the whole body.
+    static func expectedPanelKeeps(_ children: [RenderBlock]) -> Bool {
+        var small = false
+        for child in children {
+            switch child.kind {
+            case .listRows: return false
+            case .codeBlock: small = true
+            case .richText(let segments, let style):
+                if style.isHeading { return false }
+                for case .text(let text) in segments {
+                    for run in text.runs {
+                        if let style = run.adfFontSpec?.textStyle, style == .footnote || style == .subheadline { small = true }
+                    }
+                }
+            default: break
+            }
+        }
+        return children.count == 1 || !small
     }
 
     @Test("childRenderer is exhaustive: every kind, parent, inherited renderer, allow-list stage and direction")
@@ -191,11 +217,12 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("top-level rows read the same allow list and whole-block rules; the production list is empty, so every container row stays SwiftUI")
+    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes and extension bodies")
     func topLevelRowsReadTheAllowList() async throws {
-        // Step 2: no family is enabled. Each later stage changes this pin
-        // deliberately, with the family it enables.
-        #expect(TextKit2Scope.containerChildKinds.isEmpty)
+        // Step 3: paragraphs and headings in panels, quotes and extension
+        // bodies. Each later stage changes this pin deliberately, with the
+        // family it enables.
+        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder])
         #expect(EnvironmentValues().adfContainerChildKinds == TextKit2Scope.containerChildKinds)
         #expect(EnvironmentValues().adfTextContainerContext == .none)
         #expect(TextKit2Scope.captionsUseTextKit2 == false)
@@ -203,14 +230,23 @@ struct TextKit2ContainerScopeTests {
         let samples = try await Self.samples()
         for sample in samples {
             let family = Self.family(sample.kind)
-            // In the app (the production list): PR 3's rows only.
+            // In the app (the production list): PR 3's rows, and from
+            // step 3 panels that pass their shape rule, quotes and bodied
+            // extensions.
             let pr3: Bool
             switch sample.kind {
             case .richText, .codeBlock: pr3 = true
             case .listRows(let rows): pr3 = TextKit2Scope.listKeepsRenderer(rows)
             default: pr3 = false
             }
-            #expect(TextKit2Scope.inheritsRenderer(sample.kind) == pr3, "\(sample.id) \(family)")
+            let production: Bool
+            switch sample.kind {
+            case .panel(_, let children): production = Self.expectedPanelKeeps(children)
+            case .quote: production = true
+            case .extensionPlaceholder(_, let body): production = !body.isEmpty
+            default: production = pr3
+            }
+            #expect(TextKit2Scope.inheritsRenderer(sample.kind) == production, "\(sample.id) \(family)")
             for (stage, allowed) in Self.stages {
                 let inherits = TextKit2Scope.inheritsRenderer(sample.kind, allowed: allowed)
                 switch family {
@@ -277,6 +313,121 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
+    /// A text node with marks (JSON).
+    static func text(_ string: String, _ marks: String...) -> String {
+        marks.isEmpty ? "{\"type\":\"text\",\"text\":\"\(string)\"}"
+            : "{\"type\":\"text\",\"text\":\"\(string)\",\"marks\":[\(marks.joined(separator: ","))]}"
+    }
+
+    /// The panel bodies the shape probes measured (`probes/results.md`
+    /// §3.1), plus the shapes the fixtures hold beside them, with the
+    /// outcome the probes decided: `true` keeps the body's text on
+    /// TextKit 2.
+    static let panelShapes: [(name: String, body: [String], keeps: Bool)] = {
+        let sup = "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sup\"}}"
+        let sub = "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sub\"}}"
+        let small = "{\"type\":\"fontSize\",\"attrs\":{\"size\":\"small\"}}"
+        let code = "{\"type\":\"code\"}"
+        let link = "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}}"
+        func p(_ content: String...) -> String { "{\"type\":\"paragraph\",\"content\":[\(content.joined(separator: ","))]}" }
+        let heading = "{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[\(text("A heading"))]}"
+        let list = "{\"type\":\"bulletList\",\"content\":[\(item(paragraph("An item")))]}"
+        let task = "{\"type\":\"taskList\",\"attrs\":{\"localId\":\"t\"},\"content\":[{\"type\":\"taskItem\",\"attrs\":{\"localId\":\"t1\",\"state\":\"TODO\"},\"content\":[\(text("A task"))]}]}"
+        let quote = "{\"type\":\"blockquote\",\"content\":[\(paragraph("Quoted"))]}"
+        let codeBlock = "{\"type\":\"codeBlock\",\"content\":[\(text("let x = 1"))]}"
+        let subsup = p(text("x"), text("2", sup), text(" H"), text("2", sub), text("O "), text("small print", small))
+        return [
+            ("onePara", [paragraph("One paragraph.")], true),
+            ("bodyParas", [p(text("Linked", link), text(" and "), text("code", code)), paragraph("Second."), paragraph("Third.")], true),
+            ("subsupAlone", [subsup], true),
+            ("nestedQuote", [paragraph("Before the quote."), quote], true),
+            ("codeAlone", [codeBlock], true),
+            ("smallCodeBeside", [p(text("small code", small, code)), paragraph("A body paragraph.")], true),
+            ("headingPara", [heading, paragraph("After the heading.")], false),
+            ("headingAlone", [heading], false),
+            ("subsupBeside", [paragraph("Before."), subsup, paragraph("After.")], false),
+            ("subsupBesideQuote", [subsup, quote], false),
+            ("nestedList", [paragraph("Before the list."), list], false),
+            ("listAlone", [list], false),
+            ("taskBeside", [paragraph("Before the tasks."), task], false),
+            ("codeBeside", [paragraph("Before the code."), codeBlock], false),
+            ("codeFirst", [codeBlock, paragraph("After the code.")], false),
+        ]
+    }()
+
+    /// The paragraphs and headings a container body holds, through the
+    /// quotes in it (a quote keeps the renderer) and the panels that keep it
+    /// by the test's own rule; lists, code and other blocks hold none.
+    static func proseCount(_ children: [RenderBlock]) -> Int {
+        children.reduce(0) { count, child in
+            switch child.kind {
+            case .richText: return count + 1
+            case .quote(let nested): return count + proseCount(nested)
+            case .panel(_, let nested): return count + (expectedPanelKeeps(nested) ? proseCount(nested) : 0)
+            default: return count
+            }
+        }
+    }
+
+    @Test("panelKeepsRenderer: the probed panel shapes keep or reset the renderer as the probes decided, as a top-level row, a nested child and in the coverage walk")
+    func panelShapeRule() async throws {
+        for shape in Self.panelShapes {
+            let json = "{\"version\":1,\"type\":\"doc\",\"content\":[{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(shape.body.joined(separator: ","))]}]}"
+            let blocks = DocumentPreparer(theme: .default).prepare(try await ADFParser().parse(Data(json.utf8)))
+            let panel = try #require(blocks.first)
+            guard case .panel(_, let children) = panel.kind else { throw TestFailure("\(shape.name): not a panel") }
+            #expect(TextKit2Scope.panelKeepsRenderer(children) == shape.keeps, "\(shape.name)")
+            #expect(Self.expectedPanelKeeps(children) == shape.keeps, "\(shape.name): the test's own rule")
+            #expect(TextKit2Scope.blockKeepsRenderer(panel.kind) == shape.keeps, "\(shape.name)")
+            #expect(TextKit2Scope.inheritsRenderer(panel.kind) == shape.keeps, "\(shape.name): top-level row")
+            for parent in [TextKit2ContainerParent.quote, .extensionBody, .panel] {
+                let nested = TextKit2Scope.childRenderer(
+                    for: panel.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight
+                )
+                #expect(nested == (shape.keeps ? .textKit2 : .swiftUI), "\(shape.name) in \(parent)")
+            }
+            // The walk counts the body's prose only where the panel keeps
+            // the renderer (reason `panelShape`, a static reason).
+            var prose: [String] = []
+            TextKit2Scope.forEachLeaf(in: blocks) { if $0.position == .containerProse { prose.append($0.ownerID) } }
+            let paragraphs = Self.proseCount(children)
+            #expect(prose.count == (shape.keeps ? paragraphs : 0), "\(shape.name): \(prose)")
+            // A quote around the same body is not a panel: its prose counts.
+            let quote = RenderBlock(id: "q", kind: .quote(children))
+            var quoted = 0
+            TextKit2Scope.forEachLeaf(in: [quote]) { if $0.position == .containerProse { quoted += 1 } }
+            #expect(quoted == paragraphs, "\(shape.name) as a quote body")
+        }
+        // An empty panel keeps the renderer and has nothing to draw.
+        #expect(TextKit2Scope.panelKeepsRenderer([]))
+    }
+
+    @Test("containerTextMatchesText: before iOS 26 container text and captions fall back as osGatedContainer, after the content reasons and the list gate; roots, lists and code outside containers are unaffected")
+    func containerOSGate() throws {
+        func segments(_ string: String) -> [InlineSegment] {
+            var text = AttributedString(string)
+            text.adfFontSpec = ADFFontSpec(textStyle: .body)
+            return [.text(text)]
+        }
+        let gated = !TextKit2Eligibility.containerTextMatchesText
+        #expect(TextKit2Eligibility.containerTextMatchesText == TextKit2Eligibility.listsMatchText, "both from iOS 26")
+        func reason(_ verdict: TextKit2Eligibility.Verdict) -> TextKit2Eligibility.Fallback? {
+            if case .fallback(let reason) = verdict { return reason }
+            return nil
+        }
+        let plain = segments("Container text.")
+        for context in [TextKit2ContainerContext.container, .caption] {
+            #expect(reason(TextKit2Eligibility.verdict(plain, owner: .root, context: context)) == (gated ? .osGatedContainer : nil), "\(context)")
+            // The list gate decides list text in a container first.
+            #expect(reason(TextKit2Eligibility.verdict(plain, owner: .list, context: context)) == (gated ? .osGatedList : nil), "list in \(context)")
+            // Content reasons come first.
+            #expect(reason(TextKit2Eligibility.verdict(segments("\n"), owner: .root, context: context)) == .empty, "\(context)")
+            #expect(reason(TextKit2Eligibility.verdict([.atom(.mention(text: "@a"), id: "m")], owner: .root, context: context)) == .atom, "\(context)")
+        }
+        #expect(reason(TextKit2Eligibility.verdict(plain, owner: .root, context: .none)) == nil, "root text is never container-gated")
+        #expect(reason(TextKit2Eligibility.verdict(plain, owner: .list, context: .none)) == (gated ? .osGatedList : nil))
+    }
+
     @Test("a width bound narrows by an inset and maps through a share, clamped at 0; pending and unproven pass unchanged")
     func boundArithmetic() {
         #expect(TextKit2WidthBound.atLeast(343).narrowed(by: 16) == .atLeast(327))
@@ -294,3 +445,163 @@ struct TextKit2ContainerScopeTests {
         #expect(ProportionalColumnsLayout.columnWidths(totalWidth: 10, fractions: [0.5, 0.5], spacing: 16) == [0, 0])
     }
 }
+
+#if canImport(UIKit)
+import UIKit
+
+/// Plugin blocks for the hosted negatives: claims a `blockCard` whose URL
+/// starts `plugin:` and draws its value as plain SwiftUI text.
+private struct ScopePluginRenderer: ADFCustomBlockRenderer {
+    let rendererID = "test.container-scope.plugin-renderer"
+
+    func claim(for node: ADFNode) -> ADFCustomBlockClaim? {
+        guard case .blockCard(let url, _) = node.kind, let url, url.hasPrefix("plugin:") else { return nil }
+        return ADFCustomBlockClaim(String(url.dropFirst("plugin:".count)), sizing: .reflowingText)
+    }
+
+    @MainActor
+    func content(for value: String, context: ADFCustomBlockContext) -> some View {
+        Text(value)
+    }
+}
+
+/// The hosted negatives of plan §4.1 and the excluded panel shapes (§3.3,
+/// reason `panelShape`), through the real document view under `.textKit2`:
+/// each named owner draws no TextKit 2 row, with the production allow list
+/// and (through a widened test host) with every kind allowed, while a
+/// sibling the rules do pass draws one, so the negative is the scope's
+/// doing and not an empty document.
+extension TextKit2ContainerScopeTests {
+    /// The document, hosted under `.textKit2`; returns this window's row
+    /// owners by context. `allowed` widens the allow list (`nil`: the
+    /// production list).
+    @MainActor
+    static func hostedOwners(
+        _ content: [String], allowed: Set<TextKit2BlockKind>? = nil, openExpands: Set<String> = []
+    ) async throws -> (all: Set<String>, container: Set<String>, root: Set<String>) {
+        let json = "{\"version\":1,\"type\":\"doc\",\"content\":[\(content.joined(separator: ","))]}"
+        let model = ADFDocumentModel(customRenderers: [ScopePluginRenderer()])
+        model.load(data: Data(json.utf8))
+        for _ in 0..<500 where model.phase != .ready {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(model.phase == .ready)
+        model.expandedBlocks.formUnion(openExpands)
+        let document = ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2)
+            .transformEnvironment(\.adfContainerChildKinds) { kinds in
+                if let allowed { kinds = allowed }
+            }
+        let hosted = TK2CodeLogic.Hosted(document, size: CGSize(width: 390, height: 2_400))
+        defer { hosted.close() }
+        try await hosted.settle()
+        if !openExpands.isEmpty, allowed != nil, TextKit2Eligibility.containerTextMatchesText {
+            // The body is prepared off the main actor on first opening.
+            for _ in 0..<100 where hosted.rows.isEmpty {
+                try await Task.sleep(for: .milliseconds(20))
+                hosted.window.layoutIfNeeded()
+            }
+            try await hosted.settle()
+        }
+        let rows = hosted.rows
+        return (
+            Set(rows.compactMap(\.ownerID)),
+            Set(rows.filter { $0.containerContext == .container }.compactMap(\.ownerID)),
+            Set(rows.filter { $0.containerContext == .none }.compactMap(\.ownerID))
+        )
+    }
+
+    static func panelJSON(_ body: [String], type: String = "info") -> String {
+        "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"\(type)\"},\"content\":[\(body.joined(separator: ","))]}"
+    }
+
+    /// Container text drawn on TextKit 2 where the rules pass it: from
+    /// iOS 26 (before it nothing below a container draws there).
+    static func passing(_ owners: Set<String>) -> Set<String> {
+        TextKit2Eligibility.containerTextMatchesText ? owners : []
+    }
+
+    @Test("containerUnderRejectedListRow: a quote and a panel in a list item that resets the renderer, and in a list that fails rule B, stay on SwiftUI even with every kind allowed")
+    @MainActor
+    func containerUnderRejectedListRow() async throws {
+        let quote = "{\"type\":\"blockquote\",\"content\":[\(Self.paragraph("Quote in an item."))]}"
+        let panel = Self.panelJSON([Self.paragraph("Panel in an item.")])
+        let expand = "{\"type\":\"nestedExpand\",\"attrs\":{\"title\":\"E\"},\"content\":[\(Self.paragraph("Expand in an item."))]}"
+        let content = [
+            // 0.0: an item holding a paragraph, a quote and a panel (rule A:
+            // the row resets the renderer below it).
+            "{\"type\":\"bulletList\",\"content\":[\(Self.item(Self.paragraph("Item.") + "," + quote + "," + panel))]}",
+            // 0.1: a list whose item holds a panel and an expand (rule B).
+            "{\"type\":\"bulletList\",\"content\":[\(Self.item(Self.paragraph("Mixed.") + "," + panel + "," + expand)),\(Self.item(Self.paragraph("Plain.")))]}",
+            // 0.2: a root quote, the positive control.
+            quote,
+        ]
+        let excluded: Set<String> = ["0.0.0.1.0", "0.0.0.2.0", "0.1.0.1.0", "0.1.0.2.0"]
+        for allowed in [nil, Set(TextKit2BlockKind.allCases)] {
+            let owners = try await Self.hostedOwners(content, allowed: allowed)
+            #expect(owners.all.isDisjoint(with: excluded), "\(String(describing: allowed)): \(owners.all.sorted())")
+            #expect(owners.container == Self.passing(["0.2.0"]), "\(String(describing: allowed)): the root quote's paragraph is the control")
+        }
+    }
+
+    @Test("tableInExpandBody: a table in an open expand body stays on SwiftUI, beside body prose that migrates once expands are allowed")
+    @MainActor
+    func tableInExpandBody() async throws {
+        let cell = "{\"type\":\"tableCell\",\"content\":[\(Self.paragraph("In a cell."))]}"
+        let table = "{\"type\":\"table\",\"content\":[{\"type\":\"tableRow\",\"content\":[\(cell),\(cell)]}]}"
+        // The expand sits in a quote, whose boundary reads the (widened)
+        // allow list; a top-level row reads the production list only.
+        let expand = "{\"type\":\"nestedExpand\",\"attrs\":{\"title\":\"Open\"},\"content\":[\(Self.paragraph("Expand body prose.")),\(table)]}"
+        let content = ["{\"type\":\"blockquote\",\"content\":[\(expand)]}"]
+        // With the production list the expand is not a family yet: nothing.
+        let production = try await Self.hostedOwners(content, openExpands: ["0.0.0"])
+        #expect(production.all.isEmpty, "\(production.all.sorted())")
+        // Expands allowed: the body's paragraph migrates, the table does not.
+        let widened = try await Self.hostedOwners(content, allowed: Set(TextKit2BlockKind.allCases), openExpands: ["0.0.0"])
+        #expect(widened.container == Self.passing(["0.0.0.0"]), "\(widened.all.sorted())")
+        #expect(widened.all.allSatisfy { !$0.hasPrefix("0.0.0.1") }, "a table cell drew on TextKit 2: \(widened.all.sorted())")
+    }
+
+    @Test("pluginBlockInPanel: a plugin block in a panel draws its own view; the panel's paragraph beside it migrates")
+    @MainActor
+    func pluginBlockInPanel() async throws {
+        let plugin = "{\"type\":\"blockCard\",\"attrs\":{\"url\":\"plugin:A plugin's own text\"}}"
+        let content = [Self.panelJSON([Self.paragraph("Panel prose beside a plugin."), plugin])]
+        for allowed in [nil, Set(TextKit2BlockKind.allCases)] {
+            let owners = try await Self.hostedOwners(content, allowed: allowed)
+            #expect(owners.all == Self.passing(["0.0.0"]), "\(String(describing: allowed)): \(owners.all.sorted())")
+            #expect(!owners.all.contains("0.0.1"))
+        }
+    }
+
+    @Test("a root heading next to a panel is root text, never container proof: its row has no container context and is not in the container record")
+    @MainActor
+    func rootHeadingNextToPanel() async throws {
+        let heading = "{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[{\"type\":\"text\",\"text\":\"Root heading\"}]}"
+        // The panel holds a heading too, so its body stays on SwiftUI.
+        let content = [heading, Self.panelJSON([heading, Self.paragraph("Kept on SwiftUI.")])]
+        let owners = try await Self.hostedOwners(content)
+        #expect(owners.root == ["0.0"])
+        #expect(owners.container.isEmpty, "\(owners.container.sorted())")
+    }
+
+    @Test("panelShape: each excluded panel shape keeps its whole body on SwiftUI (no row for any owner), as a root panel and nested in a quote; the panels beside it migrate")
+    @MainActor
+    func excludedPanelShapesDrawNoRow() async throws {
+        let excluded = Self.panelShapes.filter { !$0.keeps }
+        #expect(excluded.map(\.name) == ["headingPara", "headingAlone", "subsupBeside", "subsupBesideQuote", "nestedList", "listAlone", "taskBeside", "codeBeside", "codeFirst"])
+        var content: [String] = []
+        for shape in excluded { content.append(Self.panelJSON(shape.body)) }
+        // The same shapes inside a quote, after a paragraph of the quote's own.
+        for shape in excluded {
+            content.append("{\"type\":\"blockquote\",\"content\":[\(Self.paragraph("Quote prose.")),\(Self.panelJSON(shape.body))]}")
+        }
+        // A panel that keeps the renderer: the control.
+        content.append(Self.panelJSON([Self.paragraph("A one-paragraph panel.")]))
+        let owners = try await Self.hostedOwners(content)
+        let n = excluded.count
+        var expected: Set<String> = ["0.\(2 * n).0"]
+        for index in n..<(2 * n) { expected.insert("0.\(index).0") }
+        #expect(owners.all == Self.passing(expected), "missing \(Self.passing(expected).subtracting(owners.all).sorted()), unexpected \(owners.all.subtracting(Self.passing(expected)).sorted())")
+    }
+}
+#endif

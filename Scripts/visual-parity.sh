@@ -211,11 +211,21 @@
 #                @0.5    block 300 (its header under the band), then 301
 #                        and on
 #   code captures  one declaration per code position (CODE_CAPTURES_DEFAULT)
-#   container and caption captures  CONTAINER_CAPTURES_DEFAULT (none yet:
-#              each PR 4 step that enables a family declares its own; a
-#              declared position not in the fixture defaults above is
-#              captured too). --no-code-captures drops every default
-#              declaration, of every kind.
+#   container and caption captures  CONTAINER_CAPTURES_DEFAULT (each PR 4
+#              step that enables a family declares its own; a declared
+#              position not in the fixture defaults above is captured too).
+#              --no-code-captures drops every default declaration, of every
+#              kind. Step 3 (panels, quotes, extension bodies):
+#              containers-parity (87 prepared blocks)
+#                @0      block 0, KP-S1: panels 0.1-0.6 (one paragraph each)
+#                @0.1321 block 11: panels 0.11 and 0.12 (headings), whose
+#                        bodies stay on SwiftUI (the panel shape rule)
+#                @0.3045 block 26, KP-S3: quotes 0.27-0.29 (three deep)
+#                @0.362  block 31, KP-S4: panel in quote, quote in panel,
+#                        panel in and quote in an extension body
+#                @0.4425 block 38, KP-S5: extension body 0.39
+#                @0.8103 block 70, KP-S10: panel 0.71, prose beside a code
+#                        block, stays on SwiftUI (the panel shape rule)
 #   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
 #              replaces the set; pairs of other fixtures are not list pairs)
 #   masks      --top-band 330 (status bar + inline nav bar/toolbar, where the
@@ -407,6 +417,34 @@ CODE_CAPTURES_DEFAULT=(
 # and owner table, as for the code captures above. The position is
 # captured by default (DEFAULT_FIXTURE_SPECS needs no edit).
 CONTAINER_CAPTURES_DEFAULT=(
+    # Step 3, panels, quotes and extension bodies (containers-parity, 87
+    # prepared blocks; owners from the fixture's owner table). Landings and
+    # owner frames measured on an iPhone 17 Pro (iOS 26.3) at -fontSizeStep
+    # 0 and 3: every named owner is on screen below the top band and above
+    # the bottom band at both steps. None of them is linked (a linked row
+    # draws through TextKit 1: 0 native draws, never proof).
+    # KP-S1: the palette panels, one paragraph each (0.7.0 and 0.8.0 run
+    # into the bottom band).
+    "containers-parity@0=container:positive;0.1.0=tk2,0.2.0=tk2,0.3.0=tk2,0.4.0=tk2,0.5.0=tk2,0.6.0=tk2;land=0.0"
+    # Panels 0.11 (H2 and H5 among three paragraphs) and 0.12 (H1) hold
+    # headings, so their bodies stay on SwiftUI. Landing on 0.11 keeps
+    # panel 0.8 (TextKit 2) off screen; at 0.10 it sits under the top band
+    # and a fallback capture would see it.
+    "containers-parity@0.1321=container:fallback;0.11.0=swiftui,0.11.1=swiftui,0.11.2=swiftui,0.11.4=swiftui,0.12.0=swiftui;land=0.11"
+    # KP-S3: a one-paragraph quote, a quote with a heading between two
+    # paragraphs, and quotes three deep.
+    "containers-parity@0.3045=container:positive;0.27.0=tk2,0.28.0=tk2,0.28.1=tk2,0.28.2=tk2,0.29.0=tk2,0.29.1.0=tk2,0.29.1.1.0=tk2,0.29.2=tk2;land=0.26"
+    # KP-S4: panel in quote, quote in panel, panel in an extension body,
+    # quote in an extension body (0.36, quote > panel > quote, runs into
+    # the bottom band at step 3).
+    "containers-parity@0.362=container:positive;0.32.0=tk2,0.32.1.0=tk2,0.33.0=tk2,0.33.1.0=tk2,0.34.0=tk2,0.34.1.0=tk2,0.35.0.0=tk2;land=0.31"
+    # KP-S5: an extension body with a heading between two paragraphs (the
+    # bodied sync block's paragraph 0.43.0 below it is root text).
+    "containers-parity@0.4425=container:positive;0.39.0=tk2,0.39.1=tk2,0.39.2=tk2;land=0.38"
+    # KP-S10: panel 0.71's paragraph sits beside a code block, so the panel
+    # stays on SwiftUI; no TextKit 2 container row is on screen (the quote,
+    # panel and extension below it hold only code).
+    "containers-parity@0.8103=container:fallback;0.71.0=swiftui;land=0.70"
 )
 CODE_CAPTURES=()
 CODE_CAPTURES_EXPLICIT=()

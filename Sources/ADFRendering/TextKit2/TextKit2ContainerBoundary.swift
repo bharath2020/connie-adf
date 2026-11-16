@@ -6,7 +6,8 @@ import ADFPreparation
 // lower bound on its width and the container context. One modifier,
 // `adfContainerChild`, at the five child sites; one allow list,
 // `TextKit2Scope.containerChildKinds`, that each stage of the container
-// work widens by one family. It starts empty: every container child gets
+// work widens by one family. Paragraphs and headings in panels, quotes and
+// extension bodies joined first; every other container child still gets
 // `.swiftUI`, as before containers joined the renderer's scope.
 
 /// A `RenderBlock.Kind` case without its payload: what the container allow
@@ -112,15 +113,17 @@ extension EnvironmentValues {
 }
 
 extension TextKit2Scope {
-    /// The child kinds a container passes the renderer to: empty until the
-    /// container stage enables its first family, so every container child
-    /// stays on SwiftUI. Each family joins in its own change: paragraphs
-    /// and headings, panels, quotes and extension bodies first, then layout
-    /// columns, expands, lists, code, media captions. `inheritsRenderer`
-    /// reads it for top-level container rows, `adfContainerChild` (through
-    /// `adfContainerChildKinds`) at every child boundary, and the coverage
-    /// walk (`forEachLeaf`) for both.
-    static let containerChildKinds: Set<TextKit2BlockKind> = []
+    /// The child kinds a container passes the renderer to. Each family
+    /// joins in its own change: paragraphs and headings, panels, quotes and
+    /// extension bodies first (here), then layout columns, expands, lists,
+    /// code, media captions; until a kind is listed every child of that
+    /// kind stays on SwiftUI, and so does everything below it.
+    /// `inheritsRenderer` reads it for top-level container rows,
+    /// `adfContainerChild` (through `adfContainerChildKinds`) at every child
+    /// boundary, and the coverage walk (`forEachLeaf`) for both. Before
+    /// iOS 26 the text it reaches still stays on SwiftUI
+    /// (`TextKit2Eligibility.containerTextMatchesText`).
+    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder]
 
     /// Kinds that never join the container scope, whatever an allow list
     /// says: tables (a later stage), plugin blocks (their renderer owns
@@ -147,11 +150,48 @@ extension TextKit2Scope {
         }
     }
 
-    /// Which panel bodies may hand their text to TextKit 2. Every body for
-    /// now: the panel family is not enabled yet (`containerChildKinds`),
-    /// and the rule is written from the panel shape probes when it is.
+    /// Which panel bodies may hand their text to TextKit 2: every body but
+    /// one holding a list, a heading, a code block beside another block, or
+    /// more than one block where a paragraph carries a superscript,
+    /// subscript or small-text run (`isBodyText`). Such a panel keeps its
+    /// whole body on SwiftUI (reason `panelShape`). From the panel shape
+    /// probes (iOS 26.3 at 3x and 2x, iOS 18.5 at 3x; xSmall to AX5, Bold
+    /// Text, documents 320 to 640 pt, both directions) and the step 3
+    /// parity run (`TextKit2ContainerParityTests.panelBody`, iOS 26.3 3x,
+    /// the full matrix), measured against the panel on SwiftUI:
+    /// - A list beside a paragraph: main's panel (an `HStack` aligned on
+    ///   first text baselines) truncates a list row at the panel's height
+    ///   ("… november o…" at Medium in a 402 pt document; dLast 21–34 pt),
+    ///   where TextKit 2 draws every line. TextKit 2 never imitates a
+    ///   truncation, so the shape stays as main draws it.
+    /// - A sub/superscript or small-text run beside another block: main
+    ///   truncates that paragraph the same way (up to 50 pt of last
+    ///   baseline at 2x). The same runs in a one-paragraph body match.
+    /// - A code block beside a paragraph: main's panel cuts the code block
+    ///   (still SwiftUI on both renderers) to its first line at most sizes
+    ///   and widths (its last line 19–21 pt off), where the panel with
+    ///   TextKit 2 prose shows every line. The same body in a quote, and
+    ///   the same blocks alone, match: the panel's stack is the cause.
+    /// - A heading and a paragraph: at AX5 in a 402 pt document (a
+    ///   271.667 pt body) TextKit 2 sets the whole body, icon included,
+    ///   31 pt low, and the blocks alone at that width do too: a leaf
+    ///   shift, kept out here until the leaf is fixed.
+    /// One paragraph, body paragraphs (links, inline code, bold, italic,
+    /// emoji) and a paragraph with a nested quote matched within 0.01 pt.
     static func panelKeepsRenderer(_ children: [RenderBlock]) -> Bool {
-        true
+        var smallRun = false
+        var code = false
+        for child in children {
+            switch child.kind {
+            case .listRows: return false
+            case .codeBlock: code = true
+            case .richText(let segments, let style):
+                if style.isHeading { return false }
+                if !isBodyText(segments) { smallRun = true }
+            default: continue
+            }
+        }
+        return !((smallRun || code) && children.count > 1)
     }
 
     /// Whether media captions may use TextKit 2 at all. Off until the
@@ -200,8 +240,11 @@ extension TextKit2Scope {
     }
 
     /// Whether a panel laid out in `direction` may pass the renderer to its
-    /// body. Every direction for now: written from the panel probes when
-    /// the panel family is enabled.
+    /// body: in both directions. The panel shape probes found no failure
+    /// right to left that the same shape does not have left to right (and
+    /// `panelKeepsRenderer` excludes); the extra right-to-left differences
+    /// were pixels the blocks alone reproduce, not the panel's. Kept as a
+    /// rule so a direction found failing later is a one-line change.
     static func panelDirectionKeepsRenderer(_ direction: LayoutDirection) -> Bool {
         true
     }

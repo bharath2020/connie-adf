@@ -20,12 +20,21 @@ struct TextKit2ListCoverageTests {
     /// (`TextKit2Eligibility.listsMatchText`, `.osGatedList`): the eligible
     /// and linked leaves are the roots' (`rootLeaves`), and the list leaves
     /// that were eligible count as fallbacks; the list leaf counts stay.
+    /// Container text falls back too (`containerTextMatchesText`,
+    /// `.osGatedContainer`): the eligible container leaves count as
+    /// fallbacks and none is linked.
     static func pinned(_ lists: ADFTextKit2Coverage, rootLeaves: (eligible: Int, linked: Int)) -> ADFTextKit2Coverage {
-        guard !TextKit2Eligibility.listsMatchText else { return lists }
         var gated = lists
-        gated.fallbackTextLeaves += lists.eligibleTextLeaves - rootLeaves.eligible
-        gated.eligibleTextLeaves = rootLeaves.eligible
-        gated.linkedTextLeaves = rootLeaves.linked
+        if !TextKit2Eligibility.listsMatchText {
+            gated.fallbackTextLeaves += lists.eligibleTextLeaves - rootLeaves.eligible
+            gated.eligibleTextLeaves = rootLeaves.eligible
+            gated.linkedTextLeaves = rootLeaves.linked
+        }
+        if !TextKit2Eligibility.containerTextMatchesText {
+            gated.fallbackContainerLeaves += lists.eligibleContainerLeaves
+            gated.eligibleContainerLeaves = 0
+            gated.linkedContainerLeaves = 0
+        }
         return gated
     }
 
@@ -53,12 +62,16 @@ struct TextKit2ListCoverageTests {
         // and 0.8.11 have none); no row in those lists holds a trailing
         // paragraph without a code block or a list beside it. Atoms
         // (fallback): 0.5.3, 0.6.1, 0.8.7–0.8.10. Links (TextKit 1-backed):
-        // 0.5.4, 0.6.2, 0.8.2. The text inside the panel, quote, table,
-        // expand and layout columns is out of scope.
+        // 0.5.4, 0.6.2, 0.8.2. The text inside the table, expand and layout
+        // columns is out of scope. Container text (step 3): none. The panel
+        // 0.14 holds a list, so its whole body stays on SwiftUI
+        // (`panelKeepsRenderer`); the quote 0.15 holds only a list, which
+        // joins with nested lists.
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 8, fallbackRoots: 13, textFallbackRoots: 0, linkRoots: 0,
             eligibleTextLeaves: 48, linkedTextLeaves: 3, fallbackTextLeaves: 6,
-            listLeaderLeaves: 46, listTrailingLeaves: 0
+            listLeaderLeaves: 46, listTrailingLeaves: 0,
+            eligibleContainerLeaves: 0, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0
         ), rootLeaves: (8, 0)))
     }
 
@@ -97,13 +110,17 @@ struct TextKit2ListCoverageTests {
         // lists in the layout columns, table and expand are out of scope.
         // The one top-level code block (0.12, two lines of printable ASCII)
         // is an eligible code root: counted apart, in none of the text
-        // counts, and still one of the 28 legacy fallback roots.
+        // counts, and still one of the 28 legacy fallback roots. Container
+        // text (step 3): the paragraphs of the seven panels, the quote and
+        // the bodied extension, all plain; the column paragraphs and the
+        // expand wait for their families.
         #expect(blocks.count == 38)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 10, fallbackRoots: 28, textFallbackRoots: 2, linkRoots: 1,
             eligibleTextLeaves: 18, linkedTextLeaves: 1, fallbackTextLeaves: 2,
             listLeaderLeaves: 8, listTrailingLeaves: 0,
-            eligibleCodeRoots: 1, fallbackCodeRoots: 0
+            eligibleCodeRoots: 1, fallbackCodeRoots: 0,
+            eligibleContainerLeaves: 9, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0
         ), rootLeaves: (10, 1)))
     }
 
@@ -213,10 +230,15 @@ struct TextKit2ListDiagnosticsTests {
         let listOwners = Set(rows.filter { $0.ownerKind == .list }.compactMap(\.ownerID))
         #expect(listOwners == eligibleList, "missing \(eligibleList.subtracting(listOwners).sorted()), unexpected \(listOwners.subtracting(eligibleList).sorted())")
         #expect(rows.filter(\.isTextKit1Backed).count == (lists ? 3 : 0))
-        // Nothing inside an excluded container (the root panel, quote,
-        // table, expand and layout columns), a row holding a block other
-        // than text (0.8.12, both rows of 0.12) or the list that keeps its
-        // text on SwiftUI (0.10).
+        // Nothing inside an excluded container (the table, expand and layout
+        // columns), a row holding a block other than text (0.8.12, both rows
+        // of 0.12) or the list that keeps its text on SwiftUI (0.10). The
+        // root panel 0.14 and quote 0.15 are in the container scope from
+        // step 3, but hold nothing that draws there yet: the panel holds a
+        // list, so its whole body stays on SwiftUI (`panelKeepsRenderer`),
+        // and the quote holds only a list, which joins with nested lists.
+        // The walk's root group (owner kind `.root`) includes container
+        // prose, so the eight roots above say there is none.
         let excluded = ["0.8.12", "0.10", "0.12", "0.14", "0.15", "0.16", "0.17", "0.18"]
         for owner in owners {
             #expect(!excluded.contains { owner == $0 || owner.hasPrefix($0 + ".") || owner.hasPrefix($0 + "#") }, "\(owner) is inside an excluded block")

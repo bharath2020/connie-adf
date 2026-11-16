@@ -145,7 +145,7 @@ struct TextKit2CodeScopeRuleTests {
         return found
     }
 
-    @Test("a top-level code block keeps the renderer choice; every container still resets it")
+    @Test("a top-level code block keeps the renderer choice; a container keeps it only as the container allow list says, and never passes it to code before code joins the list")
     func inheritsRenderer() async throws {
         let blocks = try await TK2CodeLogic.prepared(try TK2CodeLogic.document(Self.content()))
         #expect(Self.nestedCodeIDs(blocks) == Self.nestedCode)
@@ -158,8 +158,27 @@ struct TextKit2CodeScopeRuleTests {
             case .listRows:
                 #expect(block.id == "0.1")
                 #expect(inherits, "\(block.id): the list keeps the choice for its own text")
+            case .panel, .quote:
+                // From PR 4 step 3 the panel (its body passes the shape
+                // rule) and the quote keep the choice for their prose; the
+                // code in them is not in the allow list yet.
+                #expect(["0.2", "0.4"].contains(block.id), "\(block.id)")
+                #expect(inherits, "\(block.id): panels and quotes are in the container allow list")
             default:
                 #expect(!inherits, "\(block.id): a container must reset the choice")
+            }
+            let children: [RenderBlock]
+            switch block.kind {
+            case .panel(_, let blocks), .quote(let blocks): children = blocks
+            default: children = []
+            }
+            for child in children where TextKit2CodeCoverageTests.isCode(child) {
+                for parent in [TextKit2ContainerParent.panel, .quote] {
+                    let renderer = TextKit2Scope.childRenderer(
+                        for: child.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight
+                    )
+                    #expect(renderer == .swiftUI, "\(child.id) in \(parent): code joins the container scope with its own step")
+                }
             }
         }
         let kinds = blocks.filter { if case .codeBlock = $0.kind { return true } else { return false } }
@@ -170,7 +189,10 @@ struct TextKit2CodeScopeRuleTests {
         #expect(TextKit2Scope.inheritsRenderer(.codeBlock(language: nil, code: AttributedString())))
         #expect(TextKit2Scope.inheritsRenderer(.codeBlock(language: "make", code: TK2CodeLogic.stamped("all:\n\ttrue"))))
         let code = RenderBlock(id: "q.0", kind: .codeBlock(language: nil, code: TK2CodeLogic.stamped("x")))
-        #expect(!TextKit2Scope.inheritsRenderer(.quote([code])))
+        #expect(TextKit2Scope.inheritsRenderer(.quote([code])), "a quote keeps the choice for its prose")
+        #expect(TextKit2Scope.childRenderer(
+            for: code.kind, in: .quote, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight
+        ) == .swiftUI, "but not for its code")
         #expect(!TextKit2Scope.inheritsRenderer(.divider))
         #expect(!TextKit2Scope.inheritsRenderer(.unknown(typeName: "mystery")))
     }

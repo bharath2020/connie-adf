@@ -17,14 +17,18 @@ import ADFPreparation
 /// and before iOS 26 no interior empty line above AX3).
 /// A container (panel, quote, expand, layout columns, extension, and media
 /// for its caption) keeps the choice at the top level only when its kind
-/// is in the container allow list (`containerChildKinds`, empty for now)
-/// and passes its whole-block rule (`blockKeepsRenderer`); its child
+/// is in the container allow list (`containerChildKinds`: panels, quotes
+/// and extension bodies so far) and passes its whole-block rule
+/// (`blockKeepsRenderer`, for a panel `panelKeepsRenderer`); its child
 /// boundary (`View.adfContainerChild`, `childRenderer`) then passes the
-/// choice to the children the same list and rules allow. With the list
-/// empty every other top-level kind (panel, quote, table, media, expand,
-/// layout columns, card, extension, plugin, unknown) gets `.swiftUI`, and
-/// so does everything inside it, lists, code and paragraphs included; code
-/// inside a list item gets `.swiftUI` from its row. Those three places are
+/// choice to the children the same list and rules allow (paragraphs and
+/// headings, and nested panels, quotes and extensions so far). Every other
+/// top-level kind (table, media, expand, layout columns, card, plugin,
+/// unknown) gets `.swiftUI`, and so does everything inside it, and so does
+/// every child kind the list does not hold (lists and code in a container
+/// included); code inside a list item gets `.swiftUI` from its row. Before
+/// iOS 26 container text stays on SwiftUI at the leaf
+/// (`TextKit2Eligibility.containerTextMatchesText`). Those three places are
 /// the only ones that set `adfTextRenderer`. The coverage walk
 /// (`forEachLeaf`) follows the same rules, so the diagnostics count
 /// exactly the leaves the views may hand to TextKit 2 (stacked, left to

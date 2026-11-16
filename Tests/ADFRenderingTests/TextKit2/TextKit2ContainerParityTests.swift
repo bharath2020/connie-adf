@@ -35,6 +35,12 @@ import ADFPreparation
 // The matrix is sampled unless `ADF_CONTAINER_PROBES=full` reaches the test
 // runner (`TEST_RUNNER_ADF_CONTAINER_PROBES=full xcodebuild test …`).
 //
+// From step 3 container text is gated before iOS 26
+// (`TextKit2Eligibility.containerTextMatchesText`): there the probes assert
+// that the gate holds (no TextKit 2 row for container text) instead of
+// measuring, and the iOS 18.5 results in `probes/results.md` were taken
+// before the gate existed.
+//
 // PR 1's leaf residual (linked text, an emoji pair, inline code and bold at
 // AX3 in a 219 pt column) is pinned on its own in a quote body
 // (`linkedEmojiCodeResidualInQuote`); no other case carries a known-issue
@@ -218,17 +224,21 @@ enum TK2ContainerProbe {
     /// `view` with the environment a document row gives its block: the
     /// renderer, the row's width bound (`adfTextWidthBound`, which the
     /// document seeds with its column on every row), the probed container
-    /// kinds, theme, direction, Bold Text, Dynamic Type, and the horizontal
+    /// kinds (`allowed`; `nil` keeps the production list, as the app has
+    /// it), theme, direction, Bold Text, Dynamic Type, and the horizontal
     /// size class when one is given.
     @MainActor
     static func environment<V: View>(
         _ view: V, arm: ADFTextRenderer, env: TK2Parity.Environment, rowWidth: CGFloat,
-        sizeClass: UserInterfaceSizeClass? = nil, search: ADFDocumentSearch? = nil
+        sizeClass: UserInterfaceSizeClass? = nil, search: ADFDocumentSearch? = nil,
+        allowed: Set<TextKit2BlockKind>? = probedKinds
     ) -> some View {
         view
             .environment(\.adfTextRenderer, arm)
             .environment(\.adfTextWidthBound, .atLeast(rowWidth))
-            .environment(\.adfContainerChildKinds, probedKinds)
+            .transformEnvironment(\.adfContainerChildKinds) { kinds in
+                if let allowed { kinds = allowed }
+            }
             .environment(\.adfTheme, theme)
             .environment(\.adfDocumentSearch, search)
             .environment(\.layoutDirection, env.direction)
@@ -750,8 +760,45 @@ struct TextKit2ContainerParityTests {
 
     // MARK: panelShapes, quoteExpandExtensionShapes
 
+    /// Before iOS 26: the container gate holds for every shape of
+    /// `container` (no TextKit 2 row for its text, even with the probed
+    /// kinds allowed), at one environment.
+    func assertContainerGate(_ container: P.Container, probe: String) async throws {
+        var drawn: [String] = []
+        let width = P.rowWidth(documentWidth: 375)
+        for shape in P.shapes {
+            let block = try #require(try await P.prepared([container.wrap(shape.body)]).first)
+            let model = ADFDocumentModel()
+            if container == .expand { model.expandedBlocks.insert(block.id) }
+            let make = { (arm: ADFTextRenderer) in
+                P.environment(BlockView(block: block), arm: arm, env: TK2Parity.Environment(), rowWidth: width, search: model.search)
+            }
+            let b: P.Arm
+            if container == .expand {
+                // The body is prepared on opening: settle on the SwiftUI arm
+                // first, then flip (the gate leaves no row to wait for).
+                let host = P.Host(width: width)
+                defer { host.close() }
+                host.show(make(.swiftUI))
+                for _ in 0..<50 { host.layout(); try await Task.sleep(for: .milliseconds(10)) }
+                host.show(make(.textKit2))
+                for _ in 0..<20 { host.layout(); try await Task.sleep(for: .milliseconds(10)) }
+                b = P.arm(host)
+            } else {
+                b = try P.pair(width: width, pixels: false, make).textKit2
+            }
+            if !b.rows.isEmpty { drawn.append("\(shape.name): \(b.owners.sorted())") }
+        }
+        print("CONTAINER_PROBE_GATE probe=\(probe) container=\(container.rawValue) os=\(TK2Parity.osVersion) drawn=\(drawn.count)")
+        #expect(drawn.isEmpty, "before iOS 26 container text drew on TextKit 2: \(drawn)")
+    }
+
     /// Runs the shape matrix on one container kind, recording each case.
     func shapeMatrix(_ container: P.Container, probe: String) async throws {
+        guard TextKit2Eligibility.containerTextMatchesText else {
+            try await assertContainerGate(container, probe: probe)
+            return
+        }
         let clock = ContinuousClock()
         let start = clock.now
         let tally = P.Tally()
@@ -900,16 +947,19 @@ struct TextKit2ContainerParityTests {
     /// (a control).
     @Test("offGridColumns: paragraph, list, panel and quote in side-by-side columns at off-grid widths (record only; engine asserted)")
     func offGridColumns() async throws {
+        let gated = !TextKit2Eligibility.containerTextMatchesText
         let clock = ContinuousClock()
         let start = clock.now
         let tally = P.Tally()
         var engineMisses: [String] = []
         let offGrid: CGFloat = TK2Parity.nativeScale == 2 ? 370.5 : 370 + 1.0 / 3
-        let widths: [CGFloat] = P.fullMatrix ? [288, 343, 370, offGrid, 608, 639, 640] : P.familyMatrix ? [288, 370, offGrid, 640] : [370, 640]
+        // Before iOS 26 container text is gated: one width and size per
+        // family, asserting that no row draws.
+        let widths: [CGFloat] = gated ? [370] : P.fullMatrix ? [288, 343, 370, offGrid, 608, 639, 640] : P.familyMatrix ? [288, 370, offGrid, 640] : [370, 640]
         var environments: [TK2Parity.Environment] = []
-        let sideBySide: [DynamicTypeSize] = P.fullMatrix ? [.xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge] : P.familyMatrix ? [.xSmall, .large, .xxxLarge] : [.large, .xxxLarge]
+        let sideBySide: [DynamicTypeSize] = gated ? [.large] : P.fullMatrix ? [.xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge] : P.familyMatrix ? [.xSmall, .large, .xxxLarge] : [.large, .xxxLarge]
         environments += sideBySide.map { TK2Parity.Environment(size: $0) }
-        if P.fullMatrix || P.familyMatrix {
+        if !gated, P.fullMatrix || P.familyMatrix {
             environments += [DynamicTypeSize.xSmall, .large, .xxxLarge].map { TK2Parity.Environment(size: $0, legibility: .bold) }
             environments += [DynamicTypeSize.xSmall, .large, .xxxLarge].map { TK2Parity.Environment(size: $0, direction: .rightToLeft) }
             environments += [DynamicTypeSize.accessibility3, .accessibility5].map { TK2Parity.Environment(size: $0) }
@@ -925,8 +975,9 @@ struct TextKit2ContainerParityTests {
                 for env in environments {
                     for rowWidth in widths {
                         let rtl = env.direction == .rightToLeft
-                        // List text stays on SwiftUI before iOS 26 and right to left.
-                        let familyOnTextKit2 = family != "list" || (TextKit2Eligibility.listsMatchText && !rtl)
+                        // List text stays on SwiftUI before iOS 26 and right to
+                        // left; all container text before iOS 26.
+                        let familyOnTextKit2 = !gated && (family != "list" || (TextKit2Eligibility.listsMatchText && !rtl))
                         let stacked = env.size.isAccessibilitySize
                         let columnWidths = stacked ? Array(repeating: rowWidth, count: columns.count) : Self.columnWidths(columns, totalWidth: rowWidth, spacing: P.spacing * 2)
                         let fields = "probe=offGridColumns container=columns shape=\(family)/\(sectionName) \(P.fields(env)) W=\(P.format(rowWidth))"
@@ -939,8 +990,8 @@ struct TextKit2ContainerParityTests {
                             }
                             var verdict = P.geometry(a.guides, b.guides)
                             let columnOwner = P.firstTextOwner(column.blocks) ?? "?"
-                            verdict.engine = a.rows.isEmpty && (!familyOnTextKit2 || b.owners.contains(columnOwner))
-                            if !familyOnTextKit2 { verdict.notes.append("familyOnSwiftUI(listRules)") }
+                            verdict.engine = a.rows.isEmpty && (!familyOnTextKit2 || b.owners.contains(columnOwner)) && (!gated || b.rows.isEmpty)
+                            if !familyOnTextKit2 { verdict.notes.append(gated ? "familyOnSwiftUI(osGatedContainer)" : "familyOnSwiftUI(listRules)") }
                             let columnFields = fields + " column=\(index) colW=\(String(format: "%.4f", width))"
                             if !(verdict.pass && verdict.engine) {
                                 verdict.leaf = try P.leafControl(column.blocks, width: width, env: env)
@@ -958,7 +1009,7 @@ struct TextKit2ContainerParityTests {
                         // the section is compared by height and pixels.
                         verdict.dFirst = 0
                         verdict.dLast = 0
-                        verdict.engine = a.rows.isEmpty && (!familyOnTextKit2 || b.owners.contains(owner))
+                        verdict.engine = a.rows.isEmpty && (!familyOnTextKit2 || b.owners.contains(owner)) && (!gated || b.rows.isEmpty)
                         if let ba = a.bitmap, let bb = b.bitmap {
                             var crops: [P.Crop] = []
                             var x: CGFloat = 0
@@ -1048,7 +1099,11 @@ struct TextKit2ContainerParityTests {
                     let row = host.rows.first
                     let inSitu = row.map { $0.convert($0.bounds, to: nil).minX - s * 3 }
                     host.close()
-                    if let inSitu {
+                    if !TextKit2Eligibility.containerTextMatchesText {
+                        // Before iOS 26 the panel's text is gated: no row to
+                        // read the icon's width from in place.
+                        if row != nil { inSituMismatches.append("\(palette.iconSystemName) \(size): a TextKit 2 row in a panel before iOS 26") }
+                    } else if let inSitu {
                         if abs(inSitu - width) > 1 / TK2Parity.nativeScale + P.tolerance {
                             inSituMismatches.append("\(palette.iconSystemName) \(size) bold=\(weight == .bold): standalone \(width) in place \(inSitu)")
                         }
@@ -1101,7 +1156,11 @@ struct TextKit2ContainerParityTests {
             let (a, b) = try P.pair(width: width, pixels: false) { arm in
                 P.environment(BlockView(block: block), arm: arm, env: env, rowWidth: width)
             }
-            #expect(a.rows.isEmpty && b.owners.contains(owner), "\(name): TextKit 2 did not draw the quote's paragraph")
+            if TextKit2Eligibility.containerTextMatchesText {
+                #expect(a.rows.isEmpty && b.owners.contains(owner), "\(name): TextKit 2 did not draw the quote's paragraph")
+            } else {
+                #expect(a.rows.isEmpty && b.rows.isEmpty, "\(name): before iOS 26 the quote's paragraph is gated")
+            }
             let dH = abs(a.guides.height - b.guides.height)
             results.append("\(name) swiftUI=\(a.guides.height) textKit2=\(b.guides.height)")
             if name == "residual" {

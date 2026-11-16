@@ -97,8 +97,9 @@ parity vp-default
 expect_eq "default plan is a dry run that exits 0" "$STATUS" "0"
 declarations vp-default
 OUT="$WORK/vp-default"
-expect_has "default plan: 22 positions x 2 appearances x 2 sizes" "$OUT.out" "captures:     88 configurations x arms (A A2 B C)"
-expect_eq "default plan scores three pairs per configuration" "$(lines_of "$OUT.pairs")" "264"
+expect_has "default plan: 28 positions (22, plus PR 4 step 3's six containers-parity positions) x 2 appearances x 2 sizes" \
+    "$OUT.out" "captures:     112 configurations x arms (A A2 B C)"
+expect_eq "default plan scores three pairs per configuration" "$(lines_of "$OUT.pairs")" "336"
 # Every PR 1 and PR 2 default position is still captured.
 for cfg in kitchen-sink-p0 kitchen-sink-p0.5 stress-5k-p0 stress-5k-p0.5 lists-parity-p0 lists-parity-p0.119 \
     lists-parity-p0.214 lists-parity-p0.357 lists-parity-p0.405 lists-parity-p0.452 lists-parity-p0.548 \
@@ -116,7 +117,8 @@ for cfg in kitchen-sink-p0.275 code-parity-p0 code-parity-p0.19 code-parity-p0.2
 done
 expect_has "the kitchen-sink code position is launched as -scrollToFraction 0.275" "$OUT.out" \
     "-fixture kitchen-sink -scrollToFraction 0.275 -fontSizeStep 3 -rendererReset -rendererStats -captureGeometryHook -textkit2"
-expect_eq "nine code positions x 4 x three pairs are declared" "$(lines_of "$OUT.decl")" "108"
+expect_eq "nine code positions x 4 x three pairs are declared, beside six container positions' 72" \
+    "$(grep -cv -- '|container:' "$OUT.decl") $(lines_of "$OUT.decl")" "108 180"
 expect_has "kitchen-sink names code block 0.12 native and lands on 0.10" "$OUT.decl" \
     "kitchen-sink-p0.275-dark-s3-AC|positive|0.12=tk2;land=0.10|textkit2|$OUT/captures/kitchen-sink-p0.275-dark-s3-C.log"
 expect_has "arm B of a positive capture must prove SwiftUI from its own log" "$OUT.decl" \
@@ -150,8 +152,8 @@ expect_lacks "the scorer demands owner-level proof itself (no flag is passed)" "
 # The screenshot bracket: arms B and C of a declared configuration post the
 # capture-geometry hook before and after the screenshot; arm A never does.
 GEO="      geometry: notifyutil -p com.connie.adfreader.geometry before and after the screenshot"
-expect_eq "the dry run brackets the screenshot of every declared B and C arm, and only those" \
-    "$(grep -cxF -- "$GEO" "$OUT.out")" "72"
+expect_eq "the dry run brackets the screenshot of every declared B and C arm, and only those (36 code + 24 container configurations)" \
+    "$(grep -cxF -- "$GEO" "$OUT.out")" "120"
 expect_eq "… right after the launch line of a declared configuration's arm C" \
     "$(grep -A2 -F -- "  code-parity-p0.515-light-s0-C  " "$OUT.out" | tail -n 1)" "$GEO"
 expect_eq "… and of its arm B" \
@@ -241,8 +243,15 @@ declarations vp-old-default
 expect_eq "PR 1's own positions run without any declaration" "$STATUS $(lines_of "$WORK/vp-old-default.decl")" "0 0"
 
 # ---- PR 4: container and caption kinds on the declaration ----
-expect_eq "no container or caption capture is declared by default yet" \
-    "$(grep -cE -- '\|(container|caption):' "$WORK/vp-default.decl")" "0"
+expect_eq "step 3 declares four positive and two fallback container captures on containers-parity, no caption capture" \
+    "$(grep -c -- '^containers-parity-p.*|container:positive|' "$WORK/vp-default.decl") $(grep -c -- '^containers-parity-p.*|container:fallback|' "$WORK/vp-default.decl") $(grep -c -- '|container:' "$WORK/vp-default.decl") $(grep -c -- '|caption:' "$WORK/vp-default.decl")" \
+    "48 24 72 0"
+expect_has "the quote capture names the three-deep quote's owners and lands on KP-S3" "$WORK/vp-default.decl" \
+    "containers-parity-p0.3045-dark-s3-AC|container:positive|0.27.0=tk2,0.28.0=tk2,0.28.1=tk2,0.28.2=tk2,0.29.0=tk2,0.29.1.0=tk2,0.29.1.1.0=tk2,0.29.2=tk2;land=0.26|textkit2|$WORK/vp-default/captures/containers-parity-p0.3045-dark-s3-C.log"
+expect_has "the excluded panels (headings) are a fallback capture landed on 0.11" "$WORK/vp-default.decl" \
+    "containers-parity-p0.1321-light-s0-AB|container:fallback|0.11.0=swiftui,0.11.1=swiftui,0.11.2=swiftui,0.11.4=swiftui,0.12.0=swiftui;land=0.11|swiftui|$WORK/vp-default/captures/containers-parity-p0.1321-light-s0-B.log"
+expect_has "the container positions are launched like the code ones" "$WORK/vp-default.out" \
+    "-fixture containers-parity -scrollToFraction 0.362 -fontSizeStep 3 -rendererReset -rendererStats -captureGeometryHook -textkit2"
 parity vp-kinds --fixture code-parity@0.78 \
     --code-capture 'code-parity@0.78=container:positive;0.31.0=tk2,0.31.2#cont1=tk2;land=0.26' \
     --code-capture 'code-parity@0.78=caption:fallback;0.29.0=swiftui;land=0.26'
@@ -321,8 +330,8 @@ awk '{ print } /^CONTAINER_CAPTURES_DEFAULT=[(]$/ { print "    \"containers-pari
 expect_eq "the copy differs by the one declaration line" "$(diff "$PARITY" "$PCOPY/visual-parity.sh" | grep -c '^>')" "1"
 run vp-one-line "$BASH" "$PCOPY/visual-parity.sh" --udid FAKE-UDID-0001 --out "$WORK/vp-one-line" --dry-run
 declarations vp-one-line
-expect_has "… the new position joins the default plan (88 + 4 configurations)" "$WORK/vp-one-line.out" \
-    "captures:     92 configurations x arms (A A2 B C)"
+expect_has "… the new position joins the default plan (112 + 4 configurations)" "$WORK/vp-one-line.out" \
+    "captures:     116 configurations x arms (A A2 B C)"
 expect_eq "… with its declaration on every pair, and the code ones unchanged" \
     "$STATUS $(grep -c -- '^containers-parity-p0.25-.*|container:positive|0.4.0=tk2;land=0.3|' "$WORK/vp-one-line.decl") $(grep -cv -- '|container:' "$WORK/vp-one-line.decl")" \
     "0 12 108"
