@@ -20,7 +20,7 @@ login: token page in browser -> paste token (echo off)
 push:  QR adfreader://pair?v=1&h=<ip:port>&s=<sid>#k=<key>
                        ---- scan ---->           Settings → Atlassian Accounts → Scan from Mac
        listener <---- GET http://<ip:port>/h/<sid> (one fetch)
-       "Phone <ip> is asking for <site> — send? [Y/n]"
+       "Phone <ip> is asking for <site> — send? [y/N]"
        200 sealed box ---------------->          open with key -> "Add <site> as <email>?"
                                                  AdfAuthCheck -> iOS keychain
 Manual path (no Mac):                            Add Manually -> Open Token Page -> paste
@@ -39,9 +39,9 @@ before it reads a saved token. Signing with a stable identity stops that.
 
 | Command | What it does |
 |---|---|
-| `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open] [--dry-run]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. |
+| `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open] [--dry-run]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. It never prompts from a piped stdin: there `--site` and `--email` are required. |
 | `list` | Site, email, expiry, from the non-secret summary only. Suggests `rotate` at 14 days or fewer. |
-| `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>] [--print-link] [--dry-run]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. |
+| `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>] [--print-link] [--dry-run]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. The QR is drawn only on a terminal; when stdout is piped, `push` needs `--print-link`. |
 | `rotate <site> [--expiry-days <n>] [--token-stdin] [--no-open]` | `login` with the saved email, offers `push`, then points to the token page to revoke the old token. |
 | `remove <site> [--no-open]` | Deletes the Mac item, opens the token page to revoke it. The phone keeps its own copy. |
 | `probe-graphql --page <id> [--page <id> …] [--site <site>] [--raw]` | Runs `AdfProbePages`: title, space, emoji, link, and GraphQL errors verbatim. |
@@ -94,8 +94,9 @@ entitlements needed); iOS uses the app's keychain.
 - Seal: CryptoKit `ChaChaPoly` (RFC 8439), key `k`, authenticated data = `sid`.
 - Mac: one-shot IPv4 listener on the Wi-Fi/LAN address (`en0` first, or `--host`).
   Only `GET /h/<sid>` matches; anything else gets 404 and a warning. Each match
-  asks `send? [Y/n]` (Enter = yes): yes → one 200, then the listener stops; no →
-  403, keeps listening. If the phone disconnects while you decide, nothing is
+  asks `send? [y/N]`; only `y`/`yes` sends (Enter or end of input = no), and
+  keys typed before the question appears are discarded. Yes → one 200, then the
+  listener stops; no → 403, keeps listening. If the phone disconnects while you decide, nothing is
   sent and the code stays valid. Valid 120 s by default; at most 8 connections;
   the request head must arrive within 10 s and fit in 8 KiB; the sealed copy is
   zeroed when the listener finishes.
@@ -213,5 +214,5 @@ data or ships its own crypto.
 | CLI override | Effect |
 |---|---|
 | `ADF_AUTH_KEYCHAIN_SERVICE=<name>` | Keychain service instead of `com.connie.adfreader.atlassian` (prints a note) |
-| `--gateway <url>` (`login`, `rotate`, `probe-graphql`) | GraphQL to a stub; warns; plain `http` only for loopback (`127.0.0.1`, `localhost`) |
+| `--gateway <url>` (`login`, `rotate`, `probe-graphql`) | GraphQL to a stub; warns; loopback hosts only (`127.0.0.1`, `::1`, `localhost`), http or https |
 | `push --host 127.0.0.1` | Loopback listener for `curl`; warns, and the phone rejects such links |
