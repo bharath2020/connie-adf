@@ -3,8 +3,10 @@
 # Scripts/visual-parity.sh (code capture positions and declarations, the
 # capture-geometry bracket around the screenshot),
 # Scripts/e2e-video.sh (--test code) and Scripts/lifecycle-gate.sh (the
-# code tests, short names, tests of another class, the bundle check): their
-# --dry-run plans and their pure helpers.
+# code tests, short names, tests of another class, the bundle check), and
+# for PR 4's additions (the container and caption kinds on a capture
+# declaration, --test containers, CONTAINER_TESTS): their --dry-run plans
+# and their pure helpers.
 #
 # USAGE
 #   Scripts/tests/gate-scripts-tests.sh <workdir>
@@ -238,6 +240,97 @@ parity vp-old-default --fixture kitchen-sink@0,0.5
 declarations vp-old-default
 expect_eq "PR 1's own positions run without any declaration" "$STATUS $(lines_of "$WORK/vp-old-default.decl")" "0 0"
 
+# ---- PR 4: container and caption kinds on the declaration ----
+expect_eq "no container or caption capture is declared by default yet" \
+    "$(grep -cE -- '\|(container|caption):' "$WORK/vp-default.decl")" "0"
+parity vp-kinds --fixture code-parity@0.78 \
+    --code-capture 'code-parity@0.78=container:positive;0.31.0=tk2,0.31.2#cont1=tk2;land=0.26' \
+    --code-capture 'code-parity@0.78=caption:fallback;0.29.0=swiftui;land=0.26'
+declarations vp-kinds
+OUT="$WORK/vp-kinds"
+expect_eq "a position carries one declaration per kind: code (default), container, caption on each of 12 pairs" \
+    "$STATUS $(lines_of "$OUT.decl") $(lines_of "$OUT.pairs")" "0 36 12"
+expect_has "the code declaration is unchanged (no kind prefix)" "$OUT.decl" \
+    "code-parity-p0.78-light-s0-AC|fallback|0.26=swiftui,0.27=swiftui,0.28=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26|textkit2|$OUT/captures/code-parity-p0.78-light-s0-C.log"
+expect_has "the container declaration carries its kind, with a continuation-row owner" "$OUT.decl" \
+    "code-parity-p0.78-light-s0-AC|container:positive|0.31.0=tk2,0.31.2#cont1=tk2;land=0.26|textkit2|$OUT/captures/code-parity-p0.78-light-s0-C.log"
+expect_has "the caption declaration on arm B proves SwiftUI from B's log" "$OUT.decl" \
+    "code-parity-p0.78-dark-s3-AB|caption:fallback|0.29.0=swiftui;land=0.26|swiftui|$OUT/captures/code-parity-p0.78-dark-s3-B.log"
+expect_has "the noise pair asks for no proof of any kind" "$OUT.decl" \
+    "code-parity-p0.78-dark-s3-AA|container:positive|0.31.0=tk2,0.31.2#cont1=tk2;land=0.26|none|-"
+expect_has "the dry run lists each kind's declaration" "$OUT.out" \
+    "  code-parity-p0.78-light-s0: container:positive; 0.31.0=tk2,0.31.2#cont1=tk2;land=0.26"
+run vp-kinds-parse python3 -I -c '
+import importlib.util, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("visual_diff", sys.argv[1])
+diff = importlib.util.module_from_spec(spec)
+sys.modules["visual_diff"] = diff
+spec.loader.exec_module(diff)
+items = [line.rstrip("\n").split("|") for line in open(sys.argv[2])]
+pairs = {line.strip() for line in open(sys.argv[3])}
+rules = diff.parse_captures(items, pairs)
+kinds = {kind: sum(1 for k in rules.values() if kind in k) for kind in diff.CAPTURE_KINDS}
+rule = rules["code-parity-p0.78-light-s0-AC"]["container"]
+print(len(rules), kinds["code"], kinds["container"], kinds["caption"], len(diff.parse_code_captures(items, pairs)),
+      rule.kind, rule.cls, rule.owners[1][0], rule.land)
+' "$SCRIPTS/visual_diff.py" "$OUT.decl" "$OUT.pairs"
+expect_eq "visual_diff.py parses every kind the capture script emits" "$STATUS $(cat "$WORK/vp-kinds-parse.out")" \
+    "0 12 12 12 12 12 container positive 0.31.2#cont1 0.26"
+parity vp-kinds-replace --fixture code-parity@0.78 \
+    --code-capture 'code-parity@0.78=container:positive;0.31.0=tk2;land=0.26' \
+    --code-capture 'code-parity@0.78=container:fallback;0.31.0=swiftui;land=0.26'
+declarations vp-kinds-replace
+expect_eq "a later container declaration replaces the container one only (code default kept)" \
+    "$STATUS $(grep -c -- '|container:fallback|0.31.0=swiftui;land=0.26|' "$WORK/vp-kinds-replace.decl") $(grep -c -- '|container:positive|' "$WORK/vp-kinds-replace.decl") $(grep -c -- '-A.|fallback|0.26=swiftui' "$WORK/vp-kinds-replace.decl")" \
+    "0 12 0 12"
+parity vp-kinds-step --fixture code-dense@0.5 --code-capture 'code-dense@0.5#s3=container:fallback;0.300=swiftui;land=0.300'
+declarations vp-kinds-step
+expect_eq "a #s3 container declaration applies to step 3 only, beside the code default" \
+    "$STATUS $(grep -c -- '-s3-A.|container:fallback|' "$WORK/vp-kinds-step.decl") $(grep -c -- '-s0-A.|container:' "$WORK/vp-kinds-step.decl") $(grep -c -- '-A.|positive|0.301=tk2;land=0.300|' "$WORK/vp-kinds-step.decl")" \
+    "0 6 0 12"
+parity vp-kinds-code --fixture code-dense@0.5 --code-capture 'code-dense@0.5=code:fallback;0.305=swiftui;land=0.300'
+declarations vp-kinds-code
+expect_eq "an explicit code: kind is the code kind (it replaces the code default; emitted without the prefix)" \
+    "$STATUS $(grep -c -- '|fallback|0.305=swiftui;land=0.300|' "$WORK/vp-kinds-code.decl") $(lines_of "$WORK/vp-kinds-code.decl")" "0 12 12"
+parity vp-kinds-geo --arms "A B C" --fixture lists-parity@0.548 --appearances light --size-steps 0 \
+    --code-capture 'lists-parity@0.548=container:positive;0.12.0.0=tk2;land=0.11'
+expect_eq "a container capture at a position without code brackets the screenshot of arms B and C" \
+    "$STATUS $(grep -cxF -- "$GEO" "$WORK/vp-kinds-geo.out")" "0 2"
+parity vp-bad-kind --fixture code-dense@0.5 --code-capture 'code-dense@0.5=table:positive;0.301=tk2;land=0.300'
+expect_eq "an unknown kind is a usage error" "$STATUS" "2"
+expect_has "… that names the kinds" "$WORK/vp-bad-kind.out" "=[<code|container|caption>:]<positive|fallback>"
+parity vp-bad-kind-positive --fixture code-dense@0.5 --code-capture 'code-dense@0.5=container:positive;0.301=swiftui;land=0.300'
+expect_eq "a container positive without a tk2 owner is a usage error" "$STATUS" "2"
+expect_has "… and says why" "$WORK/vp-bad-kind-positive.out" "a positive capture needs an owner marked tk2"
+parity vp-bad-kind-fallback --fixture code-dense@0.5 --code-capture 'code-dense@0.5=caption:fallback;0.301=tk2;land=0.300'
+expect_eq "a caption fallback naming a tk2 owner is a usage error" "$STATUS" "2"
+expect_has "the manifest records the container and caption lines beside TK2_CODE_ROWS" "$PARITY" \
+    "landed_code_rows landed_container_rows landed_caption_rows"
+expect_has "… read after SCROLL_LANDED" "$PARITY" \
+    '"$(landed_line TK2_CODE_ROWS "$launch_log")" "$(landed_line TK2_CONTAINER_ROWS "$launch_log")"'
+expect_has "the usage text documents the kind" "$PARITY" \
+    "#     <fixture>@<position>[#s<step>]=[<kind>:]<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id>"
+# Adding a capture is one line: a copy of the script with one declaration
+# added to CONTAINER_CAPTURES_DEFAULT captures that position by default.
+PCOPY="$WORK/parity-copy"
+mkdir -p "$PCOPY/lib"
+cp "$SCRIPTS/lib/sim.sh" "$PCOPY/lib/sim.sh"
+awk '{ print } /^CONTAINER_CAPTURES_DEFAULT=[(]$/ { print "    \"containers-parity@0.25=container:positive;0.4.0=tk2;land=0.3\"" }' \
+    "$PARITY" >"$PCOPY/visual-parity.sh"
+expect_eq "the copy differs by the one declaration line" "$(diff "$PARITY" "$PCOPY/visual-parity.sh" | grep -c '^>')" "1"
+run vp-one-line "$BASH" "$PCOPY/visual-parity.sh" --udid FAKE-UDID-0001 --out "$WORK/vp-one-line" --dry-run
+declarations vp-one-line
+expect_has "… the new position joins the default plan (88 + 4 configurations)" "$WORK/vp-one-line.out" \
+    "captures:     92 configurations x arms (A A2 B C)"
+expect_eq "… with its declaration on every pair, and the code ones unchanged" \
+    "$STATUS $(grep -c -- '^containers-parity-p0.25-.*|container:positive|0.4.0=tk2;land=0.3|' "$WORK/vp-one-line.decl") $(grep -cv -- '|container:' "$WORK/vp-one-line.decl")" \
+    "0 12 108"
+run vp-one-line-none "$BASH" "$PCOPY/visual-parity.sh" --udid FAKE-UDID-0001 --out "$WORK/vp-one-line-none" --dry-run \
+    --no-code-captures
+expect_has "… and --no-code-captures drops it with its position" "$WORK/vp-one-line-none.out" \
+    "captures:     88 configurations x arms (A A2 B C)"
+
 # ================================================================ e2e-video ==
 
 e2e() { E2E_VIDEO_SOURCED=1 "$BASH" -c '. "$0"; "$@"' "$E2E" "$@"; }
@@ -248,7 +341,9 @@ expect_eq "--test switch is unchanged" "$(e2e test_id_for switch)" \
     "ADFReaderUITests/RendererSwitchUITests/testLiveSwitchSwiftUIToTextKit2AndBack"
 expect_eq "--test lists is unchanged" "$(e2e test_id_for lists)" \
     "ADFReaderUITests/ListStoryboardUITests/testListStoryboardSwiftUIToTextKit2AndBack"
-for selector in Code codes cod "" all; do
+expect_eq "--test containers names the container storyboard (PR 4)" "$(e2e test_id_for containers)" \
+    "ADFReaderUITests/ContainerStoryboardUITests/testContainerStoryboard"
+for selector in Code codes cod "" all container Containers containerss; do
     e2e test_id_for "$selector" >/dev/null 2>&1
     expect_eq "selector '$selector' is refused (no partial or case-insensitive match)" "$?" "1"
 done
@@ -299,7 +394,28 @@ expect_eq "--test code --negative is accepted" "$STATUS" "0"
 expect_has "… as the wrong-digest control" "$WORK/e2e-code-negative.out" "digest:         deliberately wrong (negative control)"
 run e2e-bad "$BASH" "$E2E" --udid FAKE-UDID-0001 --out "$WORK/e2e-out/bad.mp4" --test codes --dry-run
 expect_eq "an unknown --test is a usage error" "$STATUS" "2"
-expect_has "… that names the three selectors" "$WORK/e2e-bad.out" "--test must be 'switch', 'lists' or 'code' (got 'codes')"
+expect_has "… that names the four selectors" "$WORK/e2e-bad.out" "--test must be 'switch', 'lists', 'code' or 'containers' (got 'codes')"
+expect_has "the usage text names the four selectors" "$E2E" "[--test switch|lists|code|containers]"
+CCASE="$(e2e test_case_name "$(e2e test_id_for containers)")"
+expect_eq "the container storyboard's test case name" "$CCASE" \
+    "-[ADFReaderUITests.ContainerStoryboardUITests testContainerStoryboard]"
+run e2e-containers "$BASH" "$E2E" --udid FAKE-UDID-0001 --out "$WORK/e2e-out/containers.mp4" --test containers --skip-build \
+    --derived-data "$WORK/e2e-out/switch.DerivedData" --dry-run
+expect_eq "--test containers --dry-run exits 0" "$STATUS" "0"
+expect_has "… and runs only the container storyboard" "$WORK/e2e-containers.out" \
+    "-only-testing:ADFReaderUITests/ContainerStoryboardUITests/testContainerStoryboard -resultBundlePath"
+expect_has "… and waits for its result line" "$WORK/e2e-containers.out" "after \"Test Case '$CCASE' passed|failed\""
+expect_has "… reusing the switch video's build" "$WORK/e2e-containers.out" \
+    "derived data:   $WORK/e2e-out/switch.DerivedData (reused)"
+run e2e-containers-negative "$BASH" "$E2E" --udid FAKE-UDID-0001 --out "$WORK/e2e-out/negative/containers.mp4" \
+    --test containers --negative --dry-run
+expect_eq "--test containers --negative is accepted" "$STATUS" "0"
+expect_has "… as the wrong-digest control" "$WORK/e2e-containers-negative.out" "digest:         deliberately wrong (negative control)"
+printf 'padding\0testCodeBlockStoryboard\0testContainerStoryboard\0more' >"$LOGS/bundle-pr4.bin"
+e2e binary_has_test "$LOGS/bundle-pr4.bin" testContainerStoryboard
+expect_eq "a bundle built with the container storyboard is accepted" "$?" "0"
+e2e binary_has_test "$LOGS/bundle-pr3.bin" testContainerStoryboard
+expect_eq "a bundle without it (a PR 3 build) is refused" "$?" "1"
 run e2e-lists "$BASH" "$E2E" --udid FAKE-UDID-0001 --out "$WORK/e2e-out/lists.mp4" --test lists --dry-run
 expect_has "--test lists still records the list storyboard" "$WORK/e2e-lists.out" \
     "-only-testing:ADFReaderUITests/ListStoryboardUITests/testListStoryboardSwiftUIToTextKit2AndBack"
@@ -312,8 +428,51 @@ gate() { LIFECYCLE_GATE_SOURCED=1 "$BASH" -c '. "$0"; "$@"' "$GATE" "$@"; }
 
 OLD_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense"
 NEW_TESTS="testC1CodeFiveRoundTripsCodeDense testC1bCodeFiveRoundTripsPannedWideBlock testC2CodeCollapseRoundTripBothDirections testC3CodeTextSizeDriftMatchesSwiftUI testC4CodeSwitchDuringStreamingLoad testC5aFlingThrashSoakCodeDenseSwiftUI testC5bFlingThrashSoakCodeDenseTextKit2 testC6TwentyFlipsCodeDense"
-expect_eq "ALL_TESTS = tests 1-8 and L1-L6 in their order, then C1-C6" \
-    "$(gate eval 'printf "%s\n" "$ALL_TESTS"')" "$OLD_TESTS $NEW_TESTS"
+# PR 4's K tests (lifecycle-gate.sh CONTAINER_TESTS, plan §8.2), and the
+# pins that move with them. A step that adds a K test changes these three
+# lines with the script, in one commit: the name here, the suite timeout
+# the script sizes for it.
+CONTAINER_TESTS_EXPECTED=""
+EXPECTED_SUITE_TIMEOUT=13800
+# shellcheck disable=SC2086  # word list
+set -- $OLD_TESTS $NEW_TESTS $CONTAINER_TESTS_EXPECTED
+EXPECTED_COUNT=$#
+ALL_EXPECTED="$OLD_TESTS $NEW_TESTS${CONTAINER_TESTS_EXPECTED:+ $CONTAINER_TESTS_EXPECTED}"
+expect_eq "CONTAINER_TESTS is the expected K-test list" "$(gate eval 'printf "%s\n" "$CONTAINER_TESTS"')" \
+    "$CONTAINER_TESTS_EXPECTED"
+expect_eq "ALL_TESTS = tests 1-8 and L1-L6 in their order, then C1-C6, then CONTAINER_TESTS" \
+    "$(gate eval 'printf "%s\n" "$ALL_TESTS"')" "$ALL_EXPECTED"
+"$BASH" "$GATE" --help >"$WORK/lg-help.out" 2>&1
+missing_usage=""
+for t in $ALL_EXPECTED; do
+    grep -qE "(^|[^A-Za-z0-9_])$t([^A-Za-z0-9_]|\$)" "$WORK/lg-help.out" || missing_usage="$missing_usage $t"
+done
+expect_eq "the usage text names every ALL_TESTS method" "$missing_usage" ""
+# The wiring, with K names: a copy of the script whose CONTAINER_TESTS
+# holds three of the plan's names.
+GCOPY="$WORK/gate-copy"
+mkdir -p "$GCOPY/lib"
+cp "$SCRIPTS/lib/sim.sh" "$GCOPY/lib/sim.sh"
+K_SAMPLE="testK1SwitchRoundTripsAtContainerLandmarks testK10aFlingThrashSoakContainersSwiftUI testK10bFlingThrashSoakContainersTextKit2"
+sed "s/^CONTAINER_TESTS=.*/CONTAINER_TESTS=\"$K_SAMPLE\"/" "$GATE" >"$GCOPY/lifecycle-gate.sh"
+kgate() { LIFECYCLE_GATE_SOURCED=1 "$BASH" -c '. "$0"; "$@"' "$GCOPY/lifecycle-gate.sh" "$@"; }
+expect_eq "K tests in CONTAINER_TESTS join ALL_TESTS after the code tests" \
+    "$(kgate eval 'printf "%s\n" "$ALL_TESTS"')" "$OLD_TESTS $NEW_TESTS $K_SAMPLE"
+expect_eq "--only testK1 selects testK1… (never testK10a: an upper-case letter must follow)" \
+    "$(kgate resolve_test testK1)" "testK1SwitchRoundTripsAtContainerLandmarks"
+expect_eq "--only testK10a selects testK10a…" "$(kgate resolve_test testK10a)" "testK10aFlingThrashSoakContainersSwiftUI"
+kgate resolve_test testK10 >/dev/null 2>&1
+expect_eq "--only testK10 is ambiguous (refused)" "$?" "1"
+expect_eq "… with both candidates as the hint" "$(kgate tests_starting_with testK10)" \
+    "testK10aFlingThrashSoakContainersSwiftUI testK10bFlingThrashSoakContainersTextKit2"
+run lg-k "$BASH" "$GCOPY/lifecycle-gate.sh" --udid FAKE-UDID-0001 --out "$WORK/lg-k" --dry-run --only testK1 --only testK10b
+expect_has "a dry run selects K tests by short name" "$WORK/lg-k.out" \
+    "tests:        testK1SwitchRoundTripsAtContainerLandmarks testK10bFlingThrashSoakContainersTextKit2"
+expect_has "… each as a LifecycleUITests id" "$WORK/lg-k.out" \
+    "-only-testing:ADFReaderUITests/LifecycleUITests/testK1SwitchRoundTripsAtContainerLandmarks -only-testing:ADFReaderUITests/LifecycleUITests/testK10bFlingThrashSoakContainersTextKit2"
+run lg-k-all "$BASH" "$GCOPY/lifecycle-gate.sh" --udid FAKE-UDID-0001 --out "$WORK/lg-k-all" --dry-run
+expect_eq "… and the default plan runs them all" \
+    "$(grep '^test: ' "$WORK/lg-k-all.out" | grep -o -- '-only-testing:ADFReaderUITests/LifecycleUITests/test[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')" "30"
 
 resolves() {   # <short> <full>
     expect_eq "--only $1 selects $2" "$(gate resolve_test "$1")" "$2"
@@ -361,7 +520,7 @@ fake_build() {   # <dir> <method>...
     for t in "$@"; do printf '%s\0' "$t" >>"$dir/ADFReaderUITests"; done
 }
 # shellcheck disable=SC2086  # word lists
-fake_build "$WORK/dd-pr3" $OLD_TESTS $NEW_TESTS testCopyPutsExactCodeOnPasteboard
+fake_build "$WORK/dd-pr3" $OLD_TESTS $NEW_TESTS $CONTAINER_TESTS_EXPECTED testCopyPutsExactCodeOnPasteboard
 # shellcheck disable=SC2086
 fake_build "$WORK/dd-pr2" $OLD_TESTS
 PR3_BIN="$WORK/dd-pr3/Build/Products/Release-iphonesimulator/ADFReaderUITests-Runner.app/PlugIns/ADFReaderUITests.xctest/ADFReaderUITests"
@@ -381,10 +540,10 @@ lifecycle() {   # <name> <args...>: a dry run of lifecycle-gate.sh
 }
 lifecycle lg-default
 expect_eq "the default plan is a dry run that exits 0" "$STATUS" "0"
-expect_has "the default plan runs all 27 tests in order" "$WORK/lg-default.out" "tests:        $OLD_TESTS $NEW_TESTS"
+expect_has "the default plan runs all $EXPECTED_COUNT tests in order" "$WORK/lg-default.out" "tests:        $ALL_EXPECTED"
 expect_eq "… each as its own -only-testing id" \
-    "$(grep '^test: ' "$WORK/lg-default.out" | grep -o -- '-only-testing:ADFReaderUITests/LifecycleUITests/test[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')" "27"
-expect_has "the default suite timeout covers the longer suite" "$WORK/lg-default.out" "suite timeout: 13800s"
+    "$(grep '^test: ' "$WORK/lg-default.out" | grep -o -- '-only-testing:ADFReaderUITests/LifecycleUITests/test[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')" "$EXPECTED_COUNT"
+expect_has "the default suite timeout covers the longer suite" "$WORK/lg-default.out" "suite timeout: ${EXPECTED_SUITE_TIMEOUT}s"
 expect_has "the agent is the one the tests talk to" "$WORK/lg-default.out" "lifecycle_agent.py serve --udid FAKE-UDID-0001"
 expect_has "an unbuilt derived-data dir is reported, not an error" "$WORK/lg-default.out" "bundle check: not built yet"
 
@@ -409,7 +568,7 @@ expect_has "… and says so" "$WORK/lg-built.out" "bundle check: every selected 
 lifecycle lg-stale --skip-build --derived-data "$WORK/dd-pr2"
 expect_eq "a PR 2 build fails the bundle check (exit 2, before any device is touched)" "$STATUS" "2"
 expect_has "… naming the missing tests" "$WORK/lg-stale.out" \
-    "bundle check: MISSING from $PR2_BIN: $NEW_TESTS"
+    "bundle check: MISSING from $PR2_BIN: $NEW_TESTS${CONTAINER_TESTS_EXPECTED:+ $CONTAINER_TESTS_EXPECTED}"
 lifecycle lg-stale-lists --skip-build --derived-data "$WORK/dd-pr2" --only testL1 --only test7
 expect_eq "the same PR 2 build still runs its own tests" "$STATUS" "0"
 lifecycle lg-stale-copy --skip-build --derived-data "$WORK/dd-pr2" --only CodeRendererUITests/testCopyPutsExactCodeOnPasteboard
@@ -429,20 +588,20 @@ declares() {
 
 undeclared=""
 # shellcheck disable=SC2086  # word lists
-for t in $OLD_TESTS $NEW_TESTS; do
+for t in $OLD_TESTS $NEW_TESTS $CONTAINER_TESTS_EXPECTED; do
     declares LifecycleUITests "$t" || undeclared="$undeclared $t"
 done
 expect_eq "every ALL_TESTS method is declared in LifecycleUITests" "$undeclared" ""
 extra=""
 for t in $(grep -ohE '^[[:space:]]*func test[A-Za-z0-9_]*[(][)]' "$UITESTS/LifecycleUITests.swift" | sed -E 's/^[[:space:]]*func //; s/[(][)]$//'); do
-    case " $OLD_TESTS $NEW_TESTS " in
+    case " $OLD_TESTS $NEW_TESTS $CONTAINER_TESTS_EXPECTED " in
         *" $t "*) ;;
         *) extra="$extra $t" ;;
     esac
 done
 expect_eq "every LifecycleUITests test method is in ALL_TESTS" "$extra" ""
 
-for selector in switch lists code; do
+for selector in switch lists code containers; do
     id="$(e2e test_id_for "$selector")"
     cls="${id#*/}"; cls="${cls%%/*}"; method="${id##*/}"
     file="$(class_file "$cls")"

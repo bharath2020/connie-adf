@@ -115,9 +115,19 @@ struct ReaderDriver {
         static let buildRenderer = "build-renderer"
         static let buildDone = "build-info-done"
         static let liveTextKit2Rows = "tk2-live-rows"
+        /// Live TextKit 2 rows of owner kind list (PR 2), nested-list rows
+        /// in containers included from PR 4's step 6.
+        static let liveTextKit2ListRows = "tk2-list-live-rows"
         /// Live TextKit 2 rows drawing a code block's code (a subset of
         /// `liveTextKit2Rows`; PR 3).
         static let liveTextKit2CodeRows = "tk2-code-live-rows"
+        /// PR 4 (plan §6.4): live TextKit 2 rows with context container
+        /// and an owner kind other than code; with context caption; and
+        /// TextKit 2 row views alive off any window. Below
+        /// `liveTextKit2CodeRows` on the About sheet.
+        static let liveTextKit2ContainerRows = "tk2-container-live-rows"
+        static let liveTextKit2CaptionRows = "tk2-caption-live-rows"
+        static let offWindowTextKit2Rows = "tk2-offwindow-rows"
         static let rebuildControlRows = "rebuild-control-rows"
         static let loadSwitchBlocks = "load-switch-blocks"
         static let loadReadyBlocks = "load-ready-blocks"
@@ -276,6 +286,36 @@ struct ReaderDriver {
         return readCount(Identifier.liveTextKit2CodeRows, until: condition, settled: settled, timeout: timeout)
     }
 
+    /// Opens About and reads the live counters a row census is checked
+    /// against (`TextKit2RowCensus.crossCheck`, PR 4 plan §6.5), top to
+    /// bottom because `revealAboutField` only scrolls toward the end:
+    /// `tk2-list-live-rows`, then `tk2-code-live-rows` and PR 4's
+    /// `tk2-container-live-rows`, `tk2-caption-live-rows` and
+    /// `tk2-offwindow-rows` below it. With `settled`, each value counts
+    /// once two reads 250 ms apart agree. A field this build's About sheet
+    /// lacks reads nil (a pre-PR 4 build has none of the last three), and
+    /// the cross-check reports it. Closes About.
+    func liveRowCounters(settled: Bool = true) -> LiveRowCounters {
+        openAbout()
+        var counters = LiveRowCounters()
+        counters.list = readOptionalCount(Identifier.liveTextKit2ListRows, settled: settled)
+        counters.code = readOptionalCount(Identifier.liveTextKit2CodeRows, settled: settled)
+        counters.container = readOptionalCount(Identifier.liveTextKit2ContainerRows, settled: settled)
+        counters.caption = readOptionalCount(Identifier.liveTextKit2CaptionRows, settled: settled)
+        counters.offWindow = readOptionalCount(Identifier.offWindowTextKit2Rows, settled: settled)
+        closeAbout()
+        return counters
+    }
+
+    /// The open About sheet's count in `identifier`, scrolled into view
+    /// first; nil (no assertion) when the sheet has no such field.
+    func readOptionalCount(_ identifier: String, settled: Bool = true, timeout: TimeInterval = 5) -> Int? {
+        let field = app.staticTexts[identifier]
+        revealAboutField(field)
+        guard field.exists else { return nil }
+        return readCount(identifier, until: { _ in true }, settled: settled, timeout: timeout)
+    }
+
     /// About This Build is a list, so a row is in the accessibility tree
     /// only while it is on screen. Does nothing when `field` exists;
     /// otherwise drags the sheet's content up 160 pt at a time (rows read
@@ -380,6 +420,14 @@ struct ReaderDriver {
         try documentSnapshot().tops
     }
 
+    /// The `-fixture` value this app was (re)launched with; nil for a
+    /// launch without one (a fixture opened from the list).
+    var launchedFixture: String? {
+        let arguments = app.launchArguments
+        guard let index = arguments.firstIndex(of: "-fixture"), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
+    }
+
     /// One accessibility snapshot of the document scroll view: every
     /// labelled element (those fully inside the viewport are `visible`),
     /// and every TextKit 2 row (`tk2-row:<owner>`) anywhere in the snapshot.
@@ -388,7 +436,11 @@ struct ReaderDriver {
     /// horizontal scroll view under either renderer, which is how a
     /// TextKit 2 code row is told from a root paragraph's (their owners
     /// have the same form, `0.<n>`).
-    func documentSnapshot() throws -> DocumentSnapshot {
+    ///
+    /// Its TextKit 2 rows are classified (`TextKit2RowCensus`, PR 4 plan
+    /// §6.5) with the owner table of `fixture` (default: the launched
+    /// fixture, `launchedFixture`; `RowOwnerTable.byFixture`).
+    func documentSnapshot(fixture: String? = nil) throws -> DocumentSnapshot {
         let root = try app.scrollViews.firstMatch.snapshot()
         let viewport = viewport
         var all: [DocumentSnapshot.Node] = []
@@ -450,12 +502,16 @@ struct ReaderDriver {
         {
             all[index].inNestedScroll = true
         }
-        let codeRowOwners = Set(rows.filter {
-            DocumentSnapshot.isRootOwner($0.owner) && ($0.nested || inside($0.frame))
-        }.map { $0.owner })
+        // A row inside a nested horizontal scroll view is code, whatever
+        // its owner's form (PR 4 plan §6.5: nested code counts as code from
+        // PR 4's step 7; PR 3 also required a root-form owner).
+        let fixtureName = fixture ?? launchedFixture
+        let census = TextKit2RowCensus(
+            rows: rows.map { (owner: $0.owner, inNestedScroll: $0.nested || inside($0.frame)) },
+            fixture: fixtureName, table: fixtureName.flatMap { RowOwnerTable.byFixture[$0] }
+        )
         return DocumentSnapshot(
-            all: all, viewport: viewport, textKit2Rows: textKit2Rows, textKit2Nodes: textKit2Nodes,
-            codeRowOwners: codeRowOwners
+            all: all, viewport: viewport, textKit2Rows: textKit2Rows, textKit2Nodes: textKit2Nodes, census: census
         )
     }
 
@@ -761,21 +817,24 @@ struct DocumentSnapshot {
     /// TextKit 2 row elements in the snapshot, counted without merging
     /// owners (equals `textKit2Rows.count` unless an owner appears twice).
     let textKit2Nodes: Int
-    /// Owners of the TextKit 2 rows that draw a top-level code block's
-    /// code: root-form owners (`0.<n>`) whose row is inside a nested
-    /// scroll view, the code block's horizontal viewport (PR 3).
-    let codeRowOwners: Set<String>
+    /// Every TextKit 2 row's class (PR 4 plan §6.5).
+    let census: TextKit2RowCensus
 
     init(all: [Node], viewport: CGRect, textKit2Rows: [String: String], textKit2Nodes: Int,
-         codeRowOwners: Set<String>)
+         census: TextKit2RowCensus)
     {
         self.all = all
         self.viewport = viewport
         visible = all.filter { $0.frame.minY >= viewport.minY && $0.frame.maxY <= viewport.maxY }
         self.textKit2Rows = textKit2Rows
         self.textKit2Nodes = textKit2Nodes
-        self.codeRowOwners = codeRowOwners
+        self.census = census
     }
+
+    /// Owners of the TextKit 2 rows that draw a code block's code: rows
+    /// inside a nested scroll view, the code block's horizontal viewport
+    /// (PR 3; nested code too since PR 4).
+    var codeRowOwners: Set<String> { Set(census.owners(.code)) }
 
     /// The elements inside a nested scroll view (`Node.inNestedScroll`):
     /// the code texts of a code fixture, in document order.
@@ -818,22 +877,41 @@ struct DocumentSnapshot {
         return owners
     }
 
-    /// TextKit 2 rows that draw a top-level code block's code (PR 3). Their
-    /// owner is the block's id, which has the root form `0.<n>`.
-    var codeOwnedRows: Int { codeRowOwners.count }
+    /// The census classes as counts (owners, one class each; PR 4 plan
+    /// §6.5). Their sum plus `unclassifiedRows` is `textKit2Rows.count`.
+    ///
+    /// TextKit 2 rows that draw a code block's code (PR 3): a row inside a
+    /// nested scroll view, whatever its owner (a top-level block's `0.<n>`,
+    /// or a nested code block's node path from PR 4's step 7).
+    var codeOwnedRows: Int { census.count(.code) }
     /// TextKit 2 rows owned by a root text block (`0.<n>`: a top-level
-    /// paragraph or heading, the PR 1 scope). A code row's owner has the
-    /// same form, so code rows are taken out: on a document with top-level
-    /// code (kitchen-sink, the stress fixtures) this still counts root text
-    /// only, and on one without it nothing changes.
-    var rootOwnedRows: Int { textKit2Rows.keys.filter(Self.isRootOwner).count - codeOwnedRows }
-    /// TextKit 2 rows owned below a root (list leaders, `PreparedListRow.id`,
-    /// and list trailing text, its block's node path).
-    var listOwnedRows: Int { textKit2Rows.count - rootOwnedRows - codeOwnedRows }
+    /// paragraph or heading, the PR 1 scope) that are not code: on a
+    /// document with top-level code (kitchen-sink, the stress fixtures)
+    /// this counts root text only, and on one without it nothing changes.
+    var rootOwnedRows: Int { census.count(.root) }
+    /// TextKit 2 rows of top-level lists (list leaders, `PreparedListRow.id`,
+    /// and list trailing text, its block's node path): every row not
+    /// placed otherwise on a fixture without an owner table, and only the
+    /// table's list rows on one with a table. Container and caption rows
+    /// are never list rows here (nested-list rows in a container count in
+    /// `containerOwnedRows`).
+    var listOwnedRows: Int { census.count(.list) }
+    /// TextKit 2 rows of text inside a container (panel, quote, expand,
+    /// layout column, extension body), by the fixture's owner table; 0
+    /// without one.
+    var containerOwnedRows: Int { census.count(.container) }
+    /// Of `containerOwnedRows`, the rows of a list nested in a container
+    /// (owner kind list: they count toward `tk2-list-live-rows`).
+    var containerListOwnedRows: Int { census.containerListOwners.count }
+    /// TextKit 2 rows of a mediaSingle caption, by the fixture's owner
+    /// table; 0 without one.
+    var captionOwnedRows: Int { census.count(.caption) }
+    /// TextKit 2 rows the fixture's owner table places in no class (a
+    /// table that misses an owner); always 0 without a table.
+    var unclassifiedRows: Int { census.unclassified.count }
 
     static func isRootOwner(_ owner: String) -> Bool {
-        let parts = owner.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 2 && parts[0] == "0" && Int(parts[1]) != nil
+        TextKit2RowCensus.isRootOwner(owner)
     }
 
     /// The top of the visible element labelled `marker` on `leader`'s row:
@@ -845,5 +923,197 @@ struct DocumentSnapshot {
             $0.label == marker && $0.frame.maxX <= line.minX + 1 && $0.frame.maxY > line.minY
                 && $0.frame.minY < line.minY + min(line.height, 40)
         }.min { abs($0.frame.minY - line.minY) < abs($1.frame.minY - line.minY) }?.frame.minY
+    }
+}
+
+// MARK: - Row classifier (PR 4 plan §6.5)
+// Foundation only, so the census logic compiles and is checked apart from
+// any app (TextKit2RowClassifierTests).
+
+/// The class of one TextKit 2 row (`tk2-row:<owner>`) in a lifecycle census
+/// (PR 4 plan §6.5). The accessibility identifier carries neither the
+/// row's owner kind nor its context, so a census assigns the class from
+/// where the row sits and from the fixture's owner table; every row gets
+/// exactly one class, or is reported as unclassified.
+enum TextKit2RowClass: String, CaseIterable, Sendable {
+    /// A code block's code (owner kind code, any context): a row inside a
+    /// nested horizontal scroll view, the code block's viewport.
+    case code
+    /// A mediaSingle caption (context caption): by the owner table.
+    case caption
+    /// Text inside a panel, quote, expand, layout column or extension body
+    /// (owner kind root or list, context container; nested-list rows
+    /// included): by the owner table.
+    case container
+    /// A top-level list's leader or trailing text (owner kind list, no
+    /// context): every remaining row on a fixture without an owner table;
+    /// on one with a table, the table's top-level lists (or every
+    /// remaining row when the table leaves `list` nil).
+    case list
+    /// A root text block's row (owner `0.<n>`, owner kind root, no context)
+    /// that is not code.
+    case root
+}
+
+/// A fixture's hand-reviewed owner table (PR 4 plan §6.5), generated beside
+/// the fixture and reviewed with it, as PR 3 tabulates CP-25. Each entry is
+/// an owner-ID prefix on node paths: `0.5` names block 0.5 and every owner
+/// below it (`0.5.1`, `0.5.1.0`, `0.5.1.0#cont1`), so a container's whole
+/// body is one entry.
+struct RowOwnerTable: Sendable {
+    /// Container text: every owner at or below one of these blocks.
+    var container: [String] = []
+    /// Lists nested in a container: their rows are container rows whose
+    /// owner kind is list, so they also count toward `tk2-list-live-rows`
+    /// (the cross-check), never toward the list class. Each entry sits
+    /// inside a `container` entry (TextKit2RowClassifierTests checks every
+    /// registered table); the census reads it as container either way.
+    var containerList: [String] = []
+    /// Caption owners (`PreparedMedia.id`).
+    var caption: [String] = []
+    /// The fixture's top-level lists. nil: every row the table places
+    /// nowhere else is a list row, which is right only for a table that
+    /// names every container and caption owner of the fixture.
+    var list: [String]?
+
+    /// Whether `owner` is one of `prefixes` or below one of them.
+    static func covers(_ prefixes: [String], _ owner: String) -> Bool {
+        prefixes.contains { owner == $0 || owner.hasPrefix($0 + ".") || owner.hasPrefix($0 + "#") }
+    }
+
+    /// The owner tables by fixture name. A fixture without one is
+    /// container-free for the census: every row that is neither code nor
+    /// root is a list row (the PR 2/PR 3 meaning). Each PR 4 step that adds
+    /// a fixture with containers or captions adds its table here in the
+    /// same commit; kitchen-sink, stress-1k, stress-5k, lists-parity and
+    /// code-parity hold containers too and need theirs from the step whose
+    /// family first draws their container text on TextKit 2 (without one,
+    /// a container row would count as a list row).
+    static let byFixture: [String: RowOwnerTable] = [:]
+}
+
+/// The live counters a census is checked against (About sheet;
+/// `ReaderDriver.liveRowCounters`). nil: the field could not be read.
+struct LiveRowCounters: Sendable, Equatable {
+    var list: Int?        // tk2-list-live-rows
+    var code: Int?        // tk2-code-live-rows
+    var container: Int?   // tk2-container-live-rows (PR 4)
+    var caption: Int?     // tk2-caption-live-rows (PR 4)
+    var offWindow: Int?   // tk2-offwindow-rows (PR 4)
+}
+
+/// One snapshot's TextKit 2 rows by class (PR 4 plan §6.5).
+struct TextKit2RowCensus: Sendable {
+    /// Owner → class, for every classified row.
+    let classes: [String: TextKit2RowClass]
+    /// Rows the fixture's owner table places in no class, sorted. Always
+    /// empty without a table.
+    let unclassified: [String]
+    /// Container-class owners inside a nested list (`RowOwnerTable.containerList`).
+    let containerListOwners: Set<String>
+    /// The fixture whose owner table classified the rows; nil: no table
+    /// (a container-free fixture, or no fixture known).
+    let tableFixture: String?
+
+    /// `rows`: each TextKit 2 row's owner and whether it sits inside a
+    /// nested scroll view (an owner listed twice is code when either is).
+    init(rows: [(owner: String, inNestedScroll: Bool)], fixture: String?, table: RowOwnerTable?) {
+        var nested: [String: Bool] = [:]
+        for row in rows {
+            nested[row.owner] = (nested[row.owner] ?? false) || row.inNestedScroll
+        }
+        var classes: [String: TextKit2RowClass] = [:]
+        var unclassified: [String] = []
+        var containerList: Set<String> = []
+        for (owner, inNestedScroll) in nested {
+            guard let rowClass = Self.classify(owner: owner, inNestedScroll: inNestedScroll, table: table) else {
+                unclassified.append(owner)
+                continue
+            }
+            classes[owner] = rowClass
+            if rowClass == .container, let table, RowOwnerTable.covers(table.containerList, owner) {
+                containerList.insert(owner)
+            }
+        }
+        self.classes = classes
+        self.unclassified = unclassified.sorted()
+        containerListOwners = containerList
+        tableFixture = table == nil ? nil : fixture
+    }
+
+    /// The class of one row (nil: the owner table places it nowhere). In
+    /// order: code (inside a nested scroll view, whatever the owner's
+    /// form); root (a root-form owner `0.<n>`: a top-level block's own
+    /// text is never container or caption text); caption and container by
+    /// the table; list (the table's lists, or every remaining row when
+    /// there is no table or the table leaves `list` nil).
+    static func classify(owner: String, inNestedScroll: Bool, table: RowOwnerTable?) -> TextKit2RowClass? {
+        if inNestedScroll { return .code }
+        if isRootOwner(owner) { return .root }
+        guard let table else { return .list }
+        if RowOwnerTable.covers(table.caption, owner) { return .caption }
+        if RowOwnerTable.covers(table.container, owner) || RowOwnerTable.covers(table.containerList, owner) {
+            return .container
+        }
+        guard let lists = table.list else { return .list }
+        return RowOwnerTable.covers(lists, owner) ? .list : nil
+    }
+
+    /// A top-level block's id, `0.<n>`.
+    static func isRootOwner(_ owner: String) -> Bool {
+        let parts = owner.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 2 && parts[0] == "0" && Int(parts[1]) != nil
+    }
+
+    func count(_ rowClass: TextKit2RowClass) -> Int {
+        classes.values.filter { $0 == rowClass }.count
+    }
+
+    /// The owners of one class, sorted.
+    func owners(_ rowClass: TextKit2RowClass) -> [String] {
+        classes.filter { $0.value == rowClass }.map(\.key).sorted()
+    }
+
+    /// The §6.5 cross-check against the live counters, which overlap the
+    /// classes: code <= tk2CodeLive, caption <= tk2CaptionLive, container
+    /// <= tk2ContainerLive, list rows plus the container class's
+    /// nested-list rows <= tk2ListLive; each equal when `tk2-offwindow-rows`
+    /// is 0 and `equalWhenOnWindow`. Returns the failures (empty: passed);
+    /// a counter that could not be read, and an unclassified row, are
+    /// failures.
+    func crossCheck(_ counters: LiveRowCounters, equalWhenOnWindow: Bool = true) -> [String] {
+        var failures = unclassified.isEmpty ? [] : ["unclassified TextKit 2 rows (owner table: "
+            + "\(tableFixture ?? "none")): \(unclassified.joined(separator: ","))"]
+        let exact = equalWhenOnWindow && counters.offWindow == 0
+        if counters.offWindow == nil { failures.append("tk2-offwindow-rows unavailable") }
+        let checks: [(String, Int, Int?)] = [
+            ("code", count(.code), counters.code),
+            ("caption", count(.caption), counters.caption),
+            ("container", count(.container), counters.container),
+            ("list (with nested-list container rows)", count(.list) + containerListOwners.count, counters.list),
+        ]
+        for (name, census, live) in checks {
+            guard let live else {
+                failures.append("\(name): live counter unavailable (census \(census))")
+                continue
+            }
+            if census > live {
+                failures.append("\(name): census \(census) > live \(live)")
+            } else if exact, census != live {
+                failures.append("\(name): census \(census) != live \(live) with no row off-window")
+            }
+        }
+        return failures
+    }
+
+    /// The figures a check records for this census.
+    var figures: [String: Any] {
+        var figures: [String: Any] = Dictionary(uniqueKeysWithValues: TextKit2RowClass.allCases.map {
+            ("\($0.rawValue)_rows", count($0))
+        })
+        figures["container_list_rows"] = containerListOwners.count
+        figures["unclassified_rows"] = unclassified
+        figures["owner_table"] = tableFixture ?? "none"
+        return figures
     }
 }

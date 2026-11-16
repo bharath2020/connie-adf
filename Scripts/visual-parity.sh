@@ -93,6 +93,35 @@
 #   above it, below the top band) and, for a fallback capture, a named owner
 #   visibly present.
 #
+# CAPTURE KINDS (PR 4; the same --code-capture declaration with a kind)
+#     <fixture>@<position>[#s<step>]=[<kind>:]<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id>
+#   <kind> is code (the default: a declaration without a kind, as every
+#   PR 3 declaration is), container or caption. A position may carry one
+#   declaration per kind; a declaration replaces the one for the same
+#   position, step and kind only. The owners of a kind are:
+#     code       a code block's RenderBlock id (CODE CAPTURES above);
+#     container  the owner of a text leaf inside a panel, quote, expand,
+#                layout column or extension body: its block id (a node
+#                path such as 0.5.1) or, for a nested list's leader, the
+#                PreparedListRow id (0.5.1.0, 0.5.1.0#cont1);
+#     caption    a mediaSingle caption's owner, the PreparedMedia id.
+#   Positive: every owner marked tk2 is drawn by TextKit 2 on arm C, with
+#   context container (not a code row) or caption; fallback: every named
+#   owner stays on SwiftUI. visual_diff.py ("CONTAINER AND CAPTION
+#   CAPTURES") reads the kind's counters and per-owner line after
+#   SCROLL_LANDED (tk2ContainerLive, tk2ContainerNativeDraws and
+#   `TK2_CONTAINER_ROWS owners=<id>:<native draws>,...`; tk2CaptionLive,
+#   tk2CaptionNativeDraws and `TK2_CAPTION_ROWS ...`), ties each tk2 owner
+#   to its TextKit 2 row in the capture-time geometry (a root or list row
+#   on screen, with ink inside its frame) and, on the A-C pair, scores a
+#   text crop over that row's on-screen frame with the code text rule:
+#   the kind's crop limit, every line displaced 0 px in x and y, its ink
+#   centroid <= 0.5 px. Arms B and C of a declared capture of any kind get
+#   the SCROLL_LANDED wait and the geometry bracket.
+#   Adding a capture is one line: append its declaration to
+#   CONTAINER_CAPTURES_DEFAULT below; its fixture@position joins the
+#   default plan by itself when no --fixture is given.
+#
 # CAPTURE PROCEDURE (identical for every arm)
 #   terminate + uninstall + install the arm's .app (no persisted renderer key
 #   or text size leaks), verify the installed binary sha256 equals the .app's,
@@ -107,12 +136,13 @@
 #   the same timeline) plus --settle (default 3 s), `simctl io screenshot`,
 #   terminate. A reference built from a commit that predates the re-jump
 #   needs it patched into Demo/ADFReader/ReaderView.swift, or arm A lands
-#   nondeterministically. Arms B and C of a declared code capture also wait
-#   (up to 15 s more, normally not at all) for the app's `SCROLL_LANDED`
-#   line, printed about 2.6 s after READY with the RENDERER_STATS and
-#   TK2_CODE_ROWS lines the code proof reads: the screenshot is never taken
-#   before the log describes it. A build that never prints the line is
-#   captured anyway and its code pairs score INVALID. Those arms then
+#   nondeterministically. Arms B and C of a declared capture (any kind)
+#   also wait (up to 15 s more, normally not at all) for the app's
+#   `SCROLL_LANDED` line, printed about 2.6 s after READY with the
+#   RENDERER_STATS, TK2_CODE_ROWS, TK2_CONTAINER_ROWS and TK2_CAPTION_ROWS
+#   lines the proofs read: the screenshot is never taken before the log
+#   describes it. A build that never prints the line is captured anyway
+#   and its declared pairs score INVALID. Those arms then
 #   bracket the screenshot: `simctl spawn notifyutil -p
 #   com.connie.adfreader.geometry`, wait (up to 5 s) for the app's
 #   `CAPTURE_GEOMETRY seq=1` line, `simctl io screenshot`, post again and
@@ -181,6 +211,11 @@
 #                @0.5    block 300 (its header under the band), then 301
 #                        and on
 #   code captures  one declaration per code position (CODE_CAPTURES_DEFAULT)
+#   container and caption captures  CONTAINER_CAPTURES_DEFAULT (none yet:
+#              each PR 4 step that enables a family declares its own; a
+#              declared position not in the fixture defaults above is
+#              captured too). --no-code-captures drops every default
+#              declaration, of every kind.
 #   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
 #              replaces the set; pairs of other fixtures are not list pairs)
 #   masks      --top-band 330 (status bar + inline nav bar/toolbar, where the
@@ -206,6 +241,10 @@
 #                    RENDERER_STATS lines, png sha256, time, status, and the
 #                    SCROLL_LANDED line with the RENDERER_STATS and
 #                    TK2_CODE_ROWS lines printed after it (the code proof),
+#                    the TK2_CONTAINER_ROWS and TK2_CAPTION_ROWS lines
+#                    printed after it (the container and caption proofs;
+#                    landed_container_rows, landed_caption_rows; empty for
+#                    a build without them),
 #                    and the CAPTURE_GEOMETRY seq=1 and seq=2 lines
 #                    (geometry_before, geometry_after; empty for arms
 #                    without the bracket)
@@ -246,7 +285,7 @@ CONTENT_SIZE="large"
 SETTLE_SECONDS=3
 SCROLL_WAIT_SECONDS=2
 READY_TIMEOUT=90
-LANDED_WAIT_SECONDS=15   # extra wait for SCROLL_LANDED on a declared code capture
+LANDED_WAIT_SECONDS=15   # extra wait for SCROLL_LANDED on a declared capture (any kind)
 GEOMETRY_NOTIFICATION="com.connie.adfreader.geometry"   # CaptureGeometryHook (-captureGeometryHook)
 GEOMETRY_WAIT_SECONDS=5  # per CAPTURE_GEOMETRY line of the screenshot bracket
 MASKS=()
@@ -355,6 +394,20 @@ CODE_CAPTURES_DEFAULT=(
     "code-dense@0=positive;0.1=tk2,0.2=tk2;land=0.0"
     "code-dense@0.5=positive;0.301=tk2;land=0.300"
 )
+# ---- Container and caption captures (PR 4) -----------------------------------
+# One line per capture, in the step that enables its family (plan §7.4):
+#   "<fixture>@<position>[#s<step>]=<container|caption>:<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id>"
+# for example (not declared):
+#   "containers-parity@0.1=container:positive;0.4.0=tk2,0.4.1=tk2;land=0.3"
+# A positive capture names its TextKit 2 owners (tk2) and may name owners
+# that stay on SwiftUI beside them; a fallback capture names SwiftUI owners
+# only. Name only owners whose text is below the top band at the
+# screenshot (a tk2 owner must own a scored text crop), and confirm every
+# fraction, land= block and owner against the fixture's READY block count
+# and owner table, as for the code captures above. The position is
+# captured by default (DEFAULT_FIXTURE_SPECS needs no edit).
+CONTAINER_CAPTURES_DEFAULT=(
+)
 CODE_CAPTURES=()
 CODE_CAPTURES_EXPLICIT=()
 NO_CODE_CAPTURES=0
@@ -412,25 +465,45 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ ${#FIXTURE_SPECS[@]} -gt 0 ]] || FIXTURE_SPECS=("${DEFAULT_FIXTURE_SPECS[@]}")
 [[ ${#LIST_FIXTURES[@]} -gt 0 ]] || LIST_FIXTURES=("${LIST_FIXTURES_DEFAULT[@]}")
 for rule in "${LIST_FIXTURES[@]}"; do
     [[ "$rule" =~ ^[A-Za-z0-9_.-]+(:[0-9]+)?$ ]] || die "--list-fixture '$rule': want <name>[:<min markers>]"
 done
-# Code captures: the defaults (unless --no-code-captures), then the explicit
+# Captures: the defaults (unless --no-code-captures), then the explicit
 # ones; code_rule_for reads the list from the end, so a later declaration
-# for the same position and step wins.
-[[ $NO_CODE_CAPTURES -eq 1 ]] || CODE_CAPTURES=("${CODE_CAPTURES_DEFAULT[@]}")
+# for the same position, step and kind wins.
+DEFAULT_CAPTURES=("${CODE_CAPTURES_DEFAULT[@]}"
+    ${CONTAINER_CAPTURES_DEFAULT[@]+"${CONTAINER_CAPTURES_DEFAULT[@]}"})
+[[ $NO_CODE_CAPTURES -eq 1 ]] || CODE_CAPTURES=("${DEFAULT_CAPTURES[@]}")
 for decl in ${CODE_CAPTURES_EXPLICIT[@]+"${CODE_CAPTURES_EXPLICIT[@]}"}; do CODE_CAPTURES+=("$decl"); done
-CODE_CAPTURE_RE='^[A-Za-z0-9_.-]+@(0|1|0?[.][0-9]+|1[.]0*)(#s-?[0-9]+)?=(positive|fallback);[0-9.]+=(tk2|swiftui)(,[0-9.]+=(tk2|swiftui))*(;land=[0-9.]+)$'
+# An owner is a node path, or a list continuation row's id (<item id>#cont<n>).
+CAPTURE_OWNER_RE='[0-9][0-9.]*(#cont[0-9]+)?=(tk2|swiftui)'
+CODE_CAPTURE_RE="^[A-Za-z0-9_.-]+@(0|1|0?[.][0-9]+|1[.]0*)(#s-?[0-9]+)?=((code|container|caption):)?(positive|fallback);$CAPTURE_OWNER_RE(,$CAPTURE_OWNER_RE)*(;land=[0-9.]+)\$"
 for decl in ${CODE_CAPTURES[@]+"${CODE_CAPTURES[@]}"}; do
     [[ "$decl" =~ $CODE_CAPTURE_RE ]] ||
-        die "--code-capture '$decl': want <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id> (land= is required: the landing is measured)"
+        die "--code-capture '$decl': want <fixture>@<position>[#s<step>]=[<code|container|caption>:]<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id> (land= is required: the landing is measured)"
     case "$decl" in
-        *"=positive;"*) [[ "$decl" == *=tk2* ]] || die "--code-capture '$decl': a positive capture needs an owner marked tk2" ;;
+        *"=positive;"*|*":positive;"*) [[ "$decl" == *=tk2* ]] || die "--code-capture '$decl': a positive capture needs an owner marked tk2" ;;
         *) [[ "$decl" != *=tk2* ]] || die "--code-capture '$decl': a fallback capture cannot mark an owner tk2" ;;
     esac
 done
+# The fixture positions: --fixture's, or the defaults plus the position of
+# every default declaration they do not capture yet (so a new declaration
+# is one line), in declaration order.
+if [[ ${#FIXTURE_SPECS[@]} -eq 0 ]]; then
+    FIXTURE_SPECS=("${DEFAULT_FIXTURE_SPECS[@]}")
+    [[ $NO_CODE_CAPTURES -eq 0 ]] || DEFAULT_CAPTURES=()
+    for decl in ${DEFAULT_CAPTURES[@]+"${DEFAULT_CAPTURES[@]}"}; do
+        key="${decl%%=*}"
+        key="${key%%#*}"
+        captured=0
+        for spec in "${FIXTURE_SPECS[@]}"; do
+            [[ "$spec" == *@* ]] || spec="$spec@0"
+            case ",${spec#*@}," in *",${key#*@},"*) [[ "${spec%%@*}" != "${key%%@*}" ]] || captured=1 ;; esac
+        done
+        [[ $captured -eq 1 ]] || FIXTURE_SPECS+=("$key")
+    done
+fi
 # Every declared code capture needs the engine proof and the capture-time
 # geometry, which only -rendererStats and -captureGeometryHook print.
 [[ $RENDERER_STATS -eq 1 || ${#CODE_CAPTURES[@]} -eq 0 ]] ||
@@ -505,24 +578,38 @@ for fixture_pos in "${POSITIONS[@]}"; do
 done
 [[ ${#PLAN[@]} -gt 0 ]] || die "empty capture plan (check --appearances / --size-steps)"
 
-# code_rule_for <fixture> <position> <step>: "<class>\t<owners[;land=…]>" of
-# the code capture declared for that configuration, or nothing. A
+# code_rule_for <fixture> <position> <step>: one line "<class>\t<owners[;land=…]>"
+# per capture kind declared for that configuration (code, then container,
+# then caption), or nothing. <class> is the declaration's class field in
+# canonical form: a code capture's without a kind ("positive"; "code:" is
+# dropped), the other kinds' with it ("container:positive"). Per kind, a
 # declaration with #s<step> beats one without; among equals the last wins.
 code_rule_for() {
-    local fixture="$1" pos="$2" step="$3" index decl key value general=""
-    index=${#CODE_CAPTURES[@]}
-    while (( index > 0 )); do
-        index=$(( index - 1 ))
-        decl="${CODE_CAPTURES[$index]}"
-        key="${decl%%=*}"
-        value="${decl#*=}"
-        if [[ "$key" == "$fixture@$pos#s$step" ]]; then
-            printf '%s\t%s\n' "${value%%;*}" "${value#*;}"
-            return 0
-        fi
-        [[ -n "$general" || "$key" != "$fixture@$pos" ]] || general="$value"
+    local fixture="$1" pos="$2" step="$3" kind index decl key value cls decl_kind found general
+    for kind in code container caption; do
+        index=${#CODE_CAPTURES[@]}
+        found=""
+        general=""
+        while (( index > 0 )); do
+            index=$(( index - 1 ))
+            decl="${CODE_CAPTURES[$index]}"
+            key="${decl%%=*}"
+            value="${decl#*=}"
+            cls="${value%%;*}"
+            decl_kind="code"
+            [[ "$cls" != *:* ]] || decl_kind="${cls%%:*}"
+            [[ "$decl_kind" == "$kind" ]] || continue
+            if [[ "$key" == "$fixture@$pos#s$step" ]]; then
+                found="$value"
+                break
+            fi
+            [[ -n "$general" || "$key" != "$fixture@$pos" ]] || general="$value"
+        done
+        [[ -n "$found" ]] || found="$general"
+        [[ -n "$found" ]] || continue
+        cls="${found%%;*}"
+        printf '%s\t%s\n' "${cls#code:}" "${found#*;}"
     done
-    [[ -z "$general" ]] || printf '%s\t%s\n' "${general%%;*}" "${general#*;}"
 }
 
 # An explicit declaration that matches no planned position is a typo.
@@ -559,30 +646,32 @@ arm_engine() {
 }
 
 # pair_args <require-files:0|1>: the --pair arguments for every configuration,
-# and the --code-capture declaration of each pair of a code capture.
+# and the --code-capture declaration of each pair of a declared capture, one
+# per kind (the class argument carries a kind other than code:
+# container:positive).
 PAIR_ARGS=()
 CODE_ARGS=()
 PAIR_COUNT=0
 build_pairs() {
-    local require="$1" entry cfg a fixture pos appearance step rule cls owners
+    local require="$1" entry cfg a fixture pos appearance step rules
     PAIR_ARGS=()
     CODE_ARGS=()
     PAIR_COUNT=0
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
         a="$CAPTURES/$cfg-A.png"
-        rule="$(code_rule_for "$fixture" "$pos" "$step")"
-        cls="${rule%%$'\t'*}"
-        owners="${rule#*$'\t'}"
+        rules="$(code_rule_for "$fixture" "$pos" "$step")"
         add_pair() {   # <kind> <suffix> <arm>
-            local cand="$CAPTURES/$cfg-$3.png" engine log="-"
+            local cand="$CAPTURES/$cfg-$3.png" engine log="-" rule
             if [[ $require -eq 0 ]] || [[ -f "$a" && -f "$cand" ]]; then
                 PAIR_ARGS+=(--pair "$1" "$cfg-$2" "$a" "$cand")
                 PAIR_COUNT=$(( PAIR_COUNT + 1 ))
-                if [[ -n "$rule" ]]; then
+                if [[ -n "$rules" ]]; then
                     engine="$(arm_engine "$3")"
                     [[ "$engine" == "none" ]] || log="$CAPTURES/$cfg-$3.log"
-                    CODE_ARGS+=(--code-capture "$cfg-$2" "$cls" "$owners" "$engine" "$log")
+                    while IFS= read -r rule; do
+                        CODE_ARGS+=(--code-capture "$cfg-$2" "${rule%%$'\t'*}" "${rule#*$'\t'}" "$engine" "$log")
+                    done <<<"$rules"
                 fi
             fi
         }
@@ -613,14 +702,16 @@ if [[ $DRY_RUN -eq 1 ]]; then
             done
         done
     fi
-    echo "code captures (configuration: class; owners; landing block):"
+    echo "code captures (configuration: [kind:]class; owners; landing block):"
     declared=0
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
-        rule="$(code_rule_for "$fixture" "$pos" "$step")"
-        [[ -n "$rule" ]] || continue
-        declared=$(( declared + 1 ))
-        echo "  $cfg: ${rule%%$'\t'*}; ${rule#*$'\t'}"
+        rules="$(code_rule_for "$fixture" "$pos" "$step")"
+        [[ -n "$rules" ]] || continue
+        while IFS= read -r rule; do
+            declared=$(( declared + 1 ))
+            echo "  $cfg: ${rule%%$'\t'*}; ${rule#*$'\t'}"
+        done <<<"$rules"
     done
     [[ $declared -gt 0 ]] || echo "  (none)"
     build_pairs 0
@@ -776,7 +867,7 @@ capture() {
     ready="$(marker_line READY "$launch_log")"
     sleep "$SCROLL_WAIT_SECONDS"
     sleep "$SETTLE_SECONDS"
-    # The proof of a declared code capture is what the app prints once the
+    # The proof of a declared capture is what the app prints once the
     # jump has landed. It is there by now (about 2.6 s after READY); on a
     # slow host, wait for it rather than capture a screen the log does not
     # describe yet.
@@ -798,7 +889,7 @@ capture() {
         LAUNCH_PID=""
         return 1
     fi
-    # Arms B and C of a declared code capture: what is on screen right before
+    # Arms B and C of a declared capture: what is on screen right before
     # and right after the screenshot (CAPTURE_GEOMETRY seq=1 and seq=2), so
     # visual_diff.py can tie each scored code box to the row that drew it.
     local bracket=0 geometry_note=""
@@ -844,7 +935,8 @@ capture() {
         "${stats:-}" "$( [[ -s "$png" ]] && sha256 "$png" || echo missing )" \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${problems:-ok}" \
         "$(marker_line SCROLL_LANDED "$launch_log")" "$(landed_line RENDERER_STATS "$launch_log")" \
-        "$(landed_line TK2_CODE_ROWS "$launch_log")" "$(geometry_line 1 "$launch_log")" \
+        "$(landed_line TK2_CODE_ROWS "$launch_log")" "$(landed_line TK2_CONTAINER_ROWS "$launch_log")" \
+        "$(landed_line TK2_CAPTION_ROWS "$launch_log")" "$(geometry_line 1 "$launch_log")" \
         "$(geometry_line 2 "$launch_log")" >>"$MANIFEST"
 
     if [[ -n "$problems" ]]; then
@@ -888,7 +980,8 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
     } >"$OUT/env.txt"
     tsv capture arm fixture position appearance size_step content_size app app_sha256 installed_sha256 \
         argv udid device runtime locale ready_line renderer_stats png_sha256 captured_utc status \
-        scroll_landed landed_renderer_stats landed_code_rows geometry_before geometry_after >"$MANIFEST"
+        scroll_landed landed_renderer_stats landed_code_rows landed_container_rows landed_caption_rows \
+        geometry_before geometry_after >"$MANIFEST"
 
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"

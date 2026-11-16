@@ -75,7 +75,13 @@
 #                   fling, horizontal fling inside a wide block, scene
 #                   thrash, 60 s soak; ~4 each),
 #                   testC6TwentyFlipsCodeDense (C6: test7's design on
-#                   code-dense, live code rows 0 after every OFF, ~30 min)
+#                   code-dense, live code rows 0 after every OFF, ~30 min);
+#                   PR 4 containers (PR 4 plan §8.2, CONTAINER_TESTS; the
+#                   testK names, each with its fixture, section and
+#                   duration): none yet — each step that writes a K test
+#                   adds it here and to CONTAINER_TESTS in one commit.
+#                   testK1 never selects testK10a (the short-name rule
+#                   above).
 #   --dry-run       print the plan; touch no simulator, run no xcodebuild.
 #                   With a built --derived-data it also checks that the
 #                   UI-test bundle holds every selected test.
@@ -108,7 +114,14 @@ CLASS="LifecycleUITests"
 # named differently there, change the name HERE (the run refuses a build
 # whose UI-test bundle lacks a selected test, so a mismatch cannot pass).
 CODE_TESTS="testC1CodeFiveRoundTripsCodeDense testC1bCodeFiveRoundTripsPannedWideBlock testC2CodeCollapseRoundTripBothDirections testC3CodeTextSizeDriftMatchesSwiftUI testC4CodeSwitchDuringStreamingLoad testC5aFlingThrashSoakCodeDenseSwiftUI testC5bFlingThrashSoakCodeDenseTextKit2 testC6TwentyFlipsCodeDense"
-ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense $CODE_TESTS"
+# PR 4's container tests (PR 4 plan §8.2: the testK names in its order,
+# K9 excluded — it runs in its own class). The same contract as CODE_TESTS.
+# A step that adds a name here updates, in the same commit, the usage text
+# above, SUITE_TIMEOUT (sized from the estimate above plus the test's pilot
+# duration) and the pins of Scripts/tests/gate-scripts-tests.sh
+# (CONTAINER_TESTS_EXPECTED, EXPECTED_SUITE_TIMEOUT).
+CONTAINER_TESTS=""
+ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense $CODE_TESTS${CONTAINER_TESTS:+ $CONTAINER_TESTS}"
 
 UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=13800; GRACE=120
 KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0

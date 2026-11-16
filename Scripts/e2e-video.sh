@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Scripts/e2e-video.sh — records a screen-capture video of one named ADFReader
-# UI test (the renderer-switch test, the list storyboard, or the code-block
-# storyboard) on one explicit
+# UI test (the renderer-switch test, the list storyboard, the code-block
+# storyboard or the container storyboard) on one explicit
 # iOS Simulator and writes a provenance manifest that ties the video to one
 # exact build: the sha256 of the built binary, of every executable companion
 # and fixture in the .app, of the binary installed on the device, and of
@@ -9,7 +9,7 @@
 #
 # USAGE
 #   Scripts/e2e-video.sh (--udid <UDID> | --create-device <name>) --out <path.mp4>
-#       [--test switch|lists|code] [--derived-data <dir>] [--skip-build] [--keep-booted]
+#       [--test switch|lists|code|containers] [--derived-data <dir>] [--skip-build] [--keep-booted]
 #       [--expected-sha256 <hex> | --negative] [--test-timeout <s>]
 #       [--recorder-ready-timeout <s>] [--xcodebuild-grace <s>] [--allow-other-booted]
 #       [--dry-run]
@@ -25,14 +25,21 @@
 #                        code    ADFReaderUITests/CodeRendererUITests/
 #                                testCodeBlockStoryboard
 #                                (code-parity, the code-block storyboard)
-#                      All three assert the About checksum with the same
-#                      message, so --negative works for each. Three videos
+#                        containers
+#                                ADFReaderUITests/ContainerStoryboardUITests/
+#                                testContainerStoryboard
+#                                (containers-parity then captions-parity,
+#                                the container storyboard; PR 4 plan §10.1)
+#                      All four assert the About checksum with the same
+#                      message, so --negative works for each. Four videos
 #                      from ONE build: run `--test switch --out A.mp4` (fresh
 #                      build, default derived data A.DerivedData), then
 #                      `--test lists --out B.mp4 --skip-build --derived-data
-#                      A.DerivedData` and `--test code --out C.mp4 --skip-build
-#                      --derived-data A.DerivedData`; the three provenance
-#                      files then carry the same build manifest digests.
+#                      A.DerivedData`, `--test code --out C.mp4 --skip-build
+#                      --derived-data A.DerivedData` and `--test containers
+#                      --out D.mp4 --skip-build --derived-data A.DerivedData`;
+#                      the four provenance files then carry the same build
+#                      manifest digests.
 #   --udid             the simulator to use (required unless --create-device).
 #                      The script never looks devices up by name.
 #   --create-device    explicit opt-in: create an iPhone 17 Pro simulator with
@@ -126,7 +133,9 @@ BUNDLE_ID="com.connie.adfreader"
 DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
 XCODEGEN="${XCODEGEN:-xcodegen}"
 # Failure message of the checksum assertion; RendererSwitchUITests,
-# ListStoryboardUITests and CodeRendererUITests use exactly this text.
+# ListStoryboardUITests and CodeRendererUITests use exactly this text, and
+# ContainerStoryboardUITests (PR 4) must too
+# (Scripts/tests/gate-scripts-tests.sh checks each storyboard file).
 DIGEST_FAILURE_TEXT="on-screen checksum differs from the built binary"
 
 TEST_SELECTOR="switch"
@@ -163,6 +172,7 @@ test_id_for() {
         switch) printf '%s\n' "ADFReaderUITests/RendererSwitchUITests/testLiveSwitchSwiftUIToTextKit2AndBack" ;;
         lists) printf '%s\n' "ADFReaderUITests/ListStoryboardUITests/testListStoryboardSwiftUIToTextKit2AndBack" ;;
         code) printf '%s\n' "ADFReaderUITests/CodeRendererUITests/testCodeBlockStoryboard" ;;
+        containers) printf '%s\n' "ADFReaderUITests/ContainerStoryboardUITests/testContainerStoryboard" ;;
         *) return 1 ;;
     esac
 }
@@ -314,7 +324,7 @@ if [[ -z "$UDID" && -z "$CREATE_DEVICE" ]]; then usage_error "--udid <UDID> is r
 [[ "$OUT" == *.mp4 ]] || usage_error "--out must end in .mp4"
 if [[ -n "$EXPECTED_OVERRIDE" && $NEGATIVE -eq 1 ]]; then usage_error "--negative picks its own wrong digest; drop --expected-sha256"; fi
 if [[ -n "$EXPECTED_OVERRIDE" ]] && ! is_sha256 "$EXPECTED_OVERRIDE"; then usage_error "--expected-sha256 must be 64 hex characters"; fi
-TEST_ID="$(test_id_for "$TEST_SELECTOR")" || usage_error "--test must be 'switch', 'lists' or 'code' (got '$TEST_SELECTOR')"
+TEST_ID="$(test_id_for "$TEST_SELECTOR")" || usage_error "--test must be 'switch', 'lists', 'code' or 'containers' (got '$TEST_SELECTOR')"
 TEST_METHOD="${TEST_ID##*/}"
 for n in "$TEST_TIMEOUT" "$RECORDER_READY_TIMEOUT" "$XCODEBUILD_GRACE"; do
     [[ "$n" =~ ^[0-9]+$ ]] || usage_error "timeouts must be whole seconds (got '$n')"
