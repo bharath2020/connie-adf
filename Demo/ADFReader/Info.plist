@@ -24,8 +24,15 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Scans ADF Beam QR codes to import documents.</string>
+	<string>Scans ADF Beam QR codes to import documents, and the pairing code adf-auth shows on your Mac to add your Atlassian account.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>ADFReader fetches your Atlassian sign-in from the adf-auth command on your Mac over your local network, once, when you scan its pairing code.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
