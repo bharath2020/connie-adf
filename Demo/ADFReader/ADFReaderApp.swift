@@ -121,6 +121,11 @@ import UIKit
 ///     URLs whose lookup throws (`.unauthorized` or `.notFound`, about half
 ///     each), picked by a stable hash of the URL — the same links fail on
 ///     every launch and in every document.
+///   - `-smartLinkProbe` (UI tests only) shows `SmartLinkProbe`: one line,
+///     identifier `smartlink-probe`, with the document's smart-link
+///     counters, the mock's, the text-leaf body evaluations and the
+///     TextKit 2 conversions, layouts and live rows, polled every 250 ms —
+///     one consistent read for `SmartLinkUITests`.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -151,6 +156,8 @@ struct LaunchOptions: Sendable {
     var smartLinkDelay = 0.8
     /// `-smartLinkFailureRate <0…1>`: the share of URLs whose lookup fails.
     var smartLinkFailureRate = 0.1
+    /// `-smartLinkProbe`: the reader shows `SmartLinkProbe` (UI tests only).
+    var smartLinkProbe = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -204,6 +211,8 @@ struct LaunchOptions: Sendable {
                 if let seconds = Double(arguments[index]), seconds.isFinite {
                     smartLinkDelay = min(max(seconds, 0), 3_600)
                 }
+            case "-smartLinkProbe":
+                smartLinkProbe = true
             case "-smartLinkFailureRate" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 if let rate = Double(arguments[index]), rate.isFinite {

@@ -86,6 +86,11 @@ struct ReaderView: View {
                         .padding(8)
                 }
             }
+            .overlay(alignment: .bottomTrailing) {
+                if options.smartLinkProbe {
+                    SmartLinkProbe(model: model)
+                }
+            }
             .overlay {
                 if let loadFailure {
                     ContentUnavailableView(

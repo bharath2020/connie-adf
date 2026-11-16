@@ -11,8 +11,9 @@ import SwiftUI
 /// `-rebuildControlPicks` the memory control's live rows, and under
 /// `-interactionProbe` the task dispatches and URL opens it recorded
 /// (`InteractionProbe`), and last the open document's smart-link
-/// counters (`ADFDocumentModel.smartLinkStats`) and the mock resolver's
-/// own counts (`MockSmartLinkResolver`). The checksum lets a screen recording be
+/// counters (`ADFDocumentModel.smartLinkStats`), the mock resolver's
+/// own counts (`MockSmartLinkResolver`) and the text-leaf body and TextKit 2
+/// conversion and layout totals. The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -55,6 +56,13 @@ struct BuildInfoView: View {
     /// The demo mock resolver's own counts (`MockSmartLinkResolver.shared`),
     /// polled likewise.
     @State private var smartLinkCounts: MockSmartLinkResolver.Counts?
+    /// Text-leaf body evaluations since launch
+    /// (`ADFTextRenderer.textLeafStats`) and the TextKit 2 conversion and
+    /// layout totals, polled likewise: the smart-link UI test's proof that
+    /// a resolution re-evaluated no other leaf and rebuilt no other row.
+    @State private var textLeafStats: ADFTextLeafStats?
+    @State private var textKit2Conversions: Int?
+    @State private var textKit2Layouts: Int?
 
     var body: some View {
         NavigationStack {
@@ -129,6 +137,8 @@ struct BuildInfoView: View {
                     smartLinkStatsSection
                 }
                 smartLinksSection
+                // Last of all, below the smart-link counters it is read with.
+                leafDiagnosticsSection
             }
             .navigationTitle("About This Build")
             .navigationBarTitleDisplayMode(.inline)
@@ -162,6 +172,9 @@ struct BuildInfoView: View {
                         smartLinkRefreshedOwners = model.smartLinkLeafRefreshesByOwner.count
                     }
                     smartLinkCounts = MockSmartLinkResolver.shared?.snapshot
+                    textLeafStats = ADFTextRenderer.textLeafStats
+                    textKit2Conversions = stats.conversionCount
+                    textKit2Layouts = stats.layoutCount
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }
@@ -247,6 +260,23 @@ struct BuildInfoView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("smartlink-off")
             }
+        }
+    }
+
+    /// Process-wide work counters since launch: text-leaf body evaluations
+    /// (`ADFTextRenderer.textLeafStats`: SwiftUI `Text` leaves and engine
+    /// leaves) and TextKit 2 text conversions and layouts. Each value is its
+    /// own element (`leaf-stat-total`, `-segmented`, `-engine`,
+    /// `tk2-stat-conversions`, `tk2-stat-layouts`) for a UI test to read;
+    /// the smart-link test compares them across a resolution with the
+    /// leaf refreshes above.
+    private var leafDiagnosticsSection: some View {
+        Section("Text Leaves (Since Launch)") {
+            countRow("Leaf Bodies", textLeafStats?.total, id: "leaf-stat-total")
+            countRow("Of Which SwiftUI Text", textLeafStats?.segmentedTextBodies, id: "leaf-stat-segmented")
+            countRow("Of Which Engine Leaf", textLeafStats?.engineLeafBodies, id: "leaf-stat-engine")
+            countRow("TextKit 2 Conversions", textKit2Conversions, id: "tk2-stat-conversions")
+            countRow("TextKit 2 Layouts", textKit2Layouts, id: "tk2-stat-layouts")
         }
     }
 

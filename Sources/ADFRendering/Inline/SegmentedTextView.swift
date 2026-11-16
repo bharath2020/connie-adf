@@ -39,6 +39,7 @@ struct SegmentedTextView: View {
     @State private var flashDimmed = false
 
     var body: some View {
+        let _ = TextLeafDiagnostics.countSegmentedBody()
         let stages = smartLinkStages
         let displayed = displayedSegments(smartLinks: stages)
         let composesSmartLinks = !stages.isEmpty
@@ -183,6 +184,65 @@ struct SegmentedTextView: View {
         let characters = text.characters
         guard let first = characters.first, first == "\n" else { return false }
         return characters.index(after: characters.startIndex) == characters.endIndex
+    }
+}
+
+/// Text-leaf body evaluations since launch, process-wide (diagnostics: the
+/// demo's About sheet and the smart-link UI test's proof that a resolution
+/// re-evaluates no other leaf). Plain integers bumped at the top of each
+/// leaf's `body`: nothing observable, so counting adds no dependency and
+/// invalidates nothing.
+@MainActor
+enum TextLeafDiagnostics {
+    /// `SegmentedTextView.body`: every text leaf SwiftUI's `Text` draws.
+    private(set) static var segmentedBodies = 0
+    /// `TextEngineLeaf.body`: every paragraph, heading, list leader and code
+    /// text, before the engine choice (under TextKit 2 the row's text input
+    /// is made here).
+    private(set) static var engineBodies = 0
+
+    @discardableResult
+    static func countSegmentedBody() -> Int {
+        segmentedBodies &+= 1
+        return segmentedBodies
+    }
+
+    @discardableResult
+    static func countEngineBody() -> Int {
+        engineBodies &+= 1
+        return engineBodies
+    }
+}
+
+/// Text-leaf body evaluations since launch (`ADFTextRenderer.textLeafStats`),
+/// process-wide: under SwiftUI a text leaf re-evaluates `SegmentedTextView`
+/// (its engine leaf too only when its inputs changed), under TextKit 2 a
+/// row's text input is made in its engine leaf.
+@_spi(ADFDiagnostics)
+public struct ADFTextLeafStats: Sendable, Hashable {
+    /// `SegmentedTextView` body evaluations (SwiftUI-drawn text leaves).
+    public var segmentedTextBodies: Int
+    /// Engine-leaf body evaluations (paragraphs, headings, list leaders and
+    /// code text, on either renderer).
+    public var engineLeafBodies: Int
+    /// Both counts.
+    public var total: Int { segmentedTextBodies + engineLeafBodies }
+
+    public init(segmentedTextBodies: Int = 0, engineLeafBodies: Int = 0) {
+        self.segmentedTextBodies = segmentedTextBodies
+        self.engineLeafBodies = engineLeafBodies
+    }
+}
+
+extension ADFTextRenderer {
+    /// Text-leaf body evaluations since launch (see `ADFTextLeafStats`).
+    @_spi(ADFDiagnostics)
+    @MainActor
+    public static var textLeafStats: ADFTextLeafStats {
+        ADFTextLeafStats(
+            segmentedTextBodies: TextLeafDiagnostics.segmentedBodies,
+            engineLeafBodies: TextLeafDiagnostics.engineBodies
+        )
     }
 }
 

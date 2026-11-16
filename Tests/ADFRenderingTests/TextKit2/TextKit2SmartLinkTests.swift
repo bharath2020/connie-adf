@@ -172,6 +172,41 @@ struct TextKit2SmartLinkTests {
         #expect(TextKit2FallbackTests.rows(in: hosted.root).isEmpty, "SwiftUI built TextKit 2 rows")
     }
 
+    @Test("text-leaf bodies: a stage change re-evaluates exactly the leaves it redraws, on both renderers", arguments: [
+        ADFTextRenderer.swiftUI, .textKit2,
+    ])
+    func leafBodiesMatchRefreshes(renderer: ADFTextRenderer) async throws {
+        let resolver = ScriptedSmartLinkResolver()
+        let hosted = try await Self.host(Self.json, renderer: renderer, resolver: resolver)
+        defer { hosted.close() }
+        try await smartLinkEventually("both lookups") { resolver.waitingURLs.count == 2 }
+        try await hosted.settle()
+
+        // The counters are process-wide and other suites render in
+        // parallel, so they are compared only across this span with no
+        // suspension: publish the stage, then lay the window out and draw.
+        let leaves = ADFTextRenderer.textLeafStats
+        let refreshes = hosted.model.smartLinkStats.leafRefreshes
+        let conversions = TextKit2Diagnostics.shared.conversionCount
+        hosted.model.smartLinks.entry(for: Self.key(Self.a)).publish(.resolved(Self.page))
+        for _ in 0..<5 {
+            hosted.window.layoutIfNeeded()
+        }
+        TextKit2DiagnosticsTests.render(hosted.window)
+        let leafDelta = ADFTextRenderer.textLeafStats.total - leaves.total
+        let refreshDelta = hosted.model.smartLinkStats.leafRefreshes - refreshes
+        let conversionDelta = TextKit2Diagnostics.shared.conversionCount - conversions
+        print("SMARTLINK leaf bodies (\(renderer)): leaves Δ\(leafDelta) refreshes Δ\(refreshDelta) conversions Δ\(conversionDelta)")
+
+        // `a` shows in 0.0 and 0.3: two leaves redraw, nothing else runs.
+        #expect(refreshDelta == 2, "refreshes Δ\(refreshDelta)")
+        #expect(leafDelta == refreshDelta, "leaf bodies Δ\(leafDelta) vs refreshes Δ\(refreshDelta)")
+        #expect(conversionDelta == (renderer == .textKit2 ? 2 : 0), "conversions Δ\(conversionDelta)")
+        if renderer == .textKit2 {
+            #expect(hosted.rows()["0.0"]?.accessibilityLabel == "See Page, Q3 Roadmap now")
+        }
+    }
+
     @Test("the row visibility feed: a row far off screen never asks; a row that leaves cancels its lookup")
     func visibilityFeedDrivesLookups() async throws {
         let filler = (0..<60).map { Self.paragraph(Self.text("Filler paragraph \($0) with enough words to take a line or two of the column.")) }
