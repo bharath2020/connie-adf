@@ -68,9 +68,10 @@ private struct ADFRebuildControlKey: EnvironmentKey {
 /// that list text and code, not only top-level text, are drawn by
 /// TextKit 2.
 ///
-/// The kind says what the text is, not where it sits: a later stage that
-/// draws code inside a container keeps `.code` and adds the container's
-/// context beside it.
+/// The kind says what the text is, not where it sits: text below a
+/// container's boundary keeps its kind (code stays `.code`, list text
+/// `.list`), and the container context (`TextKit2ContainerContext`,
+/// `adfTextContainerContext`) is carried beside it.
 enum TextKit2OwnerKind: Sendable, Hashable {
     case root
     case list
@@ -134,9 +135,11 @@ private struct ADFTextWidthBoundKey: EnvironmentKey {
 extension EnvironmentValues {
     /// The text engine a text leaf (`TextEngineLeaf`) should use.
     /// `ADFDocumentView`'s rows set it to the host's choice for top-level
-    /// `.richText`, `.listRows` and `.codeBlock` rows, and list rows pass it
-    /// on to their own text only (`TextKit2Scope`). Every other position
-    /// gets `.swiftUI`.
+    /// `.richText`, `.listRows` and `.codeBlock` rows and for the container
+    /// kinds the container allow list holds, list rows pass it on to their
+    /// own text only, and a container's child boundary
+    /// (`View.adfContainerChild`) to the children that list allows
+    /// (`TextKit2Scope`). Every other position gets `.swiftUI`.
     var adfTextRenderer: ADFTextRenderer {
         get { self[ADFTextRendererKey.self] }
         set { self[ADFTextRendererKey.self] = newValue }

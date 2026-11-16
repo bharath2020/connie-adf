@@ -75,9 +75,27 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     var ownerKind: TextKit2OwnerKind = .root {
         didSet {
             guard ownerKind != oldValue else { return }
-            TextKit2Diagnostics.shared.row(ownerKind: ownerKind, was: oldValue, ownerID: ownerID)
+            TextKit2Diagnostics.shared.row(ownerKind: ownerKind, was: oldValue, context: containerContext, ownerID: ownerID)
         }
     }
+    /// Where the row's text sits (`TextKit2ContainerContext`), set by the
+    /// representable beside `ownerKind`, before the inputs. The row counts
+    /// itself by the two together: container text that is not code
+    /// (`TextKit2Diagnostics.liveContainerRowCount`, its draws and the
+    /// per-owner proof `containerRowDraws`) and captions
+    /// (`liveCaptionRowCount`, `captionRowDraws`). Diagnostics only: it
+    /// changes nothing the row lays out or draws.
+    var containerContext: TextKit2ContainerContext = .none {
+        didSet {
+            guard containerContext != oldValue else { return }
+            TextKit2Diagnostics.shared.row(context: containerContext, was: oldValue, ownerKind: ownerKind, ownerID: ownerID)
+        }
+    }
+    /// Whether the row is counted outside any window
+    /// (`TextKit2Diagnostics.liveOffWindowRowCount`): from creation until
+    /// it first moves into a window, and again whenever it leaves one, as a
+    /// row the lazy stack keeps after showing it does.
+    private var countedOffWindow = true
     /// Width the layout manager is currently laid out at (`-1`: none).
     private var containerWidth: CGFloat = -1
     /// The layout being drawn and hit-tested (set by `syncToBounds`), and
@@ -127,6 +145,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         // rows are created and released by the screenful on every switch,
         // so each per-row object counts.
         TextKit2Diagnostics.shared.rowCreated()
+        TextKit2Diagnostics.shared.row(offWindow: true)
     }
 
     @available(*, unavailable)
@@ -135,14 +154,35 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     deinit {
         let backed = isTextKit1Backed
         let kind = ownerKind
+        let context = containerContext
+        let offWindow = countedOffWindow
         let owner = ownerID
         // UIKit releases views on the main thread; hop there if a caller
         // ever drops the last reference elsewhere.
         if Thread.isMainThread {
-            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
+            MainActor.assumeIsolated {
+                TextKit2Diagnostics.shared.rowDestroyed(
+                    textKit1Backed: backed, ownerKind: kind, context: context, offWindow: offWindow, ownerID: owner
+                )
+            }
         } else {
-            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
+            DispatchQueue.main.async {
+                TextKit2Diagnostics.shared.rowDestroyed(
+                    textKit1Backed: backed, ownerKind: kind, context: context, offWindow: offWindow, ownerID: owner
+                )
+            }
         }
+    }
+
+    /// Counts the row in or out of `liveOffWindowRowCount` as it enters or
+    /// leaves a window. A counter update only: nothing is laid out or drawn
+    /// here.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        let offWindow = window == nil
+        guard offWindow != countedOffWindow else { return }
+        countedOffWindow = offWindow
+        TextKit2Diagnostics.shared.row(offWindow: offWindow)
     }
 
     // MARK: Inputs
@@ -154,7 +194,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// or laying out its text (`applyColorScheme`).
     func apply(_ newInputs: TextKit2RenderInputs, colorScheme: ColorScheme = .light, ownerID newOwnerID: String? = nil) {
         if newOwnerID != ownerID {
-            TextKit2Diagnostics.shared.row(ownerID: newOwnerID, was: ownerID, ownerKind: ownerKind)
+            TextKit2Diagnostics.shared.row(ownerID: newOwnerID, was: ownerID, ownerKind: ownerKind, context: containerContext)
             ownerID = newOwnerID
             accessibilityIdentifier = newOwnerID.map { "tk2-row:\($0)" }
         }
@@ -631,7 +671,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         if let textKit1 {
             drawTextKit1(textKit1, in: context, scale: scale)
             context.restoreGState()
-            TextKit2Diagnostics.shared.didDraw(native: false, textKit1: true)
+            TextKit2Diagnostics.shared.didDraw(native: false, textKit1: true, code: ownerKind == .code, context: containerContext, ownerID: ownerID)
             return
         }
         context.translateBy(x: drawnShift, y: 0)
@@ -665,7 +705,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             return true
         }
         context.restoreGState()
-        TextKit2Diagnostics.shared.didDraw(native: fragments > 0, code: ownerKind == .code, ownerID: ownerID)
+        TextKit2Diagnostics.shared.didDraw(native: fragments > 0, code: ownerKind == .code, context: containerContext, ownerID: ownerID)
     }
 
     /// Text containing a link, drawn as SwiftUI draws it: SwiftUI renders

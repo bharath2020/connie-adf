@@ -13,17 +13,23 @@ import UIKit
 ///       SCROLL_LANDED fixture=<name> fraction=<f> index=<i> block=<id> blocks=<n>
 ///       RENDERER_STATS …
 ///       TK2_CODE_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+///       TK2_CONTAINER_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+///       TK2_CAPTION_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
 ///
 ///   `SCROLL_LANDED` names the block the jump went to (`block=`, the
 ///   `RenderBlock.id` at `index=` of `blocks=`: the jump's target, not a
 ///   measured position; `-captureGeometryHook` measures it) and is printed
-///   with or without `-rendererStats`; the other two only with it. `RENDERER_STATS` is the READY line's keys
+///   with or without `-rendererStats`; the others only with it. `RENDERER_STATS` is the READY line's keys
 ///   with fresh values (the stats printed at READY predate the jump).
 ///   `TK2_CODE_ROWS` lists each live TextKit 2 row drawing a code block's
 ///   code by owner, with its native draw passes; with none it is
-///   `TK2_CODE_ROWS live=0 owners=-`. `Scripts/visual_diff.py` reads the
-///   three as a capture's engine proof, so a capture must wait for them
-///   (see `RendererStats` and `ReaderView.scrollToFraction`).
+///   `TK2_CODE_ROWS live=0 owners=-`. `TK2_CONTAINER_ROWS` lists the same
+///   for each live row drawing text below a container's boundary that is
+///   not code (owner: the paragraph's or heading's block id, or a nested
+///   list row's id), and `TK2_CAPTION_ROWS` for each live caption row
+///   (owner: the media id). `Scripts/visual_diff.py` reads the five as a
+///   capture's engine proof, so a capture must wait for them (see
+///   `RendererStats` and `ReaderView.scrollToFraction`).
 /// - `-autoscroll` waits 3s after ready, animates through the entire
 ///   document at ~1,200 pt/s while frame metrics run, prints one
 ///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
@@ -61,7 +67,28 @@ import UIKit
 ///   `codeGated` are measured: of the eligible ones, how many TextKit 2
 ///   would draw, and how many a view-time rule keeps on SwiftUI, at this
 ///   launch's text size, legibility weight, display scale and layout
-///   direction; the two sum to `eligibleCodeRoots`.
+///   direction; the two sum to `eligibleCodeRoots`. Since the container
+///   stage seventeen container keys follow `codeGated=`, still before the
+///   rebuild-control keys, on both arms:
+///
+///       tk2ContainerLive=<n> tk2ContainerNativeDraws=<n>
+///       tk2ContainerTK1Draws=<n> tk2CaptionLive=<n>
+///       tk2CaptionNativeDraws=<n> tk2OffWindow=<n>
+///       eligibleContainerLeaves=<n> linkedContainerLeaves=<n>
+///       fallbackContainerLeaves=<n> containerListLeaves=<n>
+///       eligibleCaptionLeaves=<n> fallbackCaptionLeaves=<n>
+///       eligibleNestedCode=<n> fallbackNestedCode=<n>
+///       unpreparedExpands=<n> nestedCodeAdmitted=<n> nestedCodeGated=<n>
+///
+///   The first six are live and cumulative row counters: rows drawing
+///   text below a container's boundary that is not code, their native
+///   and TextKit 1-backed draws, caption rows and their native draws, and
+///   row views alive outside any window. The next nine are static
+///   coverage of that text (container leaves, captions, nested code,
+///   expands whose unprepared bodies were not counted), apart from every
+///   key above; the last two measure nested code as `codeAdmitted` /
+///   `codeGated` measure top-level code. All read 0 while no container
+///   family is enabled (see `RendererStats`).
 /// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
 ///   streamed chunk arrives (the document is still loading) the way the
 ///   toolbar does, marked as automation's like `-textkit2` (the next launch

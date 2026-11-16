@@ -7,7 +7,9 @@ import SwiftUI
 /// renderer proof: > 0 while TextKit 2 draws rows on screen, 0 after a
 /// switch back to SwiftUI), of which how many are TextKit 1-backed (linked
 /// text, laid out and drawn by a TextKit 1 stack inside the row), how
-/// many draw list text and how many draw a code block's code, and under
+/// many draw list text, how many draw a code block's code, how many draw
+/// container text that is not code and how many a media caption, and how
+/// many row views are alive outside any window, and under
 /// `-rebuildControlPicks` the memory control's live rows, and under
 /// `-interactionProbe` the task dispatches and URL opens it recorded
 /// (`InteractionProbe`). The checksum lets a screen recording be
@@ -33,6 +35,15 @@ struct BuildInfoView: View {
     /// that code, not only paragraphs and lists, is on the TextKit 2
     /// engine.
     @State private var liveTextKit2CodeRows: Int?
+    /// Live TextKit 2 rows drawing text below a container's boundary that
+    /// is not code, and rows drawing a media caption: the proof that
+    /// container text and captions are on the TextKit 2 engine.
+    @State private var liveTextKit2ContainerRows: Int?
+    @State private var liveTextKit2CaptionRows: Int?
+    /// Live TextKit 2 row views outside any window (built by the lazy stack
+    /// but not on screen): what `tk2-live-rows` counts beyond the rows in
+    /// the accessibility tree.
+    @State private var offWindowTextKit2Rows: Int?
     @State private var rebuildControlRows: Int?
     /// `InteractionProbe` figures, read when the sheet is built and on each
     /// poll (they change only while the sheet is closed).
@@ -104,6 +115,21 @@ struct BuildInfoView: View {
                         .monospacedDigit()
                         .accessibilityIdentifier("tk2-code-live-rows")
                 }
+                Section("Live TextKit 2 Rows Drawing Container Text") {
+                    Text(liveTextKit2ContainerRows.map(String.init) ?? "…")
+                        .monospacedDigit()
+                        .accessibilityIdentifier("tk2-container-live-rows")
+                }
+                Section("Live TextKit 2 Rows Drawing Captions") {
+                    Text(liveTextKit2CaptionRows.map(String.init) ?? "…")
+                        .monospacedDigit()
+                        .accessibilityIdentifier("tk2-caption-live-rows")
+                }
+                Section("Live TextKit 2 Rows Off Any Window") {
+                    Text(offWindowTextKit2Rows.map(String.init) ?? "…")
+                        .monospacedDigit()
+                        .accessibilityIdentifier("tk2-offwindow-rows")
+                }
                 if InteractionProbe.enabled {
                     interactionProbeSection
                 }
@@ -130,6 +156,9 @@ struct BuildInfoView: View {
                     liveTextKit1BackedRows = stats.textKit1BackedRowCount
                     liveTextKit2ListRows = stats.liveListRowCount
                     liveTextKit2CodeRows = stats.liveCodeRowCount
+                    liveTextKit2ContainerRows = stats.liveContainerRowCount
+                    liveTextKit2CaptionRows = stats.liveCaptionRowCount
+                    offWindowTextKit2Rows = stats.liveOffWindowRowCount
                     rebuildControlRows = ADFTextRenderer.rebuildControlRows.live
                     probeTaskDispatches = InteractionProbe.taskDispatches
                     probeLastTask = InteractionProbe.lastTask

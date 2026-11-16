@@ -15,24 +15,37 @@ import ADFPreparation
 /// eligible (`TextKit2Eligibility.codeVerdict`) and the code gate admits it
 /// where it is drawn (`codeGate`: left to right, within the canvas bound,
 /// and before iOS 26 no interior empty line above AX3).
-/// Every other top-level kind
-/// (panel, quote, table, media, expand, layout columns, card,
-/// extension, plugin, unknown) gets `.swiftUI`, and so does everything
-/// inside it, lists, code and paragraphs included; code inside a list item
-/// gets `.swiftUI` from its row. Those two views are the only
-/// places that set `adfTextRenderer`. The coverage walk (`forEachLeaf`)
-/// follows the same rule, so the diagnostics count exactly the leaves the
-/// views may hand to TextKit 2 (left to right).
+/// A container (panel, quote, expand, layout columns, extension, and media
+/// for its caption) keeps the choice at the top level only when its kind
+/// is in the container allow list (`containerChildKinds`, empty for now)
+/// and passes its whole-block rule (`blockKeepsRenderer`); its child
+/// boundary (`View.adfContainerChild`, `childRenderer`) then passes the
+/// choice to the children the same list and rules allow. With the list
+/// empty every other top-level kind (panel, quote, table, media, expand,
+/// layout columns, card, extension, plugin, unknown) gets `.swiftUI`, and
+/// so does everything inside it, lists, code and paragraphs included; code
+/// inside a list item gets `.swiftUI` from its row. Those three places are
+/// the only ones that set `adfTextRenderer`. The coverage walk
+/// (`forEachLeaf`) follows the same rules, so the diagnostics count
+/// exactly the leaves the views may hand to TextKit 2 (stacked, left to
+/// right).
 enum TextKit2Scope {
-    /// Whether a top-level block keeps the renderer choice (`.richText`,
-    /// `.codeBlock`, a `.listRows` that `listKeepsRenderer`) rather than
-    /// resetting it to `.swiftUI`.
-    static func inheritsRenderer(_ kind: RenderBlock.Kind) -> Bool {
+    /// Whether a top-level block keeps the renderer choice rather than
+    /// resetting it to `.swiftUI`: `.richText`, `.codeBlock`, a `.listRows`
+    /// that `listKeepsRenderer`, and a container kind in `allowed` (the
+    /// container allow list, `containerChildKinds`, unless a coverage walk
+    /// is given another) that passes its whole-block rule
+    /// (`blockKeepsRenderer`, the rule `childRenderer` applies to a nested
+    /// one).
+    static func inheritsRenderer(_ kind: RenderBlock.Kind, allowed: Set<TextKit2BlockKind> = containerChildKinds) -> Bool {
         switch kind {
         case .richText: return true
         case .listRows(let rows): return listKeepsRenderer(rows)
         case .codeBlock: return true
-        default: return false
+        case .panel, .quote, .extensionPlaceholder, .layoutColumns, .expand, .media:
+            return allowed.contains(TextKit2BlockKind(kind)) && blockKeepsRenderer(kind)
+        case .divider, .tableSlice, .mediaStrip, .card, .custom, .unknown:
+            return false
         }
     }
 
@@ -163,7 +176,8 @@ enum TextKit2Scope {
         }
     }
 
-    /// Where a text leaf sits in the scope.
+    /// Where a text leaf sits in the scope. `root`, `listLeader`,
+    /// `listTrailing` and `codeRoot` are depth 0: outside every container.
     enum Position: Sendable, Hashable {
         /// A top-level paragraph or heading.
         case root
@@ -176,16 +190,37 @@ enum TextKit2Scope {
         /// `RenderBlock.id`. Not a text leaf of the prose and list set: it
         /// has its own owner kind, verdict and coverage counts.
         case codeRoot
+        /// A paragraph or heading below a container's child boundary.
+        case containerProse
+        /// A list row's leader in a list below a container's boundary.
+        case containerListLeader
+        /// A paragraph or heading among such a list row's trailing blocks.
+        case containerListTrailing
+        /// A media caption, owned by `PreparedMedia.id`.
+        case caption
+        /// The code text of a code block below a container's boundary.
+        case containerCode
 
         /// The owner kind a view at this position draws its text for: the
         /// one the leaf's verdict is decided with. Exhaustive, so a new
         /// position never falls into another's rules (code never takes a
-        /// list rule or the list OS gate).
+        /// list rule or the list OS gate; container prose and captions are
+        /// root text, never list text).
         var ownerKind: TextKit2OwnerKind {
             switch self {
-            case .root: return .root
-            case .listLeader, .listTrailing: return .list
-            case .codeRoot: return .code
+            case .root, .containerProse, .caption: return .root
+            case .listLeader, .listTrailing, .containerListLeader, .containerListTrailing: return .list
+            case .codeRoot, .containerCode: return .code
+            }
+        }
+
+        /// Where a view at this position sits (`adfTextContainerContext`).
+        /// Exhaustive, like `ownerKind`.
+        var context: TextKit2ContainerContext {
+            switch self {
+            case .root, .listLeader, .listTrailing, .codeRoot: return .none
+            case .containerProse, .containerListLeader, .containerListTrailing, .containerCode: return .container
+            case .caption: return .caption
             }
         }
     }
@@ -196,60 +231,118 @@ enum TextKit2Scope {
         /// The leaf's inline content; empty for code (`code`).
         let segments: [InlineSegment]
         /// The block's style; `nil` for a leader, which the list row styles
-        /// as body text (`ListRowView.leaderStyle(theme:)`), and for code
-        /// (`CodeBlockView.codeStyle(theme:)`).
+        /// as body text (`ListRowView.leaderStyle(theme:)`), for code
+        /// (`CodeBlockView.codeStyle(theme:)`) and for a caption.
         let style: TextBlockStyle?
         let position: Position
-        /// The prepared code string of a `.codeRoot` leaf, as the view
-        /// hands it to its leaf; `nil` at every other position.
+        /// The prepared code string of a `.codeRoot` or `.containerCode`
+        /// leaf, as the view hands it to its leaf; `nil` at every other
+        /// position.
         var code: AttributedString? = nil
 
         /// The engine verdict for this leaf where it sits: what
-        /// `TextEngineLeaf` decides for it. Paragraphs, headings and list
-        /// text are judged from their segments
-        /// (`TextKit2Eligibility.verdict(_:owner:)`); code is judged from
-        /// its prepared string by the code rules
-        /// (`TextKit2Eligibility.codeVerdict`), never by a list rule.
+        /// `TextEngineLeaf` decides for it. Paragraphs, headings, list
+        /// text and captions are judged from their segments
+        /// (`TextKit2Eligibility.verdict(_:owner:context:)`); code is judged
+        /// from its prepared string by the code rules
+        /// (`TextKit2Eligibility.codeVerdict`, and below a container
+        /// `containerCodeVerdict`), never by a list rule.
         var verdict: TextKit2Eligibility.Verdict {
             switch position {
-            case .root, .listLeader, .listTrailing:
-                return TextKit2Eligibility.verdict(segments, owner: position.ownerKind)
+            case .root, .listLeader, .listTrailing, .containerProse, .containerListLeader, .containerListTrailing, .caption:
+                return TextKit2Eligibility.verdict(segments, owner: position.ownerKind, context: position.context)
             case .codeRoot:
                 return TextKit2Eligibility.codeVerdict(code ?? AttributedString())
+            case .containerCode:
+                return TextKit2Eligibility.containerCodeVerdict(code ?? AttributedString(), context: position.context)
             }
         }
     }
 
-    /// Visits every leaf of the document's top-level blocks in the scope,
-    /// in prepared (depth-first) order: paragraphs and headings, list text,
+    /// Visits every leaf in the scope, in prepared (depth-first,
+    /// column-major) order: top-level paragraphs and headings, list text,
     /// and the code of top-level code blocks (`.codeRoot`, which is not
-    /// list text: a caller that wants the prose and list set skips it). A
-    /// row with empty segments has no leader view, so it is not a leaf.
-    static func forEachLeaf(in blocks: [RenderBlock], _ visit: (Leaf) -> Void) {
+    /// list text: a caller that wants the prose and list set skips it); and
+    /// below every container the renderer reaches (`inheritsRenderer`,
+    /// then `childRenderer` at each boundary, with `allowed` as the allow
+    /// list), its paragraphs, headings, list text, code and captions at
+    /// the container positions. Containers are walked as the views draw
+    /// them stacked and left to right; no view-time rule
+    /// (`containerGate`) is evaluated. A row with empty segments has no
+    /// leader view, so it is not a leaf, and neither is an absent or empty
+    /// caption. An expand's body is not prepared with the document, so the
+    /// walk never enters one: it reports each expand in scope to
+    /// `unpreparedExpand` instead.
+    static func forEachLeaf(
+        in blocks: [RenderBlock], allowed: Set<TextKit2BlockKind> = containerChildKinds,
+        unpreparedExpand: (RenderBlock) -> Void = { _ in }, _ visit: (Leaf) -> Void
+    ) {
         for block in blocks {
             switch block.kind {
             case .richText(let segments, let style):
                 visit(Leaf(ownerID: block.id, segments: segments, style: style, position: .root))
             case .listRows(let rows) where listKeepsRenderer(rows):
-                forEachLeaf(inList: rows, visit)
+                forEachLeaf(inList: rows, nested: false, visit)
             case .codeBlock(_, let code):
                 visit(Leaf(ownerID: block.id, segments: [], style: nil, position: .codeRoot, code: code))
             default:
-                continue
+                guard inheritsRenderer(block.kind, allowed: allowed) else { continue }
+                forEachLeaf(inContainer: block, allowed: allowed, unpreparedExpand: unpreparedExpand, visit)
             }
         }
     }
 
-    private static func forEachLeaf(inList rows: [PreparedListRow], _ visit: (Leaf) -> Void) {
+    /// `nested`: the list sits below a container's boundary.
+    private static func forEachLeaf(inList rows: [PreparedListRow], nested: Bool, _ visit: (Leaf) -> Void) {
         for row in rows where rowKeepsRenderer(row) {
             if !row.segments.isEmpty {
-                visit(Leaf(ownerID: row.id, segments: row.segments, style: nil, position: .listLeader))
+                visit(Leaf(ownerID: row.id, segments: row.segments, style: nil, position: nested ? .containerListLeader : .listLeader))
             }
             for block in row.trailingBlocks {
                 if case .richText(let segments, let style) = block.kind {
-                    visit(Leaf(ownerID: block.id, segments: segments, style: style, position: .listTrailing))
+                    visit(Leaf(ownerID: block.id, segments: segments, style: style, position: nested ? .containerListTrailing : .listTrailing))
                 }
             }
+        }
+    }
+
+    /// The leaves under a container block the renderer reached (a
+    /// top-level one, or a child its parent's boundary passed it to): its
+    /// children through its own boundary, a caption, or for an expand the
+    /// report that its body is not prepared.
+    private static func forEachLeaf(
+        inContainer block: RenderBlock, allowed: Set<TextKit2BlockKind>,
+        unpreparedExpand: (RenderBlock) -> Void, _ visit: (Leaf) -> Void
+    ) {
+        func children(_ blocks: [RenderBlock], in parent: TextKit2ContainerParent) {
+            for child in blocks where childRenderer(
+                for: child.kind, in: parent, inherited: .textKit2, allowed: allowed, layoutDirection: .leftToRight
+            ) == .textKit2 {
+                switch child.kind {
+                case .richText(let segments, let style):
+                    visit(Leaf(ownerID: child.id, segments: segments, style: style, position: .containerProse))
+                case .listRows(let rows):
+                    forEachLeaf(inList: rows, nested: true, visit)
+                case .codeBlock(_, let code):
+                    visit(Leaf(ownerID: child.id, segments: [], style: nil, position: .containerCode, code: code))
+                default:
+                    forEachLeaf(inContainer: child, allowed: allowed, unpreparedExpand: unpreparedExpand, visit)
+                }
+            }
+        }
+        switch block.kind {
+        case .panel(_, let blocks): children(blocks, in: .panel)
+        case .quote(let blocks): children(blocks, in: .quote)
+        case .extensionPlaceholder(_, let body): children(body, in: .extensionBody)
+        case .layoutColumns(let columns):
+            for column in columns { children(column.blocks, in: .column(sideBySide: false)) }
+        case .expand: unpreparedExpand(block)
+        case .media(let media):
+            if let caption = media.caption, !caption.isEmpty {
+                visit(Leaf(ownerID: media.id, segments: caption, style: nil, position: .caption))
+            }
+        case .richText, .codeBlock, .listRows, .divider, .tableSlice, .mediaStrip, .card, .custom, .unknown:
+            break
         }
     }
 }

@@ -39,6 +39,10 @@ struct TextEngineLeaf<Fallback: View>: View {
 
     @Environment(\.adfTextRenderer) private var renderer
     @Environment(\.adfTextOwnerKind) private var ownerKind
+    /// Where the leaf sits (`TextKit2ContainerContext`, set by a
+    /// container's boundary): an input of the verdict beside the owner
+    /// kind, and of the row's counters.
+    @Environment(\.adfTextContainerContext) private var context
 
     init(
         segments: [InlineSegment], style: TextBlockStyle, ownerID: String?, allowsTextKit2: Bool = true,
@@ -72,9 +76,11 @@ struct TextEngineLeaf<Fallback: View>: View {
         #if canImport(UIKit)
         if renderer == .textKit2, allowsTextKit2, let text = describableText {
             if ownerKind == .code {
-                TextKit2CodeGate(text: text, style: style, ownerID: ownerID) { fallback }
+                TextKit2CodeGate(text: text, style: style, ownerID: ownerID, context: context) { fallback }
             } else {
-                TextKit2Leaf(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, widthInset: widthInset) { fallback }
+                TextKit2Leaf(
+                    text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, context: context, widthInset: widthInset
+                ) { fallback }
             }
         } else {
             fallback
@@ -89,8 +95,8 @@ struct TextEngineLeaf<Fallback: View>: View {
     /// Read only when the switch is ON (the condition above stops at the
     /// renderer first), so the SwiftUI arm computes nothing here.
     private var describableText: AttributedString? {
-        if let text { return TextKit2Eligibility.describableText(text, owner: ownerKind) }
-        return TextKit2Eligibility.describableText(segments, owner: ownerKind)
+        if let text { return TextKit2Eligibility.describableText(text, owner: ownerKind, context: context) }
+        return TextKit2Eligibility.describableText(segments, owner: ownerKind, context: context)
     }
     #endif
 }

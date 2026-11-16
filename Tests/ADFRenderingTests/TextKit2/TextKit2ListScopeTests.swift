@@ -1,41 +1,65 @@
 import Foundation
 import Testing
 
-/// The renderer choice is set in exactly two places (Fable F4): the
+/// The renderer choice is set in exactly three places (Fable F4): the
 /// document row (`DocumentRow`: top-level `.richText`, `.listRows` and
-/// `.codeBlock`) and the list row's trailing-block boundary
-/// (`ListRowView`). A third setter, such as a container passing it on,
-/// would leak TextKit 2 into an excluded subtree. A code block only reads
-/// the choice (`TextKit2CodeScopeTests`, UIKit only). Source scan, so it runs on
-/// every platform.
+/// `.codeBlock`, and the container kinds the container allow list holds),
+/// the list row's trailing-block boundary (`ListRowView`) and the
+/// container child boundary (`View.adfContainerChild`, in
+/// `TextKit2ContainerBoundary.swift`, used by the five container views). A
+/// fourth setter, such as a container passing it on by itself, would leak
+/// TextKit 2 into an excluded subtree. A code block only reads the choice
+/// (`TextKit2CodeScopeTests`, UIKit only). The same scan pins the writers
+/// of the values beside it: the owner kind (`adfTextOwnerKind`) is set only
+/// by the list row and the code block, the container context
+/// (`adfTextContainerContext`) only by the boundary, and no library source
+/// writes the container allow list's environment value
+/// (`adfContainerChildKinds`), which only a test host may widen. Source
+/// scan, so it runs on every platform.
 @Suite("TextKit 2 list scope: renderer setters")
 struct TextKit2RendererSetterTests {
-    @Test("the renderer environment key is set in exactly two places")
-    func twoSetters() throws {
+    /// Every write of `\.<key>` under `Sources`, as `<file>:<line>`: an
+    /// `.environment(\.<key>, …)`, a `transformEnvironment(\.<key>` or an
+    /// assignment. Reads are `@Environment(\.<key>)`; comments are skipped.
+    static func writes(of keys: [String]) throws -> (writes: [String: [String]], scanned: Int) {
         var sources = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { sources.deleteLastPathComponent() } // …/Tests/ADFRenderingTests/TextKit2 → repo root
         sources.appendPathComponent("Sources")
         let enumerator = try #require(FileManager.default.enumerator(atPath: sources.path))
-        var setters: [String] = []
+        var writes = Dictionary(uniqueKeysWithValues: keys.map { ($0, [String]()) })
         var scanned = 0
         while let path = enumerator.nextObject() as? String {
             guard path.hasSuffix(".swift") else { continue }
             scanned += 1
             let source = try String(contentsOf: sources.appendingPathComponent(path), encoding: .utf8)
             for (index, line) in source.components(separatedBy: .newlines).enumerated() {
-                // A write: `.environment(\.adfTextRenderer, …)`,
-                // `transformEnvironment(\.adfTextRenderer)` or an assignment.
-                // Reads are `@Environment(\.adfTextRenderer)`.
                 let code = line.components(separatedBy: "//").first ?? line
-                if code.contains("\\.adfTextRenderer,") || code.contains("transformEnvironment(\\.adfTextRenderer")
-                    || code.contains(".adfTextRenderer =") {
-                    setters.append("\((path as NSString).lastPathComponent):\(index + 1)")
+                for key in keys where code.contains("\\.\(key),") || code.contains("transformEnvironment(\\.\(key)")
+                    || code.contains(".\(key) =") {
+                    writes[key, default: []].append("\((path as NSString).lastPathComponent):\(index + 1)")
                 }
             }
         }
+        return (writes, scanned)
+    }
+
+    static func files(_ sites: [String]) -> Set<Substring> {
+        Set(sites.map { $0.prefix { $0 != ":" } })
+    }
+
+    @Test("the renderer environment key is set in exactly three places; the owner kind, the container context and the allow list have their pinned writers")
+    func threeSetters() throws {
+        let (writes, scanned) = try Self.writes(of: ["adfTextRenderer", "adfTextOwnerKind", "adfTextContainerContext", "adfContainerChildKinds"])
         #expect(scanned > 50, "scanned \(scanned) source files")
-        #expect(setters.count == 2, "setters: \(setters)")
-        #expect(Set(setters.map { $0.prefix { $0 != ":" } }) == ["ADFDocumentView.swift", "ListBlockView.swift"], "setters: \(setters)")
+        let setters = writes["adfTextRenderer"] ?? []
+        #expect(setters.count == 3, "setters: \(setters)")
+        #expect(Self.files(setters) == ["ADFDocumentView.swift", "ListBlockView.swift", "TextKit2ContainerBoundary.swift"], "setters: \(setters)")
+        let ownerKind = writes["adfTextOwnerKind"] ?? []
+        #expect(Self.files(ownerKind) == ["CodeBlockView.swift", "ListBlockView.swift"], "owner kind writers: \(ownerKind)")
+        let context = writes["adfTextContainerContext"] ?? []
+        #expect(Self.files(context) == ["TextKit2ContainerBoundary.swift"], "container context writers: \(context)")
+        let allowList = writes["adfContainerChildKinds"] ?? []
+        #expect(allowList.isEmpty, "container allow list writers: \(allowList)")
     }
 }
 

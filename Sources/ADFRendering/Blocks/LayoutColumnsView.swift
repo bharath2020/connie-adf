@@ -9,24 +9,44 @@ struct LayoutColumnsView: View {
 
     @Environment(\.adfTheme) private var theme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.adfTextWidthBound) private var widthBound
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
     var body: some View {
         if isCollapsed {
+            // Stacked columns have no inset: each is proposed the section's
+            // width, so the section's bound holds for every column.
             VStack(alignment: .leading, spacing: theme.spacing * 2) {
                 ForEach(columns, id: \.id) { column in
-                    LayoutColumnContentView(column: column)
+                    LayoutColumnContentView(column: column, sideBySide: false, widthBound: widthBound)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            ProportionalColumnsLayout(fractions: fractions, spacing: theme.spacing * 2) {
+            let fractions = self.fractions
+            let spacing = theme.spacing * 2
+            ProportionalColumnsLayout(fractions: fractions, spacing: spacing) {
                 ForEach(columns, id: \.id) { column in
-                    LayoutColumnContentView(column: column)
+                    LayoutColumnContentView(
+                        column: column, sideBySide: true,
+                        widthBound: sideBySideBound(of: column, fractions: fractions, spacing: spacing)
+                    )
                 }
             }
+        }
+    }
+
+    /// A side-by-side column's width bound: its share of the section's
+    /// bound, as the layout divides the section's width
+    /// (`ProportionalColumnsLayout.columnWidths`). The share grows with the
+    /// width it is taken of, so a share of a lower bound is a lower bound.
+    private func sideBySideBound(of column: PreparedColumn, fractions: [Double], spacing: CGFloat) -> TextKit2WidthBound {
+        guard let index = columns.firstIndex(where: { $0.id == column.id }) else { return .unproven }
+        return widthBound.mapWidth { width in
+            let widths = ProportionalColumnsLayout.columnWidths(totalWidth: width, fractions: fractions, spacing: spacing)
+            return index < widths.count ? widths[index] : 0
         }
     }
 
@@ -49,9 +69,13 @@ struct LayoutColumnsView: View {
     }
 }
 
-/// One column's prepared blocks, top-aligned.
+/// One column's prepared blocks, top-aligned. `sideBySide`: the column is
+/// laid out beside its siblings (`ProportionalColumnsLayout`), not stacked;
+/// `widthBound`: the bound the section computed for this column's blocks.
 struct LayoutColumnContentView: View {
     let column: PreparedColumn
+    let sideBySide: Bool
+    let widthBound: TextKit2WidthBound
 
     @Environment(\.adfTheme) private var theme
 
@@ -59,6 +83,7 @@ struct LayoutColumnContentView: View {
         VStack(alignment: .leading, spacing: theme.spacing) {
             ForEach(column.blocks) { block in
                 BlockView(block: block)
+                    .adfContainerChild(block, in: .column(sideBySide: sideBySide), widthBound: widthBound)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -84,7 +109,7 @@ struct ProportionalColumnsLayout: Layout {
             }
             return CGSize(width: width, height: height)
         }
-        let widths = columnWidths(totalWidth: totalWidth, count: subviews.count)
+        let widths = Self.columnWidths(totalWidth: totalWidth, fractions: fractions, spacing: spacing, count: subviews.count)
         var height: CGFloat = 0
         for (index, subview) in subviews.enumerated() {
             let size = subview.sizeThatFits(ProposedViewSize(width: widths[index], height: nil))
@@ -95,7 +120,7 @@ struct ProportionalColumnsLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard !subviews.isEmpty else { return }
-        let widths = columnWidths(totalWidth: bounds.width, count: subviews.count)
+        let widths = Self.columnWidths(totalWidth: bounds.width, fractions: fractions, spacing: spacing, count: subviews.count)
         var x = bounds.minX
         for (index, subview) in subviews.enumerated() {
             subview.place(
@@ -107,7 +132,18 @@ struct ProportionalColumnsLayout: Layout {
         }
     }
 
-    private func columnWidths(totalWidth: CGFloat, count: Int) -> [CGFloat] {
+    /// The width of each of `fractions.count` columns laid out side by side
+    /// in `totalWidth`, `spacing` apart: each column's fraction of what the
+    /// gaps leave (`LayoutColumnsView` normalises the fractions to sum to 1).
+    /// The layout divides its width with it, and the section's width bound
+    /// for each column is the same share of the section's bound.
+    static func columnWidths(totalWidth: CGFloat, fractions: [Double], spacing: CGFloat) -> [CGFloat] {
+        columnWidths(totalWidth: totalWidth, fractions: fractions, spacing: spacing, count: fractions.count)
+    }
+
+    /// The widths of `count` columns: a column past the end of `fractions`
+    /// takes an equal share.
+    private static func columnWidths(totalWidth: CGFloat, fractions: [Double], spacing: CGFloat, count: Int) -> [CGFloat] {
         let available = max(totalWidth - spacing * CGFloat(max(count - 1, 0)), 0)
         return (0..<count).map { index in
             let fraction = index < fractions.count ? fractions[index] : 1 / Double(count)

@@ -14,10 +14,11 @@ import UIKit
 /// a link is laid out and drawn by its own TextKit 1 stack, as `Text` lays
 /// out linked text: such rows and their draws are counted apart
 /// (`textKit1Backed…`) and never as native TextKit 2 draws. `liveRowCount`,
-/// `liveListRowCount`, `liveCodeRowCount` and `textKit1BackedRowCount`
-/// count row views currently alive (back to zero once a switch to
-/// `.swiftUI` has released them); the others are cumulative since launch.
-/// Always zero on platforms without UIKit.
+/// `liveListRowCount`, `liveCodeRowCount`, `liveContainerRowCount`,
+/// `liveCaptionRowCount`, `liveOffWindowRowCount` and
+/// `textKit1BackedRowCount` count row views currently alive (back to zero
+/// once a switch to `.swiftUI` has released them); the others are
+/// cumulative since launch. Always zero on platforms without UIKit.
 public struct ADFTextKit2Stats: Sendable, Hashable {
     /// TextKit 2 row views currently alive.
     public var liveRowCount: Int
@@ -52,12 +53,41 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
     /// counted where TextKit 2 drew the fragments. A live code row that has
     /// not drawn yet does not count.
     public var codeNativeDrawCount: Int
+    /// Of `liveRowCount`: rows drawing text below a container's boundary
+    /// that is not code (paragraphs, headings and list text in a panel,
+    /// quote, expand body, extension body or layout column): the
+    /// container-native proof. A code block in a container counts as code
+    /// only, so a code row never proves container text.
+    public var liveContainerRowCount: Int
+    /// Of `nativeDrawCount`: the native draw passes of those container rows.
+    public var containerNativeDrawCount: Int
+    /// Of `textKit1BackedDrawCount`: the draw passes of those container
+    /// rows that their TextKit 1 stack performed (linked text; never
+    /// native proof).
+    public var containerTextKit1DrawCount: Int
+    /// Of `liveRowCount`: rows drawing a media caption.
+    public var liveCaptionRowCount: Int
+    /// Of `nativeDrawCount`: the native draw passes of caption rows.
+    public var captionNativeDrawCount: Int
+    /// Of `liveRowCount`: row views alive outside any window (`window ==
+    /// nil`), such as rows the lazy stack keeps after showing them, with
+    /// the engine they were built with. Not every row missing from an
+    /// accessibility census: rows the lazy stack keeps in its window
+    /// beyond the viewport are not counted (list-dense with TextKit 2 at
+    /// L6's census points, iOS 26.3: 0, 0 and 16 here against 5, 16 and
+    /// 16 live rows outside the census). A row is counted from its
+    /// creation until it first enters a window, so a count read before
+    /// the first layout pass (`-rendererStats` at READY) can include every
+    /// row.
+    public var liveOffWindowRowCount: Int
 
     public init(
         liveRowCount: Int, layoutCount: Int, drawCount: Int, nativeDrawCount: Int = 0,
         textKit1BackedRowCount: Int = 0, textKit1BackedDrawCount: Int = 0,
         liveListRowCount: Int = 0, conversionCount: Int = 0,
-        liveCodeRowCount: Int = 0, codeNativeDrawCount: Int = 0
+        liveCodeRowCount: Int = 0, codeNativeDrawCount: Int = 0,
+        liveContainerRowCount: Int = 0, containerNativeDrawCount: Int = 0, containerTextKit1DrawCount: Int = 0,
+        liveCaptionRowCount: Int = 0, captionNativeDrawCount: Int = 0, liveOffWindowRowCount: Int = 0
     ) {
         self.liveRowCount = liveRowCount
         self.layoutCount = layoutCount
@@ -69,6 +99,12 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
         self.conversionCount = conversionCount
         self.liveCodeRowCount = liveCodeRowCount
         self.codeNativeDrawCount = codeNativeDrawCount
+        self.liveContainerRowCount = liveContainerRowCount
+        self.containerNativeDrawCount = containerNativeDrawCount
+        self.containerTextKit1DrawCount = containerTextKit1DrawCount
+        self.liveCaptionRowCount = liveCaptionRowCount
+        self.captionNativeDrawCount = captionNativeDrawCount
+        self.liveOffWindowRowCount = liveOffWindowRowCount
     }
 }
 
@@ -110,6 +146,22 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
 /// iOS 26 interior empty lines above AX3), which these
 /// static counts assume favourable: `ADFTextRenderer.textKit2CodeAdmission`
 /// measures that at an explicit environment.
+///
+/// **Containers and captions** (static potential): every field above keeps
+/// its depth-0 meaning, so text below a container's boundary and captions
+/// join none of them. Text the container allow list lets the renderer
+/// reach below a container is counted apart: its paragraphs, headings and
+/// list text (`eligibleContainerLeaves + fallbackContainerLeaves`, with
+/// `linkedContainerLeaves` a subset of the eligible ones and
+/// `containerListLeaves` the list text among them), its code
+/// (`eligibleNestedCode`, `fallbackNestedCode`), and media captions
+/// (`eligibleCaptionLeaves`, `fallbackCaptionLeaves`). Containers are
+/// counted as drawn stacked and left to right; a view-time rule (a narrow
+/// column, a right-to-left panel, a family kept out of side-by-side
+/// columns) can still keep counted text on SwiftUI. Expand bodies are not
+/// prepared with the document, so their text is never counted:
+/// `unpreparedExpands` counts the expands in scope whose bodies the count
+/// could not enter. All of them are zero while the allow list is empty.
 public struct ADFTextKit2Coverage: Sendable, Hashable {
     /// Top-level paragraphs and headings TextKit 2 draws (root richText,
     /// legacy).
@@ -145,13 +197,49 @@ public struct ADFTextKit2Coverage: Sendable, Hashable {
     /// Top-level code blocks whose code stays on SwiftUI for a content
     /// reason.
     public var fallbackCodeRoots: Int
+    /// Paragraphs, headings and list text below a container's boundary in
+    /// scope that TextKit 2 may draw.
+    public var eligibleContainerLeaves: Int
+    /// Of `eligibleContainerLeaves`: those containing a link (TextKit
+    /// 1-backed rows).
+    public var linkedContainerLeaves: Int
+    /// Paragraphs, headings and list text below a container's boundary in
+    /// scope that stay on SwiftUI by content.
+    public var fallbackContainerLeaves: Int
+    /// Of the container leaves (eligible or not): list leaders and list
+    /// rows' direct paragraphs and headings.
+    public var containerListLeaves: Int
+    /// Non-empty media captions in scope that TextKit 2 may draw, and that
+    /// stay on SwiftUI by content.
+    public var eligibleCaptionLeaves: Int
+    public var fallbackCaptionLeaves: Int
+    /// Code blocks below a container's boundary in scope, by the content
+    /// verdict (`TextKit2Eligibility.containerCodeVerdict`): never in the
+    /// code root counts.
+    public var eligibleNestedCode: Int
+    public var fallbackNestedCode: Int
+    /// Expands (nested ones included) in scope whose bodies, not prepared
+    /// with the document, the count could not enter.
+    public var unpreparedExpands: Int
 
     public init(
         eligibleRoots: Int, fallbackRoots: Int, textFallbackRoots: Int = 0, linkRoots: Int = 0,
         eligibleTextLeaves: Int = 0, linkedTextLeaves: Int = 0, fallbackTextLeaves: Int = 0,
         listLeaderLeaves: Int = 0, listTrailingLeaves: Int = 0,
-        eligibleCodeRoots: Int = 0, fallbackCodeRoots: Int = 0
+        eligibleCodeRoots: Int = 0, fallbackCodeRoots: Int = 0,
+        eligibleContainerLeaves: Int = 0, linkedContainerLeaves: Int = 0, fallbackContainerLeaves: Int = 0,
+        containerListLeaves: Int = 0, eligibleCaptionLeaves: Int = 0, fallbackCaptionLeaves: Int = 0,
+        eligibleNestedCode: Int = 0, fallbackNestedCode: Int = 0, unpreparedExpands: Int = 0
     ) {
+        self.eligibleContainerLeaves = eligibleContainerLeaves
+        self.linkedContainerLeaves = linkedContainerLeaves
+        self.fallbackContainerLeaves = fallbackContainerLeaves
+        self.containerListLeaves = containerListLeaves
+        self.eligibleCaptionLeaves = eligibleCaptionLeaves
+        self.fallbackCaptionLeaves = fallbackCaptionLeaves
+        self.eligibleNestedCode = eligibleNestedCode
+        self.fallbackNestedCode = fallbackNestedCode
+        self.unpreparedExpands = unpreparedExpands
         self.eligibleRoots = eligibleRoots
         self.fallbackRoots = fallbackRoots
         self.textFallbackRoots = textFallbackRoots
@@ -190,6 +278,30 @@ extension ADFTextRenderer {
         TextKit2Diagnostics.shared.codeRowDraws
     }
 
+    /// The live TextKit 2 rows drawing container text that is not code (a
+    /// paragraph or heading by its `RenderBlock.id`, a nested list's text
+    /// by its `PreparedListRow.id` or trailing block's id), by owner, with
+    /// the native draw passes each live row has dispatched: the per-owner
+    /// proof behind `ADFTextKit2Stats.containerNativeDrawCount`, kept as
+    /// `textKit2CodeRowDraws` is (zero for a row that has not drawn natively
+    /// yet, a linked TextKit 1-backed row included; an entry goes with its
+    /// last row; never more owners than `liveContainerRowCount`). Always
+    /// empty on platforms without UIKit.
+    @_spi(ADFDiagnostics)
+    @MainActor
+    public static var textKit2ContainerRowDraws: [String: Int] {
+        TextKit2Diagnostics.shared.containerRowDraws
+    }
+
+    /// The live TextKit 2 rows drawing a media caption, by owner
+    /// (`PreparedMedia.id`), with their native draw passes, kept as
+    /// `textKit2CodeRowDraws` is. Always empty on platforms without UIKit.
+    @_spi(ADFDiagnostics)
+    @MainActor
+    public static var textKit2CaptionRowDraws: [String: Int] {
+        TextKit2Diagnostics.shared.captionRowDraws
+    }
+
     /// Leaves currently rendered by the rebuild control
     /// (`View.adfRebuildControl`; on screen or held by the lazy stack), and
     /// how many have appeared since launch — the proof that a control switch
@@ -202,11 +314,22 @@ extension ADFTextRenderer {
 
     /// Classifies a document's text (`ADFDocumentModel.blocks`) by whether
     /// the TextKit 2 renderer draws it: its text leaves in the renderer's
-    /// scope, its top-level blocks and its top-level code blocks (see
+    /// scope, its top-level blocks, its top-level code blocks, and the text
+    /// below its containers and in its captions (see
     /// `ADFTextKit2Coverage`).
     public static func textKit2Coverage(of blocks: [RenderBlock]) -> ADFTextKit2Coverage {
+        textKit2Coverage(of: blocks, allowed: TextKit2Scope.containerChildKinds)
+    }
+
+    /// `textKit2Coverage(of:)` with `allowed` as the container allow list
+    /// (`TextKit2Scope.containerChildKinds` in the app; a test widens it to
+    /// count a family before its stage).
+    static func textKit2Coverage(of blocks: [RenderBlock], allowed: Set<TextKit2BlockKind>) -> ADFTextKit2Coverage {
         var coverage = ADFTextKit2Coverage(eligibleRoots: 0, fallbackRoots: 0)
-        TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+        // Counted apart from `coverage`, which the leaf visitor writes: the
+        // walk takes the two closures together.
+        var unpreparedExpands = 0
+        TextKit2Scope.forEachLeaf(in: blocks, allowed: allowed, unpreparedExpand: { _ in unpreparedExpands += 1 }) { leaf in
             let root = leaf.position == .root
             switch leaf.position {
             case .root: break
@@ -219,6 +342,31 @@ extension ADFTextRenderer {
                     coverage.eligibleCodeRoots += 1
                 } else {
                     coverage.fallbackCodeRoots += 1
+                }
+                return
+            case .containerProse, .containerListLeader, .containerListTrailing:
+                // Container text joins no depth-0 total.
+                if leaf.position != .containerProse { coverage.containerListLeaves += 1 }
+                switch leaf.verdict {
+                case .eligible(let text):
+                    coverage.eligibleContainerLeaves += 1
+                    if text.runs.contains(where: { $0.link != nil }) { coverage.linkedContainerLeaves += 1 }
+                case .fallback:
+                    coverage.fallbackContainerLeaves += 1
+                }
+                return
+            case .caption:
+                if case .eligible = leaf.verdict {
+                    coverage.eligibleCaptionLeaves += 1
+                } else {
+                    coverage.fallbackCaptionLeaves += 1
+                }
+                return
+            case .containerCode:
+                if case .eligible = leaf.verdict {
+                    coverage.eligibleNestedCode += 1
+                } else {
+                    coverage.fallbackNestedCode += 1
                 }
                 return
             }
@@ -236,6 +384,7 @@ extension ADFTextRenderer {
                 if root { coverage.textFallbackRoots += 1 }
             }
         }
+        coverage.unpreparedExpands = unpreparedExpands
         coverage.fallbackRoots = blocks.count - coverage.eligibleRoots
         return coverage
     }
@@ -247,7 +396,11 @@ extension ADFTextRenderer {
     /// admitted canvas bound at this text size, legibility weight and
     /// display scale, or, before iOS 26, an interior empty line above AX3
     /// (`TextKit2Scope.CodeGate`). `admittedCodeRoots + gatedCodeRoots ==
-    /// ADFTextKit2Coverage.eligibleCodeRoots`.
+    /// ADFTextKit2Coverage.eligibleCodeRoots`. The same split of the
+    /// content-eligible code below containers in scope is
+    /// `nestedCodeAdmitted` and `nestedCodeGated`, which sum to
+    /// `ADFTextKit2Coverage.eligibleNestedCode` and never join the root
+    /// counts.
     ///
     /// It applies the rule the code views apply, to the same prepared text,
     /// so pass the environment the document is drawn in (the size after any
@@ -262,23 +415,54 @@ extension ADFTextRenderer {
         legibilityWeight: LegibilityWeight?,
         displayScale: CGFloat,
         layoutDirection: LayoutDirection
-    ) -> (admittedCodeRoots: Int, gatedCodeRoots: Int) {
+    ) -> (admittedCodeRoots: Int, gatedCodeRoots: Int, nestedCodeAdmitted: Int, nestedCodeGated: Int) {
+        textKit2CodeAdmission(
+            of: blocks, allowed: TextKit2Scope.containerChildKinds, dynamicTypeSize: dynamicTypeSize,
+            legibilityWeight: legibilityWeight, displayScale: displayScale, layoutDirection: layoutDirection
+        )
+    }
+
+    /// `textKit2CodeAdmission(of:…)` with `allowed` as the container allow
+    /// list (as `textKit2Coverage(of:allowed:)`).
+    @MainActor
+    static func textKit2CodeAdmission(
+        of blocks: [RenderBlock],
+        allowed: Set<TextKit2BlockKind>,
+        dynamicTypeSize: DynamicTypeSize,
+        legibilityWeight: LegibilityWeight?,
+        displayScale: CGFloat,
+        layoutDirection: LayoutDirection
+    ) -> (admittedCodeRoots: Int, gatedCodeRoots: Int, nestedCodeAdmitted: Int, nestedCodeGated: Int) {
         var admitted = 0
         var gated = 0
-        TextKit2Scope.forEachLeaf(in: blocks) { leaf in
-            guard leaf.position == .codeRoot, case .eligible(let text) = leaf.verdict else { return }
+        var nestedAdmitted = 0
+        var nestedGated = 0
+        TextKit2Scope.forEachLeaf(in: blocks, allowed: allowed) { leaf in
+            let nested: Bool
+            switch leaf.position {
+            case .codeRoot: nested = false
+            case .containerCode: nested = true
+            case .root, .listLeader, .listTrailing, .containerProse, .containerListLeader, .containerListTrailing, .caption:
+                return
+            }
+            guard case .eligible(let text) = leaf.verdict else { return }
             #if canImport(UIKit)
-            let gate = TextKit2Scope.codeGate(
+            let isAdmitted = TextKit2Scope.codeGate(
                 text, sizeCategory: dynamicTypeSize.uiContentSizeCategory, legibilityWeight: legibilityWeight,
                 displayScale: displayScale, layoutDirection: layoutDirection
-            )
-            if gate == nil { admitted += 1 } else { gated += 1 }
+            ) == nil
             #else
             _ = text
-            gated += 1
+            let isAdmitted = false
             #endif
+            switch (nested, isAdmitted) {
+            case (false, true): admitted += 1
+            case (false, false): gated += 1
+            case (true, true): nestedAdmitted += 1
+            case (true, false): nestedGated += 1
+            }
         }
-        return (admitted, gated)
+        return (admitted, gated, nestedAdmitted, nestedGated)
     }
 }
 
@@ -339,32 +523,50 @@ enum TextKit2Eligibility {
     }
 
     /// The merged text of an all-text segment list that TextKit 2 draws
-    /// for `owner`, or `nil` when it falls back (`verdict`). The preparer
-    /// emits one merged run per gap, so the common case returns the stored
-    /// value without building a new string.
-    static func describableText(_ segments: [InlineSegment], owner: TextKit2OwnerKind = .root) -> AttributedString? {
-        if case .eligible(let text) = verdict(segments, owner: owner) { return text }
+    /// for `owner` in `context`, or `nil` when it falls back (`verdict`).
+    /// The preparer emits one merged run per gap, so the common case
+    /// returns the stored value without building a new string.
+    static func describableText(
+        _ segments: [InlineSegment], owner: TextKit2OwnerKind = .root, context: TextKit2ContainerContext = .none
+    ) -> AttributedString? {
+        if case .eligible(let text) = verdict(segments, owner: owner, context: context) { return text }
         return nil
     }
 
-    /// The prepared attributed text TextKit 2 draws for `owner`, or `nil`
-    /// when it falls back (`verdict(_:owner:)` for attributed text): what
-    /// `TextEngineLeaf` asks for text it is handed as one string (a code
-    /// block's code), without building a segment array.
-    static func describableText(_ text: AttributedString, owner: TextKit2OwnerKind) -> AttributedString? {
-        if case .eligible(let text) = verdict(text, owner: owner) { return text }
+    /// The prepared attributed text TextKit 2 draws for `owner` in
+    /// `context`, or `nil` when it falls back (`verdict(_:owner:context:)`
+    /// for attributed text): what `TextEngineLeaf` asks for text it is
+    /// handed as one string (a code block's code), without building a
+    /// segment array.
+    static func describableText(
+        _ text: AttributedString, owner: TextKit2OwnerKind, context: TextKit2ContainerContext = .none
+    ) -> AttributedString? {
+        if case .eligible(let text) = verdict(text, owner: owner, context: context) { return text }
         return nil
     }
 
-    /// The engine verdict for prepared attributed text drawn for `owner`.
-    /// Code (`.code`) is judged by the code rules (`codeVerdict`), never by
-    /// a list rule or the list OS gate; any other owner's text is judged as
-    /// the same text in one segment would be.
-    static func verdict(_ text: AttributedString, owner: TextKit2OwnerKind) -> Verdict {
-        switch owner {
-        case .code: return codeVerdict(text)
-        case .root, .list: return verdict([.text(text)], owner: owner)
+    /// The engine verdict for prepared attributed text drawn for `owner` in
+    /// `context`. Code (`.code`) is judged by the code rules (`codeVerdict`,
+    /// below a container `containerCodeVerdict`), never by a list rule or
+    /// the list OS gate; any other owner's text is judged as the same text
+    /// in one segment would be.
+    static func verdict(_ text: AttributedString, owner: TextKit2OwnerKind, context: TextKit2ContainerContext = .none) -> Verdict {
+        switch (owner, context) {
+        case (.code, .none): return codeVerdict(text)
+        case (.code, .container), (.code, .caption): return containerCodeVerdict(text, context: context)
+        case (.root, _), (.list, _): return verdict([.text(text)], owner: owner, context: context)
         }
+    }
+
+    /// The engine verdict for a code block's code text below a container's
+    /// boundary (`context` `.container`): the content verdict
+    /// (`codeVerdict`). The container stage's OS rule for nested code joins
+    /// here with its own evidence; until then nested code is judged exactly
+    /// as top-level code. The view (through `verdict(_:owner:context:)`)
+    /// and the coverage walk (`TextKit2Scope.Leaf.verdict`) both decide
+    /// through it.
+    static func containerCodeVerdict(_ code: AttributedString, context: TextKit2ContainerContext) -> Verdict {
+        codeVerdict(code)
     }
 
     /// The engine verdict for a code block's code text, by content. The
@@ -412,9 +614,16 @@ enum TextKit2Eligibility {
     }
 
     /// The engine verdict for text drawn for `owner` (top-level or list
-    /// text). The views (`TextEngineLeaf`) and the coverage walk
-    /// (`TextKit2Scope.Leaf.verdict`) both decide through it.
-    static func verdict(_ segments: [InlineSegment], owner: TextKit2OwnerKind = .root) -> Verdict {
+    /// text, or a caption) in `context` (`TextKit2ContainerContext`). The
+    /// views (`TextEngineLeaf`) and the coverage walk
+    /// (`TextKit2Scope.Leaf.verdict`) both decide through it. No rule reads
+    /// the context yet: it is the input the container stage's OS rule for
+    /// container text and captions needs, which joins with its own
+    /// evidence. List text in a container is still `.list`, so the list
+    /// rules below apply to it unchanged.
+    static func verdict(
+        _ segments: [InlineSegment], owner: TextKit2OwnerKind = .root, context: TextKit2ContainerContext = .none
+    ) -> Verdict {
         // Atoms first, so an atom paragraph (word-chunked, many segments)
         // builds no throwaway merged string.
         for segment in segments {
@@ -477,9 +686,16 @@ final class TextKit2Diagnostics {
     private(set) var conversionCount = 0
     private(set) var liveCodeRowCount = 0
     private(set) var codeNativeDrawCount = 0
-    /// One owner's live code rows (`codeRows`).
-    private struct CodeRowProof {
-        /// Live rows drawing this owner's code: one, or two for a moment
+    private(set) var liveContainerRowCount = 0
+    private(set) var containerNativeDrawCount = 0
+    private(set) var containerTextKit1DrawCount = 0
+    private(set) var liveCaptionRowCount = 0
+    private(set) var captionNativeDrawCount = 0
+    private(set) var liveOffWindowRowCount = 0
+    /// One owner's live rows in one per-owner proof (`codeRows`,
+    /// `containerRows`, `captionRows`).
+    private struct OwnerRowProof {
+        /// Live rows drawing this owner's text: one, or two for a moment
         /// while a row is replaced (and across documents that share ids).
         var rows = 0
         /// Native draw passes those rows dispatched since the first of
@@ -487,11 +703,16 @@ final class TextKit2Diagnostics {
         var nativeDraws = 0
     }
 
-    /// The per-owner code proof: live rows of kind `.code` by owner id.
-    /// An owner is here exactly while such a row carries its id (joined
-    /// and left where `liveCodeRowCount` moves, or where a code row's id
-    /// changes), so it never holds more owners than `liveCodeRowCount`.
-    private var codeRows: [String: CodeRowProof] = [:]
+    /// The per-owner proofs, by owner id: live rows of kind `.code`
+    /// (`codeRows`); live rows in a container's context whose kind is not
+    /// `.code` (`containerRows`); live rows in a caption's context
+    /// (`captionRows`). An owner is in one exactly while such a row carries
+    /// its id (joined and left where the matching live count moves, or
+    /// where such a row's id changes), so none holds more owners than its
+    /// live count.
+    private var codeRows: [String: OwnerRowProof] = [:]
+    private var containerRows: [String: OwnerRowProof] = [:]
+    private var captionRows: [String: OwnerRowProof] = [:]
     /// The rebuild control's leaves (`View.adfRebuildControl`).
     private(set) var rebuildControlLiveRows = 0
     private(set) var rebuildControlAppearances = 0
@@ -502,7 +723,11 @@ final class TextKit2Diagnostics {
             drawCount: drawCount, nativeDrawCount: nativeDrawCount,
             textKit1BackedRowCount: textKit1BackedRowCount, textKit1BackedDrawCount: textKit1BackedDrawCount,
             liveListRowCount: liveListRowCount, conversionCount: conversionCount,
-            liveCodeRowCount: liveCodeRowCount, codeNativeDrawCount: codeNativeDrawCount
+            liveCodeRowCount: liveCodeRowCount, codeNativeDrawCount: codeNativeDrawCount,
+            liveContainerRowCount: liveContainerRowCount, containerNativeDrawCount: containerNativeDrawCount,
+            containerTextKit1DrawCount: containerTextKit1DrawCount,
+            liveCaptionRowCount: liveCaptionRowCount, captionNativeDrawCount: captionNativeDrawCount,
+            liveOffWindowRowCount: liveOffWindowRowCount
         )
     }
 
@@ -511,16 +736,33 @@ final class TextKit2Diagnostics {
         codeRows.mapValues(\.nativeDraws)
     }
 
+    /// Native draw passes of the live container rows that are not code, by
+    /// owner id (`containerRows`).
+    var containerRowDraws: [String: Int] {
+        containerRows.mapValues(\.nativeDraws)
+    }
+
+    /// Native draw passes of the live caption rows, by owner id
+    /// (`captionRows`).
+    var captionRowDraws: [String: Int] {
+        captionRows.mapValues(\.nativeDraws)
+    }
+
     func rowCreated() {
         liveRowCount += 1
     }
 
-    /// `ownerID`: the row's owner, which a code row leaves the per-owner
-    /// proof by.
-    func rowDestroyed(textKit1Backed: Bool = false, ownerKind: TextKit2OwnerKind = .root, ownerID: String? = nil) {
+    /// `ownerID`: the row's owner, which a code, container or caption row
+    /// leaves its per-owner proof by. `offWindow`: the row was counted as
+    /// outside any window (`row(offWindow:)`).
+    func rowDestroyed(
+        textKit1Backed: Bool = false, ownerKind: TextKit2OwnerKind = .root, context: TextKit2ContainerContext = .none,
+        offWindow: Bool = false, ownerID: String? = nil
+    ) {
         liveRowCount -= 1
         if textKit1Backed { textKit1BackedRowCount -= 1 }
-        count(ownerKind, by: -1, ownerID: ownerID)
+        if offWindow { liveOffWindowRowCount -= 1 }
+        count(ownerKind, context, by: -1, ownerID: ownerID)
     }
 
     /// A live row started (`true`) or stopped being laid out and drawn by
@@ -529,46 +771,89 @@ final class TextKit2Diagnostics {
         textKit1BackedRowCount += textKit1Backed ? 1 : -1
     }
 
-    /// A live row's owner kind changed (`TextKit2OwnerKind`): it leaves
-    /// the old kind's live count and joins the new one's. A new row is
-    /// `.root`, which has no count of its own. `ownerID`: the row's owner
-    /// at that moment (`nil` until it is first given one).
-    func row(ownerKind new: TextKit2OwnerKind, was old: TextKit2OwnerKind, ownerID: String? = nil) {
-        count(old, by: -1, ownerID: ownerID)
-        count(new, by: 1, ownerID: ownerID)
+    /// A live row left every window (`true`: a new row, or one the lazy
+    /// stack keeps off screen) or entered one (`false`).
+    func row(offWindow: Bool) {
+        liveOffWindowRowCount += offWindow ? 1 : -1
     }
 
-    /// A live row's owner id changed, its kind staying `ownerKind`: a code
-    /// row moves in the per-owner proof (its draws so far stay with the old
-    /// id, and go with it). Other kinds keep no per-owner record.
-    func row(ownerID new: String?, was old: String?, ownerKind: TextKit2OwnerKind) {
-        switch ownerKind {
-        case .root, .list: break
-        case .code:
-            codeRow(old, by: -1)
-            codeRow(new, by: 1)
+    /// A live row's owner kind changed (`TextKit2OwnerKind`), its context
+    /// staying `context`: it leaves the old kind's live counts and joins
+    /// the new one's. A new row is `.root` in no container, which has no
+    /// count of its own. `ownerID`: the row's owner at that moment (`nil`
+    /// until it is first given one).
+    func row(ownerKind new: TextKit2OwnerKind, was old: TextKit2OwnerKind, context: TextKit2ContainerContext = .none, ownerID: String? = nil) {
+        count(old, context, by: -1, ownerID: ownerID)
+        count(new, context, by: 1, ownerID: ownerID)
+    }
+
+    /// A live row's context changed (`TextKit2ContainerContext`), its kind
+    /// staying `ownerKind`: it leaves the old context's live counts and
+    /// joins the new one's.
+    func row(context new: TextKit2ContainerContext, was old: TextKit2ContainerContext, ownerKind: TextKit2OwnerKind, ownerID: String? = nil) {
+        count(ownerKind, old, by: -1, ownerID: ownerID)
+        count(ownerKind, new, by: 1, ownerID: ownerID)
+    }
+
+    /// A live row's owner id changed, its kind and context staying: a row
+    /// in a per-owner proof (code, container or caption) moves there (its
+    /// draws so far stay with the old id, and go with it). Other rows keep
+    /// no per-owner record.
+    func row(ownerID new: String?, was old: String?, ownerKind: TextKit2OwnerKind, context: TextKit2ContainerContext = .none) {
+        guard let proof = Self.proof(ownerKind, context) else { return }
+        ownerRow(proof, old, by: -1)
+        ownerRow(proof, new, by: 1)
+    }
+
+    /// A per-owner proof (`codeRows`, `containerRows`, `captionRows`).
+    private enum Proof {
+        case code, container, caption
+    }
+
+    /// The per-owner proof a row of `kind` in `context` belongs to, if
+    /// any: code by its kind wherever it sits; container text that is not
+    /// code (the container proof never counts a code row); captions.
+    private static func proof(_ kind: TextKit2OwnerKind, _ context: TextKit2ContainerContext) -> Proof? {
+        switch (kind, context) {
+        case (.code, _): return .code
+        case (.root, .none), (.list, .none): return nil
+        case (.root, .container), (.list, .container): return .container
+        case (.root, .caption), (.list, .caption): return .caption
         }
     }
 
-    /// Exhaustive, so a new owner kind must decide its own live count.
-    private func count(_ kind: TextKit2OwnerKind, by delta: Int, ownerID: String?) {
+    /// Exhaustive, so a new owner kind or context must decide its own live
+    /// counts.
+    private func count(_ kind: TextKit2OwnerKind, _ context: TextKit2ContainerContext, by delta: Int, ownerID: String?) {
         switch kind {
         case .root: break
         case .list: liveListRowCount += delta
-        case .code:
-            liveCodeRowCount += delta
-            codeRow(ownerID, by: delta)
+        case .code: liveCodeRowCount += delta
         }
+        guard let proof = Self.proof(kind, context) else { return }
+        switch proof {
+        case .code: break
+        case .container: liveContainerRowCount += delta
+        case .caption: liveCaptionRowCount += delta
+        }
+        ownerRow(proof, ownerID, by: delta)
     }
 
-    /// A code row joined (`1`) or left (`-1`) `ownerID`'s entry of the
-    /// per-owner proof; the entry goes with its last row. A row without an
-    /// owner id has no entry.
-    private func codeRow(_ ownerID: String?, by delta: Int) {
+    /// A row joined (`1`) or left (`-1`) `ownerID`'s entry of a per-owner
+    /// proof; the entry goes with its last row. A row without an owner id
+    /// has no entry.
+    private func ownerRow(_ proof: Proof, _ ownerID: String?, by delta: Int) {
         guard let ownerID else { return }
-        var proof = codeRows[ownerID] ?? CodeRowProof()
-        proof.rows += delta
-        codeRows[ownerID] = proof.rows > 0 ? proof : nil
+        func update(_ rows: inout [String: OwnerRowProof]) {
+            var entry = rows[ownerID] ?? OwnerRowProof()
+            entry.rows += delta
+            rows[ownerID] = entry.rows > 0 ? entry : nil
+        }
+        switch proof {
+        case .code: update(&codeRows)
+        case .container: update(&containerRows)
+        case .caption: update(&captionRows)
+        }
     }
 
     /// A row converted its prepared text into the string it lays out.
@@ -584,14 +869,37 @@ final class TextKit2Diagnostics {
     /// `textKit1`: the row's TextKit 1 stack drew it; `code`: the row
     /// draws a code block's code (`TextKit2OwnerKind.code`), so a native
     /// pass is also a code-native one, counted for the row's `ownerID` too
-    /// (the per-owner proof, `codeRows`).
-    func didDraw(native: Bool, textKit1: Bool = false, code: Bool = false, ownerID: String? = nil) {
+    /// (the per-owner proof, `codeRows`); `context`: where the row's text
+    /// sits, so a pass of a container row that is not code also counts as
+    /// a container one (native, or TextKit 1-backed), and a pass of a
+    /// caption row as a caption one, each for the row's `ownerID` in its
+    /// own proof when native.
+    func didDraw(
+        native: Bool, textKit1: Bool = false, code: Bool = false, context: TextKit2ContainerContext = .none,
+        ownerID: String? = nil
+    ) {
         drawCount += 1
         if native { nativeDrawCount += 1 }
         if textKit1 { textKit1BackedDrawCount += 1 }
         if native, code {
             codeNativeDrawCount += 1
             if let ownerID { codeRows[ownerID]?.nativeDraws += 1 }
+        }
+        switch context {
+        case .none:
+            break
+        case .container:
+            guard !code else { break }
+            if textKit1 { containerTextKit1DrawCount += 1 }
+            if native {
+                containerNativeDrawCount += 1
+                if let ownerID { containerRows[ownerID]?.nativeDraws += 1 }
+            }
+        case .caption:
+            if native {
+                captionNativeDrawCount += 1
+                if let ownerID { captionRows[ownerID]?.nativeDraws += 1 }
+            }
         }
     }
 

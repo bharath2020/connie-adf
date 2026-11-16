@@ -15,12 +15,14 @@ import ADFPreparation
 /// `fallback` instead, counted. `ownerKind` is whose text this is
 /// (`TextKit2OwnerKind`): the row counts itself by it and takes its layout
 /// policy from it, so code (`.code`) is laid out once and never wraps. Code
-/// reaches this view only through `TextKit2CodeGate`.
+/// reaches this view only through `TextKit2CodeGate`. `context` is where the
+/// text sits (`TextKit2ContainerContext`): the row counts itself by it too.
 struct TextKit2Leaf<Fallback: View>: View {
     let text: AttributedString
     let style: TextBlockStyle
     let ownerID: String?
     let ownerKind: TextKit2OwnerKind
+    let context: TextKit2ContainerContext
     /// How much narrower the leaf is laid out than the region the width
     /// bound covers (`TextEngineLeaf.widthInset`).
     let widthInset: CGFloat
@@ -37,12 +39,13 @@ struct TextKit2Leaf<Fallback: View>: View {
 
     init(
         text: AttributedString, style: TextBlockStyle, ownerID: String?, ownerKind: TextKit2OwnerKind = .root,
-        widthInset: CGFloat = 0, @ViewBuilder fallback: () -> Fallback
+        context: TextKit2ContainerContext = .none, widthInset: CGFloat = 0, @ViewBuilder fallback: () -> Fallback
     ) {
         self.text = text
         self.style = style
         self.ownerID = ownerID
         self.ownerKind = ownerKind
+        self.context = context
         self.widthInset = widthInset
         self.fallback = fallback()
     }
@@ -59,18 +62,21 @@ struct TextKit2Leaf<Fallback: View>: View {
                     .onAppear { TextKit2Diagnostics.shared.rebuildControlRow(appeared: true) }
                     .onDisappear { TextKit2Diagnostics.shared.rebuildControlRow(appeared: false) }
             } else {
-                TextKit2TextRow(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind)
+                TextKit2TextRow(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, context: context)
             }
         } else {
             fallback
         }
     }
 
-    /// The under-1-pt guard (`TextKit2Scope.textFits`) for wrapping text;
-    /// code (`TextKit2LayoutPolicy.natural`) ignores the proposed width and
-    /// is decided by its own gate (`TextKit2CodeGate`).
+    /// The under-1-pt guard for wrapping text, the width rules of
+    /// `TextKit2Scope.containerGate(widthBound:inset:layoutPolicy:)`: a
+    /// bound less the inset under 1 pt (`.narrowColumn`) or a container
+    /// that could not bound its insets (`.unprovenNestedWidth`). Code
+    /// (`TextKit2LayoutPolicy.natural`) ignores the proposed width and is
+    /// decided by its own gate (`TextKit2CodeGate`).
     private var fitsWidth: Bool {
-        ownerKind.layoutPolicy != .wrapping || TextKit2Scope.textFits(widthBound, inset: widthInset)
+        TextKit2Scope.containerGate(widthBound: widthBound, inset: widthInset, layoutPolicy: ownerKind.layoutPolicy) == nil
     }
 
     /// The same gate as `SegmentedTextView.displayedSegments`: with no
@@ -110,13 +116,16 @@ struct TextKit2TextRow: View {
     let style: TextBlockStyle
     var ownerID: String? = nil
     var ownerKind: TextKit2OwnerKind = .root
+    var context: TextKit2ContainerContext = .none
 
     var body: some View {
         // A handle per evaluation, not view state (the TK2 sources hold
         // none, `TextKit2RowViewTests`): the alignment guides query the
         // live row view's layout cache through it.
         let handle = TextKit2RowHandle()
-        TextKit2RowRepresentable(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, handle: handle)
+        TextKit2RowRepresentable(
+            text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, containerContext: context, handle: handle
+        )
             .alignmentGuide(.firstTextBaseline) { dimensions in
                 let size = CGSize(width: dimensions.width, height: dimensions.height)
                 return MainActor.assumeIsolated { handle.firstBaseline(placedAt: size) } ?? dimensions.height
@@ -151,6 +160,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
     let style: TextBlockStyle
     let ownerID: String?
     var ownerKind: TextKit2OwnerKind = .root
+    var containerContext: TextKit2ContainerContext = .none
     let handle: TextKit2RowHandle
 
     func makeUIView(context: Context) -> TextKit2RowView {
@@ -172,6 +182,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
     private func update(_ view: TextKit2RowView, context: Context) {
         handle.view = view
         view.ownerKind = ownerKind
+        view.containerContext = containerContext
         view.apply(
             Self.inputs(text: text, style: style, environment: context.environment, layoutPolicy: ownerKind.layoutPolicy),
             colorScheme: context.environment.colorScheme,

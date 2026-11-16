@@ -362,8 +362,9 @@ struct ReaderView: View {
         // The proof of what this position shows (`Scripts/visual_diff.py`):
         // the stats printed at READY predate the jump, so once the rows the
         // jump brought in have laid out and drawn, name the block the jump
-        // went to and print the counters again, with the code rows by
-        // owner. The three lines are printed together, in this order.
+        // went to and print the counters again, with the code rows, the
+        // container rows and the caption rows by owner. The five lines are
+        // printed together, in this order.
         try? await Task.sleep(for: Self.landedSettle)
         print(
             "SCROLL_LANDED fixture=\(source.title) fraction=\(fraction) index=\(index) "
@@ -373,6 +374,8 @@ struct ReaderView: View {
         if options.rendererStats {
             RendererStats.print(blocks: model.blocks)
             RendererStats.printCodeRows()
+            RendererStats.printContainerRows()
+            RendererStats.printCaptionRows()
         }
     }
 
