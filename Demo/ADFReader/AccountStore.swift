@@ -12,46 +12,20 @@ final class AccountStore {
     private(set) var summaries: [AtlassianAccountSummary] = []
     /// Why the last `reload()` failed (a keychain error), if it did.
     private(set) var loadError: String?
-    #if DEBUG
-    /// Where token checks go instead of each site's own gateway — a stub
-    /// server under the Debug-only `-authGateway` launch argument, `nil`
-    /// otherwise. Release builds have no override: checks always go to
-    /// `https://<site>/gateway/api/graphql`.
-    let gatewayOverride: URL?
-    #endif
 
     @ObservationIgnored private let store: any CredentialStore
     /// Ephemeral: no cookies, cache or credentials are written to disk for
     /// the token check or the pairing fetch.
     @ObservationIgnored let session: URLSession
 
-    #if DEBUG
-    init(store: any CredentialStore, gatewayOverride: URL? = nil) {
-        self.store = store
-        self.gatewayOverride = gatewayOverride
-        session = URLSession(configuration: .ephemeral)
-    }
-    #else
     init(store: any CredentialStore) {
         self.store = store
         session = URLSession(configuration: .ephemeral)
     }
-    #endif
 
-    /// The app's store for this launch: the keychain, or memory under the
-    /// Debug-only `-accountsInMemory`; token checks go to `-authGateway`'s
-    /// stub in Debug builds that pass it.
-    static func live(options: LaunchOptions) -> AccountStore {
-        #if DEBUG
-        let store: any CredentialStore = options.accountsInMemory
-            ? InMemoryCredentialStore() : KeychainCredentialStore()
-        if let gateway = options.authGateway {
-            print("AUTH_GATEWAY override=\(gateway.absoluteString)")
-        }
-        return AccountStore(store: store, gatewayOverride: options.authGateway)
-        #else
-        return AccountStore(store: KeychainCredentialStore())
-        #endif
+    /// The app's store: the keychain.
+    static func live() -> AccountStore {
+        AccountStore(store: KeychainCredentialStore())
     }
 
     func reload() {
@@ -74,12 +48,7 @@ final class AccountStore {
     @discardableResult
     func connect(_ credential: AtlassianCredential) async throws -> AtlassianAccountSummary {
         try credential.validate()
-        #if DEBUG
-        let endpoint = gatewayOverride
-        #else
-        let endpoint: URL? = nil
-        #endif
-        let client = AtlassianGraphQLClient(credential: credential, endpoint: endpoint, session: session)
+        let client = AtlassianGraphQLClient(credential: credential, session: session)
         let result = try await client.checkToken()
         var checked = credential
         checked.cloudId = result.cloudId

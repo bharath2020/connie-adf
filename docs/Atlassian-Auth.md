@@ -39,9 +39,9 @@ before it reads a saved token. Signing with a stable identity stops that.
 
 | Command | What it does |
 |---|---|
-| `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open] [--dry-run]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. It never prompts from a piped stdin: there `--site` and `--email` are required. |
+| `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. It never prompts from a piped stdin: there `--site` and `--email` are required. |
 | `list` | Site, email, expiry, from the non-secret summary only. Suggests `rotate` at 14 days or fewer. |
-| `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>] [--print-link] [--dry-run]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. The QR is drawn only on a terminal; when stdout is piped, `push` needs `--print-link`. |
+| `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. The QR is drawn only on a terminal; with stdout piped, `push` exits 2. |
 | `rotate <site> [--expiry-days <n>] [--token-stdin] [--no-open]` | `login` with the saved email, offers `push`, then points to the token page to revoke the old token. |
 | `remove <site> [--no-open]` | Deletes the Mac item, opens the token page to revoke it. The phone keeps its own copy. |
 | `probe-graphql --page <id> [--page <id> …] [--site <site>] [--raw]` | Runs `AdfProbePages`: title, space, emoji, link, and GraphQL errors verbatim. |
@@ -55,8 +55,7 @@ before it reads a saved token. Signing with a stable identity stops that.
   (`--expiry-days` 1–365). Scopes can't be added to a token; a new one means a new token.
 - **Token page:** `https://id.atlassian.com/manage-profile/security/api-tokens?autofillToken&expiryDays=<n>&appId=confluence&selectedScopes=<percent-encoded JSON array>`.
   Atlassian does not document these preselection parameters, so they are
-  unverified. `login` (and `--dry-run`) always prints the seven manual steps and
-  the scope list.
+  unverified. `login` always prints the seven manual steps and the scope list.
 
 ## 3. Setup in ADFReader
 
@@ -65,9 +64,11 @@ before it reads a saved token. Signing with a stable identity stops that.
   token into a `SecureField`, set **Expires** to the date you picked (default
   +90 days), **Connect**. Nothing is saved if `AdfAuthCheck` fails.
 - **Scan from Mac:** run `adf-auth push`, scan, answer on the Mac, then **Add** on
-  "Add <site> as <email>?" (it warns when it replaces another email). No camera
-  (Simulator): `adf-auth push --print-link`, copy the link, **Paste Link**. Cancel
-  discards the credential; the code is spent, so push again.
+  "Add <site> as <email>?" (it warns when it replaces another email). Pairing is
+  QR-scan only; without a camera (Simulator) use Add Manually. A code counts as
+  used only once the Mac has served it: after a cancelled or failed fetch (network,
+  timeout, the Mac declined), **Try Again** / **Scan Again** works with the same
+  code. Cancel on "Add …?" discards the credential; that code is spent, so push again.
 - **Expiry banner:** at 14 days or fewer, or expired, with **Replace Token** (manual
   form, site and email filled in). The row's context menu has it too.
 - **Remove:** swipe or context menu. Deletes the token from this device only;
@@ -111,11 +112,10 @@ entitlements needed); iOS uses the app's keychain.
 Until the code is used or expires, someone on the same network could request it,
 but the Mac shows their IP and asks you first. The photo plus a capture of that
 one plain-HTTP response would open the box. After that the listener is gone.
-`--print-link` prints the same secret as text: Simulator or camera-less only.
 
 **Logging.** The credential, GraphQL client and pairing link redact the token,
-`sid` and key in `description`, `debugDescription` and `dump`. Dry runs show
-`Authorization: Basic <redacted>`; server events show `/h/<redacted>`; `--raw`
+`sid` and key in `description`, `debugDescription` and `dump`. Server events
+show `/h/<redacted>`; `--raw`
 prints the gateway's response, never the request.
 
 **Known limits.** Guest or client-isolated Wi-Fi, VPNs, cellular, or denied Local
@@ -204,17 +204,10 @@ data or ships its own crypto.
   Run `swift test --filter ADFAtlassianAuthTests`.
 - Real keychain round-trip: opt-in with `ADF_AUTH_KEYCHAIN_TESTS=1` (unique
   `com.connie.adfreader.atlassian.tests.<UUID>` service, cleaned up).
-- `Demo/ADFReaderUITests/AccountsUITests.swift`: offline, `-openAccounts -accountsInMemory`.
-- The CLI target has no unit tests; use `--dry-run` and the overrides below.
-
-| App launch argument | Builds | Effect |
-|---|---|---|
-| `-openAccounts` | all | Opens Settings on Atlassian Accounts (ignored with `-fixture`) |
-| `-authGateway <url>` | Debug only | Token checks go to a stub; prints `AUTH_GATEWAY override=<url>` |
-| `-accountsInMemory` | Debug only | Accounts in memory, never the keychain |
-
-| CLI override | Effect |
-|---|---|
-| `ADF_AUTH_KEYCHAIN_SERVICE=<name>` | Keychain service instead of `com.connie.adfreader.atlassian` (prints a note) |
-| `--gateway <url>` (`login`, `rotate`, `probe-graphql`) | GraphQL to a stub; warns; loopback hosts only (`127.0.0.1`, `::1`, `localhost`), http or https |
-| `push --host 127.0.0.1` | Loopback listener for `curl`; warns, and the phone rejects such links |
+- `Demo/ADFReaderUITests/AccountsUITests.swift`: offline, `-openAccounts` (opens
+  Settings on Atlassian Accounts; ignored with `-fixture`). It never saves an
+  account.
+- The CLI target has no unit tests. Neither the CLI nor the app has a GraphQL
+  endpoint override: the token only goes to `https://<site>/gateway/api/graphql`.
+  Stub servers are reached only from unit tests, through
+  `AtlassianGraphQLClient`'s `endpoint:` and `session:` parameters.

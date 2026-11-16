@@ -41,8 +41,7 @@ public struct KeychainCredentialStore: CredentialStore {
     }
 
     /// The non-secret identity attributes of the item for `site`: class,
-    /// service, account, label, accessibility and synchronizable. Useful for
-    /// dry runs that have no credential.
+    /// service, account, label, accessibility and synchronizable.
     public static func baseAttributes(site: AtlassianSite, service: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,

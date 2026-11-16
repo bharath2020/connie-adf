@@ -77,12 +77,4 @@ public struct GraphQLOperation: Sendable, Equatable {
     public static func pageARI(cloudId: String, pageId: String) -> String {
         "ari:cloud:confluence:\(cloudId):page/\(pageId)"
     }
-
-    /// The body as pretty-printed JSON, for dry runs.
-    public var prettyBody: String {
-        guard let object = try? JSONSerialization.jsonObject(with: body),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        else { return String(decoding: body, as: UTF8.self) }
-        return String(decoding: data, as: UTF8.self)
-    }
 }

@@ -104,15 +104,6 @@ import UIKit
 ///   to Atlassian Accounts (`AccountsView`), for UI tests and demo
 ///   recordings. Ignored with `-fixture` (the space list, which owns the
 ///   gear button, is not shown then).
-/// - `-authGateway <url>` (Debug builds only; compiled out of Release)
-///   sends every Atlassian token check to `<url>` instead of the site's
-///   `https://<site>/gateway/api/graphql` — a local stub GraphQL server for
-///   demos. It prints `AUTH_GATEWAY override=<url>` once at launch, and
-///   Atlassian Accounts says the override is active.
-/// - `-accountsInMemory` (Debug builds only; compiled out of Release) keeps
-///   Atlassian accounts in memory instead of the keychain, so a UI test
-///   starts from an empty account list whatever a previous run saved, and
-///   never writes the simulator's keychain.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -136,10 +127,6 @@ struct LaunchOptions: Sendable {
     var interactionProbe = false
     var captureGeometryHook = false
     var openAccounts = false
-    #if DEBUG
-    var authGateway: URL?
-    var accountsInMemory = false
-    #endif
 
     static let none = LaunchOptions(arguments: [])
 
@@ -185,13 +172,6 @@ struct LaunchOptions: Sendable {
                 captureGeometryHook = true
             case "-openAccounts":
                 openAccounts = true
-            #if DEBUG
-            case "-authGateway" where arguments.index(after: index) < arguments.endIndex:
-                index = arguments.index(after: index)
-                authGateway = URL(string: arguments[index])
-            case "-accountsInMemory":
-                accountsInMemory = true
-            #endif
             default:
                 break
             }
@@ -206,7 +186,7 @@ struct ADFReaderApp: App {
     @State private var accountStore: AccountStore
 
     init() {
-        _accountStore = State(initialValue: AccountStore.live(options: options))
+        _accountStore = State(initialValue: AccountStore.live())
         // Before the scene builds: `ReaderView` reads the renderer key through
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)

@@ -37,14 +37,6 @@ enum Help {
           An unsigned binary gets a new identity on every rebuild, so macOS asks again
           before it reads a saved token. Signing with a stable identity stops that.
 
-        Testing (stub servers only):
-          ADF_AUTH_KEYCHAIN_SERVICE=<name>  Use this keychain service instead of
-                                            \(KeychainCredentialStore.defaultService)
-          --gateway <url>                   (login, rotate, probe-graphql) Send GraphQL to
-                                            <url> instead of https://<site>/gateway/api/graphql.
-                                            Loopback only: 127.0.0.1, ::1 or localhost
-                                            (http or https). Prints a warning.
-
         Prompts are only shown when stdin is a terminal. With piped stdin, pass
         --site and --email (and --token-stdin for the token); yes/no questions
         are answered no.
@@ -56,7 +48,7 @@ enum Help {
     static var login: String {
         """
         Usage: adf-auth login [--site <site>] [--email <email>] [--expiry-days <n>]
-                              [--token-stdin] [--no-open] [--dry-run]
+                              [--token-stdin] [--no-open]
 
         Creates a Confluence API token with read-only scopes, checks it against the
         site's GraphQL gateway, and saves it in your login keychain.
@@ -75,10 +67,7 @@ enum Help {
           --expiry-days <n>   The expiry you pick on Atlassian's page (1-365, default \(AtlassianTokenScopes.defaultExpiryDays))
           --token-stdin       Read the token as one line of stdin (needs --site and --email)
           --no-open           Don't open the token page in the browser
-          --dry-run           Show what would happen; no network, browser, token or keychain
           -h, --help          Show this help
-
-        Testing: --gateway <url> sends GraphQL to a stub server (see adf-auth help).
         """
     }
 
@@ -94,7 +83,7 @@ enum Help {
 
     static let push = """
         Usage: adf-auth push [--site <site>] [--host <ipv4>] [--port <n>]
-                             [--timeout <seconds>] [--print-link] [--dry-run]
+                             [--timeout <seconds>]
 
         Sends a saved account to ADFReader on your phone over the local network,
         once. Shows a QR code; in ADFReader open Settings → Atlassian Accounts →
@@ -118,12 +107,6 @@ enum Help {
           --port <n>            The port (default 0: any free port)
           --timeout <seconds>   How long the code stays valid (5-120, default 120; the
                                 phone waits at most 130 s for your answer)
-          --print-link          Also print the pairing link, for the iOS Simulator or a
-                                device without a camera. Anyone on the network who
-                                sees it before it expires can fetch the credential.
-                                Required when stdout is not a terminal (then only the
-                                link is printed, no QR code).
-          --dry-run             Show what would happen; no keychain read, no listener
           -h, --help            Show this help
         """
 
@@ -140,8 +123,6 @@ enum Help {
           --token-stdin       Read the new token as one line of stdin
           --no-open           Don't open Atlassian's pages in the browser
           -h, --help          Show this help
-
-        Testing: --gateway <url> sends GraphQL to a stub server (see adf-auth help).
         """
     }
 
@@ -177,8 +158,6 @@ enum Help {
           -h, --help      Show this help
 
         Exits 3 if the gateway rejects the scoped API token for the query.
-
-        Testing: --gateway <url> sends GraphQL to a stub server (see adf-auth help).
         """
 
     /// Help for a command name, or nil if there is no such command.

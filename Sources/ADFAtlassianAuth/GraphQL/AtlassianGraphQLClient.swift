@@ -68,7 +68,7 @@ public struct AtlassianGraphQLClient: Sendable {
     private let session: URLSession
 
     /// - Parameter endpoint: Overrides `site.graphQLEndpoint`. Only for stub
-    ///   servers in tests and the demo app's DEBUG builds.
+    ///   servers in tests.
     public init(site: AtlassianSite, email: String, token: String, endpoint: URL? = nil, session: URLSession = .shared) {
         self.site = site
         self.email = email
@@ -110,19 +110,6 @@ public struct AtlassianGraphQLClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         return request
-    }
-
-    /// The request as text, with the Authorization value redacted. For dry runs.
-    public static func requestPreview(_ operation: GraphQLOperation, endpoint: URL) -> String {
-        """
-        POST \(endpoint.absoluteString)
-        Authorization: Basic \(Redaction.placeholder)
-        Content-Type: application/json
-        Accept: application/json
-        User-Agent: \(userAgent)
-
-        \(operation.prettyBody)
-        """
     }
 
     private struct HTTPResult: Sendable {

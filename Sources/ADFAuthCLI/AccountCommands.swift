@@ -13,7 +13,7 @@ enum ListCommand {
             Terminal.out(Help.list)
             return ExitCode.success
         }
-        let store = try Context.store()
+        let store = Context.store()
         let summaries = try Context.keychain { try store.summaries() }
         guard !summaries.isEmpty else {
             Terminal.out("No accounts. Run: adf-auth login")
@@ -44,7 +44,7 @@ enum RemoveCommand {
             return ExitCode.success
         }
         let site = try Context.site(parsed.positionals[0], command: spec.name)
-        let store = try Context.store()
+        let store = Context.store()
         let removed = try Context.keychain { try store.remove(site: site) }
         let manage = AtlassianTokenPage.manageURL
         if removed {

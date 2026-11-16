@@ -61,14 +61,6 @@ struct GraphQLClientTests {
         }
     }
 
-    @Test("the dry-run preview redacts the Authorization header")
-    func preview() {
-        let preview = AtlassianGraphQLClient.requestPreview(.authCheck(site: Fixture.acme), endpoint: Fixture.acme.graphQLEndpoint)
-        #expect(preview.contains("Authorization: Basic <redacted>"))
-        #expect(preview.contains("\"operationName\" : \"AdfAuthCheck\""))
-        #expect(preview.contains("acme.atlassian.net"))
-    }
-
     // MARK: Token check mapping
 
     @Test("the tenant whose hostName matches wins")

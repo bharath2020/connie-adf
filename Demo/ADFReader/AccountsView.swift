@@ -58,13 +58,6 @@ struct AccountsView: View {
                     Label("Scan from Mac", systemImage: "qrcode.viewfinder")
                 }
                 .accessibilityIdentifier("accounts-scan-mac")
-            } footer: {
-                #if DEBUG
-                if let gateway = accounts.gatewayOverride {
-                    Text(verbatim: "Debug: token checks go to \(gateway.absoluteString) (-authGateway), not to Atlassian.")
-                        .accessibilityIdentifier("accounts-gateway-override")
-                }
-                #endif
             }
         }
         .navigationTitle("Atlassian Accounts")

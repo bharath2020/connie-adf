@@ -4,34 +4,12 @@ import Darwin
 import Foundation
 
 /// Shared plumbing for the commands: the keychain store, site and email
-/// input, the testing-only gateway override, and keychain error mapping.
+/// input, and keychain error mapping.
 @MainActor
 enum Context {
-    /// Testing only: the keychain service to use instead of the default.
-    static let keychainServiceVariable = "ADF_AUTH_KEYCHAIN_SERVICE"
-
-    /// The keychain service name and whether it came from the environment.
-    static func keychainService() throws(CLIError) -> (name: String, overridden: Bool) {
-        guard let raw = ProcessInfo.processInfo.environment[keychainServiceVariable] else {
-            return (KeychainCredentialStore.defaultService, false)
-        }
-        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            throw .usage("\(keychainServiceVariable) is set but empty.", command: nil)
-        }
-        return (name, true)
-    }
-
-    private static var notedServiceOverride = false
-
-    /// The login-keychain store (service overridable for tests, noted once).
-    static func store() throws(CLIError) -> KeychainCredentialStore {
-        let service = try keychainService()
-        if service.overridden, !notedServiceOverride {
-            notedServiceOverride = true
-            Terminal.err("note: using keychain service \(service.name) (from \(keychainServiceVariable))")
-        }
-        return KeychainCredentialStore(service: service.name)
+    /// The login-keychain store.
+    static func store() -> KeychainCredentialStore {
+        KeychainCredentialStore()
     }
 
     /// Runs a keychain call and turns its error into a message.
@@ -150,28 +128,6 @@ enum Context {
                 Terminal.err("Enter a number from 1 to \(summaries.count).")
             }
         }
-    }
-
-    // MARK: Testing override
-
-    /// Hosts `--gateway` may point at.
-    static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
-
-    /// `--gateway <url>`: GraphQL endpoint override for local stub servers.
-    /// Loopback only (127.0.0.1, ::1, localhost; http or https), so the
-    /// saved token can never be sent to another machine. Warns when used.
-    static func gateway(_ parsed: ParsedArguments, command: String) throws(CLIError) -> URL? {
-        guard let raw = parsed.value("--gateway") else { return nil }
-        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
-              let host = url.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")),
-              url.user == nil, url.password == nil else {
-            throw .usage("--gateway needs an http(s) URL on 127.0.0.1, ::1 or localhost.", command: command)
-        }
-        guard loopbackHosts.contains(host) else {
-            throw .usage("--gateway only accepts 127.0.0.1, ::1 or localhost (it is for local stub servers; the token must never go anywhere else).", command: command)
-        }
-        Terminal.err("warning: --gateway is for stub servers only: sending GraphQL to \(url.absoluteString) instead of the site's gateway.")
-        return url
     }
 
     /// A fresh ephemeral session for one command: no shared cookies, cache

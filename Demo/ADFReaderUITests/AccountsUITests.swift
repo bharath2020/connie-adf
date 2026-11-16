@@ -1,18 +1,15 @@
 import XCTest
 
-/// Settings → Atlassian Accounts, offline: the empty state with both ways to
-/// add an account, and the manual form rejecting a site that is not
-/// `<name>.atlassian.net` with the site normalizer's message — before any
-/// network call, so no token is involved.
+/// Settings → Atlassian Accounts, offline: both ways to add an account, and
+/// the manual form rejecting a site that is not `<name>.atlassian.net` with
+/// the site normalizer's message — before any network call, so no token is
+/// involved and nothing is saved.
 ///
 /// Launch arguments: `-openAccounts` opens the Settings sheet already on
-/// Atlassian Accounts; `-accountsInMemory` (Debug only) keeps accounts in
-/// memory, so the list starts empty whatever a previous run left in the
-/// simulator's keychain.
+/// Atlassian Accounts.
 @MainActor
 final class AccountsUITests: XCTestCase {
     private enum Identifier {
-        static let empty = "accounts-empty"
         static let addManual = "accounts-add-manual"
         static let scanFromMac = "accounts-scan-mac"
         static let site = "add-site"
@@ -24,12 +21,10 @@ final class AccountsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testEmptyStateAndManualFormRejectsUnsupportedSite() throws {
-        let app = ReaderDriver(launching: ["-openAccounts", "-accountsInMemory"]).app
+    func testManualFormRejectsUnsupportedSite() throws {
+        let app = ReaderDriver(launching: ["-openAccounts"]).app
 
-        let empty = app.descendants(matching: .any)[Identifier.empty]
-        XCTAssertTrue(empty.waitForExistence(timeout: 30), "Atlassian Accounts did not open on its empty state")
-        XCTAssertTrue(app.buttons[Identifier.addManual].exists, "Add Manually button missing")
+        XCTAssertTrue(app.buttons[Identifier.addManual].waitForExistence(timeout: 30), "Atlassian Accounts did not open with Add Manually")
         XCTAssertTrue(app.buttons[Identifier.scanFromMac].exists, "Scan from Mac button missing")
 
         app.buttons[Identifier.addManual].tap()

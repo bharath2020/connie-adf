@@ -9,7 +9,6 @@ enum ProbeCommand {
         OptionSpec("--page", value: "id", repeatable: true),
         OptionSpec("--site", value: "site"),
         OptionSpec("--raw"),
-        OptionSpec("--gateway", value: "url"),
     ])
 
     static func run(_ arguments: [String]) async throws -> Int32 {
@@ -30,10 +29,9 @@ enum ProbeCommand {
             throw CLIError.usage("give at least one --page <id>.", command: spec.name)
         }
         let explicitSite = try parsed.value("--site").map { site throws(CLIError) in try Context.site(site, command: spec.name) }
-        let gateway = try Context.gateway(parsed, command: spec.name)
         let raw = parsed.has("--raw")
 
-        let store = try Context.store()
+        let store = Context.store()
         let summary = try Context.savedSite(explicit: explicitSite, store: store, command: spec.name)
         let site = summary.site
         guard let credential = try Context.keychain({ try store.load(site: site) }) else {
@@ -41,7 +39,7 @@ enum ProbeCommand {
         }
         let session = Context.makeSession()
         defer { session.finishTasksAndInvalidate() }
-        let client = AtlassianGraphQLClient(credential: credential, endpoint: gateway, session: session)
+        let client = AtlassianGraphQLClient(credential: credential, session: session)
 
         let result: PageProbeResult
         let cloudId: String

@@ -10,8 +10,6 @@ enum PushCommand {
         OptionSpec("--host", value: "ipv4"),
         OptionSpec("--port", value: "n"),
         OptionSpec("--timeout", value: "seconds"),
-        OptionSpec("--print-link"),
-        OptionSpec("--dry-run"),
     ])
 
     static let defaultTimeout = 120
@@ -24,7 +22,6 @@ enum PushCommand {
         var host: String?
         var port: UInt16 = 0
         var timeout = 120
-        var printLink = false
     }
 
     static func run(_ arguments: [String]) async throws -> Int32 {
@@ -43,28 +40,23 @@ enum PushCommand {
         }
         options.port = UInt16(try ArgumentParser.integer(parsed, "--port", in: 0...65_535, default: 0, command: spec.name))
         options.timeout = try ArgumentParser.integer(parsed, "--timeout", in: 5...maxTimeout, default: defaultTimeout, command: spec.name)
-        options.printLink = parsed.has("--print-link")
-        if parsed.has("--dry-run") {
-            return dryRun(options)
-        }
         return try await perform(options)
     }
 
-    static let noAddressMessage = "No Wi-Fi/LAN IPv4 address; connect to the same network as the phone, or add the account on the phone by pasting"
+    static let noAddressMessage = "No Wi-Fi/LAN IPv4 address; connect to the same network as the phone, or add the account on the phone with Add Manually"
 
     /// ADFReader only fetches from private-range hosts.
-    static let notLocalNetworkWarning = "warning: the phone only accepts private-network addresses (10/8, 172.16/12, 192.168/16, 100.64/10); this link is for curl/testing only"
+    static let notLocalNetworkWarning = "warning: the phone only accepts private-network addresses (10/8, 172.16/12, 192.168/16, 100.64/10), so the phone won't fetch from this address"
 
     // MARK: Push
 
     static func perform(_ options: Options) async throws -> Int32 {
         // The QR holds the one-time key: draw it only on a terminal, never
         // into a file or pipe (`push | tee log` would keep a usable code).
-        let drawQR = isatty(STDOUT_FILENO) == 1
-        guard drawQR || options.printLink else {
-            throw CLIError.usage("stdout is not a terminal, so push won't draw the QR code: it holds the one-time key and would end up in a file or pipe. Run push in a terminal, or pass --print-link to print only the link (and keep that output private).", command: spec.name)
+        guard isatty(STDOUT_FILENO) == 1 else {
+            throw CLIError.usage("stdout is not a terminal, so push won't draw the QR code: it holds the one-time key and would end up in a file or pipe. Run push in a terminal.", command: spec.name)
         }
-        let store = try Context.store()
+        let store = Context.store()
         let summary = try Context.savedSite(explicit: options.site, store: store, command: spec.name)
         let site = summary.site
         guard let host = options.host ?? LANAddress.primaryIPv4() else {
@@ -125,21 +117,13 @@ enum PushCommand {
         promptLine.setDeadline(deadline)
         Terminal.out("Listening: \(host):\(port) until \(Format.time(deadline))")
         Terminal.out()
-        if drawQR {
-            guard let qr = QRTerminalRenderer.lines(for: link.url.absoluteString) else {
-                server.cancel()
-                throw CLIError.failure("Couldn't draw the QR code.")
-            }
-            qr.forEach { Terminal.out($0) }
-        } else {
-            Terminal.out("(QR code not drawn: stdout is not a terminal.)")
+        guard let qr = QRTerminalRenderer.lines(for: link.url.absoluteString) else {
+            server.cancel()
+            throw CLIError.failure("Couldn't draw the QR code.")
         }
+        qr.forEach { Terminal.out($0) }
         Terminal.out()
         Terminal.out("Scan with ADFReader → Settings → Atlassian Accounts → Scan from Mac. Expires in \(options.timeout) s. The code contains a one-time key, not your token.")
-        if options.printLink {
-            Terminal.err("warning: anyone on this network who sees this link within \(options.timeout) s can fetch the credential; for the iOS Simulator or camera-less devices only.")
-            Terminal.out(link.url.absoluteString)
-        }
         Terminal.out("Waiting for the phone… (Ctrl-C to cancel)")
 
         let outcome = await server.waitForCompletion()
@@ -192,42 +176,6 @@ enum PushCommand {
                 promptLine.warn("warning: ignored request from \(peer) for an unknown path")
             }
         }
-    }
-
-    // MARK: Dry run
-
-    static func dryRun(_ options: Options) -> Int32 {
-        let interface = LANAddress.ipv4Interfaces().first { $0.name == "en0" } ?? LANAddress.ipv4Interfaces().first { $0.name.hasPrefix("en") }
-        let host: String
-        if let given = options.host {
-            host = "\(given)  (--host)" + (PairingLink.isLocalNetworkHost(given) ? "" : "; not a private-network address, so the phone won't accept the link")
-        } else if let interface {
-            host = "\(interface.address)  (Wi-Fi/LAN address of \(interface.name))"
-        } else {
-            host = "none found; a real run would stop: \(noAddressMessage)"
-        }
-        let site = options.site?.host ?? "the only saved account (asked when several are saved)"
-        Terminal.out("Dry run: no keychain read, no listener, nothing sent.")
-        Terminal.out()
-        for line in Format.table([
-            ["Account:", site],
-            ["Host:", host],
-            ["Port:", options.port == 0 ? "0 (any free port, chosen when the listener starts)" : "\(options.port)"],
-            ["Timeout:", "\(options.timeout) s"],
-            ["Link:", "adfreader://pair?v=\(PairingLink.version)&h=<host>:<port>&s=\(Redaction.placeholder)#k=\(Redaction.placeholder)"],
-            ["", "s = 16 random bytes, k = a 32-byte one-time key (both base64url); no token"],
-            ["Serves:", "one GET http://<host>:<port>/h/\(Redaction.placeholder) after you confirm; anything else gets 404"],
-            ["Sealed:", "ChaChaPoly(credential JSON, key k, authenticated data s)"],
-            ["Print link:", options.printLink ? "yes (--print-link)" : "no"],
-        ]) {
-            Terminal.out(line)
-        }
-        Terminal.out()
-        let sample = "adfreader://pair?v=1&h=192.0.2.1:9&s=dry-run#k=dry-run"
-        Terminal.out("Sample QR code (dummy link \(sample); not a real pairing code):")
-        Terminal.out()
-        (QRTerminalRenderer.lines(for: sample) ?? ["(couldn't draw the QR code)"]).forEach { Terminal.out($0) }
-        return ExitCode.success
     }
 }
 #endif

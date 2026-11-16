@@ -1,7 +1,6 @@
 #if os(macOS)
 import ADFAtlassianAuth
 import Foundation
-import Security
 
 /// `adf-auth login` and `adf-auth rotate`.
 @MainActor
@@ -12,8 +11,6 @@ enum LoginCommand {
         OptionSpec("--expiry-days", value: "n"),
         OptionSpec("--token-stdin"),
         OptionSpec("--no-open"),
-        OptionSpec("--dry-run"),
-        OptionSpec("--gateway", value: "url"),
     ])
 
     struct Options {
@@ -22,7 +19,6 @@ enum LoginCommand {
         var expiryDays = AtlassianTokenScopes.defaultExpiryDays
         var tokenFromStdin = false
         var openBrowser = true
-        var gateway: URL?
         /// `rotate`: the site is known to be saved already; skip the "Next" hint.
         var rotating = false
     }
@@ -39,10 +35,6 @@ enum LoginCommand {
         options.expiryDays = try ArgumentParser.integer(parsed, "--expiry-days", in: 1...365, default: AtlassianTokenScopes.defaultExpiryDays, command: spec.name)
         options.tokenFromStdin = parsed.has("--token-stdin")
         options.openBrowser = !parsed.has("--no-open")
-        options.gateway = try Context.gateway(parsed, command: spec.name)
-        if parsed.has("--dry-run") {
-            return try dryRun(options)
-        }
         return try await perform(options, command: spec.name)
     }
 
@@ -55,7 +47,7 @@ enum LoginCommand {
         }
         let site = try options.site ?? Context.askForSite(command: command)
         let email = try options.email ?? Context.askForEmail(command: command)
-        let store = try Context.store()
+        let store = Context.store()
         if !options.rotating, let existing = try Context.keychain({ try store.summaries() }).first(where: { $0.site == site }) {
             Terminal.out("A token for \(site.host) (\(existing.email)) is already saved; the new one will replace it.")
         }
@@ -92,7 +84,7 @@ enum LoginCommand {
         do {
             let session = Context.makeSession()
             defer { session.finishTasksAndInvalidate() }
-            check = try await AtlassianGraphQLClient(credential: credential, endpoint: options.gateway, session: session).checkToken()
+            check = try await AtlassianGraphQLClient(credential: credential, session: session).checkToken()
         } catch {
             throw CLIError.failure("\(error.message) Nothing was saved.")
         }
@@ -156,75 +148,6 @@ enum LoginCommand {
             Terminal.err("Enter a number of days from 1 to 365, or press Enter.")
         }
     }
-
-    // MARK: Dry run
-
-    static func dryRun(_ options: Options) throws -> Int32 {
-        let site: AtlassianSite
-        if let given = options.site {
-            site = given
-        } else if Terminal.stdinIsTerminal, !options.tokenFromStdin {
-            site = try Context.askForSite(command: spec.name)
-        } else {
-            throw CLIError.usage("--dry-run needs --site when stdin is not a terminal.", command: spec.name)
-        }
-        let service = try Context.keychainService()
-        let endpoint = options.gateway ?? site.graphQLEndpoint
-        let createURL = AtlassianTokenPage.createURL(expiryDays: options.expiryDays)
-        let expiry = Date().addingTimeInterval(TimeInterval(options.expiryDays) * 86_400)
-
-        Terminal.out("Dry run: no network, no browser, no token read, nothing saved.")
-        Terminal.out()
-        for line in Format.table([
-            ["Site:", site.host],
-            ["Email:", options.email ?? "(asked when you run it)"],
-            ["GraphQL endpoint:", endpoint.absoluteString + (options.gateway == nil ? "" : "  (--gateway override)")],
-            ["Token page:", createURL.absoluteString],
-            ["Browser:", options.openBrowser ? "would open the token page" : "not opened (--no-open)"],
-            ["Token:", "not read in a dry run; a real run reads it " + (options.tokenFromStdin ? "as one line of stdin (--token-stdin)" : "with echo off from the terminal (readpassphrase)")],
-            ["Expiry:", "\(Format.day(expiry)) (\(options.expiryDays) days)"],
-        ]) {
-            Terminal.out(line)
-        }
-        Terminal.out()
-        Terminal.out("Manual steps on the token page:")
-        for (index, step) in AtlassianTokenPage.manualSteps(expiryDays: options.expiryDays).enumerated() {
-            Terminal.out("  \(index + 1). \(step)")
-        }
-        Terminal.out("Scopes: \(AtlassianTokenScopes.required.joined(separator: ", "))")
-        Terminal.out()
-        Terminal.out("Token check it would send (\(GraphQLDocuments.authCheckOperationName)):")
-        Terminal.out(Format.indent(AtlassianGraphQLClient.requestPreview(GraphQLOperation.authCheck(site: site), endpoint: endpoint)))
-        Terminal.out()
-        Terminal.out("Keychain item it would write (login keychain):")
-        for line in Format.table(keychainRows(site: site, service: service.name, overridden: service.overridden)) {
-            Terminal.out("  " + line)
-        }
-        return ExitCode.success
-    }
-
-    /// The would-be keychain attributes, read from the store's own attribute
-    /// dictionary so the dry run can't drift from what `save` writes.
-    static func keychainRows(site: AtlassianSite, service: String, overridden: Bool) -> [[String]] {
-        let attributes = KeychainCredentialStore.baseAttributes(site: site, service: service)
-        func string(_ key: CFString) -> String { (attributes[key as String] as? String) ?? "?" }
-        let itemClass = string(kSecClass) == (kSecClassGenericPassword as String) ? "generic password" : string(kSecClass)
-        let accessible = string(kSecAttrAccessible) == (kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
-            ? "kSecAttrAccessibleWhenUnlockedThisDeviceOnly" : string(kSecAttrAccessible)
-        let synchronizable = (attributes[kSecAttrSynchronizable as String] as? Bool) == false
-            ? "false (never synced to iCloud Keychain)" : "\(attributes[kSecAttrSynchronizable as String] ?? "?")"
-        return [
-            ["class:", itemClass],
-            ["service:", string(kSecAttrService) + (overridden ? "  (from \(Context.keychainServiceVariable))" : "")],
-            ["account:", string(kSecAttrAccount)],
-            ["label:", string(kSecAttrLabel)],
-            ["accessible:", accessible],
-            ["synchronizable:", synchronizable],
-            ["access group:", "none"],
-            ["generic:", "summary JSON (site, email, cloudId, scopes, createdAt, expiresAt), no token"],
-            ["data:", "credential JSON, including the token"],
-        ]
-    }
 }
 
 /// `adf-auth rotate <site>`.
@@ -234,7 +157,6 @@ enum RotateCommand {
         OptionSpec("--expiry-days", value: "n"),
         OptionSpec("--token-stdin"),
         OptionSpec("--no-open"),
-        OptionSpec("--gateway", value: "url"),
     ], positionals: ["site"])
 
     static func run(_ arguments: [String]) async throws -> Int32 {
@@ -249,10 +171,9 @@ enum RotateCommand {
         options.expiryDays = try ArgumentParser.integer(parsed, "--expiry-days", in: 1...365, default: AtlassianTokenScopes.defaultExpiryDays, command: spec.name)
         options.tokenFromStdin = parsed.has("--token-stdin")
         options.openBrowser = !parsed.has("--no-open")
-        options.gateway = try Context.gateway(parsed, command: spec.name)
         options.rotating = true
 
-        let store = try Context.store()
+        let store = Context.store()
         let summary = try Context.savedSite(explicit: site, store: store, command: spec.name)
         options.email = summary.email
         Terminal.out("Rotating the token for \(site.host) (\(summary.email)). The old token keeps working until you revoke it.")
