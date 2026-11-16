@@ -3,6 +3,13 @@
 //
 // Run from anywhere (paths resolve relative to this file):
 //     swift Tools/make-fixtures.swift
+//     swift Tools/make-fixtures.swift --check
+// The second form regenerates every fixture in memory, writes nothing and
+// exits 1 if any generated fixture differs from its bytes in Fixtures/
+// (or is missing), 0 when all match. Fixtures/SHA256SUMS pins the bytes of
+// every Fixtures/*.json, hand-authored ones included
+// (Tests/ADFModelTests/FixtureManifestTests.swift); the lines above its
+// `# PR 4` line never change.
 //
 // Emits into <repo-root>/Fixtures/:
 //   stress-5k.json      5,000 mixed top-level blocks (paragraphs with mixed
@@ -2667,11 +2674,29 @@ func makeCodeTall() -> CodeFixture {
 
 // MARK: - Emit
 
+/// At most one argument. `--check` regenerates every fixture in memory,
+/// writes nothing, compares each with the bytes in Fixtures/ and exits 1 if
+/// any differs or is missing (0 when all match). Anything else is a usage
+/// error (exit 2). With no argument the generator writes every fixture, as
+/// before.
+let checkOnly: Bool
+switch Array(CommandLine.arguments.dropFirst()) {
+case []:
+    checkOnly = false
+case ["--check"]:
+    checkOnly = true
+default:
+    FileHandle.standardError.write(Data("usage: swift Tools/make-fixtures.swift [--check]\n".utf8))
+    exit(2)
+}
+
 let repoRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent() // …/Tools
     .deletingLastPathComponent() // repo root
 let fixturesDir = repoRoot.appendingPathComponent("Fixtures")
-try FileManager.default.createDirectory(at: fixturesDir, withIntermediateDirectories: true)
+if !checkOnly {
+    try FileManager.default.createDirectory(at: fixturesDir, withIntermediateDirectories: true)
+}
 
 let stress5K = makeStress5K()
 var listDenseTally = ListDenseTally()
@@ -2695,6 +2720,31 @@ let fixtures: [(name: String, document: [String: Any])] = [
     ("code-dense.json", codeDense.document),
     ("code-tall.json", codeTall.document),
 ]
+
+if checkOnly {
+    var differing: [String] = []
+    for (name, document) in fixtures {
+        let data = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+        let url = fixturesDir.appendingPathComponent(name)
+        guard let committed = try? Data(contentsOf: url) else {
+            print("MISSING \(name): regenerated \(data.count) bytes, no file in Fixtures/")
+            differing.append(name)
+            continue
+        }
+        if committed == data {
+            print("same    \(name): \(data.count) bytes")
+        } else {
+            print("DIFFERS \(name): regenerated \(data.count) bytes, Fixtures/ has \(committed.count)")
+            differing.append(name)
+        }
+    }
+    if differing.isEmpty {
+        print("check: all \(fixtures.count) generated fixtures match Fixtures/ byte for byte; nothing written")
+        exit(0)
+    }
+    print("check: \(differing.count) of \(fixtures.count) generated fixtures differ: \(differing.joined(separator: " ")); nothing written")
+    exit(1)
+}
 
 for (name, document) in fixtures {
     let data = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
