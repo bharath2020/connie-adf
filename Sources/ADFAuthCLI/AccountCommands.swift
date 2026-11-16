@@ -53,7 +53,7 @@ enum RemoveCommand {
             if !parsed.has("--no-open"), Terminal.open(manage) {
                 Terminal.out("  (opened in your browser)")
             }
-            Terminal.out("ADFReader on your phone keeps its own copy: remove it there in Settings → Accounts.")
+            Terminal.out("ADFReader on your phone keeps its own copy: remove it there in Settings → Atlassian Accounts.")
             return ExitCode.success
         }
         Terminal.err("error: no saved account for \(site.host); nothing was removed.")

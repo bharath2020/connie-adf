@@ -63,30 +63,38 @@ enum Terminal {
         return bytes.isEmpty ? nil : String(decoding: bytes, as: UTF8.self)
     }
 
-    /// Writes `text` to stderr and reads one line.
+    /// Writes `text` to stderr and reads one line from the terminal. Returns
+    /// nil without reading when stdin is not a terminal: piped input (which
+    /// may be a token) is never taken as an answer, so it is never echoed.
     static func prompt(_ text: String) -> String? {
+        guard stdinIsTerminal else { return nil }
         write(text, to: STDERR_FILENO)
-        let answer = readLine()
-        echoIfPiped(answer)
-        return answer
+        return readLine()
     }
 
-    /// When stdin is a pipe the answer isn't echoed by a terminal; echo it so
-    /// logs read naturally. Never used for the token.
-    static func echoIfPiped(_ answer: String?) {
-        guard !stdinIsTerminal else { return }
-        write((answer ?? "(end of input)") + "\n", to: STDERR_FILENO)
+    /// Discards keystrokes typed before a prompt appeared, so they can't
+    /// answer it. Terminal only (piped answers are deliberate).
+    static func discardTypeahead() {
+        if stdinIsTerminal { _ = tcflush(STDIN_FILENO, TCIFLUSH) }
     }
 
-    /// `[Y/n]`: an empty line or y/yes is yes; end of input or anything else is no.
-    static func isYes(_ answer: String?) -> Bool {
+    /// y/yes is yes; an empty line is `defaultYes`; end of input or anything
+    /// else is no.
+    static func isYes(_ answer: String?, defaultYes: Bool) -> Bool {
         guard let answer else { return false }
         let normalized = answer.trimmingCharacters(in: .whitespaces).lowercased()
-        return normalized.isEmpty || normalized == "y" || normalized == "yes"
+        if normalized.isEmpty { return defaultYes }
+        return normalized == "y" || normalized == "yes"
     }
 
+    /// `[Y/n]` on a terminal. Without a terminal it doesn't read stdin and
+    /// answers no (the safe choice for every caller).
     static func askYesNo(_ question: String) -> Bool {
-        isYes(prompt("\(question) [Y/n] "))
+        guard stdinIsTerminal else {
+            err("\(question) No (stdin is not a terminal).")
+            return false
+        }
+        return isYes(prompt("\(question) [Y/n] "), defaultYes: true)
     }
 
     // MARK: Secrets

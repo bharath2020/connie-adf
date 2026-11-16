@@ -51,12 +51,34 @@ enum Context {
         do {
             return try AtlassianSite(parsing: input)
         } catch {
-            throw .usage(error.message, command: command)
+            throw .usage(siteMessage(error), command: command)
         }
     }
 
-    /// Prompts until the site parses (re-asks only on a terminal).
+    /// Why a site was rejected, without repeating the input (it might be a
+    /// pasted token).
+    static func siteMessage(_ error: AtlassianSite.ParseError) -> String {
+        switch error {
+        case .empty:
+            return "Enter your Atlassian site, for example acme or acme.atlassian.net."
+        case .unsupportedHost:
+            return "That isn't an atlassian.net site. Only <name>.atlassian.net sites are supported for now."
+        case .invalidName:
+            return "That isn't a valid atlassian.net site name. Use letters, digits and hyphens, for example acme or acme.atlassian.net."
+        }
+    }
+
+    /// Refuses to prompt when stdin is not a terminal: piped input (say, a
+    /// token from `pbpaste`) must never be read as an answer and echoed.
+    static func requireTerminal(for missing: String, command: String) throws(CLIError) {
+        guard Terminal.stdinIsTerminal else {
+            throw .usage("stdin is not a terminal, so adf-auth won't prompt for \(missing). Pass it as an option (and use --token-stdin if you are piping the token).", command: command)
+        }
+    }
+
+    /// Prompts on the terminal until the site parses.
     static func askForSite(command: String) throws(CLIError) -> AtlassianSite {
+        try requireTerminal(for: "the site (--site <site>)", command: command)
         while true {
             guard let line = Terminal.prompt("Atlassian site (e.g. acme or acme.atlassian.net): ") else {
                 throw .usage("no site given. Pass --site <site>.", command: command)
@@ -64,8 +86,7 @@ enum Context {
             do {
                 return try AtlassianSite(parsing: line)
             } catch {
-                guard Terminal.stdinIsTerminal else { throw .usage(error.message, command: command) }
-                Terminal.err(error.message)
+                Terminal.err(siteMessage(error))
             }
         }
     }
@@ -79,21 +100,21 @@ enum Context {
     static func email(_ input: String, command: String) throws(CLIError) -> String {
         let email = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isPlausibleEmail(email) else {
-            throw .usage("“\(Terminal.sanitize(email))” is not an email address.", command: command)
+            throw .usage("That isn't an email address.", command: command)
         }
         return email
     }
 
-    /// Prompts until the email looks valid (re-asks only on a terminal).
+    /// Prompts on the terminal until the email looks valid.
     static func askForEmail(command: String) throws(CLIError) -> String {
+        try requireTerminal(for: "the email (--email <email>)", command: command)
         while true {
             guard let line = Terminal.prompt("Atlassian account email: ") else {
                 throw .usage("no email given. Pass --email <email>.", command: command)
             }
             let email = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if isPlausibleEmail(email) { return email }
-            guard Terminal.stdinIsTerminal else { throw .usage("“\(Terminal.sanitize(email))” is not an email address.", command: command) }
-            Terminal.err("Enter the email address of your Atlassian account.")
+            Terminal.err("That isn't an email address. Enter the email of your Atlassian account.")
         }
     }
 
@@ -133,20 +154,30 @@ enum Context {
 
     // MARK: Testing override
 
-    /// `--gateway <url>`: GraphQL endpoint override for stub servers. Plain
-    /// http is allowed only for loopback, so the token never crosses a
-    /// network unencrypted. Prints a warning when used.
+    /// Hosts `--gateway` may point at.
+    static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
+
+    /// `--gateway <url>`: GraphQL endpoint override for local stub servers.
+    /// Loopback only (127.0.0.1, ::1, localhost; http or https), so the
+    /// saved token can never be sent to another machine. Warns when used.
     static func gateway(_ parsed: ParsedArguments, command: String) throws(CLIError) -> URL? {
         guard let raw = parsed.value("--gateway") else { return nil }
-        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(),
-              scheme == "https" || scheme == "http" else {
-            throw .usage("--gateway needs an http(s) URL.", command: command)
+        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              let host = url.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")),
+              url.user == nil, url.password == nil else {
+            throw .usage("--gateway needs an http(s) URL on 127.0.0.1, ::1 or localhost.", command: command)
         }
-        if scheme == "http", !["127.0.0.1", "localhost", "::1"].contains(host) {
-            throw .usage("--gateway may use plain http only for 127.0.0.1 or localhost.", command: command)
+        guard loopbackHosts.contains(host) else {
+            throw .usage("--gateway only accepts 127.0.0.1, ::1 or localhost (it is for local stub servers; the token must never go anywhere else).", command: command)
         }
         Terminal.err("warning: --gateway is for stub servers only: sending GraphQL to \(url.absoluteString) instead of the site's gateway.")
         return url
+    }
+
+    /// A fresh ephemeral session for one command: no shared cookies, cache
+    /// or credential storage.
+    static func makeSession() -> URLSession {
+        URLSession(configuration: .ephemeral)
     }
 }
 

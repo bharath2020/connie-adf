@@ -58,6 +58,12 @@ enum PushCommand {
     // MARK: Push
 
     static func perform(_ options: Options) async throws -> Int32 {
+        // The QR holds the one-time key: draw it only on a terminal, never
+        // into a file or pipe (`push | tee log` would keep a usable code).
+        let drawQR = isatty(STDOUT_FILENO) == 1
+        guard drawQR || options.printLink else {
+            throw CLIError.usage("stdout is not a terminal, so push won't draw the QR code: it holds the one-time key and would end up in a file or pipe. Run push in a terminal, or pass --print-link to print only the link (and keep that output private).", command: spec.name)
+        }
         let store = try Context.store()
         let summary = try Context.savedSite(explicit: options.site, store: store, command: spec.name)
         let site = summary.site
@@ -119,13 +125,17 @@ enum PushCommand {
         promptLine.setDeadline(deadline)
         Terminal.out("Listening: \(host):\(port) until \(Format.time(deadline))")
         Terminal.out()
-        guard let qr = QRTerminalRenderer.lines(for: link.url.absoluteString) else {
-            server.cancel()
-            throw CLIError.failure("Couldn't draw the QR code.")
+        if drawQR {
+            guard let qr = QRTerminalRenderer.lines(for: link.url.absoluteString) else {
+                server.cancel()
+                throw CLIError.failure("Couldn't draw the QR code.")
+            }
+            qr.forEach { Terminal.out($0) }
+        } else {
+            Terminal.out("(QR code not drawn: stdout is not a terminal.)")
         }
-        qr.forEach { Terminal.out($0) }
         Terminal.out()
-        Terminal.out("Scan with ADFReader → Settings → Accounts → Scan from Mac. Expires in \(options.timeout) s. The code contains a one-time key, not your token.")
+        Terminal.out("Scan with ADFReader → Settings → Atlassian Accounts → Scan from Mac. Expires in \(options.timeout) s. The code contains a one-time key, not your token.")
         if options.printLink {
             Terminal.err("warning: anyone on this network who sees this link within \(options.timeout) s can fetch the credential; for the iOS Simulator or camera-less devices only.")
             Terminal.out(link.url.absoluteString)
@@ -159,11 +169,12 @@ enum PushCommand {
     /// returns `.cancelled` and the answer, if any, is ignored.
     nonisolated static func makeConfirm(site: String, promptLine: PromptLine) -> @Sendable (String) async -> Bool {
         { peer in
-            switch await promptLine.ask("Phone \(peer) is asking for \(site) — send? [Y/n] ") {
+            // Sending needs an explicit y/yes; Enter, end of input or anything else is no.
+            switch await promptLine.ask("Phone \(peer) is asking for \(site) — send? [y/N] ") {
             case .cancelled:
                 promptLine.phoneLeft(peer)
                 return false
-            case .line(let answer) where Terminal.isYes(answer):
+            case .line(let answer) where Terminal.isYes(answer, defaultYes: false):
                 return true
             case .line, .endOfInput:
                 Terminal.err("Not sent to \(peer). Still waiting for a scan.")

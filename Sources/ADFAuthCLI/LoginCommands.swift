@@ -90,7 +90,9 @@ enum LoginCommand {
         Terminal.out("Checking the token with \(site.host) (GraphQL AdfAuthCheck)…")
         let check: TokenCheckResult
         do {
-            check = try await AtlassianGraphQLClient(credential: credential, endpoint: options.gateway).checkToken()
+            let session = Context.makeSession()
+            defer { session.finishTasksAndInvalidate() }
+            check = try await AtlassianGraphQLClient(credential: credential, endpoint: options.gateway, session: session).checkToken()
         } catch {
             throw CLIError.failure("\(error.message) Nothing was saved.")
         }

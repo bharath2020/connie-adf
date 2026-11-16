@@ -121,6 +121,10 @@ final class PromptLine: Sendable {
 
     /// Shows `text` on stderr and waits for one line. `.cancelled` when the
     /// server abandoned the question (the phone left, or time ran out).
+    ///
+    /// On a terminal, keystrokes typed before the prompt appeared are
+    /// discarded first, so only an answer typed after it counts. A piped
+    /// answer is never echoed.
     func ask(_ text: String) async -> StdinLines.Result {
         let shown = state.withLock { state -> Bool in
             guard !state.finished else { return false }
@@ -128,23 +132,23 @@ final class PromptLine: Sendable {
             return true
         }
         guard shown else { return .cancelled }
+        Terminal.discardTypeahead()
         Terminal.write(text, to: STDERR_FILENO)
         let result = await lines.next()
         let lineStillOpen = state.withLock { state -> Bool in
             defer { state.open = nil }
             return state.open != nil && !state.finished
         }
+        guard lineStillOpen else { return result }
         switch result {
-        case .line(let answer):
-            Terminal.echoIfPiped(answer)
+        case .line where Terminal.stdinIsTerminal:
+            break // The terminal already ended the line.
+        case .line:
+            Terminal.write("(answer read from stdin)\n", to: STDERR_FILENO)
         case .endOfInput:
-            if Terminal.stdinIsTerminal {
-                if lineStillOpen { Terminal.write("\n", to: STDERR_FILENO) }
-            } else {
-                Terminal.echoIfPiped(nil)
-            }
+            Terminal.write(Terminal.stdinIsTerminal ? "\n" : "(end of stdin)\n", to: STDERR_FILENO)
         case .cancelled:
-            if lineStillOpen { Terminal.write("\n", to: STDERR_FILENO) }
+            Terminal.write("\n", to: STDERR_FILENO)
         }
         return result
     }

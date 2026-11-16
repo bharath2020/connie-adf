@@ -42,7 +42,12 @@ enum Help {
                                             \(KeychainCredentialStore.defaultService)
           --gateway <url>                   (login, rotate, probe-graphql) Send GraphQL to
                                             <url> instead of https://<site>/gateway/api/graphql.
-                                            Prints a warning; plain http only for loopback.
+                                            Loopback only: 127.0.0.1, ::1 or localhost
+                                            (http or https). Prints a warning.
+
+        Prompts are only shown when stdin is a terminal. With piped stdin, pass
+        --site and --email (and --token-stdin for the token); yes/no questions
+        are answered no.
 
         Exit status: 0 success, 1 failure, 2 usage error,
                      3 the gateway rejected the scoped token (probe-graphql).
@@ -92,13 +97,16 @@ enum Help {
                              [--timeout <seconds>] [--print-link] [--dry-run]
 
         Sends a saved account to ADFReader on your phone over the local network,
-        once. Shows a QR code; in ADFReader open Settings → Accounts → Scan from Mac.
+        once. Shows a QR code; in ADFReader open Settings → Atlassian Accounts →
+        Scan from Mac.
 
         The QR code holds the Mac's address, a session ID and a one-time key. The
         Mac serves one sealed (ChaChaPoly) copy of the credential at that session's
-        path, asks you to confirm each request, then stops. Every other request gets
-        404 and a warning. If the phone gives up before you answer, nothing is sent
-        and the code stays valid. Nothing is sent after the timeout.
+        path, asks you to confirm each request ("send? [y/N]": only y or yes sends;
+        keys typed before the question appears are discarded), then stops. Every
+        other request gets 404 and a warning. If the phone gives up before you
+        answer, nothing is sent and the code stays valid. Nothing is sent after the
+        timeout. The QR code is drawn only when stdout is a terminal.
 
         Reading the saved token may show a macOS keychain prompt after a rebuild.
 
@@ -113,6 +121,8 @@ enum Help {
           --print-link          Also print the pairing link, for the iOS Simulator or a
                                 device without a camera. Anyone on the network who
                                 sees it before it expires can fetch the credential.
+                                Required when stdout is not a terminal (then only the
+                                link is printed, no QR code).
           --dry-run             Show what would happen; no keychain read, no listener
           -h, --help            Show this help
         """
@@ -140,7 +150,8 @@ enum Help {
 
         Deletes the saved account for <site> from the keychain, then opens
         Atlassian's token page so you can revoke the token there too.
-        ADFReader on your phone keeps its own copy: remove it in Settings → Accounts.
+        ADFReader on your phone keeps its own copy: remove it in Settings →
+        Atlassian Accounts.
 
         Options:
           --no-open    Don't open the token page in the browser
@@ -150,9 +161,10 @@ enum Help {
     static let probe = """
         Usage: adf-auth probe-graphql --page <id> [--page <id> ...] [--site <site>] [--raw]
 
-        Looks up pages over the site's GraphQL gateway with a saved account (the
-        same AdfProbePages query ADFReader uses for titles). Prints each page's
-        title, space and title emoji, and any GraphQL errors verbatim.
+        Looks up pages over the site's GraphQL gateway with a saved account, using
+        AdfProbePages: the query ADFReader's future title lookup will use (nothing
+        in the app sends it yet). Prints each page's title, space and title emoji,
+        and any GraphQL errors verbatim.
 
         Title emoji needs the \(AtlassianTokenScopes.contentMetadata) scope, which
         ADFReader's token doesn't ask for; that error is reported, not fatal.

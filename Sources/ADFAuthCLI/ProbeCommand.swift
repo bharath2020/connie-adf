@@ -39,7 +39,9 @@ enum ProbeCommand {
         guard let credential = try Context.keychain({ try store.load(site: site) }) else {
             throw CLIError.failure("No saved account for \(site.host). Run: adf-auth login --site \(site.host)")
         }
-        let client = AtlassianGraphQLClient(credential: credential, endpoint: gateway)
+        let session = Context.makeSession()
+        defer { session.finishTasksAndInvalidate() }
+        let client = AtlassianGraphQLClient(credential: credential, endpoint: gateway, session: session)
 
         let result: PageProbeResult
         let cloudId: String
