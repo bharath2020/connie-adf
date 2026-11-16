@@ -102,8 +102,33 @@ private struct ADFTextOwnerKindKey: EnvironmentKey {
     static let defaultValue: TextKit2OwnerKind = .root
 }
 
-private struct ADFListWidthKey: EnvironmentKey {
-    static let defaultValue: CGFloat? = nil
+/// A guaranteed lower bound on the width text below it is laid out at
+/// (`adfTextWidthBound`). It decides eligibility only, never layout: a
+/// TextKit 2 row lays out at the width it is proposed (`sizeThatFits`),
+/// but the engine is chosen earlier, in `body`, so a width-dependent rule
+/// needs a width known before layout. Those rules are list rule D
+/// (`TextKit2Scope.listTextFits`) and the under-1-pt guard on every
+/// wrapping leaf (`TextKit2Scope.textFits`).
+///
+/// Because it is only a lower bound, a bound that is too small can keep
+/// text on SwiftUI, never lay TextKit 2 text out wrongly. A bound larger
+/// than the real width breaks the contract: whoever writes one removes
+/// every inset between itself and the text below, or writes `unproven`.
+enum TextKit2WidthBound: Sendable, Hashable {
+    /// Not known yet: before the document's first width observation, or a
+    /// host outside `ADFDocumentView`. Permissive, as an unknown list
+    /// width always was: a restrictive first pass would build the first
+    /// screen's leaves twice, once on each engine.
+    case pending
+    /// The text is laid out at least this many points wide.
+    case atLeast(CGFloat)
+    /// A container above the text cannot bound its insets. Restrictive:
+    /// every wrapping leaf below stays on SwiftUI.
+    case unproven
+}
+
+private struct ADFTextWidthBoundKey: EnvironmentKey {
+    static let defaultValue: TextKit2WidthBound = .pending
 }
 
 extension EnvironmentValues {
@@ -132,15 +157,19 @@ extension EnvironmentValues {
         set { self[ADFTextOwnerKindKey.self] = newValue }
     }
 
-    /// The width a top-level list is laid out at, the document's content
-    /// column (`ADFDocumentView`'s rows); `nil` when the host does not know
-    /// it. A list row works out its own text column from it, and keeps
-    /// that text on SwiftUI when the column has no room
-    /// (`TextKit2Scope.listTextFits`). Only top-level lists draw TextKit 2
-    /// text (`TextKit2Scope.rowKeepsRenderer`), so nested ones never need it.
-    var adfListWidth: CGFloat? {
-        get { self[ADFListWidthKey.self] }
-        set { self[ADFListWidthKey.self] = newValue }
+    /// A lower bound on the width the text below is laid out at
+    /// (`TextKit2WidthBound`), for eligibility only, never for layout.
+    /// `ADFDocumentView`'s rows seed it with the row's content width, the
+    /// document column widened or capped by the block's breakout mark
+    /// (`TextKit2WidthBound.rowSeed`); `.pending` before the column is
+    /// measured and in hosts outside the document view. Any view that
+    /// passes it on into a narrower region must remove that region's
+    /// insets first, or write `.unproven`. Read by a list row, which works
+    /// out its text column from it (`TextKit2Scope.listTextFits`), and by
+    /// every wrapping TextKit 2 leaf (`TextKit2Scope.textFits`).
+    var adfTextWidthBound: TextKit2WidthBound {
+        get { self[ADFTextWidthBoundKey.self] }
+        set { self[ADFTextWidthBoundKey.self] = newValue }
     }
 }
 

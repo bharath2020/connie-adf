@@ -124,11 +124,43 @@ enum TextKit2Scope {
     /// only absorbs rounding: a column narrower than this stays on SwiftUI.
     static let minimumListTextWidth: CGFloat = 1
 
-    /// Whether list text in a column `width` wide (`nil`: unknown) may use
-    /// TextKit 2.
-    static func listTextFits(_ width: CGFloat?) -> Bool {
-        guard let width else { return true }
-        return width >= minimumListTextWidth
+    /// Rule D: whether list text may use TextKit 2 where the list's width
+    /// bound (`adfTextWidthBound`) is `bound` and the text column sits
+    /// `inset` points inside it: the row's depth padding, decision padding,
+    /// marker column and the gap after it, and for a trailing paragraph or
+    /// heading its own indentation. An unknown width (`.pending`) passes;
+    /// `.unproven` fails; a known one passes when the column is at least
+    /// `minimumListTextWidth` wide.
+    static func listTextFits(_ bound: TextKit2WidthBound, inset: CGFloat) -> Bool {
+        switch bound {
+        case .pending: return true
+        case .unproven: return false
+        case .atLeast(let width): return width - inset >= minimumListTextWidth
+        }
+    }
+
+    /// The narrowest width any wrapping leaf (paragraph, heading, list
+    /// text) is drawn by TextKit 2 at: list rule D's 1 pt
+    /// (`minimumListTextWidth`, where the evidence is), applied to every
+    /// wrapping leaf. A layout column of zero percent proposes its blocks a
+    /// zero width, and a paragraph's indentation takes up to 144 pt of what
+    /// it is given; at a zero width `Text` sets one character per line,
+    /// over 100 pt tall, where the TextKit 2 row lays nothing out.
+    static let minimumTextWidth: CGFloat = minimumListTextWidth
+
+    /// The under-1-pt guard: whether a wrapping leaf may use TextKit 2
+    /// where the width bound (`adfTextWidthBound`) is `bound` and the leaf
+    /// sits `inset` points inside the region it covers (a paragraph's
+    /// indentation). `.pending` passes, `.unproven` fails, and a known
+    /// bound passes when at least `minimumTextWidth` is left. Code is
+    /// exempt: it never wraps (`TextKit2LayoutPolicy.natural`). A view-time
+    /// rule (`TextKit2Leaf`); the coverage walk does not evaluate it.
+    static func textFits(_ bound: TextKit2WidthBound, inset: CGFloat) -> Bool {
+        switch bound {
+        case .pending: return true
+        case .unproven: return false
+        case .atLeast(let width): return width - inset >= minimumTextWidth
+        }
     }
 
     /// Where a text leaf sits in the scope.

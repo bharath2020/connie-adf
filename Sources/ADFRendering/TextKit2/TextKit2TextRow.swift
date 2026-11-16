@@ -5,8 +5,10 @@ import ADFPreparation
 
 /// The TextKit 2 arm of a text leaf (`TextEngineLeaf`) for eligible text:
 /// the TextKit 2 row, unless the environment carries text styling the row
-/// does not reproduce, or the active search has highlights for this owner
-/// (the row paints no search highlight or arrival flash) — then `fallback`
+/// does not reproduce, the active search has highlights for this owner
+/// (the row paints no search highlight or arrival flash), or wrapping text
+/// has under 1 pt of width (`TextKit2Scope.textFits`, from the width bound
+/// less `widthInset`; code never wraps and is exempt) — then `fallback`
 /// (the SwiftUI `Text` path). Only constructed when the switch is ON, so
 /// the SwiftUI arm reads none of these values.
 /// Under `View.adfRebuildControl` (diagnostics) the row's place holds
@@ -19,6 +21,9 @@ struct TextKit2Leaf<Fallback: View>: View {
     let style: TextBlockStyle
     let ownerID: String?
     let ownerKind: TextKit2OwnerKind
+    /// How much narrower the leaf is laid out than the region the width
+    /// bound covers (`TextEngineLeaf.widthInset`).
+    let widthInset: CGFloat
     let fallback: Fallback
 
     @Environment(\.lineSpacing) private var lineSpacing
@@ -28,20 +33,24 @@ struct TextKit2Leaf<Fallback: View>: View {
     @Environment(\.redactionReasons) private var redactionReasons
     @Environment(\.adfRebuildControl) private var rebuildControl
     @Environment(\.adfDocumentSearch) private var search
+    @Environment(\.adfTextWidthBound) private var widthBound
 
     init(
         text: AttributedString, style: TextBlockStyle, ownerID: String?, ownerKind: TextKit2OwnerKind = .root,
-        @ViewBuilder fallback: () -> Fallback
+        widthInset: CGFloat = 0, @ViewBuilder fallback: () -> Fallback
     ) {
         self.text = text
         self.style = style
         self.ownerID = ownerID
         self.ownerKind = ownerKind
+        self.widthInset = widthInset
         self.fallback = fallback()
     }
 
     var body: some View {
-        if !hasSearchHighlights, Self.supportsEnvironment(
+        // Before the rebuild-control branch, so the matched SwiftUI control
+        // swaps exactly the leaves the TextKit 2 arm draws.
+        if !hasSearchHighlights, fitsWidth, Self.supportsEnvironment(
             lineSpacing: lineSpacing, textCase: textCase, lineLimit: lineLimit,
             minimumScaleFactor: minimumScaleFactor, redactionReasons: redactionReasons
         ) {
@@ -55,6 +64,13 @@ struct TextKit2Leaf<Fallback: View>: View {
         } else {
             fallback
         }
+    }
+
+    /// The under-1-pt guard (`TextKit2Scope.textFits`) for wrapping text;
+    /// code (`TextKit2LayoutPolicy.natural`) ignores the proposed width and
+    /// is decided by its own gate (`TextKit2CodeGate`).
+    private var fitsWidth: Bool {
+        ownerKind.layoutPolicy != .wrapping || TextKit2Scope.textFits(widthBound, inset: widthInset)
     }
 
     /// The same gate as `SegmentedTextView.displayedSegments`: with no

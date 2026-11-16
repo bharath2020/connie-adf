@@ -9,10 +9,10 @@ import ADFPreparation
 /// eligible where it sits (`TextKit2Eligibility`, by `adfTextOwnerKind`:
 /// list text only from iOS 26, code by the code rules) goes to
 /// `TextKit2Leaf`, which makes the one engine decision (search highlights,
-/// inherited styling, the rebuild control); code passes the code gate first
-/// (`TextKit2CodeGate`: layout direction, the canvas bound and, before
-/// iOS 26, interior empty lines above AX3). Anything
-/// else draws the caller's SwiftUI `fallback`. These are plain `if`/`else`
+/// inherited styling, the under-1-pt width guard, the rebuild control);
+/// code passes the code gate first (`TextKit2CodeGate`: layout direction,
+/// the canvas bound and, before iOS 26, interior empty lines above AX3).
+/// Anything else draws the caller's SwiftUI `fallback`. These are plain `if`/`else`
 /// branches, never `AnyView` or `#available` (§18's per-row erasure
 /// lesson). Without UIKit the fallback always runs.
 struct TextEngineLeaf<Fallback: View>: View {
@@ -29,17 +29,27 @@ struct TextEngineLeaf<Fallback: View>: View {
     /// `listDirectionKeepsRenderer`) or has no room for it
     /// (`TextKit2Scope.listTextFits`).
     let allowsTextKit2: Bool
+    /// How much narrower the leaf is laid out than the region its width
+    /// bound (`adfTextWidthBound`) covers: a paragraph's indentation
+    /// (`RichTextBlockView`). The under-1-pt guard (`TextKit2Scope.textFits`)
+    /// subtracts it. Always 0 for a leaf handed `text` (code, which the
+    /// guard exempts).
+    let widthInset: CGFloat
     let fallback: Fallback
 
     @Environment(\.adfTextRenderer) private var renderer
     @Environment(\.adfTextOwnerKind) private var ownerKind
 
-    init(segments: [InlineSegment], style: TextBlockStyle, ownerID: String?, allowsTextKit2: Bool = true, @ViewBuilder fallback: () -> Fallback) {
+    init(
+        segments: [InlineSegment], style: TextBlockStyle, ownerID: String?, allowsTextKit2: Bool = true,
+        widthInset: CGFloat = 0, @ViewBuilder fallback: () -> Fallback
+    ) {
         self.segments = segments
         self.text = nil
         self.style = style
         self.ownerID = ownerID
         self.allowsTextKit2 = allowsTextKit2
+        self.widthInset = widthInset
         self.fallback = fallback()
     }
 
@@ -54,6 +64,7 @@ struct TextEngineLeaf<Fallback: View>: View {
         self.style = style
         self.ownerID = ownerID
         self.allowsTextKit2 = allowsTextKit2
+        self.widthInset = 0
         self.fallback = fallback()
     }
 
@@ -63,7 +74,7 @@ struct TextEngineLeaf<Fallback: View>: View {
             if ownerKind == .code {
                 TextKit2CodeGate(text: text, style: style, ownerID: ownerID) { fallback }
             } else {
-                TextKit2Leaf(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind) { fallback }
+                TextKit2Leaf(text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, widthInset: widthInset) { fallback }
             }
         } else {
             fallback

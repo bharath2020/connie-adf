@@ -320,11 +320,13 @@ private struct DocumentRow: View {
             if isInRenderRegion || heights.isEmpty {
                 BlockView(block: block)
                     .environment(\.adfTextRenderer, rowTextRenderer)
-                    // The width a top-level list is laid out at, so its
-                    // rows can tell when their text column has no room
-                    // (`TextKit2Scope.listTextFits`); unknown (0) until
-                    // the stack's first width observation.
-                    .environment(\.adfListWidth, containerWidth > 0 ? containerWidth : nil)
+                    // A lower bound on the width the block is laid out at,
+                    // for width-dependent eligibility only (list rule D,
+                    // the under-1-pt guard): the column as the breakout
+                    // mark below widens or caps it, `.pending` until the
+                    // stack's first width observation
+                    // (`TextKit2WidthBound.rowSeed`).
+                    .environment(\.adfTextWidthBound, TextKit2WidthBound.rowSeed(container: containerWidth, breakout: block.breakout, margin: margin))
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: margin)
                     // Full width so the size measured below reports the
@@ -464,6 +466,36 @@ extension View {
             frame(maxWidth: breakout?.width.map { CGFloat($0) })
                 .padding(.horizontal, -margin)
         }
+    }
+}
+
+extension TextKit2WidthBound {
+    /// The width `blockBreakout` lays a top-level block out at in a
+    /// document column `container` wide: the column with no mark; `wide`
+    /// widens it by half the margin on each side (`container + margin`),
+    /// `full-width` by all of it (`container + 2 × margin`), each capped
+    /// by the mark's custom width when it has one, which can be narrower
+    /// than the column. Clamped at 0; a custom width that is not a number
+    /// counts as 0. Keep in step with `blockBreakout`.
+    static func rowContentWidth(container: CGFloat, breakout: BlockBreakout?, margin: CGFloat) -> CGFloat {
+        let widened: CGFloat
+        switch breakout?.mode {
+        case nil: return max(container, 0)
+        case .wide: widened = container + margin
+        case .fullWidth: widened = container + 2 * margin
+        }
+        guard let custom = breakout?.width else { return max(widened, 0) }
+        let cap = CGFloat(custom)
+        guard !cap.isNaN else { return 0 }
+        return max(min(widened, cap), 0)
+    }
+
+    /// The width bound `DocumentRow` gives a top-level block: `.pending`
+    /// until the document column has been measured, then at least the
+    /// row's content width (`rowContentWidth`).
+    static func rowSeed(container: CGFloat, breakout: BlockBreakout?, margin: CGFloat) -> TextKit2WidthBound {
+        guard container > 0 else { return .pending }
+        return .atLeast(rowContentWidth(container: container, breakout: breakout, margin: margin))
     }
 }
 
