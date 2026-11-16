@@ -8,10 +8,13 @@ import XCTest
 /// consistent snapshot in well under a second.
 /// 1. **Plain first, then the title.** With `-smartLinkDelay 8` and failure
 ///    rate 0 each of the five intro links (blocks 0.2–0.6) is first exposed
-///    as its URL, and keeps showing it while its lookup runs (four at once;
-///    the fifth waits for a slot, the cap of 4), then shows its title.
-///    Separately, the design §6 spoken text is checked: "<URL>, loading
-///    title" while loading, then "<kind>, <title>", e.g. "Roadmap: Page, Q3
+///    as its prepared text — the URL; for the inline card (0.6), the URL's
+///    host (design call #30) — and keeps showing it while its lookup runs
+///    (four at once; the fifth waits for a slot, the cap of 4), then shows
+///    its title. Separately, the design §6 spoken text is checked on both
+///    renderers (a TextKit 2 row's label; on SwiftUI the leaf's `Text`,
+///    which call #35 labels as a whole): "<prepared text>, loading title"
+///    while loading, then "<kind>, <title>", e.g. "Roadmap: Page, Q3
 ///    Roadmap" (a failed check is reported and the rest of the test still
 ///    runs). Under TextKit 2 each link stays a `tk2-row:` element.
 /// 2. **Nothing else re-renders.** Probe A with four lookups in flight, B
@@ -27,13 +30,21 @@ import XCTest
 ///    every lookup failing, links go plain → loading → plain (colour only,
 ///    no row changes size), and leaf bodies (and TextKit 2 conversions)
 ///    grow by exactly the refreshes.
-/// 3. **Lazy.** At rest at the top the resolver was called exactly 5 times
-///    (the on-screen URLs) of the fixture's 86 unique URLs, and never for
-///    the last row (built by the lazy stack, never shown). Scrolling down
-///    a few screens adds calls; a fling past rows with lookups in flight
-///    cancels them, and the counters stay consistent
+/// 3. **Lazy.** Each text leaf with smart links reports its own visibility
+///    (design call #28). At rest at the top the resolver was called exactly
+///    5 times of the fixture's 86 unique URLs: the five intro leaves, the
+///    only smart-link leaves on the first screen (blocks 0.7–0.17 below
+///    them have no links), each resolved and titled, so no other URL was
+///    asked — not even the last row's (built by the lazy stack, never
+///    shown). Scrolling down a few screens adds calls; a fling past leaves
+///    with lookups in flight cancels them (a cancelled call is counted when
+///    its task returns, call #33), and the counters stay consistent
 ///    (`resolverCalls == resolved + failed + cancellations + inFlight`,
 ///    and the mock resolver saw the same calls and cancellations).
+///
+/// `testNoResolverKeepsLinksAndCardChips…`: with `-smartLinks off` (no
+/// resolver) nothing is looked up, bare links keep their URLs and the
+/// inline card is the host-only chip it is on main (call #30).
 ///
 /// `testFlingThrashSoak…` (host agent: `Scripts/lifecycle-gate.sh --only
 /// SmartLinkUITests/<method>`): a fling with the `top` CPU settle check,
@@ -46,21 +57,22 @@ import XCTest
 @MainActor
 final class SmartLinkUITests: XCTestCase {
     /// One of the five smart links on the first screen: its paragraph's lead
-    /// text, the URL it shows as prepared, and its title and kind once
-    /// resolved.
+    /// text, the text it shows as prepared (a bare link's URL; an inline
+    /// card's host, design call #30), and its title and kind once resolved.
     struct IntroLink {
         let lead: String
-        let url: String
+        let prepared: String
         let kind: String
         let title: String
         /// Design §6 spoken text per stage.
-        var plain: String { lead + url }
+        var plain: String { lead + prepared }
         var resolving: String { plain + ", loading title" }
         var resolved: String { lead + "\(kind), \(title)" }
 
         /// What the label's characters show (icon character dropped,
-        /// no-break spaces as spaces): the URL first (plain or loading)…
-        func showsURL(_ label: String) -> Bool { SmartLinkUITests.shown(label).hasPrefix(plain) }
+        /// no-break spaces as spaces): the prepared text first (plain or
+        /// loading)…
+        func showsPrepared(_ label: String) -> Bool { SmartLinkUITests.shown(label).hasPrefix(plain) }
         /// …then the title, as drawn (SwiftUI's `Text` characters) or as
         /// spoken (§6).
         func showsTitle(_ label: String) -> Bool {
@@ -70,22 +82,28 @@ final class SmartLinkUITests: XCTestCase {
     }
 
     /// Blocks 0.2–0.6 of `Fixtures/smart-links.json`; the titles are the mock
-    /// resolver's (`MockSmartLinkResolver.metadata(for:)`).
+    /// resolver's (`MockSmartLinkResolver.metadata(for:)`). The last is an
+    /// `inlineCard` (…/pages/2972601/Design+System+Tokens): with a resolver
+    /// installed it is a smart-link text run showing the URL's host until it
+    /// resolves; without one it is the host-only chip, as on main.
     static let intro = [
-        IntroLink(lead: "Roadmap: ", url: "https://acme.atlassian.net/wiki/spaces/ENG/pages/7118762/Q3+Roadmap",
+        IntroLink(lead: "Roadmap: ", prepared: "https://acme.atlassian.net/wiki/spaces/ENG/pages/7118762/Q3+Roadmap",
                   kind: "Page", title: "Q3 Roadmap"),
         IntroLink(lead: "Onboarding: ",
-                  url: "https://acme.atlassian.net/wiki/spaces/MOBILE/pages/1945560/Engineering+Onboarding",
+                  prepared: "https://acme.atlassian.net/wiki/spaces/MOBILE/pages/1945560/Engineering+Onboarding",
                   kind: "Page", title: "Engineering Onboarding"),
         IntroLink(lead: "Release blog: ",
-                  url: "https://acme.atlassian.net/wiki/spaces/SEC/blog/2026/09/17/2941752/Release+Notes+2.4",
+                  prepared: "https://acme.atlassian.net/wiki/spaces/SEC/blog/2026/09/17/2941752/Release+Notes+2.4",
                   kind: "Blog post", title: "Release Notes 2.4"),
-        IntroLink(lead: "Tracking issue: ", url: "https://acme.atlassian.net/browse/OPS-205",
+        IntroLink(lead: "Tracking issue: ", prepared: "https://acme.atlassian.net/browse/OPS-205",
                   kind: "Issue", title: "OPS-205 Release 2.5 sign-off"),
-        IntroLink(lead: "As an inline card: ",
-                  url: "https://acme.atlassian.net/wiki/spaces/DESIGN/pages/2972601/Design+System+Tokens",
-                  kind: "Page", title: "Design System Tokens"),
+        IntroLink(lead: cardLead, prepared: cardHost, kind: "Page", title: "Design System Tokens"),
     ]
+    /// The intro inline card's host: its text until resolved (and its chip's
+    /// text without a resolver).
+    static let cardHost = "acme.atlassian.net"
+    /// The intro inline card's paragraph lead.
+    static let cardLead = "As an inline card: "
 
     /// A label as text: the icon's object-replacement character dropped,
     /// no-break spaces as spaces, runs of spaces collapsed.
@@ -148,18 +166,20 @@ final class SmartLinkUITests: XCTestCase {
         }
         let firstLabel = first.label
         note("\(arm) first label of the Roadmap link (\(elapsed(since: launched))): \(firstLabel)")
-        XCTAssertTrue(Self.intro[0].showsURL(firstLabel), "the Roadmap link was not first shown as its URL: \(firstLabel)")
+        XCTAssertTrue(Self.intro[0].showsPrepared(firstLabel),
+                      "the Roadmap link was not first shown as its URL: \(firstLabel)")
 
         // 2a. Probe A: four lookups in flight, the fifth queued (cap of 4).
         let a = waitForProbe(reader, "A (4 lookups in flight)", timeout: 6) { $0["calls"] == 4 && $0["inFlight"] == 4 }
         XCTAssertTrue(a.met, "A: expected 4 calls in flight: \(a.stats)")
         XCTAssertEqual(a.stats["resolved"], 0, "A: \(a.stats)")
         XCTAssertEqual(a.stats["refreshes"], 4, "A: four leaves went plain → loading: \(a.stats)")
-        // Still the URL while loading; design §6 speaks "<URL>, loading title".
+        // Still the URL (the card: its host) while loading; design §6 speaks
+        // "<URL>, loading title".
         let loading = currentLabels(reader, textKit2: textKit2)
         note("\(arm) loading stage (\(elapsed(since: launched))): \(loading)")
-        XCTAssertTrue(zip(loading, Self.intro).allSatisfy { $0.1.showsURL($0.0) },
-                      "a link stopped showing its URL before its lookup ended: \(loading)")
+        XCTAssertTrue(zip(loading, Self.intro).allSatisfy { $0.1.showsPrepared($0.0) },
+                      "a link stopped showing its URL (or the card its host) before its lookup ended: \(loading)")
         XCTAssertTrue(Self.count(loading, \.resolving) == 4 && Self.count(loading, \.plain) == 1,
                       "§6 spoken text while loading: expected 4 links \"<URL>, loading title\" and 1 plain (queued): "
                       + "\(loading)")
@@ -263,7 +283,12 @@ final class SmartLinkUITests: XCTestCase {
         for _ in 0 ..< 3 {
             scroll.swipeUp(velocity: .fast)
         }
-        let flung = probe(reader, "F (right after the fling)")
+        // A cancelled call is counted when its task returns (design call
+        // #33), not when it is cancelled: give the mock's `Task.sleep` a
+        // moment to throw.
+        let flung = waitForProbe(reader, "F (after the fling)", timeout: 5) {
+            $0["cancelled"] > e["cancelled"]
+        }.stats
         scrollToTop(reader)
         attach(app, "\(arm)-05-back-at-top")
         let returned = currentLabels(reader, textKit2: textKit2)
@@ -273,7 +298,7 @@ final class SmartLinkUITests: XCTestCase {
             $0["inFlight"] == 0 && $0["mockInFlight"] == 0
         }.stats
         note("\(arm) laziness: calls at rest \(b.stats["calls"]) of \(Self.uniqueURLs) URLs; after scrolling "
-            + "\(e["calls"]) (cancelled \(e["cancelled"])); right after the fling \(flung["calls"]) (cancelled "
+            + "\(e["calls"]) (cancelled \(e["cancelled"])); after the fling \(flung["calls"]) (cancelled "
             + "\(flung["cancelled"])); back at the top \(d["calls"]) (cancelled \(d["cancelled"]))")
         XCTAssertGreaterThan(flung["cancelled"], e["cancelled"], "the fling cancelled nothing: \(e) → \(flung)")
         XCTAssertEqual(d["inFlight"], 0, "D: \(d)")
@@ -296,21 +321,24 @@ final class SmartLinkUITests: XCTestCase {
     /// so each link goes plain → loading → plain again — a colour change
     /// only, no row changes size and the lazy stack builds nothing. Across
     /// the window every text-leaf body evaluation (and under TextKit 2
-    /// every conversion) is a smart-link refresh, with equality.
+    /// every conversion) is a smart-link refresh, with equality. Lookups take
+    /// `functionalDelay` (8 s), as in the title test: with 4 s, a slow
+    /// launch on a busy host let all five fail before probe A's first read.
     private func failedLookupsRedrawOnlyTheirLeaves(textKit2: Bool) throws {
         continueAfterFailure = true
         let arm = textKit2 ? "textkit2" : "swiftui"
-        let reader = launch(textKit2: textKit2, delay: 4, failureRate: 1)
+        let reader = launch(textKit2: textKit2, delay: Self.functionalDelay, failureRate: 1)
         XCTAssertTrue(link(Self.intro[0], reader, textKit2: textKit2).waitForExistence(timeout: 20),
                       "the Roadmap intro link never appeared")
         let a = waitForProbe(reader, "A (4 lookups in flight)", timeout: 6) { $0["calls"] == 4 && $0["inFlight"] == 4 }
         XCTAssertTrue(a.met, "A: expected 4 calls in flight: \(a.stats)")
-        let b = waitForProbe(reader, "B (all failed, settled)", timeout: 20, settle: 1.5) {
+        let b = waitForProbe(reader, "B (all failed, settled)", timeout: 2 * Self.functionalDelay + 10, settle: 1.5) {
             $0["failed"] == Self.intro.count && $0["inFlight"] == 0
         }
         XCTAssertTrue(b.met, "B: expected 5 failed lookups: \(b.stats)")
         let labels = currentLabels(reader, textKit2: textKit2)
-        XCTAssertTrue(zip(labels, Self.intro).allSatisfy { $0.1.showsURL($0.0) }, "a failed link left its URL: \(labels)")
+        XCTAssertTrue(zip(labels, Self.intro).allSatisfy { $0.1.showsPrepared($0.0) },
+                      "a failed link left its URL (or the card its host): \(labels)")
         XCTAssertEqual(labels, Self.intro.map(\.plain), "§6: a failed link speaks as plain")
         attach(reader.app, "\(arm)-failed-plain")
 
@@ -331,6 +359,72 @@ final class SmartLinkUITests: XCTestCase {
         }
         XCTAssertEqual(b.stats["calls"], Self.intro.count, "B: \(b.stats)")
         XCTAssertEqual(b.stats["mockCalls"], Self.intro.count, "B: \(b.stats)")
+    }
+
+    // MARK: - No resolver: links as authored, cards as chips
+
+    func testNoResolverKeepsLinksAndCardChipsSwiftUI() throws {
+        try noResolverKeepsLinksAndCardChips(textKit2: false)
+    }
+
+    func testNoResolverKeepsLinksAndCardChipsTextKit2() throws {
+        try noResolverKeepsLinksAndCardChips(textKit2: true)
+    }
+
+    /// `-smartLinks off` passes no resolver (design §3, call #30): the
+    /// library does no lookup work, the four bare intro links keep their
+    /// URLs, and the inline card is the host-only chip it is on main — an
+    /// atom, so its paragraph is word-chunked around it (no element reads
+    /// "As an inline card: …") and, under TextKit 2, drawn by SwiftUI (no
+    /// `tk2-row:` for it, while the bare links' paragraphs are TextKit 2
+    /// rows). With a resolver, `testResolvesOnlyWhatIsOnScreen…` shows the
+    /// same paragraph as one text run (a TextKit 2 row under TextKit 2).
+    private func noResolverKeepsLinksAndCardChips(textKit2: Bool) throws {
+        continueAfterFailure = true
+        let arm = textKit2 ? "textkit2" : "swiftui"
+        var arguments = ["-fixture", "smart-links", "-rendererReset", "-rendererStats", "-smartLinkProbe",
+                         "-smartLinks", "off"]
+        if textKit2 { arguments.append("-textkit2") }
+        let reader = ReaderDriver(launching: arguments)
+        reader.waitForRenderer(textKit2 ? "TextKit 2" : "SwiftUI")
+        XCTAssertTrue(link(Self.intro[0], reader, textKit2: textKit2).waitForExistence(timeout: 20),
+                      "the Roadmap intro link never appeared")
+        // Longer than a dwell (150 ms) plus a default lookup (0.8 s): any
+        // lookup would have started and ended by now.
+        reader.pause(3)
+        let stats = probe(reader, "no resolver (3 s after the intro appeared)")
+        XCTAssertEqual(stats["calls"], 0, "the library looked a link up with no resolver: \(stats)")
+        XCTAssertEqual(stats["inFlight"], 0, stats.description)
+        XCTAssertEqual(stats["refreshes"], 0, "a smart-link leaf redrew with no resolver: \(stats)")
+        XCTAssertEqual(stats["mockCalls"], -1, "a mock resolver exists under -smartLinks off: \(stats)")
+
+        let bare = Array(Self.intro.dropLast())
+        let labels = bare.map { item in
+            let element = link(item, reader, textKit2: textKit2)
+            return element.exists ? element.label : "missing"
+        }
+        XCTAssertEqual(labels, bare.map(\.plain), "a bare link changed with no resolver")
+
+        // The chip: SwiftUI's `Link` around the chip's icon and text, which
+        // XCUITest exposes as a button labelled exactly the host, holding
+        // the chip's own text. (With a resolver the card's host is a link
+        // run inside the paragraph's text: a `link` element, no children.)
+        let chip = reader.app.buttons.matching(NSPredicate(format: "label == %@", Self.cardHost)).firstMatch
+        let chipText = chip.staticTexts[Self.cardHost]
+        let hostLinks = reader.app.links.matching(NSPredicate(format: "label == %@", Self.cardHost))
+        note("\(arm) no resolver: chip button \(chip.exists), chip text \(chipText.exists), "
+            + "link runs showing the host \(hostLinks.count); bare links \(labels)")
+        XCTAssertTrue(chip.exists && chipText.exists, "no chip (a button holding the text \(Self.cardHost))")
+        XCTAssertEqual(hostLinks.count, 0, "the card's host is a link run in text, not a chip")
+        XCTAssertFalse(reader.element(labelPrefix: Self.cardLead).exists,
+                       "the card's paragraph is one text run: the card was prepared as a smart link, not a chip")
+        if textKit2 {
+            XCTAssertFalse(reader.textKit2Row(labelPrefix: Self.cardLead).exists,
+                           "the card's paragraph is a TextKit 2 row: its chip should keep it on SwiftUI")
+        } else {
+            XCTAssertFalse(reader.anyTextKit2Row.exists, "a TextKit 2 row exists on the SwiftUI renderer")
+        }
+        attach(reader.app, "\(arm)-no-resolver-chip")
     }
 
     /// Launches smart-links with the probe on.
@@ -552,9 +646,11 @@ final class SmartLinkUITests: XCTestCase {
     }
 
     /// Paced for `simctl io recordVideo`: the intro links resolve at the top,
-    /// then eight slow drags (no fling momentum), each held 2.6 s, so every
-    /// link that scrolls in is seen plain, dimmed while its 0.8 s lookup runs
-    /// (4 at a time), then as an icon and its title.
+    /// then six slow 400 pt drags (no fling momentum, down to about S04),
+    /// each held 2 s, so every link that scrolls in is seen plain (an inline
+    /// card as its host), dimmed while its 0.8 s lookup runs (4 at a time),
+    /// then as an icon and its title. A slow drag takes 2–3 s to synthesise
+    /// on a busy host, so the tour runs about 40 s.
     private func videoTour(textKit2: Bool) throws {
         var arguments = ["-fixture", "smart-links", "-rendererReset", "-smartLinkDelay", "0.8",
                          "-smartLinkFailureRate", "0"]
@@ -565,11 +661,11 @@ final class SmartLinkUITests: XCTestCase {
             zip(labels, Self.intro).allSatisfy { $0.1.showsTitle($0.0) }
         }
         XCTAssertTrue(resolved.met, "the intro links did not resolve: \(resolved.labels)")
-        reader.pause(2.0)
-        for step in 0 ..< 8 {
-            reader.drag(by: 330)
-            reader.pause(2.6)
-            if step % 4 == 0 { attach(reader.app, "tour-\(textKit2 ? "textkit2" : "swiftui")-\(step)") }
+        reader.pause(1.5)
+        for step in 0 ..< 6 {
+            reader.drag(by: 400)
+            reader.pause(2.0)
+            if step % 3 == 0 { attach(reader.app, "tour-\(textKit2 ? "textkit2" : "swiftui")-\(step)") }
         }
         print("SMARTLINK_UI tour done")
     }
