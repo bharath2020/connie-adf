@@ -13,7 +13,8 @@ import SwiftUI
 /// (`InteractionProbe`), and last the open document's smart-link
 /// counters (`ADFDocumentModel.smartLinkStats`), the mock resolver's
 /// own counts (`MockSmartLinkResolver`) and the text-leaf body and TextKit 2
-/// conversion and layout totals. The checksum lets a screen recording be
+/// conversion and layout totals, and last of all the smart-link resolution
+/// mode with its scroll and nearby counters. The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -22,6 +23,8 @@ struct BuildInfoView: View {
     /// the polling task (never in `body`), so the sheet observes nothing on
     /// it. `nil` hides the per-document smart-link section.
     var model: ADFDocumentModel? = nil
+    /// The reader's smart-link resolution mode (the menu's choice).
+    var smartLinkResolution: ADFSmartLinkResolution = .whileScrolling
 
     @Environment(\.dismiss) private var dismiss
     @State private var executableSHA256: String?
@@ -137,8 +140,13 @@ struct BuildInfoView: View {
                     smartLinkStatsSection
                 }
                 smartLinksSection
-                // Last of all, below the smart-link counters it is read with.
+                // Below the smart-link counters it is read with.
                 leafDiagnosticsSection
+                // Last of all, so it moves none of the rows above (UI tests
+                // read them top to bottom).
+                if model != nil {
+                    smartLinkResolutionSection
+                }
             }
             .navigationTitle("About This Build")
             .navigationBarTitleDisplayMode(.inline)
@@ -230,6 +238,47 @@ struct BuildInfoView: View {
             countRow("Failed", smartLinkStats?.failed, id: "smartlink-stat-failed")
             countRow("Leaf Refreshes", smartLinkStats?.leafRefreshes, id: "smartlink-stat-leafRefreshes")
             countRow("Owners Refreshed", smartLinkRefreshedOwners, id: "smartlink-stat-refreshedOwners")
+        }
+    }
+
+    /// The resolution mode the reader passes (`ADFSmartLinkResolution`) and
+    /// the counters it drives (`ADFSmartLinkStats`, design §8): scroll ends,
+    /// calls started while scrolling (zero unless While Scrolling), visible
+    /// lookups held back by a scroll, links on screen still waiting, and the
+    /// nearby batches (After Scrolling + Nearby). Each value is its own
+    /// element: `smartlink-resolution` (the mode's raw value), then
+    /// `smartlink-mode-<field>`.
+    private var smartLinkResolutionSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                Text("Mode")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(verbatim: smartLinkResolution.displayName)
+                    .accessibilityIdentifier("smartlink-resolution-name")
+                Text(verbatim: smartLinkStats?.resolution.rawValue ?? "…")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("smartlink-resolution")
+            }
+            countRow("Scroll Ends", smartLinkStats?.scrollEnds, id: "smartlink-mode-scrollEnds")
+            countRow("Calls While Scrolling", smartLinkStats?.scrollingCalls, id: "smartlink-mode-scrollingCalls")
+            countRow("Held by Scrolling", smartLinkStats?.deferred, id: "smartlink-mode-deferred")
+            countRow("Waiting On Screen", smartLinkStats?.waiting, id: "smartlink-mode-waiting")
+            countRow("Nearby Batches", smartLinkStats?.prefetchBatches, id: "smartlink-mode-prefetchBatches")
+            countRow("Nearby Calls", smartLinkStats?.prefetchCalls, id: "smartlink-mode-prefetchCalls")
+            countRow("Nearby In Flight", smartLinkStats?.prefetchInFlight, id: "smartlink-mode-prefetchInFlight")
+            countRow("Nearby Cancelled", smartLinkStats?.prefetchCancellations, id: "smartlink-mode-prefetchCancellations")
+            countRow("Nearby Hits", smartLinkStats?.prefetchHits, id: "smartlink-mode-prefetchHits")
+            countRow("Largest Batch", smartLinkStats?.largestPrefetchBatch, id: "smartlink-mode-largestPrefetchBatch")
+            countRow("Farthest (Positions)", smartLinkStats?.farthestPrefetch, id: "smartlink-mode-farthestPrefetch")
+        } header: {
+            Text("Smart Link Resolution")
+        } footer: {
+            if let limits = model?.smartLinkNearbyLimits {
+                Text(verbatim: "Nearby: batches of ≤ \(limits.batch), within \(limits.distance) positions "
+                    + "(a top-level row, or a row of a top-level list), only at rest.")
+            }
         }
     }
 

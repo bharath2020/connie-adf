@@ -121,9 +121,20 @@ import UIKit
 ///     URLs whose lookup throws (`.unauthorized` or `.notFound`, about half
 ///     each), picked by a stable hash of the URL — the same links fail on
 ///     every launch and in every document.
+///   - `-smartLinkResolution <whileScrolling|afterScrolling|afterScrollingWithNearby>`:
+///     when links are looked up (`ADFSmartLinkResolution`, the renderer
+///     menu's "Smart Link Resolution" section): as they come on screen,
+///     also mid-scroll (the default); only once scrolling has stopped; or
+///     once it has stopped, plus small batches of the off-screen links
+///     nearest the screen. It seeds the persisted menu choice the way
+///     `-textkit2` seeds the renderer: written with an automation mark and
+///     removed on the next launch without the flag, so a manual launch
+///     after a test run starts on While Scrolling. `-rendererReset`
+///     resets it too. An unknown name is ignored.
 ///   - `-smartLinkProbe` (UI tests only) shows `SmartLinkProbe`: one line,
 ///     identifier `smartlink-probe`, with the document's smart-link
-///     counters, the mock's, the text-leaf body evaluations and the
+///     counters (including the resolution mode's scroll and nearby
+///     counters), the mock's, the text-leaf body evaluations and the
 ///     TextKit 2 conversions, layouts and live rows, polled every 250 ms —
 ///     one consistent read for `SmartLinkUITests`.
 ///
@@ -158,6 +169,9 @@ struct LaunchOptions: Sendable {
     var smartLinkFailureRate = 0.1
     /// `-smartLinkProbe`: the reader shows `SmartLinkProbe` (UI tests only).
     var smartLinkProbe = false
+    /// `-smartLinkResolution <name>`: an `ADFSmartLinkResolution` raw value
+    /// (`SmartLinkResolutionPreference` validates and applies it).
+    var smartLinkResolution: String?
 
     static let none = LaunchOptions(arguments: [])
 
@@ -213,6 +227,9 @@ struct LaunchOptions: Sendable {
                 }
             case "-smartLinkProbe":
                 smartLinkProbe = true
+            case "-smartLinkResolution" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                smartLinkResolution = arguments[index]
             case "-smartLinkFailureRate" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 if let rate = Double(arguments[index]), rate.isFinite {
@@ -236,6 +253,7 @@ struct ADFReaderApp: App {
         // Before the scene builds: `ReaderView` reads the renderer key through
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)
+        SmartLinkResolutionPreference.apply(options)
         RebuildControl.picksLeft = options.rebuildControlPicks ?? 0
         RebuildControl.configured = options.rebuildControlPicks != nil
         InteractionProbe.enabled = options.interactionProbe

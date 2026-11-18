@@ -7,13 +7,19 @@ import SwiftUI
 ///     calls=<n> cancelled=<n> inFlight=<n> resolved=<n> failed=<n>
 ///     refreshes=<n> owners=<n> mockCalls=<n> mockCancelled=<n>
 ///     mockInFlight=<n> leaves=<n> segmented=<n> engine=<n>
-///     conversions=<n> layouts=<n> live=<n>
+///     conversions=<n> layouts=<n> live=<n> res=<mode> scrolling=<0|1>
+///     scrollEnds=<n> scrollCalls=<n> deferred=<n> waiting=<n>
+///     pfBatches=<n> pfCalls=<n> pfInFlight=<n> pfCancelled=<n> pfHits=<n>
+///     pfMaxBatch=<n> pfPeak=<n> pfFar=<n> B=<n> D=<n>
 ///
 /// under the accessibility identifier `smartlink-probe`: the document's
 /// smart-link counters (`ADFDocumentModel.smartLinkStats`, refreshed owners),
 /// the mock resolver's, the text-leaf body evaluations since launch
 /// (`ADFTextRenderer.textLeafStats`: total, SwiftUI `Text`, engine leaf) and
-/// the TextKit 2 conversions, layouts and live rows. One element read in one
+/// the TextKit 2 conversions, layouts and live rows, then the resolution
+/// mode (`res=`, the `ADFSmartLinkResolution` raw value) and its scroll and
+/// nearby counters, with the nearby limits (`B=` keys per batch, `D=`
+/// positions). One element read in one
 /// query, so a test gets a consistent snapshot in well under a second
 /// without opening About This Build (whose rows are read one at a time). It
 /// polls every 250 ms in its own task and keeps the line in its own state,
@@ -53,6 +59,16 @@ struct SmartLinkProbe: View {
             ("leaves", leaves.total), ("segmented", leaves.segmentedTextBodies), ("engine", leaves.engineLeafBodies),
             ("conversions", textKit2.conversionCount), ("layouts", textKit2.layoutCount), ("live", textKit2.liveRowCount),
         ]
-        return fields.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
+        let modeFields: [(String, Int)] = [
+            ("scrolling", stats.isScrolling ? 1 : 0), ("scrollEnds", stats.scrollEnds),
+            ("scrollCalls", stats.scrollingCalls), ("deferred", stats.deferred), ("waiting", stats.waiting),
+            ("pfBatches", stats.prefetchBatches), ("pfCalls", stats.prefetchCalls),
+            ("pfInFlight", stats.prefetchInFlight), ("pfCancelled", stats.prefetchCancellations),
+            ("pfHits", stats.prefetchHits), ("pfMaxBatch", stats.largestPrefetchBatch),
+            ("pfPeak", stats.peakPrefetchInFlight), ("pfFar", stats.farthestPrefetch),
+            ("B", model.smartLinkNearbyLimits.batch), ("D", model.smartLinkNearbyLimits.distance),
+        ]
+        return (fields.map { "\($0.0)=\($0.1)" } + ["res=\(stats.resolution.rawValue)"]
+            + modeFields.map { "\($0.0)=\($0.1)" }).joined(separator: " ")
     }
 }

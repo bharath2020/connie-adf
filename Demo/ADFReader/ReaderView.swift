@@ -13,7 +13,9 @@ import ADFYouTube
 /// The text renderer (SwiftUI or TextKit 2) is a live switch: flipping it in
 /// the toolbar menu re-renders the rows in place — same model, same scroll
 /// position, no relaunch — so the two engines can be compared side by side
-/// on the same screen of text.
+/// on the same screen of text. The same menu picks when smart links are
+/// looked up (`ADFSmartLinkResolution`), also live: the document's
+/// coordinator takes the new mode with no row invalidated.
 struct ReaderView: View {
     let source: DocumentSource
     let options: LaunchOptions
@@ -33,6 +35,11 @@ struct ReaderView: View {
     /// Persisted renderer choice; `-textkit2` / `-rendererReset` seed it at
     /// launch (see `RendererPreference`). Off means the shipping SwiftUI path.
     @AppStorage(RendererPreference.key) private var textKit2Enabled = false
+    /// Persisted smart-link resolution mode; `-smartLinkResolution` /
+    /// `-rendererReset` seed it at launch (see
+    /// `SmartLinkResolutionPreference`).
+    @AppStorage(SmartLinkResolutionPreference.key)
+    private var smartLinkResolution: ADFSmartLinkResolution = .whileScrolling
     /// Whether the last TextKit 2 pick was a memory-control pick
     /// (`-rebuildControlPicks`, `RebuildControl`).
     @State private var rebuildControl = false
@@ -68,7 +75,8 @@ struct ReaderView: View {
                         taskStates: taskStates,
                         mentionContent: { AnyView(ProfileCard(name: $0)) },
                         textRenderer: activeRenderer,
-                        smartLinkResolver: smartLinkResolver)
+                        smartLinkResolver: smartLinkResolver,
+                        smartLinkResolution: smartLinkResolution)
             .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
             .adfRebuildControl(rebuildControl)
             .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
@@ -101,7 +109,7 @@ struct ReaderView: View {
                 }
             }
             .sheet(isPresented: $buildInfoPresented) {
-                BuildInfoView(renderer: activeRenderer, model: model)
+                BuildInfoView(renderer: activeRenderer, model: model, smartLinkResolution: smartLinkResolution)
             }
             .task { load() }
             .onChange(of: model.blocks.count) { _, count in
@@ -206,6 +214,23 @@ struct ReaderView: View {
                         }
                     }
                     .accessibilityIdentifier(Self.choiceIdentifier(for: renderer))
+                }
+            }
+            // Each option is labelled with the API's own name
+            // (`ADFSmartLinkResolution.displayName`).
+            Section("Smart Link Resolution") {
+                ForEach(ADFSmartLinkResolution.allCases) { mode in
+                    Button {
+                        SmartLinkResolutionPreference.userChose()
+                        smartLinkResolution = mode
+                    } label: {
+                        if mode == smartLinkResolution {
+                            Label(mode.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(mode.displayName)
+                        }
+                    }
+                    .accessibilityIdentifier("smartlink-resolution-\(mode.rawValue)")
                 }
             }
             Section {
