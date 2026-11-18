@@ -19,18 +19,20 @@ import ADFPreparation
 /// A container (panel, quote, expand, layout columns, extension, and media
 /// for its caption) keeps the choice at the top level only when its kind
 /// is in the container allow list (`containerChildKinds`: panels, quotes,
-/// extension bodies, media and expands so far) and passes its whole-block
-/// rule (`blockKeepsRenderer`, for a panel `panelKeepsRenderer`); its child
-/// boundary (`View.adfContainerChild`, `childRenderer`) then passes the
-/// choice to the children the same list and rules allow (paragraphs and
-/// headings, media, and nested panels, quotes, extensions and expands so
-/// far; an expand's body only once it is open and prepared). A media
-/// block's only text is its caption (`MediaBlockView.caption`,
-/// `captionsUseTextKit2`, `captionLayoutKeepsRenderer`). Every other
-/// top-level kind (table, layout columns, card, plugin, unknown) gets
-/// `.swiftUI`, and so does everything inside it, and so does every child
-/// kind the list does not hold (lists and code in a container
-/// included); code inside a list item gets `.swiftUI` from its row. Before
+/// extension bodies, media, expands and layout columns so far) and passes
+/// its whole-block rule (`blockKeepsRenderer`, for a panel
+/// `panelKeepsRenderer`); its child boundary (`View.adfContainerChild`,
+/// `childRenderer`) then passes the choice to the children the same list
+/// and rules allow (paragraphs and headings, media, and nested panels,
+/// quotes, extensions and expands so far; an expand's body only once it is
+/// open and prepared), and in side-by-side layout columns to none
+/// (`horizontalColumnKeepsRenderer`). A media block's only text is its
+/// caption (`MediaBlockView.caption`, `captionsUseTextKit2`,
+/// `captionLayoutKeepsRenderer`). Every other top-level kind (table, card,
+/// plugin, unknown) gets `.swiftUI`, and so does everything inside it, and
+/// so does every child kind the list does not hold (lists and code in a
+/// container included); code inside a list item gets `.swiftUI` from its
+/// row. Before
 /// iOS 26 container text and captions stay on SwiftUI at the leaf
 /// (`TextKit2Eligibility.containerTextMatchesText`). Those three places are
 /// the only ones that set `adfTextRenderer`. The coverage walk

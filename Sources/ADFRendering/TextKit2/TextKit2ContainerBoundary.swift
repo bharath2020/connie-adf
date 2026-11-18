@@ -8,9 +8,10 @@ import ADFPreparation
 // `adfContainerChild`, at the five child sites; one allow list,
 // `TextKit2Scope.containerChildKinds`, that each stage of the container
 // work widens by one family. Paragraphs and headings in panels, quotes and
-// extension bodies joined first, then open expand and nested-expand bodies;
-// every other container child still gets `.swiftUI`, as before containers
-// joined the renderer's scope.
+// extension bodies joined first, then open expand and nested-expand bodies,
+// then layout columns (stacked; side by side no family keeps the renderer,
+// `horizontalColumnKeepsRenderer`); every other container child still gets
+// `.swiftUI`, as before containers joined the renderer's scope.
 
 /// A `RenderBlock.Kind` case without its payload: what the container allow
 /// list (`TextKit2Scope.containerChildKinds`) holds.
@@ -119,17 +120,20 @@ extension TextKit2Scope {
     /// The child kinds a container passes the renderer to. Each family
     /// joins in its own change: paragraphs and headings, panels, quotes and
     /// extension bodies first, media for its caption (`captionsUseTextKit2`),
-    /// expands (here: an expand or nested expand passes the renderer to its
-    /// open body, which is prepared on opening as before, so the coverage
-    /// walk reports it as unprepared rather than entering it), then layout
-    /// columns, lists, code; until a kind is listed every child of that kind
-    /// stays on SwiftUI, and so does everything below it.
+    /// expands (an expand or nested expand passes the renderer to its open
+    /// body, which is prepared on opening as before, so the coverage walk
+    /// reports it as unprepared rather than entering it), layout columns
+    /// (here), then lists, code; until a kind is listed every child of that
+    /// kind stays on SwiftUI, and so does everything below it.
     /// `inheritsRenderer` reads it for top-level container rows,
     /// `adfContainerChild` (through `adfContainerChildKinds`) at every child
     /// boundary, and the coverage walk (`forEachLeaf`) for both. Before
     /// iOS 26 the text it reaches still stays on SwiftUI
-    /// (`TextKit2Eligibility.containerTextMatchesText`).
-    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand]
+    /// (`TextKit2Eligibility.containerTextMatchesText`). A layout section
+    /// passes the renderer to its columns' blocks when the columns stack
+    /// (compact width, accessibility text sizes); side by side, no family
+    /// keeps it yet (`horizontalColumnKeepsRenderer`).
+    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns]
 
     /// Kinds that never join the container scope, whatever an allow list
     /// says: tables (a later stage), plugin blocks (their renderer owns
@@ -269,11 +273,31 @@ extension TextKit2Scope {
     }
 
     /// Whether a child of `kind` may keep the renderer in a side-by-side
-    /// layout column. Every kind for now: written from the off-grid column
-    /// probe when the column family is enabled. Stacked columns are
-    /// unaffected.
+    /// layout column (reason `.horizontalColumn` when not): no family yet.
+    /// From the off-grid column probe (iOS 26.3 at 3x and 2x, iOS 18.5 at
+    /// 3x; three equal and 33.33/66.66 % sections at row widths 288 to
+    /// 640 pt, xSmall to xxxLarge, Bold Text, both directions), measured
+    /// against the same columns on SwiftUI:
+    /// - Paragraphs and quotes: in the 90.667 pt column of a 288 pt row at
+    ///   2x (off the pixel grid) TextKit 2 sets the text 11 to 22 pt low
+    ///   (half a line or a line at that size), with the same height.
+    /// - Lists and panels: the same shift at 3x too, in columns of 85 to
+    ///   118 pt on and off the grid (10 to 19 pt; a panel's height 0.5 pt
+    ///   at 2x), and a panel's first baseline 11 pt off where the blocks
+    ///   alone matched (iOS 18.5, a 112.778 pt column).
+    /// Otherwise the same blocks hosted alone at the column's width shift
+    /// the same way: the TextKit 2 leaf's shift at those widths, not the
+    /// column's. A family returns here when a leaf fix passes the probe.
+    /// Extension bodies, expands, code and captions were not probed side
+    /// by side and stay out with them. Stacked columns (compact width,
+    /// accessibility sizes) passed every case and are unaffected: their
+    /// children are proposed the section's width.
     static func horizontalColumnKeepsRenderer(_ kind: TextKit2BlockKind) -> Bool {
-        true
+        switch kind {
+        case .richText, .quote, .panel, .listRows: return false
+        case .extensionPlaceholder, .expand, .codeBlock, .media, .layoutColumns: return false
+        case .divider, .tableSlice, .mediaStrip, .card, .custom, .unknown: return false
+        }
     }
 
     /// The boundary's view-time rules for a child of `kind` in `parent`

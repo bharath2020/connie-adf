@@ -153,12 +153,14 @@ struct TextKit2FixtureSweepTests {
 
     nonisolated static let containerDocuments = ["containers-parity", "kitchen-sink", "stress-1k", "stress-5k"]
     /// Container prose leaves in scope per document (step 3: paragraphs and
-    /// headings in panels, quotes and bodied extensions), as hand-counted
-    /// from the JSON (`TextKit2ContainerCoverageTests.fixturePins`; stress-5k
-    /// 400 one-paragraph panels and 400 quotes of 606 paragraphs), with the
-    /// eligible ones (containers-parity has two atom paragraphs).
+    /// headings in panels, quotes and bodied extensions; step 4: and in
+    /// layout columns), as hand-counted from the JSON
+    /// (`TextKit2ContainerCoverageTests.fixturePins`; stress-5k 400
+    /// one-paragraph panels and 400 quotes of 606 paragraphs, its layout
+    /// sections all in expand bodies), with the eligible ones
+    /// (containers-parity has two atom paragraphs).
     nonisolated static let expectedContainerLeaves: [String: (leaves: Int, eligible: Int)] = [
-        "containers-parity": (40, 38), "kitchen-sink": (9, 9), "stress-1k": (199, 199), "stress-5k": (1_006, 1_006),
+        "containers-parity": (64, 62), "kitchen-sink": (11, 11), "stress-1k": (199, 199), "stress-5k": (1_006, 1_006),
     ]
     /// The document widths whose rows (16 pt in from each side) the
     /// container leaves are swept in: an iPhone SE and an iPhone 17 Pro.
@@ -167,11 +169,13 @@ struct TextKit2FixtureSweepTests {
     /// One container a leaf sits in, outermost first: what it takes from
     /// the width it is given (`PanelBlockView`: padding on both sides, the
     /// stack spacing and its icon; `QuoteBlockView`: its leading inset;
-    /// the extension body: its inset).
+    /// the extension body: its inset; a layout column, stacked as on these
+    /// phone widths: nothing, each column is proposed the section's width).
     enum Inset: Hashable {
         case panel(symbol: String)
         case quote
         case extensionBody
+        case stackedColumn
 
         @MainActor
         func points(_ env: TK2Parity.Environment) -> CGFloat {
@@ -180,12 +184,14 @@ struct TextKit2FixtureSweepTests {
             case .panel(let symbol): return spacing * 4.5 + TK2ContainerProbe.iconWidth(symbol, env: env)
             case .quote: return spacing * 2
             case .extensionBody: return spacing * 3
+            case .stackedColumn: return 0
             }
         }
     }
 
-    /// The paragraphs and headings below panels, quotes and extension
-    /// bodies in `blocks`, with the containers above each, outermost first.
+    /// The paragraphs and headings below panels, quotes, extension bodies
+    /// and layout columns in `blocks`, with the containers above each,
+    /// outermost first.
     static func containerChains(_ blocks: [RenderBlock], chain: [Inset] = []) -> [String: (segments: [InlineSegment], style: TextBlockStyle, chain: [Inset])] {
         var found: [String: (segments: [InlineSegment], style: TextBlockStyle, chain: [Inset])] = [:]
         for block in blocks {
@@ -194,6 +200,7 @@ struct TextKit2FixtureSweepTests {
             case .panel(let palette, let children): found.merge(containerChains(children, chain: chain + [.panel(symbol: palette.iconSystemName)])) { a, _ in a }
             case .quote(let children): found.merge(containerChains(children, chain: chain + [.quote])) { a, _ in a }
             case .extensionPlaceholder(_, let body): found.merge(containerChains(body, chain: chain + [.extensionBody])) { a, _ in a }
+            case .layoutColumns(let columns): found.merge(containerChains(columns.flatMap(\.blocks), chain: chain + [.stackedColumn])) { a, _ in a }
             default: continue
             }
         }

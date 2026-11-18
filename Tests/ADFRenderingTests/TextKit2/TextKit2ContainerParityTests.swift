@@ -940,12 +940,21 @@ struct TextKit2ContainerParityTests {
     /// pixel grid — three equal columns at the readable cap (640: 202.667),
     /// x.333 and x.667 widths, a width a third of a point off the whole
     /// point (3x) or half a point (2x) — and real 33.33 % / 66.66 %
-    /// columns. Each column is hosted alone at its exact width (the
+    /// columns. AX3 and AX5 stack the columns (a control).
+    ///
+    /// From step 4 the whole section goes through the production path
+    /// (the production allow list, `BlockView` as a document row hosts
+    /// it): side by side no family keeps the renderer
+    /// (`horizontalColumnKeepsRenderer`, decided by this probe), so the
+    /// engine asserted there is SwiftUI on both arms, and stacked the
+    /// families the production list holds draw on TextKit 2 (lists from
+    /// step 6). Each column is still measured alone at its exact width
+    /// behind the stacked boundary with the probed families allowed (the
     /// layout's own proposal: height, first and last baseline at 0.01 pt,
-    /// the last being the sibling paragraph's), and the whole section is
-    /// compared as pixels, column by column. AX3 and AX5 stack the columns
-    /// (a control).
-    @Test("offGridColumns: paragraph, list, panel and quote in side-by-side columns at off-grid widths (record only; engine asserted)")
+    /// the last being the sibling paragraph's): the leaf at the column's
+    /// width as the boundary would hand it if the family were allowed,
+    /// recorded so a TextKit 2 leaf fix can be re-probed here.
+    @Test("offGridColumns: paragraph, list, panel and quote in columns at off-grid widths: each column alone (record only; TextKit 2 asserted) and the section through the production path (SwiftUI side by side, the production families on TextKit 2 stacked)")
     func offGridColumns() async throws {
         let gated = !TextKit2Eligibility.containerTextMatchesText
         let clock = ContinuousClock()
@@ -982,11 +991,12 @@ struct TextKit2ContainerParityTests {
                         let columnWidths = stacked ? Array(repeating: rowWidth, count: columns.count) : Self.columnWidths(columns, totalWidth: rowWidth, spacing: P.spacing * 2)
                         let fields = "probe=offGridColumns container=columns shape=\(family)/\(sectionName) \(P.fields(env)) W=\(P.format(rowWidth))"
                         let key = "container=columns shape=\(family)/\(sectionName) dir=\(rtl ? "rtl" : "ltr") mode=\(stacked ? "stacked" : "sideBySide")"
-                        // Each column at its own width.
+                        // Each column at its own width, behind the stacked
+                        // boundary (no side-by-side family rule).
                         for (index, column) in columns.enumerated() {
                             let width = columnWidths[index]
                             let (a, b) = try P.pair(width: width, pixels: false) { arm in
-                                P.environment(LayoutColumnContentView(column: column, sideBySide: !stacked, widthBound: .atLeast(width)), arm: arm, env: env, rowWidth: rowWidth, sizeClass: .regular)
+                                P.environment(LayoutColumnContentView(column: column, sideBySide: false, widthBound: .atLeast(width)), arm: arm, env: env, rowWidth: rowWidth, sizeClass: .regular)
                             }
                             var verdict = P.geometry(a.guides, b.guides)
                             let columnOwner = P.firstTextOwner(column.blocks) ?? "?"
@@ -1000,16 +1010,23 @@ struct TextKit2ContainerParityTests {
                             if !(verdict.pass && verdict.engine) || P.printsEveryCase { print(P.line(columnFields, verdict, a, b)) }
                             if !verdict.engine { engineMisses.append("\(columnFields): owner \(columnOwner) textKit2Owners=\(b.owners.sorted())") }
                         }
-                        // The whole section, as pixels column by column.
+                        // The whole section through the production path,
+                        // as pixels column by column.
                         let (a, b) = try P.pair(width: rowWidth, pixels: true) { arm in
-                            P.environment(BlockView(block: block), arm: arm, env: env, rowWidth: rowWidth, sizeClass: .regular)
+                            P.environment(BlockView(block: block), arm: TK2ContainerBody.rowRenderer(block, arm), env: env, rowWidth: rowWidth,
+                                          sizeClass: .regular, allowed: nil)
                         }
                         var verdict = P.geometry(a.guides, b.guides)
                         // A custom layout has no text baselines of its own:
                         // the section is compared by height and pixels.
                         verdict.dFirst = 0
                         verdict.dLast = 0
-                        verdict.engine = a.rows.isEmpty && (!familyOnTextKit2 || b.owners.contains(owner)) && (!gated || b.rows.isEmpty)
+                        // Production: side by side no family; stacked the
+                        // families in the production allow list (the
+                        // sibling paragraph always; lists from step 6).
+                        let production: Set<String> = gated ? [] : TK2ContainerColumns.expectedOwners([block], sideBySide: !stacked)
+                        verdict.engine = a.rows.isEmpty && b.owners == production
+                        if production.isEmpty { verdict.notes.append(stacked ? "productionOnSwiftUI(allowList)" : "productionOnSwiftUI(horizontalColumn)") }
                         if let ba = a.bitmap, let bb = b.bitmap {
                             var crops: [P.Crop] = []
                             var x: CGFloat = 0
@@ -1048,14 +1065,14 @@ struct TextKit2ContainerParityTests {
                         }
                         tally.add(key + " part=section", label: "\(P.fields(env)) W=\(P.format(rowWidth)) dH=\(P.format(verdict.dHeight)) px=\(verdict.pixelFailures.count)", verdict)
                         if !(verdict.pass && verdict.engine) || P.printsEveryCase { print(P.line(fields + " part=section", verdict, a, b)) }
-                        if !verdict.engine { engineMisses.append("\(fields) section: textKit2Owners=\(b.owners.sorted())") }
+                        if !verdict.engine { engineMisses.append("\(fields) section (production): textKit2Owners=\(b.owners.sorted()) swiftUIRows=\(a.rows.count)") }
                     }
                 }
             }
         }
         tally.print(probe: "offGridColumns")
         print("CONTAINER_PROBE_TIME probe=offGridColumns scale=\(TK2Parity.nativeScale) os=\(TK2Parity.osVersion) mode=\(P.mode) elapsed=\(clock.now - start)")
-        #expect(engineMisses.isEmpty, "\(engineMisses.count) cases did not engage TextKit 2: \(engineMisses.prefix(4))")
+        #expect(engineMisses.isEmpty, "\(engineMisses.count) cases had the wrong engine (a column alone not on TextKit 2, or the section not as production draws it): \(engineMisses.prefix(4))")
     }
 
     // MARK: panelIconMeasurement

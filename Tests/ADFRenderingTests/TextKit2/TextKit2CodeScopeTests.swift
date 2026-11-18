@@ -158,23 +158,25 @@ struct TextKit2CodeScopeRuleTests {
             case .listRows:
                 #expect(block.id == "0.1")
                 #expect(inherits, "\(block.id): the list keeps the choice for its own text")
-            case .panel, .quote, .expand:
+            case .panel, .quote, .layoutColumns, .expand:
                 // From PR 4 step 3 the panel (its body passes the shape
-                // rule) and the quote keep the choice for their prose, and
-                // from step 5 the expand for its open body's; the code in
-                // them is not in the allow list yet.
-                #expect(["0.2", "0.3", "0.4"].contains(block.id), "\(block.id)")
-                #expect(inherits, "\(block.id): panels, quotes and expands are in the container allow list")
+                // rule) and the quote keep the choice for their prose, from
+                // step 4 the layout section and from step 5 the expand for
+                // its open body's; the code in them is not in the allow
+                // list yet.
+                #expect(["0.2", "0.3", "0.4", "0.5"].contains(block.id), "\(block.id)")
+                #expect(inherits, "\(block.id): panels, quotes, layout columns and expands are in the container allow list")
             default:
                 #expect(!inherits, "\(block.id): a container must reset the choice")
             }
             let children: [RenderBlock]
             switch block.kind {
             case .panel(_, let blocks), .quote(let blocks): children = blocks
+            case .layoutColumns(let columns): children = columns.flatMap(\.blocks)
             default: children = []
             }
             for child in children where TextKit2CodeCoverageTests.isCode(child) {
-                for parent in [TextKit2ContainerParent.panel, .quote, .expandBody] {
+                for parent in [TextKit2ContainerParent.panel, .quote, .expandBody, .column(sideBySide: false), .column(sideBySide: true)] {
                     let renderer = TextKit2Scope.childRenderer(
                         for: child.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight
                     )
@@ -210,9 +212,11 @@ struct TextKit2CodeScopeRuleTests {
             if leaf.position == .codeRoot { codeLeaves.append(leaf) }
         }
         // The two top-level code blocks and the one list row that keeps the
-        // renderer (the two items holding code keep their text on SwiftUI).
-        #expect(owners == ["0.0", "0.1.2", "0.7"])
-        #expect(positions == [.codeRoot, .listLeader, .codeRoot])
+        // renderer (the two items holding code keep their text on SwiftUI);
+        // from PR 4 step 4 the column's paragraph (container prose), never
+        // the code in the column beside it.
+        #expect(owners == ["0.0", "0.1.2", "0.5.1.0", "0.7"])
+        #expect(positions == [.codeRoot, .listLeader, .containerProse, .codeRoot])
         #expect(Set(owners).isDisjoint(with: Self.nestedCode))
         for leaf in codeLeaves {
             // A code leaf carries the block's prepared string and nothing a
@@ -405,6 +409,12 @@ struct TextKit2CodeScopeTests {
         // The plain list item beside the two items holding code (from
         // iOS 26; before it lists keep their text on SwiftUI).
         if TextKit2Eligibility.listsMatchText { expected.insert("0.1.2") }
+        // The paragraph in the layout column beside the column holding code
+        // while the columns stack (PR 4 step 4: a phone's compact width;
+        // side by side no family keeps the renderer), from iOS 26 (before
+        // it container text stays on SwiftUI). Never the code beside it.
+        let stacked = hosted.window.traitCollection.horizontalSizeClass != .regular
+        if TextKit2Eligibility.containerTextMatchesText, stacked { expected.insert("0.5.1.0") }
         #expect(found == expected, "missing \(expected.subtracting(found).sorted()), unexpected \(found.subtracting(expected).sorted())")
         #expect(found.isDisjoint(with: TextKit2CodeScopeRuleTests.nestedCode))
         // Nothing under the expand, whatever ids its body's blocks take.

@@ -226,6 +226,11 @@
 #                @0.4425 block 38, KP-S5: extension body 0.39
 #                @0.8103 block 70, KP-S10: panel 0.71, prose beside a code
 #                        block, stays on SwiftUI (the panel shape rule)
+#              Step 4 (layout columns; positive on a phone, where the
+#              columns stack — side by side every column stays SwiftUI):
+#                @0.5229 block 45, KP-S6: the 25/75 and 33/67 columns
+#                @0.5919 block 51, KP-S7: the zero, negative, indented
+#                        and (step 0 only) all non-positive column cases
 #              Step 5 (expand bodies): containers-parity
 #                @0.6609 block 57, KP-S8: expands 0.58 and 0.59 and the
 #                        column's nested expand closed (no body row)
@@ -235,7 +240,7 @@
 #                @0.38   block 9: CAP-09 atoms (SwiftUI), CAP-10 wrapping
 #                @0.46   block 11: CAP-11 mixed scripts and emoji
 #                @0.54   block 13: CAP-12 in a panel, CAP-13 in a column
-#                        (SwiftUI until step 4)
+#                        (stacked on a phone: TextKit 2 from step 4)
 #                @0.70, @0.78, @0.86  blocks 17, 19, 21: one caption per
 #                        media layout
 #   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
@@ -457,15 +462,29 @@ CONTAINER_CAPTURES_DEFAULT=(
     # stays on SwiftUI; no TextKit 2 container row is on screen (the quote,
     # panel and extension below it hold only code).
     "containers-parity@0.8103=container:fallback;0.71.0=swiftui;land=0.70"
+    # Step 4, layout columns. On a phone (a compact width) the columns
+    # stack and their text is TextKit 2; side by side (a regular width) no
+    # family keeps the renderer, so on an iPad these positions would show
+    # SwiftUI only (the masks above are an iPhone 17 Pro's: the script
+    # stops on another screen size unless masks are passed).
+    # KP-S6: the 25/75 columns (a heading in the 75 % column) and the
+    # 33/67 columns (the linked paragraph 0.47.1.1 is not named).
+    "containers-parity@0.5229=container:positive;0.46.0.0=tk2,0.46.0.1=tk2,0.46.1.0=tk2,0.46.1.1=tk2,0.46.1.2=tk2,0.47.0.0=tk2,0.47.1.0=tk2;land=0.45"
+    # KP-S7: the zero-percent column (its code block stays SwiftUI), the
+    # negative-percent column, the level-6 indented paragraph in the 25 %
+    # column (drawn from x = 160 pt) and, at step 0, the all-non-positive
+    # control 0.55; at step 3 it is below the screen and 0.54.1.0 runs into
+    # the bottom band.
+    "containers-parity@0.5919#s0=container:positive;0.52.0.0=tk2,0.52.1.0=tk2,0.53.0.0=tk2,0.53.1.0=tk2,0.54.0.0=tk2,0.54.1.0=tk2,0.55.0.0=tk2,0.55.1.0=tk2;land=0.51"
+    "containers-parity@0.5919#s3=container:positive;0.52.0.0=tk2,0.52.1.0=tk2,0.53.0.0=tk2,0.53.1.0=tk2,0.54.0.0=tk2;land=0.51"
     # Step 5, expand bodies. KP-S8 at launch: expands 0.58 (a nested
     # expand inside) and 0.59 closed, and the 50/50 section 0.60 (a
     # closed nested expand in its first column). A closed body mounts no
-    # row, so its owners stay on SwiftUI on arm C; the column paragraphs
-    # stay on SwiftUI until columns join the allow list (step 4, which
-    # turns this capture positive for 0.60.0.0 and 0.60.1.0). Opened
+    # row, so its owners stay on SwiftUI on arm C; the stacked column
+    # paragraphs 0.60.0.0 and 0.60.1.0 are TextKit 2 (step 4). Opened
     # bodies get no three-arm crop (plan §7.4, P15): the hosted
     # expandBody and nestedExpandBody suites are their proof.
-    "containers-parity@0.6609=container:fallback;0.58.0=swiftui,0.58.3.0=swiftui,0.59.0.0=swiftui,0.60.0.0=swiftui,0.60.1.0=swiftui;land=0.57"
+    "containers-parity@0.6609=container:positive;0.60.0.0=tk2,0.60.1.0=tk2,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57"
     # Captions (step 8): captions-parity, 25 prepared blocks (`Int(f x 25)`).
     # Each landing, owner and live caption row was checked on the enabled
     # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions
@@ -483,8 +502,9 @@ CONTAINER_CAPTURES_DEFAULT=(
     "captions-parity@0.46=caption:positive;0.11.0=tk2;land=0.11"
     # CAP-12 in a panel (TextKit 2: panels and media are in the allow list
     # from steps 3 and 8) and CAP-13 in a column (stacked at phone width;
-    # SwiftUI until step 4 adds layout columns, which flips it to tk2).
-    "captions-parity@0.54=caption:positive;0.13.1.0=tk2,0.14.0.0.0=swiftui;land=0.13"
+    # TextKit 2 since step 4 added layout columns; side by side, as on an
+    # iPad, it would stay SwiftUI).
+    "captions-parity@0.54=caption:positive;0.13.1.0=tk2,0.14.0.0.0=tk2;land=0.13"
     # CAP-S3, one caption per layout: center, wrap-left; wrap-right,
     # align-start; align-end, wide, full-width. The document ends below
     # CAP-L-FULL-WIDTH: 0.86 is the last landing with at most one block

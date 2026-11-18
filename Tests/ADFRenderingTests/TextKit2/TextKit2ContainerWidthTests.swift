@@ -188,17 +188,21 @@ extension TextKit2ContainerWidthTests {
         return window
     }
 
+    /// `pending`: probes expected to read `.pending` even when `known`
+    /// (below a container that is itself on SwiftUI).
     @MainActor
     fileprivate static func waitForProbes(
-        _ probes: [String], recorder: WidthProbeRecorder, window: UIWindow, known: Bool = true
+        _ probes: [String], recorder: WidthProbeRecorder, window: UIWindow, known: Bool = true, pending: Set<String> = []
     ) async throws {
-        for _ in 0..<250 where !recorder.complete(probes, known: known) {
+        let knownProbes = probes.filter { !pending.contains($0) }
+        for _ in 0..<250 where !recorder.complete(knownProbes, known: known) || !recorder.complete(Array(pending), known: false) {
             window.layoutIfNeeded()
             try await Task.sleep(for: .milliseconds(20))
         }
         try await TextKit2DiagnosticsTests.settle(window)
         let incomplete = probes.filter { name in
-            recorder.bounds[name] == nil || (known && recorder.bounds[name] == .pending) || recorder.widths[name] == nil
+            recorder.bounds[name] == nil || (known && !pending.contains(name) && recorder.bounds[name] == .pending)
+                || recorder.widths[name] == nil
         }
         #expect(incomplete.isEmpty, "probes without a\(known ? " known" : "") bound or a width: \(incomplete)")
     }
@@ -379,6 +383,17 @@ extension TextKit2ContainerWidthTests {
     /// whether its columns sit side by side (regular width) or stack.
     enum Site: String, CaseIterable {
         case panel, quote, expand, extensionBody, columns
+
+        /// The allow-list kind of the site's container.
+        var kind: TextKit2BlockKind {
+            switch self {
+            case .panel: return .panel
+            case .quote: return .quote
+            case .expand: return .expand
+            case .extensionBody: return .extensionPlaceholder
+            case .columns: return .layoutColumns
+            }
+        }
     }
 
     /// The fractions of the test's sections: uneven, so each column's share
@@ -426,11 +441,20 @@ extension TextKit2ContainerWidthTests {
     }
 
     /// Every site holding a probe (depth 1), and every site in every site
-    /// (depth 2), with the bound each probe must read.
+    /// (depth 2), with the bound each probe must read. `pending`: the depth-2
+    /// probes whose inner container a side-by-side column keeps on SwiftUI
+    /// (`TextKit2Scope.horizontalColumnKeepsRenderer`, reason
+    /// `.horizontalColumn`; no family from PR 4 step 4): that container's
+    /// boundary writes `.pending` under its SwiftUI parent, so no bound
+    /// reaches the probe (the column's share still reaches the container
+    /// itself, depth 1).
     @MainActor
-    static func lowerBoundCases(width: CGFloat, sideBySide: Bool) -> (blocks: [String], expected: [String: CGFloat]) {
+    static func lowerBoundCases(
+        width: CGFloat, sideBySide: Bool
+    ) -> (blocks: [String], expected: [String: CGFloat], pending: Set<String>) {
         var blocks: [String] = []
         var expected: [String: CGFloat] = [:]
+        var pending: Set<String> = []
         for outer in Site.allCases {
             blocks.append(wrap(outer, nested: false) { column in
                 let name = "1.\(outer.rawValue)\(column)"
@@ -442,13 +466,17 @@ extension TextKit2ContainerWidthTests {
                     let outerBound = childBound(outer, of: width, column: column, sideBySide: sideBySide)
                     return wrap(inner, nested: true) { innerColumn in
                         let name = "2.\(outer.rawValue)\(column).\(inner.rawValue)\(innerColumn)"
-                        expected[name] = childBound(inner, of: outerBound, column: innerColumn, sideBySide: sideBySide)
+                        if outer == .columns, sideBySide, !TextKit2Scope.horizontalColumnKeepsRenderer(inner.kind) {
+                            pending.insert(name)
+                        } else {
+                            expected[name] = childBound(inner, of: outerBound, column: innerColumn, sideBySide: sideBySide)
+                        }
                         return probe(name)
                     }
                 })
             }
         }
-        return (blocks, expected)
+        return (blocks, expected, pending)
     }
 
     /// The ids of every expand in `node`, nested ones and those in expand
@@ -465,7 +493,7 @@ extension TextKit2ContainerWidthTests {
     @MainActor
     fileprivate static func hostDirect(
         _ json: String, probes: [String], recorder: WidthProbeRecorder, width: CGFloat, sideBySide: Bool,
-        styles: [String: BlockStyle] = [:]
+        styles: [String: BlockStyle] = [:], pending: Set<String> = []
     ) async throws -> UIWindow {
         let data = Data(json.utf8)
         let model = ADFDocumentModel(customRenderers: [WidthProbeRenderer(recorder: recorder)])
@@ -481,7 +509,7 @@ extension TextKit2ContainerWidthTests {
         ).environment(\.horizontalSizeClass, sideBySide ? .regular : .compact))
         window.rootViewController = host
         window.isHidden = false
-        try await waitForProbes(probes, recorder: recorder, window: window)
+        try await waitForProbes(probes, recorder: recorder, window: window, pending: pending)
         return window
     }
 
@@ -489,22 +517,31 @@ extension TextKit2ContainerWidthTests {
     /// width rules, one and two levels deep, the bound a container writes
     /// for a child is what its rule gives and is no wider than the width
     /// the child is laid out at (to a pixel: frames are pixel-snapped).
+    /// Side by side, a container in a column is on SwiftUI (no family keeps
+    /// the renderer there, PR 4 step 4), so its children read `.pending`.
     @Test("boundIsLowerBound: every boundary's bound, one and two levels deep, is its rule's value and at most the child's width", arguments: [CGFloat(320), 375, 402, 640], [false, true])
     @MainActor
     func boundIsLowerBound(width: CGFloat, sideBySide: Bool) async throws {
         let cases = Self.lowerBoundCases(width: width, sideBySide: sideBySide)
-        let probes = cases.expected.keys.sorted()
+        let probes = (Array(cases.expected.keys) + cases.pending).sorted()
         // Depth 1: four sites with one probe, a section with two; depth 2:
         // the same six slots in each of the six outer slots.
         #expect(probes.count == 6 + 6 * 6)
+        // Side by side: the six containers in each of the two columns.
+        #expect(cases.pending.count == (sideBySide ? 2 * 6 : 0))
         let recorder = WidthProbeRecorder()
         let window = try await Self.hostDirect(
-            Self.document(cases.blocks), probes: probes, recorder: recorder, width: width, sideBySide: sideBySide
+            Self.document(cases.blocks), probes: probes, recorder: recorder, width: width, sideBySide: sideBySide,
+            pending: cases.pending
         )
         defer { Self.close(window) }
         let scale = window.traitCollection.displayScale
         let label = "W=\(width) \(sideBySide ? "side by side" : "stacked")"
-        for name in probes {
+        for name in cases.pending.sorted() {
+            #expect(recorder.bounds[name] == .pending,
+                    "\(label) \(name): bound \(String(describing: recorder.bounds[name])) below a container a side-by-side column keeps on SwiftUI")
+        }
+        for name in probes where !cases.pending.contains(name) {
             let expected = cases.expected[name] ?? -1
             guard case .atLeast(let bound) = recorder.bounds[name], let laid = recorder.widths[name] else {
                 Issue.record("\(label) \(name): bound \(String(describing: recorder.bounds[name])), width \(String(describing: recorder.widths[name]))")

@@ -48,11 +48,12 @@ enum TK2ContainerCoverage {
     /// | 0.15 | panel: heading, paragraph | nothing (`panelKeepsRenderer`: a heading) |
     ///
     /// With the production list (step 3: prose, panels, quotes, extension
-    /// bodies; step 8: media; step 5: expands) only 0.2.0, 0.3.0, 0.3.1,
-    /// 0.7.0 and 0.12.0 are container leaves, 0.9's caption is the one
-    /// caption leaf (lists, code and columns are not listed yet), and the
-    /// expands 0.5 and 0.6.0 are reported unprepared: an expand's body is
-    /// prepared when it opens, so listing expands adds no leaf.
+    /// bodies; step 8: media; step 5: expands; step 4: layout columns) only
+    /// 0.2.0, 0.3.0, 0.3.1, 0.4.0.0, 0.4.1.0, 0.4.1.1.0, 0.7.0 and 0.12.0
+    /// are container leaves, 0.9's caption is the one caption leaf (lists
+    /// and code are not listed yet), and the expands 0.5 and 0.6.0 are
+    /// reported unprepared: an expand's body is prepared when it opens, so
+    /// listing expands adds no leaf.
     static func content() -> [[String: Any]] {
         let paragraph = TK2CodeLogic.paragraph
         return [
@@ -141,11 +142,13 @@ enum TK2ContainerCoverage {
         )
     }
 
-    /// Captioned media the production list (step 3 and captions) reaches,
-    /// written out independently of the walk: at the top level, and in
-    /// quotes, bodied extensions and panels whose body the probes kept
-    /// (`TextKit2ContainerScopeTests.expectedPanelKeeps`), nested in one
-    /// another; never in a list, table, expand or layout column.
+    /// Captioned media the production list (steps 3 and 4 and captions)
+    /// reaches, written out independently of the walk: at the top level,
+    /// and in quotes, bodied extensions, panels whose body the probes kept
+    /// (`TextKit2ContainerScopeTests.expectedPanelKeeps`) and layout
+    /// columns (counted stacked, as the walk counts them; step 4: CAP-13 in
+    /// captions-parity is the one such caption in the fixtures), nested in
+    /// one another; never in a list, table or expand.
     static func captionsInScope(_ blocks: [RenderBlock]) -> Int {
         var count = 0
         for block in blocks {
@@ -155,6 +158,7 @@ enum TK2ContainerCoverage {
             case .extensionPlaceholder(_, let body): count += captionsInScope(body)
             case .panel(_, let children):
                 if TextKit2ContainerScopeTests.expectedPanelKeeps(children) { count += captionsInScope(children) }
+            case .layoutColumns(let columns): count += captionsInScope(columns.flatMap(\.blocks))
             default: continue
             }
         }
@@ -178,10 +182,11 @@ enum TK2ContainerCoverage {
 /// nested code and captions count only in their own fields; the legacy
 /// fields keep their depth-0 meaning; the sums hold at every allow-list
 /// stage; unprepared expands are counted, not entered; the walk visits
-/// owners in search's order. With the production list (steps 3 and 5 and
-/// captions) only the container leaf fields move, where a panel, quote or
-/// extension body holds prose, the caption fields, where captioned media
-/// is in scope, and `unpreparedExpands`, where the walk reaches an expand.
+/// owners in search's order. With the production list (steps 3, 4 and 5
+/// and captions) only the container leaf fields move, where a panel,
+/// quote, extension body or layout column holds prose, the caption fields,
+/// where captioned media is in scope, and `unpreparedExpands`, where the
+/// walk reaches an expand.
 @Suite("TextKit 2 container coverage")
 @MainActor
 struct TextKit2ContainerCoverageTests {
@@ -211,23 +216,25 @@ struct TextKit2ContainerCoverageTests {
         // The empty list: the legacy fields only.
         let legacy = TK2ContainerCoverage.legacy(expected)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks, allowed: []) == legacy)
-        // The production list (steps 3 and 5 and captions): prose in the
-        // quotes 0.2 and 0.3, the extension 0.7 and the panel 0.12 (an
-        // atom: a fallback); the panel 0.15 holds a heading, so its body
-        // stays on SwiftUI. The caption of the top-level media 0.9 (from
-        // iOS 26; `osGatedContainer` before). The top-level expand 0.5 and
-        // the nested expand in the panel 0.6 are reported, not entered.
+        // The production list (steps 3, 4 and 5 and captions): prose in the
+        // quotes 0.2 and 0.3, the section 0.4 (both columns and the panel
+        // in one, counted stacked), the extension 0.7 and the panel 0.12
+        // (an atom: a fallback); the panel 0.15 holds a heading, so its
+        // body stays on SwiftUI. The caption of the top-level media 0.9
+        // (from iOS 26; `osGatedContainer` before). The top-level expand
+        // 0.5 and the nested expand in the panel 0.6 are reported, not
+        // entered.
         var production = legacy
-        production.eligibleContainerLeaves = containers ? 4 : 0
+        production.eligibleContainerLeaves = containers ? 7 : 0
         production.linkedContainerLeaves = containers ? 1 : 0
-        production.fallbackContainerLeaves = containers ? 1 : 5
+        production.fallbackContainerLeaves = containers ? 1 : 8
         production.eligibleCaptionLeaves = containers ? 1 : 0
         production.fallbackCaptionLeaves = containers ? 0 : 1
         production.unpreparedExpands = 2
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == production)
         var visitedProduction: [String] = []
         TextKit2Scope.forEachLeaf(in: blocks) { if $0.position.context == .container { visitedProduction.append($0.ownerID) } }
-        #expect(visitedProduction == ["0.2.0", "0.3.0", "0.3.1", "0.7.0", "0.12.0"])
+        #expect(visitedProduction == ["0.2.0", "0.3.0", "0.3.1", "0.4.0.0", "0.4.1.0", "0.4.1.1.0", "0.7.0", "0.12.0"])
 
         // The order and position of every leaf the widest walk visits.
         var visited: [(String, TextKit2Scope.Position)] = []
@@ -367,7 +374,7 @@ struct TextKit2ContainerCoverageTests {
         let blocks = try await TK2ContainerCoverage.blocks()
         let cases: [(Set<TextKit2BlockKind>, Int, String)] = [
             ([], 0, "the empty list"),
-            (TextKit2Scope.containerChildKinds, 2, "the production list (step 5): the top-level expand and the nested one in the panel"),
+            (TextKit2Scope.containerChildKinds, 2, "the production list (steps 3 to 5 and captions): the top-level expand and the nested one in the panel"),
             ([.expand], 1, "the top-level expand only: the nested one is in a panel"),
             ([.panel], 0, "the panel is entered, the nested expand in it is not allowed"),
             ([.panel, .expand], 2, "both"),
@@ -397,16 +404,18 @@ struct TextKit2ContainerCoverageTests {
     }
 
     /// A fixture's container leaves as hand-counted from its JSON for the
-    /// step-3 scope (`<data>/step3/tools/handcount.py`, which re-implements
-    /// the rules over the raw ADF, not the walk): by the innermost
-    /// container (panel, quote, extension body), the headings among them,
-    /// the linked and the fallback (inline atom) ones, and the top-level
-    /// panels whose shape keeps their body on SwiftUI.
+    /// step-4 scope (`<data>/cols/tools/handcount4.py`, step 3's
+    /// `handcount.py` with layout sections added; both re-implement the
+    /// rules over the raw ADF, not the walk): by the innermost container
+    /// (panel, quote, extension body, layout column), the headings among
+    /// them, the linked and the fallback (inline atom) ones, and the
+    /// top-level panels whose shape keeps their body on SwiftUI.
     struct FixturePin {
         let name: String
         let panel: Int
         let quote: Int
         let extensionBody: Int
+        let column: Int
         let headings: Int
         let linked: Int
         let atoms: Int
@@ -424,12 +433,13 @@ struct TextKit2ContainerCoverageTests {
         var expandsInColumns = 0
         /// Leaves expected to stay on SwiftUI for a view-time reason on the
         /// gate device (iPhone, left to right, the demo's environment): none
-        /// at step 3. No panel is right to left, the demo sets no font or
-        /// image scale on the document (`unprovenNestedWidth`), and no
-        /// container leaf is under 1 pt wide.
+        /// at step 4. No panel is right to left, the demo sets no font or
+        /// image scale on the document (`unprovenNestedWidth`), a compact
+        /// width stacks every layout section (no `horizontalColumn`), and
+        /// no container leaf is under 1 pt wide.
         let viewTimeFallbacks = 0
 
-        var leaves: Int { panel + quote + extensionBody }
+        var leaves: Int { panel + quote + extensionBody + column }
 
         /// `expands`, plus `expandsInColumns` once columns are listed.
         var unpreparedExpands: Int {
@@ -447,32 +457,40 @@ struct TextKit2ContainerCoverageTests {
     /// in it), 0.39 (a heading among three). The panels 0.11 and 0.12
     /// (headings), 0.15 (a superscript run beside a second paragraph), 0.63
     /// (a list), and 0.71, 0.77 and 0.78 (prose beside code blocks) keep
-    /// their bodies on SwiftUI; 0.10 is empty. Links:
-    /// 0.16.0, 0.18.0, 0.22.1.
-    /// kitchen-sink: seven one-paragraph panels, a quote and a bodied
-    /// extension (the two column paragraphs and the expand wait for their
-    /// families).
+    /// their bodies on SwiftUI; 0.10 is empty. Columns (step 4): the
+    /// sections 0.46 (five, a heading among them), 0.47 (three, one
+    /// linked), 0.48 (a panel and a quote, one leaf each), 0.49 (three),
+    /// 0.52–0.55 (two each: the zero, negative, indented and all
+    /// non-positive cases), 0.60 (two, beside the nested expand) and 0.76
+    /// (the paragraph beside the column code); 0.68 holds only lists.
+    /// Links: 0.16.0, 0.18.0, 0.22.1, 0.47.1.1.
+    /// kitchen-sink: seven one-paragraph panels, a quote, a bodied
+    /// extension and two column paragraphs (its expand is reported
+    /// unprepared, below).
     /// stress-1k: 80 top-level one-paragraph panels and 80 top-level quotes
     /// of one to three paragraphs (119 leaves); its other panels and quotes
-    /// sit in list items, expands and columns, out of scope at step 3.
+    /// sit in list items and expands (its layout sections are in expand
+    /// bodies), out of scope at step 4.
     /// Captions (step 8, counted from the JSON): containers-parity has
     /// none; kitchen-sink's one (0.23, plain) is top-level; stress-1k's ten
     /// (0.95, 0.195, … 0.995) are all in expands, whose bodies the walk
-    /// does not enter. Expands (step 5): containers-parity's top-level
+    /// does not enter. None of the three has a caption in a layout column
+    /// (`<data>/merge/tools/captioncount.py --columns`), so step 4 moves no
+    /// caption pin here. Expands (step 5): containers-parity's top-level
     /// 0.58, 0.59, 0.66, 0.74 and 0.82, and the nested expand in column
     /// 0.60.0 once columns join; kitchen-sink's 0.22; stress-1k's 100
     /// top-level expands (blocks 45–49 of every 50).
     static let pins: [FixturePin] = [
-        FixturePin(name: "containers-parity", panel: 17, quote: 16, extensionBody: 7, headings: 2, linked: 3, atoms: 2,
+        FixturePin(name: "containers-parity", panel: 18, quote: 17, extensionBody: 7, column: 22, headings: 3, linked: 4, atoms: 2,
                    panelShapeExcluded: ["0.11", "0.12", "0.15", "0.63", "0.71", "0.77", "0.78"], expands: 5, expandsInColumns: 1),
-        FixturePin(name: "kitchen-sink", panel: 7, quote: 1, extensionBody: 1, headings: 0, linked: 0, atoms: 0, panelShapeExcluded: [],
+        FixturePin(name: "kitchen-sink", panel: 7, quote: 1, extensionBody: 1, column: 2, headings: 0, linked: 0, atoms: 0, panelShapeExcluded: [],
                    captions: 1, expands: 1),
-        FixturePin(name: "stress-1k", panel: 80, quote: 119, extensionBody: 0, headings: 0, linked: 43, atoms: 0, panelShapeExcluded: [],
+        FixturePin(name: "stress-1k", panel: 80, quote: 119, extensionBody: 0, column: 0, headings: 0, linked: 43, atoms: 0, panelShapeExcluded: [],
                    expands: 100),
     ]
 
     /// The innermost container kind above each container leaf the walk
-    /// visits (owner id → "panel", "quote" or "extension").
+    /// visits (owner id → "panel", "quote", "extension" or "column").
     static func innermostContainers(_ blocks: [RenderBlock]) -> [String: String] {
         var found: [String: String] = [:]
         func walk(_ blocks: [RenderBlock], in container: String?) {
@@ -482,6 +500,7 @@ struct TextKit2ContainerCoverageTests {
                 case .panel(_, let children): walk(children, in: "panel")
                 case .quote(let children): walk(children, in: "quote")
                 case .extensionPlaceholder(_, let body): walk(body, in: "extension")
+                case .layoutColumns(let columns): walk(columns.flatMap(\.blocks), in: "column")
                 default: continue
                 }
             }
@@ -490,7 +509,7 @@ struct TextKit2ContainerCoverageTests {
         return found
     }
 
-    @Test("fixturePins: hand-counted container leaves of containers-parity, kitchen-sink and stress-1k at step 3, by container, with the excluded panel shapes, their captions and the unprepared expands; before iOS 26 every leaf is gated")
+    @Test("fixturePins: hand-counted container leaves of containers-parity, kitchen-sink and stress-1k at step 4, by container, with the excluded panel shapes, their captions and the unprepared expands; before iOS 26 every leaf is gated")
     func fixturePins() async throws {
         let containers = TextKit2Eligibility.containerTextMatchesText
         for pin in Self.pins {
@@ -517,7 +536,7 @@ struct TextKit2ContainerCoverageTests {
                 if leaf.style?.isHeading == true { headings += 1 }
                 if case .fallback(let reason) = leaf.verdict { reasons[reason, default: 0] += 1 }
             }
-            #expect(byKind == ["panel": pin.panel, "quote": pin.quote, "extension": pin.extensionBody].filter { $0.value > 0 }, "\(pin.name): \(byKind)")
+            #expect(byKind == ["panel": pin.panel, "quote": pin.quote, "extension": pin.extensionBody, "column": pin.column].filter { $0.value > 0 }, "\(pin.name): \(byKind)")
             #expect(headings == pin.headings, "\(pin.name)")
             var expectedReasons: [TextKit2Eligibility.Fallback: Int] = [:]
             if pin.atoms > 0 { expectedReasons[.atom] = pin.atoms }
@@ -608,10 +627,10 @@ struct TextKit2ContainerCoverageTests {
         "text-dense": (0, 0), "youtube-dense": (0, 0), "youtube": (1, 0),
     ]
 
-    @Test("with the production list (steps 3 and 5 and captions) only the container leaf fields, as the step-3 stage counts them, the caption fields, for the captioned media in scope, and the unprepared expands, as hand-counted, move; listing expands adds no leaf; no nested code or container list leaf on any fixture; the legacy fields are the empty list's")
+    @Test("with the production list (steps 3, 4 and 5 and captions) only the container leaf fields, as the step-4 stage counts them, the caption fields, for the captioned media in scope, and the unprepared expands, as hand-counted, move; listing expands adds no leaf; no nested code or container list leaf on any fixture; the legacy fields are the empty list's")
     func newFieldsReadZeroOnEveryFixture() async throws {
-        let step3 = try #require(Self.stages.first { $0.name.hasPrefix("step 3") }).kinds
-        let production = step3.union([.media, .expand])
+        let step4 = try #require(Self.stages.first { $0.name.hasPrefix("step 4") }).kinds
+        let production = step4.union([.media, .expand])
         #expect(production == TextKit2Scope.containerChildKinds)
         let columns = TextKit2Scope.containerChildKinds.contains(.layoutColumns)
         let fixtures = try TK2ContainerCoverage.allFixtures()
@@ -629,11 +648,11 @@ struct TextKit2ContainerCoverageTests {
             withoutExpands.unpreparedExpands = coverage.unpreparedExpands
             #expect(coverage == withoutExpands, "\(name)")
             // Media adds captions only: the container leaf fields are the
-            // step-3 stage's.
-            let atStep3 = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: step3)
-            #expect(coverage.eligibleContainerLeaves == atStep3.eligibleContainerLeaves
-                && coverage.linkedContainerLeaves == atStep3.linkedContainerLeaves
-                && coverage.fallbackContainerLeaves == atStep3.fallbackContainerLeaves, "\(name): \(coverage)")
+            // step-4 stage's.
+            let atStep4 = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: step4)
+            #expect(coverage.eligibleContainerLeaves == atStep4.eligibleContainerLeaves
+                && coverage.linkedContainerLeaves == atStep4.linkedContainerLeaves
+                && coverage.fallbackContainerLeaves == atStep4.fallbackContainerLeaves, "\(name): \(coverage)")
             #expect(TK2ContainerCoverage.legacy(coverage) == ADFTextRenderer.textKit2Coverage(of: blocks, allowed: []), "\(name)")
             #expect(coverage.containerListLeaves == 0, "\(name): \(coverage)")
             #expect(coverage.eligibleNestedCode + coverage.fallbackNestedCode == 0, "\(name): \(coverage)")

@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Which text engine draws top-level paragraphs and headings, the text of
 /// top-level lists, the code of top-level code blocks, and the paragraphs
-/// and headings in panels, quotes, extension bodies and open expand bodies.
+/// and headings in panels, quotes, extension bodies, open expand bodies and
+/// stacked layout columns.
 ///
 /// `.swiftUI` is the shipping path (`Text(AttributedString)`). `.textKit2`
 /// routes plain (atom-free) top-level paragraphs and headings, the
@@ -35,15 +36,17 @@ import SwiftUI
 /// sub/superscript or small-text run or a code block beside another block
 /// keeps its whole body on SwiftUI. An expand body is prepared when it
 /// opens, as before; the renderer never starts or restarts that
-/// preparation.
+/// preparation. A layout section's columns pass the same choice to their
+/// blocks while the columns stack (compact width, accessibility text
+/// sizes); columns laid out side by side keep all their text on SwiftUI.
 ///
 /// A media caption's text follows the setting from iOS 26 when its text
 /// is eligible and its media is in scope (a top-level row, or a child a
 /// container's boundary passes the setting to), drawn in the caption's
 /// secondary foreground; the media box is SwiftUI.
 ///
-/// Everything else stays on SwiftUI regardless of the setting: layout
-/// columns, the lists and code inside any container, table cells, and
+/// Everything else stays on SwiftUI regardless of the setting: side-by-side
+/// layout columns, the lists and code inside any container, table cells, and
 /// atom-bearing text. On platforms without UIKit, `.textKit2` behaves as
 /// `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {

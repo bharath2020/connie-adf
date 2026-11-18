@@ -12,7 +12,8 @@ import ADFPreparation
 /// (`inheritsRenderer`); the panel shape rule (`panelKeepsRenderer`); and
 /// the view-time rules (`containerGate`). The production allow list holds
 /// the families enabled so far (paragraphs and headings, panels, quotes,
-/// extension bodies, expands). Cross-platform.
+/// extension bodies, captioned media, expands, layout columns).
+/// Cross-platform.
 @Suite("TextKit 2 container scope: rules")
 struct TextKit2ContainerScopeTests {
     /// The allow list at each stage of the container work (plan §5), and
@@ -132,6 +133,23 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
+    /// The families the off-grid column probe let keep the renderer in a
+    /// side-by-side layout column (`probes/results.md` §3.3): none.
+    /// Paragraphs, quotes, lists and panels failed it (the TextKit 2 leaf
+    /// sets text half a line or a line low at 85–118 pt column widths);
+    /// extension bodies, expands, code and captions were not probed side
+    /// by side. Written out here, not read from
+    /// `horizontalColumnKeepsRenderer`.
+    static let sideBySideFamilies: Set<TextKit2BlockKind> = []
+
+    /// The boundary's view-time rule for a child of `family` in `parent`,
+    /// as the probes decided it: a side-by-side column keeps every family
+    /// but `sideBySideFamilies` out; no panel direction is kept out.
+    static func expectedGate(_ family: TextKit2BlockKind, in parent: TextKit2ContainerParent) -> TextKit2Scope.ContainerGate? {
+        if parent == .column(sideBySide: true), !sideBySideFamilies.contains(family) { return .horizontalColumn }
+        return nil
+    }
+
     /// The panel shape rule as the probes decided it (`probes/results.md`
     /// §1) and the step 3 parity run added (a code block beside prose),
     /// written out from the run attributes rather than through
@@ -193,10 +211,11 @@ struct TextKit2ContainerScopeTests {
                             let renderer = TextKit2Scope.childRenderer(
                                 for: sample.kind, in: parent, inherited: inherited, allowed: allowed, layoutDirection: direction
                             )
-                            // No view-time boundary rule keeps a family out
-                            // at this stage (`containerGateTruthTable`).
+                            // The view-time boundary rules: a side-by-side
+                            // column keeps every family out
+                            // (`containerGateTruthTable`).
                             let expected: ADFTextRenderer = inherited == .textKit2 && allowed.contains(family)
-                                && Self.expectedWholeBlock(sample.kind) ? .textKit2 : .swiftUI
+                                && Self.expectedWholeBlock(sample.kind) && Self.expectedGate(family, in: parent) == nil ? .textKit2 : .swiftUI
                             #expect(renderer == expected, "\(sample.id) \(family) in \(parent), inherited \(inherited), \(stage), \(direction)")
                             checked += 1
                         }
@@ -218,13 +237,13 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies, captioned media and expands")
+    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies, captioned media, expands and layout columns")
     func topLevelRowsReadTheAllowList() async throws {
         // Step 3: paragraphs and headings in panels, quotes and extension
-        // bodies; step 8: captions; step 5: expands (their open bodies).
-        // Each later stage changes this pin deliberately, with the family
-        // it enables.
-        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand])
+        // bodies; step 8: captions; step 5: expands (their open bodies);
+        // step 4: layout columns. Each later stage changes this pin
+        // deliberately, with the family it enables.
+        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns])
         #expect(EnvironmentValues().adfContainerChildKinds == TextKit2Scope.containerChildKinds)
         #expect(EnvironmentValues().adfTextContainerContext == .none)
         #expect(TextKit2Scope.captionsUseTextKit2 == true)
@@ -235,7 +254,7 @@ struct TextKit2ContainerScopeTests {
             // In the app (the production list): PR 3's rows, and from
             // step 3 panels that pass their shape rule, quotes and bodied
             // extensions; from step 8 media with a caption; from step 5
-            // expands and nested expands.
+            // expands and nested expands; from step 4 layout sections.
             let pr3: Bool
             switch sample.kind {
             case .richText, .codeBlock: pr3 = true
@@ -245,7 +264,7 @@ struct TextKit2ContainerScopeTests {
             let production: Bool
             switch sample.kind {
             case .panel(_, let children): production = Self.expectedPanelKeeps(children)
-            case .quote, .expand: production = true
+            case .quote, .expand, .layoutColumns: production = true
             case .extensionPlaceholder(_, let body): production = !body.isEmpty
             case .media(let media): production = !(media.caption?.isEmpty ?? true)
             default: production = pr3
@@ -272,7 +291,7 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("containerGate: the width rules for wrapping leaves, none for code; no boundary rule fires before its family's probe decides it")
+    @Test("containerGate: the width rules for wrapping leaves, none for code; side-by-side columns keep every family out (the off-grid probe), no other boundary rule fires")
     @MainActor
     func containerGateTruthTable() {
         #expect(Set(TextKit2Scope.ContainerGate.allCases) == [.narrowColumn, .unprovenNestedWidth, .panelDirection, .horizontalColumn])
@@ -296,22 +315,26 @@ struct TextKit2ContainerScopeTests {
             #expect((expected == nil) == TextKit2Scope.textFits(bound, inset: inset), "textFits \(bound) inset \(inset)")
         }
 
-        // The boundary's rules. The panel direction and the side-by-side
-        // families are decided by their probes when those families are
-        // enabled; until then neither keeps anything out.
+        // The boundary's rules, as their probes decided them: no panel
+        // direction is kept out (the panel shape probes); in a side-by-side
+        // column no family keeps the renderer (the off-grid column probe:
+        // `sideBySideFamilies`); stacked columns and the other parents keep
+        // nothing out.
         #expect(TextKit2Scope.panelDirectionKeepsRenderer(.leftToRight))
         #expect(TextKit2Scope.panelDirectionKeepsRenderer(.rightToLeft))
         for kind in TextKit2BlockKind.allCases {
-            #expect(TextKit2Scope.horizontalColumnKeepsRenderer(kind), "\(kind)")
+            #expect(TextKit2Scope.horizontalColumnKeepsRenderer(kind) == Self.sideBySideFamilies.contains(kind), "\(kind)")
         }
         let kinds: [RenderBlock.Kind] = [
             .richText(segments: [], style: ListRowView.leaderStyle(theme: .default)),
             .quote([]), .panel(ADFTheme.default.panelPalette(.info, colorHex: nil), []), .listRows([]),
+            .extensionPlaceholder(title: "x", body: []), .layoutColumns([]), .divider,
         ]
         for kind in kinds {
             for parent in Self.parents {
                 for direction in [LayoutDirection.leftToRight, .rightToLeft] {
-                    #expect(TextKit2Scope.containerGate(for: kind, in: parent, layoutDirection: direction) == nil, "\(kind) in \(parent) \(direction)")
+                    let expected = Self.expectedGate(Self.family(kind), in: parent)
+                    #expect(TextKit2Scope.containerGate(for: kind, in: parent, layoutDirection: direction) == expected, "\(kind) in \(parent) \(direction)")
                 }
             }
         }

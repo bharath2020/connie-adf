@@ -387,6 +387,26 @@ struct ContainerDriver {
         }
     }
 
+    /// Whether the section holding `left` (its first column) and `right`
+    /// (a later column) lays its columns out side by side (a regular width
+    /// below the accessibility sizes: the two leaves share a top and
+    /// `right` starts past `left`) rather than stacked. `nil` while either
+    /// leaf is not in the tree.
+    func columnsSideBySide(_ left: ContainerLeaf, _ right: ContainerLeaf) -> Bool? {
+        let first = element(left), second = element(right)
+        guard first.exists, second.exists else { return nil }
+        return abs(first.frame.minY - second.frame.minY) < 4 && second.frame.minX > first.frame.maxX
+    }
+
+    /// Whether a column leaf is drawn by TextKit 2 in an arm: under the
+    /// TextKit 2 switch only while its columns stack. Side by side no
+    /// family keeps the renderer (PR 4 step 4: the off-grid column probe,
+    /// `TextKit2Scope.horizontalColumnKeepsRenderer`), so the column text
+    /// stays SwiftUI there in both arms.
+    static func columnTextKit2(_ textKit2: Bool, sideBySide: Bool) -> Bool {
+        textKit2 && !sideBySide
+    }
+
     // MARK: Geometry
 
     /// Fully inside the viewport, give or take `slack` points.
@@ -598,18 +618,33 @@ struct ContainerDriver {
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: point.x, dy: point.y)).tap()
     }
 
+    /// Each link's span relative to its text's top-left corner, from the
+    /// last arm whose tree exposed the link element (SwiftUI's). A TextKit 2
+    /// row exposes no link element, and it lays the text out as SwiftUI does
+    /// (the parity suites), so a later arm taps the same glyphs there.
+    static var linkSpans: [String: CGRect] = [:]
+
     /// Screen points on `link`'s glyphs, best first: the centre of the link
     /// element SwiftUI exposes inside the text when there is one (clamped
-    /// to the text's frame), else an estimate along the text's first line.
+    /// to the text's frame); else the span an earlier arm's link element
+    /// had in the same text (`linkSpans`); else an estimate along the
+    /// text's first line.
     func linkPoints(_ link: ContainerLink, in text: XCUIElement) -> [CGPoint] {
         let frame = text.frame
-        let candidates = app.links.matching(NSPredicate(format: "label == %@", link.linkText)).allElementsBoundByIndex
-        if let element = candidates.first(where: { $0.frame.intersects(frame) }) {
-            let span = element.frame.intersection(frame)
-            let lineHeight: CGFloat = 20.5
+        let lineHeight: CGFloat = 20.5
+        func points(_ span: CGRect) -> [CGPoint] {
             guard span.height > lineHeight * 1.5 else { return [CGPoint(x: span.midX, y: span.midY)] }
             return [CGPoint(x: span.minX + 8, y: span.maxY - lineHeight / 2),
                     CGPoint(x: span.maxX - 8, y: span.minY + lineHeight / 2)]
+        }
+        let candidates = app.links.matching(NSPredicate(format: "label == %@", link.linkText)).allElementsBoundByIndex
+        if let element = candidates.first(where: { $0.frame.intersects(frame) }) {
+            let span = element.frame.intersection(frame)
+            Self.linkSpans[link.leaf.owner + "|" + link.linkText] = span.offsetBy(dx: -frame.minX, dy: -frame.minY)
+            return points(span)
+        }
+        if let relative = Self.linkSpans[link.leaf.owner + "|" + link.linkText] {
+            return points(relative.offsetBy(dx: frame.minX, dy: frame.minY))
         }
         return [CGPoint(x: frame.midX, y: frame.minY + min(frame.height, 20) / 2)]
     }

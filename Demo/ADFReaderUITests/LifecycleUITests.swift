@@ -2820,6 +2820,10 @@ extension LifecycleUITests {
         let name: String
         let leaves: [ContainerLeaf]
         let follower: ContainerLeaf
+        /// For a layout section: two leaves in its first and a later
+        /// column. Its text is TextKit 2 under the switch only while the
+        /// columns stack (`ContainerDriver.columnTextKit2`).
+        var columns: (left: ContainerLeaf, right: ContainerLeaf)? = nil
         let reach: @MainActor (ContainerDriver) -> Bool
     }
 
@@ -2849,7 +2853,7 @@ extension LifecycleUITests {
                 return driver.scroll(by: 300, until: driver.element(KP.afterQuotes))
             },
             KLandmark(name: "columns 0.46", leaves: [KP.col25A, KP.col25B, KP.col75A, KP.col75B],
-                      follower: ContainerLeaf("KP-COL33-A", "0.47.0.0")) { driver in
+                      follower: ContainerLeaf("KP-COL33-A", "0.47.0.0"), columns: (KP.col25A, KP.col75A)) { driver in
                 driver.jump(toHeading: KP.s6, settleDrag: 0)
                 return driver.scroll(by: 300, until: driver.element(ContainerLeaf("KP-COL33-A", "0.47.0.0")))
             },
@@ -2902,6 +2906,8 @@ extension LifecycleUITests {
         reader.drag(by: 40)
         reader.pause()
         let scale = reader.pixelScale()
+        // Side-by-side columns keep their text on SwiftUI in both arms.
+        let sideBySide = landmark.columns.flatMap { driver.columnsSideBySide($0.left, $0.right) } ?? false
         let tracked = landmark.leaves + [landmark.follower]
         let start = try reader.documentSnapshot()
         let base = Self.kTops(start, tracked)
@@ -2915,11 +2921,12 @@ extension LifecycleUITests {
         for trip in 1 ... 5 {
             for textKit2 in [true, false] {
                 reader.chooseRenderer(textKit2: textKit2)
-                kWaitForEngine(driver, landmark.leaves, textKit2: textKit2)
+                let engine = ContainerDriver.columnTextKit2(textKit2, sideBySide: sideBySide)
+                kWaitForEngine(driver, landmark.leaves, textKit2: engine)
                 let snapshot = try reader.documentSnapshot()
                 let tops = Self.kTops(snapshot, tracked)
                 let shift = LabelShift(from: last, to: tops, scale: scale)
-                let wrong = Self.kWrongEngine(snapshot, landmark.leaves, textKit2: textKit2)
+                let wrong = Self.kWrongEngine(snapshot, landmark.leaves, textKit2: engine)
                 let lost = measured.filter { tops[$0] == nil }
                 let name = "\(landmark.name) trip \(trip) \(textKit2 ? "ON" : "OFF")"
                 if shift.maxPixels > Self.shiftLimit { failures.append("\(name): \(shift.worstLabel) moved \(shift.maxPixels) px") }
@@ -2937,6 +2944,7 @@ extension LifecycleUITests {
         attach(reader.app, "k1-\(landmark.name.replacingOccurrences(of: " ", with: "-"))")
         return ([
             "landmark": landmark.name, "measured": measured, "owners": landmark.leaves.map(\.owner),
+            "layout": landmark.columns == nil ? "-" : (sideBySide ? "side-by-side" : "stacked"),
             "switches": switches, "accumulated_px": Double(drift.maxPixels), "accumulated_worst": drift.worstLabel,
         ], failures)
     }
@@ -3141,7 +3149,10 @@ extension LifecycleUITests {
     /// drift + 2 px. The column layout (side by side or stacked) is recorded
     /// before, rotated and after; a phone stays stacked in both
     /// orientations, so the side-by-side boundary is crossed only on a
-    /// regular-width device (recorded, `crossed_boundary`). The live
+    /// regular-width device (recorded, `crossed_boundary`). The column
+    /// text is TextKit 2 under the switch only while the columns stack (no
+    /// family keeps the renderer side by side, PR 4 step 4), so the
+    /// engine each check expects follows the layout of the moment. The live
     /// TextKit 2 row count after each size step is at most the count before
     /// it + `unshownRowAllowance` (no mass re-materialisation, ADR §16), and
     /// CPU settles ≤ 2 % within 5 s after each change. Passes after step 4.
@@ -3161,22 +3172,25 @@ extension LifecycleUITests {
             kAway(reader)
             try park(reader, agent)
             let scale = reader.pixelScale()
+            func layout() -> String {
+                guard let sideBySide = driver.columnsSideBySide(KP.col25A, KP.col75A) else { return "unknown" }
+                return sideBySide ? "side-by-side" : "stacked"
+            }
+            /// The engine the column leaves have now: TextKit 2 under the
+            /// switch while the columns stack.
+            func engine() -> Bool {
+                ContainerDriver.columnTextKit2(textKit2, sideBySide: layout() == "side-by-side")
+            }
             func aligned() throws -> [String: CGFloat] {
                 _ = driver.scroll(by: 300, until: driver.element(anchor), maxDrags: 10)
-                kWaitForEngine(driver, tracked, textKit2: textKit2)
+                kWaitForEngine(driver, tracked, textKit2: engine())
                 return LabelShift.relative(Self.kTops(try reader.documentSnapshot(), tracked), to: anchor.sentinel) ?? [:]
-            }
-            func layout() -> String {
-                let left = driver.element(KP.col25A), right = driver.element(KP.col75A)
-                guard left.exists, right.exists else { return "unknown" }
-                return abs(left.frame.minY - right.frame.minY) < 4 && right.frame.minX > left.frame.maxX
-                    ? "side-by-side" : "stacked"
             }
             func live() -> Int {
                 textKit2 ? reader.liveTextKit2Rows(until: { _ in true }, settled: true) ?? -1 : 0
             }
-            let engine = Self.kWrongEngine(try reader.documentSnapshot(), tracked, textKit2: textKit2)
-            failures += engine.map { "\(arm) parked: \($0)" }
+            let wrongEngine = Self.kWrongEngine(try reader.documentSnapshot(), tracked, textKit2: engine())
+            failures += wrongEngine.map { "\(arm) parked (\(layout())): \($0)" }
 
             let c0 = try aligned()
             reader.pause(5)
