@@ -54,10 +54,21 @@ public final class ADFDocumentModel {
     @ObservationIgnored private(set) var inlineCardsAsSmartLinks = false
 
     /// The smart-link counters of this model (resolver calls, cancellations,
-    /// calls in flight, resolved, failed, smart-link leaf redraws),
-    /// cumulative across its loads except `inFlight`. Diagnostics only.
+    /// calls in flight, resolved, failed, smart-link leaf redraws, and the
+    /// resolution mode's scroll and nearby counters), cumulative across its
+    /// loads except the ones read off the current state (`inFlight`,
+    /// `isScrolling`, `waiting`, `prefetchInFlight`). Diagnostics only.
     @_spi(ADFDiagnostics)
     public var smartLinkStats: ADFSmartLinkStats { smartLinks.stats }
+
+    /// `.afterScrollingWithNearby`'s limits: the keys one nearby batch may
+    /// hold, and how far (in document positions, a top-level row or a
+    /// top-level list row each) a nearby link may be from the links on
+    /// screen. Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var smartLinkNearbyLimits: (batch: Int, distance: Int) {
+        (smartLinks.timing.prefetchBatchSize, smartLinks.timing.nearbyDistance)
+    }
 
     /// Smart-link-driven redraws per text owner id (`RenderBlock.id`,
     /// list-row id, media id): which leaves a resolution redrew, so a test
@@ -124,6 +135,7 @@ public final class ADFDocumentModel {
         self.customRenderers = ADFCustomRendererRegistry(customRenderers)
         self.search = ADFDocumentSearch()
         self.search.model = self
+        smartLinks.document = self
     }
 
     /// The indexer every index build for this document must use — same theme,
@@ -551,6 +563,15 @@ public final class ADFDocumentModel {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled heading" : trimmed
     }
+}
+
+/// What `.afterScrollingWithNearby` reads to find the links near the screen
+/// (`SmartLinkCoordinator`, design §8.5): read only from the coordinator's
+/// own tasks, never in a view's body, so it adds no observation.
+extension ADFDocumentModel: SmartLinkDocument {
+    var smartLinkBlocks: [RenderBlock] { blocks }
+    var smartLinkRevision: UInt64 { documentRevision }
+    var smartLinkTopRowIndex: Int? { anchors.topRow.flatMap { itemPositionByID[$0] } }
 }
 
 /// One lazy-stack section: an optional pinned header (a table's header

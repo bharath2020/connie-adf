@@ -50,13 +50,21 @@ public struct ADFDocumentView: View {
     ///     after a resolver is installed (build the view before calling
     ///     `load`, or in the same main-actor turn); in a document loaded
     ///     earlier they keep their chips while bare links still resolve.
+    ///   - smartLinkResolution: When smart links are looked up (see
+    ///     `ADFSmartLinkResolution`): as they come on screen, also while
+    ///     scrolling (the default); only once scrolling has stopped; or
+    ///     once scrolling has stopped plus, at rest, small batches of the
+    ///     off-screen links nearest the screen. Handed to the same
+    ///     coordinator, so changing it invalidates no row, and it can change
+    ///     at any time.
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
                 taskStates: [String: Bool] = [:],
                 mentionContent: (@MainActor (String) -> AnyView)? = nil,
                 textRenderer: ADFTextRenderer = .swiftUI,
-                smartLinkResolver: (any ADFSmartLinkResolver)? = nil) {
+                smartLinkResolver: (any ADFSmartLinkResolver)? = nil,
+                smartLinkResolution: ADFSmartLinkResolution = .whileScrolling) {
         self.model = model
         self.mediaProvider = mediaProvider
         self.interactionHandler = interactionHandler
@@ -64,6 +72,7 @@ public struct ADFDocumentView: View {
         self.mentionContent = mentionContent
         self.textRenderer = textRenderer
         model.smartLinks.resolver = smartLinkResolver
+        model.smartLinks.resolution = smartLinkResolution
     }
 
     /// TOC jumps use `ScrollViewReader.scrollTo` rather than writing the
@@ -91,6 +100,11 @@ public struct ADFDocumentView: View {
                     .frame(maxWidth: .infinity)
             }
             .scrollPosition(id: anchorBinding, anchor: .top)
+            // The scroll phase, for smart-link resolution modes that wait
+            // for the document to come to rest (design §8.2). Writes the
+            // non-observable coordinator only: a phase change invalidates
+            // no row and not this view.
+            .modifier(SmartLinkScrollPhaseFeed(coordinator: model.smartLinks))
             // The *sole* re-anchor authority: re-assert the reader's row by
             // identity whenever the content column changes width (rotation, iPad
             // Split View drag). `scrollPosition(id:)` above is tracking-only (its
@@ -476,6 +490,30 @@ extension View {
         case .fullWidth:
             frame(maxWidth: breakout?.width.map { CGFloat($0) })
                 .padding(.horizontal, -margin)
+        }
+    }
+}
+
+/// Feeds the document scroll view's phase to the smart-link coordinator
+/// (`SmartLinkCoordinator.scrollPhaseChanged`): scrolling is any phase but
+/// idle — a drag, a fling's deceleration, an animated jump. The
+/// `#available` branch erases one view, the document's scroll view, never a
+/// lazy row (see `ADFDocumentView.rows`). Installed in every mode and with
+/// or without a resolver, so the view's structure never depends on either;
+/// the callback is a stored Bool and offset on a non-observable object and
+/// returns at once without a resolver. Before iOS 18 / macOS 15 there is no
+/// phase: the coordinator stays at rest and every mode behaves as
+/// `.whileScrolling`.
+private struct SmartLinkScrollPhaseFeed: ViewModifier {
+    let coordinator: SmartLinkCoordinator
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content.onScrollPhaseChange { [coordinator] _, phase, context in
+                coordinator.scrollPhaseChanged(scrolling: phase != .idle, offset: context.geometry.contentOffset.y)
+            }
+        } else {
+            content
         }
     }
 }

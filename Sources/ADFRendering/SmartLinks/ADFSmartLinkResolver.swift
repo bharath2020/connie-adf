@@ -10,10 +10,15 @@ import Foundation
 /// holding it (its paragraph, heading, list item or caption) is on screen,
 /// after a short dwell, so a fling past it starts nothing; leaving the
 /// screen cancels the lookup, which leaves the link plain until it appears
-/// again. The result replaces the link's text (an inline card's host) with
-/// an icon and the title, in the text that shows that link only.
+/// again. `ADFDocumentView(smartLinkResolution:)` can make lookups wait
+/// until scrolling stops, and can add, at rest, small batches of the
+/// off-screen links nearest the screen (`ADFSmartLinkResolution`). The
+/// result replaces the link's text (an inline card's host) with an icon and
+/// the title, in the text that shows that link only.
 public protocol ADFSmartLinkResolver: Sendable {
-    /// Called on a background executor while the URL is on screen, with at
+    /// Called on a background executor while the URL is on screen (or, under
+    /// `.afterScrollingWithNearby`, near it while the reader is not
+    /// scrolling; such a call is cancelled when scrolling resumes), with at
     /// most one call at a time per canonical URL (scheme and host
     /// lowercased, a trailing dot, the default port and the fragment
     /// removed; URLs with user info are never passed) and at most four calls
