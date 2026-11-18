@@ -172,12 +172,12 @@ struct TextKit2FixtureSweepTests {
     /// generation; Slide Over), 375, 390, 393, 402, 414, 430 and 440 pt
     /// (code review F-R4).
     nonisolated static let containerDocumentWidths: [CGFloat] = [320, 375, 390, 393, 402, 414, 430, 440]
-    /// The text sizes the container leaves are swept at: xSmall to
-    /// xxLarge, every size the container size rule
-    /// (`containerSizeKeepsRenderer`) keeps on TextKit 2. Swept from
-    /// xxxLarge to AX5 (code review F-R4, F-Q1), panel bodies 183 to 271 pt
-    /// wide broke long words apart at AX4 and AX5, so from xxxLarge every
-    /// container keeps its body on SwiftUI. `ADF_SWEEP_CONTAINER_SIZES=<name,…>`
+    /// The text sizes the container leaves are swept at: xSmall to AX3,
+    /// every size the container size rule (`containerSizeKeepsRenderer`)
+    /// keeps on TextKit 2. Swept at AX4 and AX5 (code review F-R4, F-Q1),
+    /// panel bodies 183 to 271 pt wide and quote bodies near 268 pt broke
+    /// long words apart, so from AX4 every container keeps its body on
+    /// SwiftUI. `ADF_SWEEP_CONTAINER_SIZES=<name,…>`
     /// (`DynamicTypeSize` case names) replaces the sizes; a size the rule
     /// keeps on SwiftUI is then measured and its misses printed
     /// (`TK2_CONTAINER_SWEEP_RULE`), not asserted: the rule's evidence,
@@ -186,7 +186,7 @@ struct TextKit2FixtureSweepTests {
     nonisolated static var containerSizes: [DynamicTypeSize] {
         let names = ProcessInfo.processInfo.environment["ADF_SWEEP_CONTAINER_SIZES"]?.split(separator: ",").map(String.init) ?? []
         let sizes = names.compactMap { name in DynamicTypeSize.allCases.first { "\($0)" == name } }
-        return sizes.isEmpty ? [.xSmall, .small, .medium, .large, .xLarge, .xxLarge] : sizes
+        return sizes.isEmpty ? DynamicTypeSize.allCases.filter(TextKit2Scope.containerSizeKeepsRenderer) : sizes
     }
     /// A fine grid of child widths around the one width D3 was measured at
     /// in a body (a 271.667 pt panel body at AX5, `probes/results.md` §D3):
@@ -204,6 +204,11 @@ struct TextKit2FixtureSweepTests {
         let sizes = names.compactMap { name in DynamicTypeSize.allCases.first { "\($0)" == name } }
         return sizes.isEmpty ? [.large, .accessibility4, .accessibility5] : sizes
     }
+    /// Whether the fine grid takes list text too (`ADF_SWEEP_FINE_LISTS=1`):
+    /// evidence for PR 2's list leaf at off-grid widths, which the row fix
+    /// leaves out (`.list` rows lay out anew when re-proposed). Its misses
+    /// print as `TK2_CONTAINER_SWEEP_LIST_FINE` and are not asserted.
+    nonisolated static var fineGridLists: Bool { ProcessInfo.processInfo.environment["ADF_SWEEP_FINE_LISTS"] == "1" }
 
     /// The first and last text baselines and height of `view` laid out at
     /// `width` as a baseline-aligned parent reads them (`TK2Parity.guides`).
@@ -354,7 +359,8 @@ struct TextKit2FixtureSweepTests {
         var failures: [String] = []
         var ruleMisses = 0
         let onePixel = 1 / TK2Parity.nativeScale
-        func measure(_ entry: (segments: [InlineSegment], style: TextBlockStyle?, chain: [Inset]), owner: String, document: String, width: CGFloat, size: DynamicTypeSize) {
+        var listFine = (checked: 0, misses: 0, d3: 0)
+        func measure(_ entry: (segments: [InlineSegment], style: TextBlockStyle?, chain: [Inset]), owner: String, document: String, width: CGFloat, size: DynamicTypeSize, listFineGrid: Bool = false) {
             guard width >= TextKit2Scope.minimumTextWidth else { return }
             guard measured.insert(Key(segments: entry.segments, style: entry.style, width: width, size: size)).inserted else { return }
             widthsSeen.insert(width)
@@ -374,10 +380,19 @@ struct TextKit2FixtureSweepTests {
             }
             let delta = max(dHeight, dFirst, dLast)
             let label = "\(document) \(owner) in \(entry.chain) \(size) W=\(String(format: "%.3f", width)): h=\(g.swiftUI.height)/\(g.textKit2.height) first=\(g.swiftUI.first)/\(g.textKit2.first) last=\(g.swiftUI.last)/\(g.textKit2.last)"
+            let signature = dHeight <= Self.tolerance && dFirst > Self.tolerance ? "d3Signature " : ""
+            if listFineGrid {
+                // Evidence only (`fineGridLists`).
+                listFine.checked += 1
+                guard delta > Self.tolerance else { return }
+                listFine.misses += 1
+                if !signature.isEmpty { listFine.d3 += 1 }
+                print("TK2_CONTAINER_SWEEP_LIST_FINE \(signature)\(label)")
+                return
+            }
             checked += 1
             if delta > worst.delta { worst = (delta, label) }
             guard delta > Self.tolerance else { return }
-            let signature = dHeight <= Self.tolerance && dFirst > Self.tolerance ? "d3Signature " : ""
             if TextKit2Scope.containerSizeKeepsRenderer(size) {
                 failures.append(label)
                 print("TK2_CONTAINER_SWEEP_MISS \(signature)\(label)")
@@ -418,7 +433,13 @@ struct TextKit2FixtureSweepTests {
                         measure(entry, owner: leaf.ownerID, document: document, width: documentWidth - 4 * TK2Parity.theme.spacing - inset, size: size)
                     }
                 }
-                guard !isList else { continue }
+                if isList {
+                    guard Self.fineGridLists else { continue }
+                    for size in Self.d3FineSizes where Self.containerSizes.contains(size) && TextKit2Scope.nestedListSizeKeepsRenderer(size) {
+                        for width in Self.d3FineWidths { measure(entry, owner: leaf.ownerID, document: document, width: width, size: size, listFineGrid: true) }
+                    }
+                    continue
+                }
                 for size in Self.d3FineSizes where Self.containerSizes.contains(size) {
                     for width in Self.d3FineWidths { measure(entry, owner: leaf.ownerID, document: document, width: width, size: size) }
                 }
@@ -431,6 +452,9 @@ struct TextKit2FixtureSweepTests {
             print("TK2 container sweep \(document): \(leaves.count) container leaves, \(eligible) eligible, \(gated) gated, \(measured.count - before) new distinct measured")
         }
         if TextKit2Eligibility.containerTextMatchesText { #expect(checked > 0, "no container leaf measured") }
+        if Self.fineGridLists {
+            print("TK2 container sweep list fine grid: \(listFine.checked) measurements, \(listFine.misses) misses, \(listFine.d3) with the d3 signature")
+        }
         print("TK2 container sweep: \(checked) measurements at \(widthsSeen.count) child widths, \(failures.count) misses, \(ruleMisses) under the size rule, residual1 \(residual1), worst |Δ| = \(worst.delta) \(worst.description); elapsed \(clock.now - start)")
         #expect(failures.isEmpty, "\(failures.count) container leaves miss Text's height or baselines: \(failures.prefix(6))")
     }

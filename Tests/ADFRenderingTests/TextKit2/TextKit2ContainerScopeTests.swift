@@ -150,9 +150,10 @@ struct TextKit2ContainerScopeTests {
     /// and a panel's quote at AX5 drew apart from the blocks alone); a
     /// side-by-side column keeps every family but `sideBySideFamilies` out;
     /// a list at an accessibility size stays out of every container (the
-    /// AX4 nested-list case, lead dispositions M1); from xxxLarge every
-    /// family stays out of every container (code review F-R4 and F-Q1: the
-    /// container-leaf sweep's AX4 and AX5 line breaks in panel bodies).
+    /// AX4 nested-list case, lead dispositions M1); from AX4 every family
+    /// stays out of every container (code review F-R4 and F-Q1: the
+    /// container-leaf sweep's AX4 and AX5 line breaks in panel and quote
+    /// bodies).
     static func expectedGate(
         _ family: TextKit2BlockKind, in parent: TextKit2ContainerParent, size: DynamicTypeSize = .large,
         direction: LayoutDirection = .leftToRight
@@ -160,13 +161,14 @@ struct TextKit2ContainerScopeTests {
         if direction == .rightToLeft { return .containerDirection }
         if parent == .column(sideBySide: true), !sideBySideFamilies.contains(family) { return .horizontalColumn }
         if family == .listRows, size >= .accessibility1 { return .nestedListSize }
-        if size >= .xxxLarge { return .containerSize }
+        if size >= .accessibility4 { return .containerSize }
         return nil
     }
 
-    /// Large and xLarge (below the container size rule), xxxLarge (its
-    /// first size) and two accessibility sizes, for the truth tables.
-    static let gateSizes: [DynamicTypeSize] = [.large, .xLarge, .xxxLarge, .accessibility1, .accessibility5]
+    /// Large and xxxLarge (below the container size rule), AX1 and AX3
+    /// (below it, where only lists stay out), AX4 (its first size) and AX5,
+    /// for the truth tables.
+    static let gateSizes: [DynamicTypeSize] = [.large, .xxxLarge, .accessibility1, .accessibility3, .accessibility4, .accessibility5]
 
     /// The panel shape rule as the probes decided it (`probes/results.md`
     /// §1) and the step 3 parity run added (a code block beside prose),
@@ -251,8 +253,9 @@ struct TextKit2ContainerScopeTests {
                                 )
                                 // The view-time boundary rules: right to left
                                 // nothing, a side-by-side column keeps every
-                                // family out, and a list stays out at an
-                                // accessibility size (`containerGateTruthTable`).
+                                // family out, a list stays out at an
+                                // accessibility size, and from AX4 every
+                                // family stays out (`containerGateTruthTable`).
                                 let expected: ADFTextRenderer = inherited == .textKit2 && allowed.contains(family)
                                     && Self.expectedWholeBlock(sample.kind)
                                     && Self.expectedGate(family, in: parent, size: size, direction: direction) == nil
@@ -336,7 +339,7 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("containerGate: the width rules for wrapping leaves, none for code; right to left every container keeps every family out; side-by-side columns keep every family out (the off-grid probe); a list below a boundary stays out at the accessibility sizes; from xxxLarge every container keeps every family out; no other boundary rule fires")
+    @Test("containerGate: the width rules for wrapping leaves, none for code; right to left every container keeps every family out; side-by-side columns keep every family out (the off-grid probe); a list below a boundary stays out at the accessibility sizes; from AX4 every container keeps every family out; no other boundary rule fires")
     @MainActor
     func containerGateTruthTable() {
         #expect(Set(TextKit2Scope.ContainerGate.allCases) == [.narrowColumn, .unprovenNestedWidth, .containerDirection, .horizontalColumn, .nestedListSize, .containerSize])
@@ -391,10 +394,9 @@ struct TextKit2ContainerScopeTests {
         for size in DynamicTypeSize.allCases {
             #expect(TextKit2Scope.nestedListSizeKeepsRenderer(size) == !size.isAccessibilitySize, "\(size)")
         }
-        // The container size rule (code review F-R4, F-Q1): below xxxLarge
-        // only.
+        // The container size rule (code review F-R4, F-Q1): below AX4 only.
         for size in DynamicTypeSize.allCases {
-            #expect(TextKit2Scope.containerSizeKeepsRenderer(size) == [.xSmall, .small, .medium, .large, .xLarge, .xxLarge].contains(size), "\(size)")
+            #expect(TextKit2Scope.containerSizeKeepsRenderer(size) == ![.accessibility4, .accessibility5].contains(size), "\(size)")
         }
     }
 
@@ -799,6 +801,55 @@ extension TextKit2ContainerScopeTests {
             for index in n..<(2 * n) { expected.insert("0.\(index).0") }
             let names = batch.map(\.name)
             #expect(owners.all == Self.passing(expected), "\(names): missing \(Self.passing(expected).subtracting(owners.all).sorted()), unexpected \(owners.all.subtracting(Self.passing(expected)).sorted())")
+        }
+    }
+}
+extension TextKit2ContainerScopeTests {
+    /// The size and renderer rules applied live, not only to a fresh host
+    /// (lead calls C47 and C51): containers-dense hosted once, in a
+    /// 402 pt window, then given AX4 (where the container size rule keeps
+    /// every container body on SwiftUI), AX3 again, the SwiftUI renderer
+    /// and TextKit 2 again, in place. Only the rows in the window's bounds
+    /// count: the lazy stack keeps a few prefetched rows off screen.
+    @Test("live flips on containers-dense: AX3 to AX4 takes every container row off TextKit 2 and back to AX3 restores the same rows; a renderer switch to SwiftUI leaves no TextKit 2 row and back restores them")
+    @MainActor
+    func liveFlipsLeaveNoStaleContainerRow() async throws {
+        let model = try await TK2CodeLogic.loadedModel(try TextKit2FixtureSweepTests.fixtureData("containers-dense"))
+        func document(_ renderer: ADFTextRenderer, _ size: DynamicTypeSize) -> some View {
+            TK2CodeLogic.documentView(model, renderer)
+                .environment(\.horizontalSizeClass, .compact)
+                .dynamicTypeSize(size)
+        }
+        let hosted = TK2CodeLogic.Hosted(document(.textKit2, .accessibility3), size: CGSize(width: 402, height: 3_000))
+        defer { hosted.close() }
+        func shown() -> [TextKit2RowView] {
+            hosted.rows.filter { $0.window != nil && $0.convert($0.bounds, to: nil).intersects(hosted.window.bounds) }
+        }
+        func containerOwners() -> Set<String> {
+            Set(shown().filter { $0.containerContext == .container }.compactMap(\.ownerID))
+        }
+        try await hosted.settle()
+        let gated = !TextKit2Eligibility.containerTextMatchesText
+        let first = containerOwners()
+        if gated {
+            #expect(first.isEmpty, "before iOS 26 container text is gated: \(first.sorted())")
+        } else {
+            #expect(!first.isEmpty, "at AX3 container text draws on TextKit 2")
+        }
+        let steps: [(ADFTextRenderer, DynamicTypeSize)] = [(.textKit2, .accessibility4), (.textKit2, .accessibility3), (.swiftUI, .accessibility3), (.textKit2, .accessibility3)]
+        for (renderer, size) in steps {
+            hosted.show(document(renderer, size))
+            try await hosted.settle()
+            let owners = containerOwners()
+            let label = "\(renderer) \(size)"
+            print("CONTAINER_LIVE_FLIP \(label): containerRows=\(owners.count) rows=\(shown().count)")
+            if renderer == .swiftUI {
+                #expect(shown().isEmpty, "\(label): \(shown().compactMap(\.ownerID).sorted())")
+            } else if !TextKit2Scope.containerSizeKeepsRenderer(size) {
+                #expect(owners.isEmpty, "\(label): \(owners.sorted())")
+            } else {
+                #expect(owners == first, "\(label): missing \(first.subtracting(owners).sorted()), unexpected \(owners.subtracting(first).sorted())")
+            }
         }
     }
 }

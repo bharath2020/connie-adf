@@ -17,7 +17,7 @@ import ADFPreparation
 // blocks (PR 3's code block, whole, through `BlockView`: its own gate
 // still decides its code text); every other container child still gets
 // `.swiftUI`, as before containers joined the renderer's scope. Right to
-// left (`containerDirectionKeepsRenderer`) and from xxxLarge
+// left (`containerDirectionKeepsRenderer`) and from AX4
 // (`containerSizeKeepsRenderer`) every container keeps its body on SwiftUI.
 
 /// A `RenderBlock.Kind` case without its payload: what the container allow
@@ -138,10 +138,10 @@ extension TextKit2Scope {
     /// iOS 26 the text it reaches still stays on SwiftUI
     /// (`TextKit2Eligibility.containerTextMatchesText`, and for code
     /// `containerCodeVerdict`). A layout section passes the renderer to its
-    /// columns' blocks when the columns stack (compact width; at the
-    /// accessibility text sizes, where they stack too, the size rule keeps
-    /// them on SwiftUI, `containerSizeKeepsRenderer`); side by side, no
-    /// family keeps it yet
+    /// columns' blocks when the columns stack (compact width, and the
+    /// accessibility text sizes, where they stack too; from AX4 the size
+    /// rule keeps them on SwiftUI, `containerSizeKeepsRenderer`); side by
+    /// side, no family keeps it yet
     /// (`horizontalColumnKeepsRenderer`). A list below a boundary is drawn
     /// by the list row as at the top level: rules A–D and the iOS 26 list
     /// gate decide its rows, rule D at the width bound the containers above
@@ -336,7 +336,7 @@ extension TextKit2Scope {
         /// A list below a container's boundary at an accessibility text
         /// size (`nestedListSizeKeepsRenderer`).
         case nestedListSize
-        /// A child of a container at xxxLarge or above
+        /// A child of a container at AX4 or above
         /// (`containerSizeKeepsRenderer`).
         case containerSize
     }
@@ -411,28 +411,30 @@ extension TextKit2Scope {
     }
 
     /// Whether a container at the text size `size` may pass the renderer
-    /// to its children: below xxxLarge only. Measured (code review F-R4 and
+    /// to its children: below AX4 only. Measured (code review F-R4 and
     /// F-Q1: the container-leaf sweep comparing baselines as well as
     /// heights, iOS 26.3, 3x; every eligible container leaf of
     /// containers-parity, kitchen-sink, stress-1k and stress-5k hosted alone
-    /// at the width its containers give it in 320 to 440 pt documents, at
-    /// every size, and at off-grid widths 268 to 276 pt at Large and AX5):
+    /// at the width its containers give it in 320 to 440 pt documents, and
+    /// at off-grid widths 268 to 276 pt, at every size):
     /// - A paragraph set a line low at the same height, in panel bodies at
-    ///   every size from xSmall to AX5 (31 leaves at real widths): the row
-    ///   re-laid out at the pixel it reported. The row now keeps that
-    ///   layout (`TextKit2RowView.layoutResult(forProposedWidth:)`), and
-    ///   the sweep finds none at any size.
-    /// - A paragraph one to three lines taller or shorter, still: panel
-    ///   bodies 183 to 271 pt wide at AX4 (2) and AX5 (40), and quote bodies
-    ///   at off-grid widths at AX5, long words broken apart differently
-    ///   (heights 58 to 682 pt apart).
-    /// So from xxxLarge every container keeps its body on SwiftUI: a
-    /// category rule, not a width floor. xxxLarge to AX3 stay out with AX4
-    /// and AX5 though only the line shift, now fixed, was measured there. A
-    /// list below a boundary at an accessibility size reports
-    /// `nestedListSize` first (lead dispositions M1).
+    ///   every size from xSmall to AX5 (31 leaves at real widths) and in
+    ///   quote, panel and column bodies at off-grid widths: the row re-laid
+    ///   out at the pixel it reported. The row now keeps that layout
+    ///   (`TextKit2RowView.layoutResult(forProposedWidth:)`), and the sweep
+    ///   finds none at any size (156,891 measurements).
+    /// - A paragraph one to three lines taller or shorter, from AX4 only:
+    ///   panel bodies 183 to 271 pt wide at AX4 (2) and AX5 (42), and quote
+    ///   bodies at off-grid widths near 268 pt at AX5 (7), long words broken
+    ///   apart differently (heights 58 to 682 pt apart). The break follows
+    ///   the width a long word is given, so any container narrow enough can
+    ///   reach it.
+    /// So from AX4 every container keeps its body on SwiftUI, at every
+    /// document width: a category rule, not a width floor. xxxLarge to AX3
+    /// measured clean. A list below a boundary at an accessibility size
+    /// reports `nestedListSize` first (lead dispositions M1).
     static func containerSizeKeepsRenderer(_ size: DynamicTypeSize) -> Bool {
-        size < .xxxLarge
+        size < .accessibility4
     }
 
     /// The boundary's view-time rules for a child of `kind` in `parent`

@@ -61,10 +61,10 @@ enum TK2ContainerProbe {
     static var familyMatrix: Bool { mode == "family" }
     /// Whether every case prints its line (not only failures).
     static var printsEveryCase: Bool { mode != "sample" }
-    /// xxLarge is the largest size the container size rule
-    /// (`containerSizeKeepsRenderer`) keeps on TextKit 2 and xxxLarge the
-    /// first it keeps on SwiftUI; the rest stand for the sizes around them.
-    static let familySizes: [DynamicTypeSize] = [.xSmall, .large, .xxLarge, .xxxLarge, .accessibility3, .accessibility5]
+    /// AX3 is the largest size the container size rule
+    /// (`containerSizeKeepsRenderer`) keeps on TextKit 2 and AX4 the first
+    /// it keeps on SwiftUI; the rest stand for the sizes around them.
+    static let familySizes: [DynamicTypeSize] = [.xSmall, .large, .xxxLarge, .accessibility3, .accessibility4, .accessibility5]
 
     // MARK: Documents
 
@@ -1123,15 +1123,15 @@ enum TK2ContainerProbe {
         return all
     }
 
-    /// The sample's corner cases (code review F-R5): AX5, xxLarge (the
-    /// largest size the container size rule keeps on TextKit 2) and
-    /// xxxLarge (the first it keeps on SwiftUI) in a 320 pt document; right
-    /// to left with Bold Text at Large in a 320 pt document and at AX3 in a
-    /// 375 pt one; dark appearance at Large and AX3 in a 375 pt document.
+    /// The sample's corner cases (code review F-R5): AX5, AX3 (the largest
+    /// size the container size rule keeps on TextKit 2) and AX4 (the first
+    /// it keeps on SwiftUI) in a 320 pt document; right to left with Bold
+    /// Text at Large in a 320 pt document and at AX3 in a 375 pt one; dark
+    /// appearance at Large and AX3 in a 375 pt document.
     static let sampleCorners: [(env: TK2Parity.Environment, documentWidth: CGFloat)] = [
         (TK2Parity.Environment(size: .accessibility5), 320),
-        (TK2Parity.Environment(size: .xxLarge), 320),
-        (TK2Parity.Environment(size: .xxxLarge), 320),
+        (TK2Parity.Environment(size: .accessibility3), 320),
+        (TK2Parity.Environment(size: .accessibility4), 320),
         (TK2Parity.Environment(size: .large, direction: .rightToLeft, legibility: .bold), 320),
         (TK2Parity.Environment(size: .accessibility3, direction: .rightToLeft, legibility: .bold), 375),
         (TK2Parity.Environment(size: .large, dark: true), 375),
@@ -1215,7 +1215,7 @@ struct TextKit2ContainerParityTests {
                     let make = { (arm: ADFTextRenderer) in
                         P.environment(BlockView(block: block), arm: arm, env: env, rowWidth: width, search: model.search)
                     }
-                    // Right to left and from xxxLarge the container keeps
+                    // Right to left and from AX4 the container keeps
                     // its body on SwiftUI (the container direction rule,
                     // lead dispositions F-Q6; the container size rule, code
                     // review F-R4 and F-Q1): the engine is then no row.
@@ -1401,7 +1401,7 @@ struct TextKit2ContainerParityTests {
                         // container text before iOS 26.
                         let listOnSwiftUI = !TextKit2Eligibility.listsMatchText || rtl
                             || !TextKit2Scope.nestedListSizeKeepsRenderer(env.size)
-                        // Right to left and from xxxLarge no family: the
+                        // Right to left and from AX4 no family: the
                         // container direction and size rules (lead
                         // dispositions F-Q6; code review F-R4 and F-Q1).
                         let big = !TextKit2Scope.containerSizeKeepsRenderer(env.size)
@@ -1552,10 +1552,10 @@ struct TextKit2ContainerParityTests {
                         // read the icon's width from in place.
                         if row != nil { inSituMismatches.append("\(palette.iconSystemName) \(size): a TextKit 2 row in a panel before iOS 26") }
                     } else if !TextKit2Scope.containerSizeKeepsRenderer(size) {
-                        // From xxxLarge the panel's body stays on SwiftUI
+                        // From AX4 the panel's body stays on SwiftUI
                         // (the container size rule): no row to read from;
                         // the standalone width is recorded.
-                        if row != nil { inSituMismatches.append("\(palette.iconSystemName) \(size): a TextKit 2 row in a panel from xxxLarge") }
+                        if row != nil { inSituMismatches.append("\(palette.iconSystemName) \(size): a TextKit 2 row in a panel from AX4") }
                     } else if let inSitu {
                         if abs(inSitu - width) > 1 / TK2Parity.nativeScale + P.tolerance {
                             inSituMismatches.append("\(palette.iconSystemName) \(size) bold=\(weight == .bold): standalone \(width) in place \(inSitu)")
@@ -1585,13 +1585,11 @@ struct TextKit2ContainerParityTests {
     /// PR 1's leaf residual (`TextKit2HeightParityTests.linkedEmojiCodeResidual`:
     /// linked text with an emoji pair, inline code and bold at AX3 in a
     /// 219 pt column, a pixel short on TextKit 2) in a quote body 235 pt
-    /// wide (219 pt inside its 16 pt inset). It was pinned here as a known
-    /// issue; from xxxLarge the container size rule
-    /// (`containerSizeKeepsRenderer`, code review F-R4 and F-Q1) keeps the
-    /// quote's body on SwiftUI, so at AX3 no TextKit 2 row draws it and both
-    /// arms measure alike, with the link and the emoji or without. No
-    /// container case carries a known-issue mask.
-    @Test("PR 1 leaf residual in a quote body (linked text with an emoji pair and inline code, a pixel short at AX3, 219 pt) cannot show: from xxxLarge the quote's body stays on SwiftUI")
+    /// wide (219 pt inside its 16 pt inset). Pinned as its own case so a
+    /// fix shows up as an unexpected pass; no other container case carries
+    /// a known-issue mask. Without the link, or without the emoji, the
+    /// quote matches.
+    @Test("PR 1 leaf residual in a quote body: linked text with an emoji pair and inline code is a pixel short at AX3, 219 pt")
     func linkedEmojiCodeResidualInQuote() async throws {
         func content(link linked: Bool, emoji: Bool) -> String {
             P.paragraph(
@@ -1603,18 +1601,39 @@ struct TextKit2ContainerParityTests {
             )
         }
         let env = TK2Parity.Environment(size: .accessibility3)
-        #expect(!TextKit2Scope.containerSizeKeepsRenderer(env.size))
+        // Below AX4 the container size rule passes the quote its renderer.
+        #expect(TextKit2Scope.containerSizeKeepsRenderer(env.size))
         let width: CGFloat = 219 + P.spacing * 2
         var results: [String] = []
         for (name, linked, emoji) in [("residual", true, true), ("no-link", false, true), ("no-emoji", true, false)] {
             let block = try #require(try await P.prepared([P.quote([content(link: linked, emoji: emoji)])]).first)
+            let owner = try #require(P.probedOwner(block))
             let (a, b) = try P.pair(width: width, pixels: false) { arm in
                 P.environment(BlockView(block: block), arm: arm, env: env, rowWidth: width)
             }
-            #expect(a.rows.isEmpty && b.rows.isEmpty, "\(name): the quote's paragraph drew on TextKit 2 at AX3: \(b.owners.sorted())")
+            if TextKit2Eligibility.containerTextMatchesText {
+                #expect(a.rows.isEmpty && b.owners.contains(owner), "\(name): TextKit 2 did not draw the quote's paragraph")
+            } else {
+                #expect(a.rows.isEmpty && b.rows.isEmpty, "\(name): before iOS 26 the quote's paragraph is gated")
+            }
             let dH = abs(a.guides.height - b.guides.height)
             results.append("\(name) swiftUI=\(a.guides.height) textKit2=\(b.guides.height)")
-            #expect(dH <= P.tolerance, "\(name): swiftUI=\(a.guides.height) textKit2=\(b.guides.height)")
+            if name == "residual" {
+                // Measured on iOS 26 (576 against 575.5 at 2x, 575.67 at
+                // 3x). iOS 18.5 lays the paragraph out equal on both arms
+                // (528 here), so there the case is asserted, not masked:
+                // the mask stays where PR 1 measured it and never widens.
+                // (PR 1's own pin, `TextKit2HeightParityTests
+                // .linkedEmojiCodeResidual`, has no such condition and
+                // reports "Known issue was not recorded" on iOS 18.5.)
+                withKnownIssue("PR 1 leaf residual: linked text with an emoji pair and inline code measures a pixel short at AX3, 219 pt (here in a quote body)") {
+                    #expect(dH <= P.tolerance, "swiftUI=\(a.guides.height) textKit2=\(b.guides.height)")
+                } when: {
+                    ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
+                }
+            } else {
+                #expect(dH <= P.tolerance, "\(name): swiftUI=\(a.guides.height) textKit2=\(b.guides.height)")
+            }
         }
         print("CONTAINER_PROBE_RESIDUAL scale=\(TK2Parity.nativeScale) os=\(TK2Parity.osVersion) quote W=\(width) AX3: \(results.joined(separator: "; "))")
     }

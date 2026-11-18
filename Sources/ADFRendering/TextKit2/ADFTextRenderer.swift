@@ -37,15 +37,15 @@ import SwiftUI
 /// heading of its own, or a sub/superscript or small-text run or a code
 /// block beside another block (directly or in a quote, extension body or
 /// layout column in it) keeps its whole body on SwiftUI. Laid out right to
-/// left, or at xxxLarge and above, every container keeps its body on
-/// SwiftUI. An expand body is prepared when it opens, as before; the
-/// renderer never starts or restarts that preparation. A layout section's
-/// columns pass the same choice to their blocks while the columns stack
-/// (compact width; at the accessibility text sizes, where they also
-/// stack, the size rule keeps them on SwiftUI); columns laid out side by
-/// side keep all their text on SwiftUI.
+/// left, or at AX4 and above, every container keeps its body on SwiftUI.
+/// An expand body is prepared when it opens, as before; the renderer never
+/// starts or restarts that preparation. A layout section's columns pass
+/// the same choice to their blocks while the columns stack (compact width,
+/// and the accessibility text sizes, where they also stack); columns laid
+/// out side by side keep all their text on SwiftUI.
 /// The lists in a quote, an expand or extension body or a stacked column
-/// follow the list rules above at the width the container leaves them; a
+/// follow the list rules above at the width the container leaves them,
+/// below the accessibility text sizes (at those they stay on SwiftUI); a
 /// panel holding a list keeps its whole body on SwiftUI. Code blocks in
 /// those places follow their container's choice and then the code rules
 /// above, as a top-level code block does (a panel holding code beside
@@ -58,8 +58,8 @@ import SwiftUI
 /// box is SwiftUI.
 ///
 /// Everything else stays on SwiftUI regardless of the setting: side-by-side
-/// layout columns, container bodies laid out right to left or at xxxLarge
-/// and above, code inside a list item, table cells, and atom-bearing text. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.
+/// layout columns, container bodies laid out right to left or at AX4 and
+/// above, code inside a list item, table cells, and atom-bearing text. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
     case swiftUI = "swiftui"
     case textKit2 = "textkit2"

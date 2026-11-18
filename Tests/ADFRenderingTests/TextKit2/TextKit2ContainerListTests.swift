@@ -303,10 +303,11 @@ extension TextKit2ContainerScopeTests {
     /// expand body and a stacked column alike, and in the list alone. Lists
     /// below a container therefore stay on SwiftUI at every accessibility
     /// size (`nestedListSize`), while a top-level list keeps PR 2's rules
-    /// (on TextKit 2 from iOS 26). From xxxLarge the prose beside them
-    /// stays on SwiftUI too (the container size rule, code review F-R4 and
-    /// F-Q1). Below xxxLarge the same nested lists and prose migrate.
-    @Test("nestedListAtAccessibilitySizeStaysSwiftUI: at xxxLarge, AX1, AX4 and AX5 nothing in a quote, an extension body, an open expand's body or a stacked column draws on TextKit 2 (nested lists by the nested-list size rule at the accessibility sizes, everything by the container size rule) while a top-level list migrates; at Large, xLarge and xxLarge the nested lists and the prose beside them migrate")
+    /// (on TextKit 2 from iOS 26); the prose beside them migrates up to
+    /// AX3. From AX4 that prose stays on SwiftUI too (the container size
+    /// rule, code review F-R4 and F-Q1). Below the accessibility sizes the
+    /// nested lists and the prose migrate.
+    @Test("nestedListAtAccessibilitySizeStaysSwiftUI: at AX1 and AX3 no list in a quote, an extension body, an open expand's body or a stacked column draws on TextKit 2 while the prose beside it does (the nested-list size rule); at AX4 and AX5 nothing below a container does (the container size rule); a top-level list migrates; at Large and xxxLarge the nested lists and the prose beside them migrate")
     @MainActor
     func nestedListAtAccessibilitySizeStaysSwiftUI() async throws {
         let p = { (text: String) in TK2ContainerProbe.paragraph(TK2ContainerProbe.t(text)) }
@@ -333,18 +334,20 @@ extension TextKit2ContainerScopeTests {
         let prose = TK2ContainerColumns.allTextOwners(Array(blocks.dropFirst())).subtracting(nested)
         #expect(prose.count == 5, "\(prose.sorted())")
         let topText = TextKit2Eligibility.listsMatchText ? top : []
-        for size in [DynamicTypeSize.large, .xLarge, .xxLarge, .xxxLarge, .accessibility1, .accessibility4, .accessibility5] {
+        for size in [DynamicTypeSize.large, .xxxLarge, .accessibility1, .accessibility3, .accessibility4, .accessibility5] {
             let accessible = size.isAccessibilitySize
             #expect(TextKit2Scope.nestedListSizeKeepsRenderer(size) == !accessible, "\(size)")
-            let expected = topText.union(TextKit2Scope.containerSizeKeepsRenderer(size) ? Self.passing(prose.union(nested)) : [])
+            #expect(TextKit2Scope.containerSizeKeepsRenderer(size) == (size < .accessibility4), "\(size)")
+            let below = accessible ? prose : prose.union(nested)
+            let expected = topText.union(TextKit2Scope.containerSizeKeepsRenderer(size) ? Self.passing(below) : [])
             let (_, rows) = try await Self.hostedListRows(content, size: size, waitFor: expected)
             #expect(Set(rows.keys) == expected,
                     "\(size): missing \(expected.subtracting(rows.keys).sorted()), unexpected \(Set(rows.keys).subtracting(expected).sorted())")
         }
     }
 
-    /// Below xxxLarge (where a container may pass the renderer at all,
-    /// `containerSizeKeepsRenderer`), at xxLarge.
+    /// Below the accessibility sizes (where a list below a container may
+    /// pass the renderer at all, `nestedListSizeKeepsRenderer`), at xxLarge.
     @Test("narrowNestedListStaysSwiftUI: rule D reads the container's bound: at xxLarge, at a width where a depth-2 row has a text column at the top level, the same row in a quote (16 pt narrower) stays on SwiftUI while its shallower rows migrate")
     @MainActor
     func narrowNestedListStaysSwiftUI() async throws {

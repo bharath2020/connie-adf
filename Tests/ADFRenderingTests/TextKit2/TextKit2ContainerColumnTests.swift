@@ -249,7 +249,7 @@ extension TextKit2ContainerParityTests {
                     let narrow = sideBySide ? [] : TK2ContainerLists.narrowListText(in: [block], bound: rowWidth, size: env.size)
                     var expected = expectedLTR.subtracting(narrow)
                     if rtl { expected = [] }
-                    // From xxxLarge nothing either (the container size
+                    // From AX4 nothing either (the container size
                     // rule, code review F-R4 and F-Q1).
                     if !TextKit2Scope.containerSizeKeepsRenderer(env.size) { expected = [] }
                     if !TextKit2Scope.nestedListSizeKeepsRenderer(env.size) { expected = expected.subtracting(listText) }
