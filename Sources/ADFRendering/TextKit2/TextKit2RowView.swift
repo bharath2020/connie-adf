@@ -110,6 +110,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// Container-width relayouts performed by this view (the global count
     /// lives in `TextKit2Diagnostics`).
     private(set) var relayoutCount = 0
+    /// Re-proposals of a width this row reported for a narrower proposal
+    /// that it answered with the layout it reported
+    /// (`layoutResult(forProposedWidth:)`). Read by tests only.
+    private(set) var keptReportedLayoutCount = 0
 
     /// The block this row draws; also its accessibility identifier
     /// (`tk2-row:<ownerID>`).
@@ -268,10 +272,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// fitted a line and the row came out a line shorter, centred in the
     /// slot measured first, where `Text` keeps its lines (code review F-R4:
     /// the container-leaf sweep's equal-height baseline shift, in panel
-    /// bodies from xSmall to AX5). Proposed that width fresh, both lay out
-    /// anew. List rows (`.list`) keep laying out anew: a list that grows to
-    /// a row's reported width proposes every row that width again, and
-    /// `Text` lays out anew there (lists-parity at 385.333 pt, AX1).
+    /// bodies from xSmall to AX5; probe log t-ed3b). Proposed that width
+    /// fresh, both lay out anew. List rows (`.list`) keep laying out anew:
+    /// a list that grows to a row's reported width proposes every row that
+    /// width again, and `Text` lays out anew there (lists-parity at
+    /// 385.333 pt, AX1). A proposal on the pixel grid (any whole-point
+    /// width) never reports past itself, so this case never arises there;
+    /// new inputs (text, size, Bold Text) clear the cache, and with it every
+    /// reported layout (`keptReportedLayoutCount` counts the case).
     ///
     /// Text that never wraps (`TextKit2LayoutPolicy.natural`: code) has the
     /// natural layout only, and it answers every positive width as well: the
@@ -290,6 +298,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
                 if ownerKind == .root, let reported = cache.mostRecent(where: {
                     $0.width != Self.unboundedWidth && $0.width < proposed && $0.size.width == proposed
                 }) {
+                    keptReportedLayoutCount += 1
                     return reported
                 }
                 return result(atWidth: proposed)

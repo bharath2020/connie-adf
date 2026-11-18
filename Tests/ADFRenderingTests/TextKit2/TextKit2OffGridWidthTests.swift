@@ -53,9 +53,11 @@ struct TextKit2OffGridWidthTests {
     ]
 
     /// The TextKit 2 arm's guides at `width`, with each TextKit 2 row's
-    /// placed bounds, read while the host is still in its window.
+    /// placed bounds and how often it kept a reported layout
+    /// (`TextKit2RowView.keptReportedLayoutCount`), read while the host is
+    /// still in its window.
     static func textKit2Hosted(_ fixture: TK2Parity.Fixture, env: TK2Parity.Environment, width: CGFloat)
-        -> (guides: (first: CGFloat, last: CGFloat, height: CGFloat), rows: [CGRect]) {
+        -> (guides: (first: CGFloat, last: CGFloat, height: CGFloat), rows: [CGRect], kept: Int) {
         let box = TK2Parity.GuideBox()
         let root = VStack(alignment: .leading, spacing: 0) {
             TK2Parity.hosted(fixture, arm: .textKit2, env: env)
@@ -81,10 +83,12 @@ struct TextKit2OffGridWidthTests {
         window.isHidden = false
         window.layoutIfNeeded()
         host.view.layoutIfNeeded()
-        let rows = TextKit2FallbackTests.rows(in: host.view).map { $0.convert($0.bounds, to: host.view) }
+        let views = TextKit2FallbackTests.rows(in: host.view)
+        let rows = views.map { $0.convert($0.bounds, to: host.view) }
+        let kept = views.reduce(0) { $0 + $1.keptReportedLayoutCount }
         window.isHidden = true
         window.rootViewController = nil
-        return ((box.first, box.last, box.height), rows)
+        return ((box.first, box.last, box.height), rows, kept)
     }
 
     @Test("a container leaf at a width a few ulps past a pixel sits as Text does when SwiftUI re-proposes the pixel it reported", arguments: cases)
@@ -105,6 +109,7 @@ struct TextKit2OffGridWidthTests {
         let onePixel = 1 / scale
         let tolerance = TextKit2FixtureSweepTests.tolerance
         var reproposed = 0
+        var keptAtShifted = 0
         for width in widths {
             let fixture = TK2Parity.Fixture(name: c.owner, segments: entry.segments, style: style)
             let swiftUI = TK2Parity.guides(fixture, arm: .swiftUI, env: env, width: width)
@@ -114,13 +119,14 @@ struct TextKit2OffGridWidthTests {
             let row = try #require(textKit2.rows.count == 1 ? textKit2.rows.first : nil, "\(label): one TextKit 2 row")
             // The row is proposed the leaf's width less its indentation.
             if row.width > width - fixture.indentation { reproposed += 1 }
+            if String(format: "%.3f", width) == c.shiftedAt { keptAtShifted += textKit2.kept }
             var dLast = abs(swiftUI.last - textKit2.guides.last)
             if dLast > tolerance, abs(swiftUI.last - textKit2.guides.last - onePixel) <= tolerance { dLast = 0 }
             #expect(abs(swiftUI.height - textKit2.guides.height) <= tolerance, "\(label): height")
             #expect(abs(swiftUI.first - textKit2.guides.first) <= tolerance, "\(label): first baseline")
             #expect(dLast <= tolerance, "\(label): last baseline")
             #expect(abs(row.height - textKit2.guides.height) <= tolerance, "\(label): the row fills its slot")
-            print("TK2_OFF_GRID \(label)")
+            print("TK2_OFF_GRID \(label) kept=\(textKit2.kept)")
         }
         // Not vacuous: on 3x the width the sweep found shifted is off the
         // pixel grid and the row was placed one pixel wider than proposed.
@@ -128,7 +134,51 @@ struct TextKit2OffGridWidthTests {
             let shifted = try #require(widths.first { String(format: "%.3f", $0) == c.shiftedAt }, "\(c.testDescription): \(widths)")
             #expect(TextKit2RowView.proposalCeil(shifted, scale: scale) > shifted, "\(c.testDescription): \(shifted) is on the pixel grid")
             #expect(reproposed > 0, "\(c.testDescription): no row was re-proposed the pixel it reported")
+            #expect(keptAtShifted > 0, "\(c.testDescription): the row did not keep its reported layout at \(shifted)")
         }
+    }
+
+    /// The row fix's one case never arises on PR 1's corpus: every
+    /// eligible top-level paragraph and heading of the root sweep's
+    /// documents (`TextKit2FixtureSweepTests.documents`), laid out at each
+    /// iPhone row width less its indentation (whole points), at five sizes,
+    /// reports a width no wider than it was proposed, so nothing proposes
+    /// it a reported overshoot, and re-proposing the reported width keeps
+    /// nothing (`keptReportedLayoutCount` stays 0).
+    @Test("the row fix never fires on PR 1's corpus at whole-point iPhone widths: no root reports past its proposal, and re-proposing its reported width keeps nothing")
+    func neverFiresAtWholePointWidths() async throws {
+        // The iPhone document widths' rows (`containerDocumentWidths` less
+        // the document's margins): whole points, on every pixel grid.
+        let rowWidths = TextKit2FixtureSweepTests.containerDocumentWidths.map { $0 - 4 * TK2Parity.theme.spacing }
+        #expect(rowWidths.allSatisfy { $0 == $0.rounded() })
+        var checked = 0
+        var distinct: Set<String> = []
+        for document in TextKit2FixtureSweepTests.documents {
+            let doc = try await ADFParser().parse(try TextKit2FixtureSweepTests.fixtureData(document))
+            let blocks = DocumentPreparer(theme: TK2Parity.theme).prepare(doc)
+            for (index, block) in blocks.enumerated() {
+                guard case .richText(let segments, let style) = block.kind,
+                      case .eligible = TextKit2Eligibility.verdict(segments) else { continue }
+                let fixture = TK2Parity.Fixture(name: "\(document)#\(index)", segments: segments, style: style)
+                guard distinct.insert("\(fixture.describableText.map { String($0.characters) } ?? fixture.name) \(style)").inserted else { continue }
+                for size in [DynamicTypeSize.xSmall, .large, .xxxLarge, .accessibility3, .accessibility5] {
+                    let inputs = try TK2Parity.inputs(fixture, env: TK2Parity.Environment(size: size))
+                    let view = TextKit2RowView()
+                    view.apply(inputs)
+                    for rowWidth in rowWidths {
+                        let proposed = rowWidth - fixture.indentation
+                        guard proposed > 0 else { continue }
+                        let result = autoreleasepool { view.layoutResult(forProposedWidth: proposed) }
+                        #expect(result.size.width <= proposed, "\(fixture.name) \(size) W=\(proposed): reported \(result.size.width)")
+                        _ = view.layoutResult(forProposedWidth: result.size.width)
+                        checked += 1
+                    }
+                    #expect(view.keptReportedLayoutCount == 0, "\(fixture.name) \(size): kept a reported layout")
+                }
+            }
+        }
+        print("TK2_OFF_GRID_CORPUS \(distinct.count) distinct roots, \(checked) whole-point proposals, scale \(TK2Parity.nativeScale)")
+        #expect(checked > 0)
     }
 }
 #endif

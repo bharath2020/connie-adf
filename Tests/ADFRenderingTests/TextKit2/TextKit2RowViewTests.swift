@@ -162,12 +162,32 @@ struct TextKit2RowViewTests {
                 let relayouts = paragraph.relayoutCount
                 #expect(paragraph.layoutResult(forProposedWidth: reported) == first, "\(size) at \(proposed): re-proposed \(reported), the paragraph keeps its lines")
                 #expect(paragraph.relayoutCount == relayouts, "\(size) at \(proposed): no layout at the reported width")
+                #expect(paragraph.keptReportedLayoutCount == 1)
                 #expect(paragraph.placedResult(for: first.size) == first)
                 let list = row(.list)
                 #expect(list.layoutResult(forProposedWidth: proposed) == first)
                 #expect(list.layoutResult(forProposedWidth: reported) == fresh, "\(size) at \(proposed): a list row lays out anew at \(reported)")
+                #expect(list.keptReportedLayoutCount == 0)
+                if fresh.lineCount != first.lineCount {
+                    // New inputs (another size, Bold Text) clear every
+                    // reported layout: back on the first inputs, the
+                    // reported width lays out anew.
+                    let original = TextKit2RenderInputs(text: self.text(text), sizeCategory: size.uiContentSizeCategory, displayScale: scale)
+                    var bold = original
+                    bold.legibilityWeight = .bold
+                    let other = TextKit2RenderInputs(text: self.text(text), sizeCategory: DynamicTypeSize.medium.uiContentSizeCategory, displayScale: scale)
+                    for changed in [bold, other] {
+                        let view = row(.root)
+                        _ = view.layoutResult(forProposedWidth: proposed)
+                        view.apply(changed)
+                        _ = view.layoutResult(forProposedWidth: proposed)
+                        view.apply(original)
+                        #expect(view.layoutResult(forProposedWidth: reported) == fresh, "\(size) at \(proposed): new inputs keep no reported layout")
+                        #expect(view.keptReportedLayoutCount == 0)
+                    }
+                    shifted += 1
+                }
                 reproposed += 1
-                if fresh.lineCount != first.lineCount { shifted += 1 }
             }
         }
         // Not vacuous: lines fill the proposal at many widths, and some fit
