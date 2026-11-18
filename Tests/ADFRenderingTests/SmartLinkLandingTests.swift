@@ -6,7 +6,10 @@ import ADFPreparation
 
 /// Watches one entry's stage the way a leaf reading it in its body does:
 /// every change it registers is one invalidation of every leaf showing the
-/// URL. `seen` lists the stage after each.
+/// URL. `seen` lists the stage after each, read when the watcher's task
+/// runs: two changes before that (in one main-actor turn, or while the
+/// test's own poll resumes first) record as one, the last stage, so a test
+/// settles between changes it counts.
 @MainActor
 final class StageWatcher {
     let entry: SmartLinkEntry
@@ -37,8 +40,8 @@ final class StageWatcher {
 /// no layout shift across the screen's edge); and a lookup shows the
 /// loading look only after it has run 300 ms (P2, no redraws for links
 /// passed in a fling). Driven by hand: injected phase and visibility
-/// (`setLeafVisible` is the leaf's 0.01 feed, `setLeafFullyVisible` its 1.0
-/// feed), a scripted resolver and a manual sleeper for the delay.
+/// (`setLeafVisible` is the leaf's 0.01 feed, `setLeafFullyVisible` its
+/// 0.99999 feed), a scripted resolver and a manual sleeper for the delay.
 @Suite("Smart link landing and loading look", .serialized)
 @MainActor
 struct SmartLinkLandingTests {
@@ -444,6 +447,8 @@ struct SmartLinkLandingTests {
         try await smartLinkEventually("loading") { coordinator.stage(for: a) == .resolving }
         #expect(coordinator.pendingDimKeys.isEmpty)
         #expect(coordinator.stats.resolvingShown == 1)
+        await Self.settle()
+        #expect(watcher.seen == [.resolving])
         coordinator.setLeafVisible("p1", false)
         #expect(coordinator.stage(for: a) == .plain)
         await Self.settle()
