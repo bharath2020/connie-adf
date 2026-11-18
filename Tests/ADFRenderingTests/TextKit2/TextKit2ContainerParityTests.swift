@@ -658,15 +658,30 @@ enum TK2ContainerProbe {
 
     // MARK: Matrix
 
-    static var documentWidths: [CGFloat] { fullMatrix ? [320, 375, 402, 640] : familyMatrix ? [320, 402] : [375] }
-    static var sizes: [DynamicTypeSize] { fullMatrix ? DynamicTypeSize.allCases : familyMatrix ? familySizes : [.large, .accessibility3] }
+    /// `ADF_CONTAINER_PROBES_WIDTHS=<pt,…>` and `ADF_CONTAINER_PROBES_SIZES=<name,…>`
+    /// (`DynamicTypeSize` case names) replace the mode's document widths and
+    /// sizes, to reproduce one case.
+    static var documentWidths: [CGFloat] {
+        if let widths = override("ADF_CONTAINER_PROBES_WIDTHS", { Double($0).map { CGFloat($0) } }) { return widths }
+        return fullMatrix ? [320, 375, 402, 640] : familyMatrix ? [320, 402] : [375]
+    }
+    static var sizes: [DynamicTypeSize] {
+        if let sizes = override("ADF_CONTAINER_PROBES_SIZES", { name in DynamicTypeSize.allCases.first { "\($0)" == name } }) { return sizes }
+        return fullMatrix ? DynamicTypeSize.allCases : familyMatrix ? familySizes : [.large, .accessibility3]
+    }
+    static func override<T>(_ key: String, _ parse: (String) -> T?) -> [T]? {
+        guard let value = ProcessInfo.processInfo.environment[key] else { return nil }
+        let parsed = value.split(separator: ",").compactMap { parse(String($0)) }
+        return parsed.isEmpty ? nil : parsed
+    }
     static var directions: [LayoutDirection] { fullMatrix || familyMatrix ? [.leftToRight, .rightToLeft] : [.leftToRight] }
     static var weights: [LegibilityWeight?] { fullMatrix || familyMatrix ? [nil, .bold] : [nil] }
     /// Whether a case is also compared as pixels: every case of the sample;
     /// in the full matrix, xSmall, Large, xxxLarge, AX3 and AX5 at 320 and
-    /// 402 pt (geometry runs at every size and width).
+    /// 402 pt (geometry runs at every size and width), or every case with
+    /// `ADF_CONTAINER_PROBES_PIXELS=all`.
     static func comparesPixels(_ env: TK2Parity.Environment, documentWidth: CGFloat) -> Bool {
-        guard fullMatrix else { return true }
+        guard fullMatrix, ProcessInfo.processInfo.environment["ADF_CONTAINER_PROBES_PIXELS"] != "all" else { return true }
         return familySizes.contains(env.size) && [320, 402].contains(documentWidth)
     }
 

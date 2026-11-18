@@ -63,16 +63,19 @@ struct TextKit2ListCoverageTests {
         // paragraph without a code block or a list beside it. Atoms
         // (fallback): 0.5.3, 0.6.1, 0.8.7–0.8.10. Links (TextKit 1-backed):
         // 0.5.4, 0.6.2, 0.8.2. The text inside the table, expand and layout
-        // columns is out of scope. Container text (step 3): none. The panel
-        // 0.14 holds a list, so its whole body stays on SwiftUI
-        // (`panelKeepsRenderer`); the quote 0.15 holds only a list, which
-        // joins with nested lists. The expand 0.17 is reported unprepared
-        // (step 5: its body is prepared on opening).
+        // columns is out of scope. Container text (steps 3 and 4): none.
+        // The panel 0.14 holds a list, so its whole body stays on SwiftUI
+        // (`panelKeepsRenderer`). From step 6 the lists below a boundary
+        // count apart, as container list text (the legacy fields above do
+        // not move): the quote 0.15's two leaders and the three leaders of
+        // the layout section 0.18's lists, all plain. The expand 0.17 is
+        // reported unprepared (step 5: its body is prepared on opening;
+        // its list is not counted).
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 8, fallbackRoots: 13, textFallbackRoots: 0, linkRoots: 0,
             eligibleTextLeaves: 48, linkedTextLeaves: 3, fallbackTextLeaves: 6,
             listLeaderLeaves: 46, listTrailingLeaves: 0,
-            eligibleContainerLeaves: 0, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 0,
+            eligibleContainerLeaves: 5, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 5,
             unpreparedExpands: 1
         ), rootLeaves: (8, 0)))
     }
@@ -134,14 +137,17 @@ struct TextKit2ListCoverageTests {
 
     /// The iOS 26 gate is one verdict (`TextKit2Eligibility.verdict`,
     /// owner `.list`): before iOS 26 exactly the list leaves eligible on
-    /// iOS 26 fall back as `.osGatedList` (lists-parity 40, kitchen-sink 8,
-    /// list-dense 3,537), never a root; from iOS 26 none does. A top-level
+    /// iOS 26 fall back as `.osGatedList` (lists-parity 45, kitchen-sink 8,
+    /// list-dense 3,537), never a root; from iOS 26 none does. List text
+    /// below a container takes the same gate first: from step 6
+    /// lists-parity's 40 top-level leaves gain the five leaders of its
+    /// quote 0.15 and section 0.18. A top-level
     /// code block (kitchen-sink's 0.12) is not list text: it is judged by
     /// the code rules and never takes the gate, so it counts with the roots
     /// here.
     @Test("before iOS 26 list text that is otherwise eligible falls back as osGatedList; roots never do")
     func osGatedLists() async throws {
-        for (name, listEligible) in [("lists-parity", 40), ("kitchen-sink", 8), ("list-dense", 3_537)] {
+        for (name, listEligible) in [("lists-parity", 45), ("kitchen-sink", 8), ("list-dense", 3_537)] {
             let blocks = try await Self.blocks(name)
             var gated = 0
             var gatedRoots = 0
@@ -219,8 +225,10 @@ struct TextKit2ListDiagnosticsTests {
         }
         // Before iOS 26 no list text is eligible (`TextKit2Eligibility.listsMatchText`,
         // `.osGatedList`): list text draws on SwiftUI, roots as in PR 1.
+        // From step 6 the 40 top-level list leaves gain the five leaders of
+        // the lists in the quote 0.15 and the layout section 0.18.
         let lists = TextKit2Eligibility.listsMatchText
-        #expect(eligibleRoots.count == 8 && eligibleList.count == (lists ? 40 : 0))
+        #expect(eligibleRoots.count == 8 && eligibleList.count == (lists ? 45 : 0))
 
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 9_000))
         let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2))
@@ -238,16 +246,16 @@ struct TextKit2ListDiagnosticsTests {
         let listOwners = Set(rows.filter { $0.ownerKind == .list }.compactMap(\.ownerID))
         #expect(listOwners == eligibleList, "missing \(eligibleList.subtracting(listOwners).sorted()), unexpected \(listOwners.subtracting(eligibleList).sorted())")
         #expect(rows.filter(\.isTextKit1Backed).count == (lists ? 3 : 0))
-        // Nothing inside an excluded container (the table, expand and layout
-        // columns), a row holding a block other than text (0.8.12, both rows
-        // of 0.12) or the list that keeps its text on SwiftUI (0.10). The
-        // root panel 0.14 and quote 0.15 are in the container scope from
-        // step 3, but hold nothing that draws there yet: the panel holds a
-        // list, so its whole body stays on SwiftUI (`panelKeepsRenderer`),
-        // and the quote holds only a list, which joins with nested lists.
-        // The walk's root group (owner kind `.root`) includes container
-        // prose, so the eight roots above say there is none.
-        let excluded = ["0.8.12", "0.10", "0.12", "0.14", "0.15", "0.16", "0.17", "0.18"]
+        // Nothing inside an excluded container (the table and the expand), a
+        // row holding a block other than text (0.8.12, both rows of 0.12)
+        // or the list that keeps its text on SwiftUI (0.10), and nothing in
+        // the root panel 0.14: it holds a list, so its whole body stays on
+        // SwiftUI (`panelKeepsRenderer`). The quote 0.15 and the layout
+        // section 0.18 hold only lists, which draw from step 6 (counted
+        // with the list rows above). The walk's root group (owner kind
+        // `.root`) includes container prose, so the eight roots above say
+        // there is none.
+        let excluded = ["0.8.12", "0.10", "0.12", "0.14", "0.16", "0.17"]
         for owner in owners {
             #expect(!excluded.contains { owner == $0 || owner.hasPrefix($0 + ".") || owner.hasPrefix($0 + "#") }, "\(owner) is inside an excluded block")
         }
@@ -258,7 +266,7 @@ struct TextKit2ListDiagnosticsTests {
         // exactly the list rows.
         let listLive = diagnostics.liveListRowCount
         rows.removeAll()
-        #expect(listLive - diagnostics.liveListRowCount == (lists ? 40 : 0))
+        #expect(listLive - diagnostics.liveListRowCount == (lists ? 45 : 0))
     }
 }
 #endif

@@ -50,7 +50,7 @@ enum TK2ContainerBody {
     /// (the fixtures hold it: containers-parity 0.71, 0.77, 0.78). A panel
     /// keeps a heading, a list and a superscript or small-text run beside
     /// another block on SwiftUI (`panelKeepsRenderer`); in a quote or an
-    /// extension body only the list (and the code) does.
+    /// extension body only the code does (lists joined at step 6).
     static func shapes(for container: P.Container) -> [Shape] {
         let probe = Dictionary(uniqueKeysWithValues: P.allShapes.map { ($0.name, $0.body) })
         let codeBeside = [P.paragraph(P.t(P.words(14, from: 3))), codeBlock, P.paragraph(P.t(P.words(5, from: 11)))]
@@ -90,22 +90,69 @@ enum TK2ContainerBody {
         return all.filter { only?.contains($0.0.name) ?? true }
     }
 
-    /// The paragraphs and headings in `blocks` that draw on TextKit 2 under
-    /// the step 3 rules, written out here rather than read from the walk:
-    /// prose in quotes and bodied extensions, and in panels whose body the
-    /// probes kept (`TextKit2ContainerScopeTests.expectedPanelKeeps`); no
-    /// list, code, expand or column text.
+    /// The paragraphs, headings and list text in `blocks` that draw on
+    /// TextKit 2 under the step 3 and step 6 rules, laid out left to right,
+    /// written out here rather than read from the walk: prose in quotes and
+    /// bodied extensions, and in panels whose body the probes kept
+    /// (`TextKit2ContainerScopeTests.expectedPanelKeeps`); list text in
+    /// those containers where PR 2's rules keep the list and the row
+    /// (`listOwners`; a panel holding a list keeps its body on SwiftUI); no
+    /// code, expand or column text.
     static func expectedOwners(_ blocks: [RenderBlock], inContainer: Bool = false) -> Set<String> {
         var owners: Set<String> = []
         for block in blocks {
             switch block.kind {
             case .richText: if inContainer { owners.insert(block.id) }
+            case .listRows(let rows): if inContainer { owners.formUnion(listOwners(rows)) }
             case .quote(let children): owners.formUnion(expectedOwners(children, inContainer: true))
             case .extensionPlaceholder(_, let body): owners.formUnion(expectedOwners(body, inContainer: true))
             case .panel(_, let children):
                 if TextKit2ContainerScopeTests.expectedPanelKeeps(children) {
                     owners.formUnion(expectedOwners(children, inContainer: true))
                 }
+            default: continue
+            }
+        }
+        return owners
+    }
+
+    /// The text of a list below a container's boundary that TextKit 2
+    /// draws left to right (PR 2's rules, unchanged at the nested position):
+    /// none when rule B rejects the list; else each row rule A keeps, its
+    /// leader (when it has text) and its trailing paragraphs and headings.
+    /// Rule D passes at every width the matrices use (a depth-1 row needs
+    /// 2 × (marker + gap) ≤ 190 pt at AX5), and right to left rule C keeps
+    /// every list row on SwiftUI (`listOwners(in:)`, subtracted per
+    /// environment).
+    static func listOwners(_ rows: [PreparedListRow]) -> Set<String> {
+        guard TextKit2Scope.listKeepsRenderer(rows) else { return [] }
+        var owners: Set<String> = []
+        for row in rows where TextKit2Scope.rowKeepsRenderer(row) {
+            if !row.segments.isEmpty { owners.insert(row.id) }
+            for block in row.trailingBlocks {
+                if case .richText = block.kind { owners.insert(block.id) }
+            }
+        }
+        return owners
+    }
+
+    /// Every list leader and trailing paragraph or heading under `blocks`
+    /// (in containers too): what rule C keeps on SwiftUI right to left.
+    static func listOwners(in blocks: [RenderBlock]) -> Set<String> {
+        var owners: Set<String> = []
+        for block in blocks {
+            switch block.kind {
+            case .listRows(let rows):
+                for row in rows {
+                    if !row.segments.isEmpty { owners.insert(row.id) }
+                    for trailing in row.trailingBlocks {
+                        if case .richText = trailing.kind { owners.insert(trailing.id) }
+                    }
+                }
+            case .quote(let children), .panel(_, let children), .extensionPlaceholder(_, let children):
+                owners.formUnion(listOwners(in: children))
+            case .layoutColumns(let columns):
+                for column in columns { owners.formUnion(listOwners(in: column.blocks)) }
             default: continue
             }
         }
@@ -146,8 +193,10 @@ enum TK2ContainerBody {
     /// production scope inherits into (`TextKit2Scope.inheritsRenderer`,
     /// whole-block rules included), SwiftUI otherwise. Hosting the block
     /// with the switch itself would skip the top-level panel rule.
-    static func rowRenderer(_ block: RenderBlock, _ arm: ADFTextRenderer) -> ADFTextRenderer {
-        TextKit2Scope.inheritsRenderer(block.kind) ? arm : .swiftUI
+    static func rowRenderer(
+        _ block: RenderBlock, _ arm: ADFTextRenderer, allowed: Set<TextKit2BlockKind> = TextKit2Scope.containerChildKinds
+    ) -> ADFTextRenderer {
+        TextKit2Scope.inheritsRenderer(block.kind, allowed: allowed) ? arm : .swiftUI
     }
 
     /// The leaf control on the production path: each child of the
@@ -191,24 +240,67 @@ extension TextKit2ContainerParityTests {
     /// Runs one container's shapes over the matrix on the production path
     /// and asserts parity (or, for a shape the rules keep on SwiftUI, that
     /// no TextKit 2 row draws). `nested` cases are whole documents whose
-    /// outer container is `container`.
-    func productionMatrix(_ test: String, container: P.Container, shapes: [B.Shape], nested: Bool) async throws {
+    /// outer container is `container`. `allowed`: the container allow list
+    /// (`nil`: the production one); an open expand's body (prepared by the
+    /// view on opening) is expected as the same body in a quote, whose
+    /// prepared ids (node paths) it shares. Right to left no list text is
+    /// expected (rule C). `knownIssues`: cases (`shape=… size=… bold=… dir=…
+    /// W=…`) expected to fail, with the reason; each one recorded as a known
+    /// issue when it fails and as a failure when it runs and passes.
+    func productionMatrix(
+        _ test: String, container: P.Container, shapes: [B.Shape], nested: Bool, allowed: Set<TextKit2BlockKind>? = nil,
+        knownIssues: [String: String] = [:]
+    ) async throws {
         let clock = ContinuousClock()
         let start = clock.now
         let tally = P.Tally()
         var failures: [String] = []
         let gated = !TextKit2Eligibility.containerTextMatchesText
+        let allowList = allowed ?? TextKit2Scope.containerChildKinds
         for shape in shapes {
             let json = nested ? shape.body[0] : container.wrap(shape.body)
             let block = try #require(try await P.prepared([json]).first)
+            // The blocks the expectation reads: the container itself, or
+            // for an expand the same body in a quote.
+            var stand = block
             let children: [RenderBlock]
             switch block.kind {
             case .panel(_, let blocks), .quote(let blocks), .extensionPlaceholder(_, let blocks): children = blocks
-            default: throw TestFailure("\(shape.name): not a panel, quote or extension")
+            case .expand where !nested:
+                stand = try #require(try await P.prepared([P.quote(shape.body)]).first)
+                guard case .quote(let blocks) = stand.kind else { throw TestFailure("\(shape.name): no stand-in body") }
+                children = blocks
+            default: throw TestFailure("\(shape.name): not a panel, quote, expand or extension")
             }
-            let expected = shape.migrates ? B.expectedOwners([block]) : []
+            let expected = shape.migrates ? B.expectedOwners([stand]) : []
+            let listText = B.listOwners(in: [stand])
             #expect(shape.migrates == !expected.isEmpty, "\(shape.name): the shape's text and its expectation disagree")
-            let everyOwner = B.allTextOwners([block])
+            let everyOwner = B.allTextOwners([stand])
+            let model = ADFDocumentModel()
+            if case .expand = block.kind { model.expandedBlocks.insert(block.id) }
+            /// `rows`: whether TextKit 2 rows are expected (an expand
+            /// waits for them).
+            func host(_ width: CGFloat, _ env: TK2Parity.Environment, pixels: Bool, rows: Bool) async throws -> (P.Arm, P.Arm) {
+                let make = { (arm: ADFTextRenderer) in
+                    P.environment(BlockView(block: block), arm: B.rowRenderer(block, arm, allowed: allowList), env: env,
+                                  rowWidth: width, search: model.search, allowed: allowed)
+                }
+                guard case .expand = block.kind else { return try P.pair(width: width, pixels: pixels, make) }
+                if !rows {
+                    // Nothing to wait for on TextKit 2: settle the opened
+                    // body on SwiftUI, then flip.
+                    let host = P.Host(width: width)
+                    defer { host.close() }
+                    host.show(make(.swiftUI))
+                    for _ in 0..<50 { host.layout(); try await Task.sleep(for: .milliseconds(10)) }
+                    let a = P.arm(host)
+                    host.show(make(.textKit2))
+                    for _ in 0..<20 { host.layout(); try await Task.sleep(for: .milliseconds(10)) }
+                    return (a, P.arm(host))
+                }
+                let (a, b, _) = try await P.expandPair(width: width, pixels: pixels, make)
+                return (a, b)
+            }
             print("CONTAINER_PARITY_SHAPE test=\(test) container=\(container.rawValue) shape=\(shape.name) migrates=\(shape.migrates) expected=\(expected.sorted()) prepared=\(P.shapeDescription(block))")
 
             if gated {
@@ -216,18 +308,18 @@ extension TextKit2ContainerParityTests {
                 // engine is all there is to compare.
                 let width = P.rowWidth(documentWidth: 375)
                 let env = TK2Parity.Environment(size: .large)
-                let (a, b) = try P.pair(width: width, pixels: false) { arm in
-                    P.environment(BlockView(block: block), arm: B.rowRenderer(block, arm), env: env, rowWidth: width, allowed: nil)
-                }
+                let (a, b) = try await host(width, env, pixels: false, rows: false)
                 if !(a.rows.isEmpty && b.rows.isEmpty) {
                     failures.append("\(shape.name): before iOS 26 TextKit 2 drew \(b.owners.sorted())")
                 }
                 var notGated: [String] = []
                 var leaves = 0
-                TextKit2Scope.forEachLeaf(in: [block]) { leaf in
-                    guard leaf.position == .containerProse else { return }
+                TextKit2Scope.forEachLeaf(in: [stand], allowed: allowList) { leaf in
+                    guard [.containerProse, .containerListLeader, .containerListTrailing].contains(leaf.position) else { return }
                     leaves += 1
+                    // List text meets the list gate first (`osGatedList`).
                     if case .fallback(.osGatedContainer) = leaf.verdict { return }
+                    if case .fallback(.osGatedList) = leaf.verdict { return }
                     notGated.append(leaf.ownerID)
                 }
                 if !notGated.isEmpty || leaves != expected.count {
@@ -240,13 +332,17 @@ extension TextKit2ContainerParityTests {
                 for documentWidth in P.documentWidths {
                     let width = P.rowWidth(documentWidth: documentWidth)
                     let pixels = shape.migrates && P.comparesPixels(env, documentWidth: documentWidth)
-                    let (a, b) = try P.pair(width: width, pixels: pixels) { arm in
-                        P.environment(BlockView(block: block), arm: B.rowRenderer(block, arm), env: env, rowWidth: width, allowed: nil)
-                    }
+                    // The engine: exactly the expected owners on TextKit 2
+                    // (no list text right to left, rule C, nor where the
+                    // container's bound leaves a row no text column, rule
+                    // D), nothing on the SwiftUI arm, and for a shape kept
+                    // on SwiftUI no row at all.
+                    let narrow = TK2ContainerLists.narrowListText(
+                        in: children, bound: P.childWidth(container, rowWidth: width, env: env), size: env.size
+                    )
+                    let expected = (env.direction == .rightToLeft ? expected.subtracting(listText) : expected).subtracting(narrow)
+                    let (a, b) = try await host(width, env, pixels: pixels, rows: !expected.isEmpty)
                     var verdict = P.geometry(a.guides, b.guides)
-                    // The engine: exactly the expected owners on TextKit 2,
-                    // nothing on the SwiftUI arm, and for a shape kept on
-                    // SwiftUI no row at all.
                     verdict.engine = a.rows.isEmpty && b.owners == expected && b.rows.count == expected.count
                     if pixels, let ba = a.bitmap, let bb = b.bitmap {
                         crops(&verdict, container, ba, bb, width: width, env: env, swiftUIArm: a)
@@ -265,9 +361,17 @@ extension TextKit2ContainerParityTests {
                     if !accepted || P.printsEveryCase || !verdict.pass {
                         print(P.line(fields, verdict, a, b).replacingOccurrences(of: "CONTAINER_PROBE ", with: "CONTAINER_PARITY ") + " accepted=\(accepted)")
                     }
+                    let known = knownIssues["shape=\(shape.name) \(P.fields(env)) W=\(documentWidth)"]
                     if !accepted {
-                        failures.append("\(fields): engine=\(verdict.engine) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")")
+                        let failure = "\(fields): engine=\(verdict.engine) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")"
+                        if let known {
+                            withKnownIssue(Comment(rawValue: known)) { Issue.record(Comment(rawValue: failure)) }
+                        } else {
+                            failures.append(failure)
+                        }
                         if let ba = a.bitmap, let bb = b.bitmap { P.dump(key, fields, ba, bb) }
+                    } else if known != nil {
+                        failures.append("\(fields): the known issue no longer reproduces (\(known!)); remove it")
                     }
                     // Nothing outside the expected owners (a list or code
                     // block left on SwiftUI) drew through TextKit 2.
@@ -286,12 +390,12 @@ extension TextKit2ContainerParityTests {
         try await productionMatrix("panelBody", container: .panel, shapes: B.shapes(for: .panel), nested: false)
     }
 
-    @Test("quoteBody: quote prose matches SwiftUI through the production path, beside lists and code that stay on SwiftUI")
+    @Test("quoteBody: quote prose (and from step 6 its lists) matches SwiftUI through the production path, beside code that stays on SwiftUI")
     func quoteBody() async throws {
         try await productionMatrix("quoteBody", container: .quote, shapes: B.shapes(for: .quote), nested: false)
     }
 
-    @Test("extensionBody: bodied-extension prose matches SwiftUI through the production path, beside lists and code that stay on SwiftUI")
+    @Test("extensionBody: bodied-extension prose (and from step 6 its lists) matches SwiftUI through the production path, beside code that stays on SwiftUI")
     func extensionBody() async throws {
         try await productionMatrix("extensionBody", container: .bodiedExtension, shapes: B.shapes(for: .bodiedExtension), nested: false)
     }

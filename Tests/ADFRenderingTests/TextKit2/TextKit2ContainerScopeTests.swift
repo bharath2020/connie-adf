@@ -237,13 +237,14 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies, captioned media, expands and layout columns")
+    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies, captioned media, expands, layout columns and lists")
     func topLevelRowsReadTheAllowList() async throws {
         // Step 3: paragraphs and headings in panels, quotes and extension
         // bodies; step 8: captions; step 5: expands (their open bodies);
-        // step 4: layout columns. Each later stage changes this pin
-        // deliberately, with the family it enables.
-        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns])
+        // step 4: layout columns; step 6: lists below a boundary (a
+        // top-level list never reads the list). Each later stage changes
+        // this pin deliberately, with the family it enables.
+        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns, .listRows])
         #expect(EnvironmentValues().adfContainerChildKinds == TextKit2Scope.containerChildKinds)
         #expect(EnvironmentValues().adfTextContainerContext == .none)
         #expect(TextKit2Scope.captionsUseTextKit2 == true)

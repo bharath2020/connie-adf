@@ -234,6 +234,12 @@
 #              Step 5 (expand bodies): containers-parity
 #                @0.6609 block 57, KP-S8: expands 0.58 and 0.59 and the
 #                        column's nested expand closed (no body row)
+#              Step 6 (lists in containers, KP-S9; a panel's list and a
+#              rule-A row stay SwiftUI):
+#                @0.7183 block 62: lists in the quotes 0.64 and 0.65 (step
+#                        3: the first two rows), the panel 0.63 SwiftUI
+#                @0.7643 block 66: lists in the extension 0.67 and the
+#                        stacked 25/75 section 0.68
 #              Step 8 (captions): captions-parity (25 prepared blocks)
 #                @0.14   block 3: CAP-03 plain, CAP-04 marks
 #                @0.30   block 7: CAP-07 colour/highlight, CAP-08 placeholder
@@ -485,6 +491,22 @@ CONTAINER_CAPTURES_DEFAULT=(
     # bodies get no three-arm crop (plan §7.4, P15): the hosted
     # expandBody and nestedExpandBody suites are their proof.
     "containers-parity@0.6609=container:positive;0.60.0.0=tk2,0.60.1.0=tk2,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57"
+    # Step 6, lists in containers (KP-S9). Landed on the section heading
+    # 0.62: the panel 0.63 holds a list, so its whole body stays on
+    # SwiftUI (0.63.0 named); in the quote 0.64 the ordered rows, the row
+    # after the rule-A row and the tasks are TextKit 2, and the rule-A row
+    # 0.64.1.0 (it holds a panel) stays on SwiftUI; the quote 0.65's
+    # Hebrew and Arabic rows (a left-to-right layout) are TextKit 2. At
+    # step 3 only the ordered rows are above the bottom band.
+    "containers-parity@0.7183#s0=container:positive;0.64.0.0=tk2,0.64.0.1=tk2,0.64.1.1=tk2,0.64.2.0=tk2,0.64.2.1=tk2,0.65.0.0=tk2,0.65.0.1=tk2,0.63.0=swiftui,0.64.1.0=swiftui;land=0.62"
+    "containers-parity@0.7183#s3=container:positive;0.64.0.0=tk2,0.64.0.1=tk2,0.63.0=swiftui;land=0.62"
+    # Landed on the expand 0.66 (closed: its lists are not prepared): the
+    # extension 0.67's ordered rows and nested bullet, and the 25/75
+    # section 0.68, stacked on a phone: the three-deep list of the 25 %
+    # column and the ordered rows and decision of the 75 % column. At step
+    # 3 the decision 0.68.1.1.0 runs into the bottom band.
+    "containers-parity@0.7643#s0=container:positive;0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2,0.68.1.1.0=tk2;land=0.66"
+    "containers-parity@0.7643#s3=container:positive;0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2;land=0.66"
     # Captions (step 8): captions-parity, 25 prepared blocks (`Int(f x 25)`).
     # Each landing, owner and live caption row was checked on the enabled
     # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions

@@ -42,11 +42,29 @@ enum TK2ContainerColumns {
     /// The column shapes: the fixture's KP-S6 sections (25/75 with a
     /// heading, 33/67 with a link, 50/50 holding a panel and a quote,
     /// three equal columns), a column holding a list and a code block
-    /// beside its prose (both stay on SwiftUI until their own steps), and
+    /// beside its prose (the list migrates from step 6 when the columns
+    /// stack, the code stays on SwiftUI until step 7), and
     /// containers nested in columns (a quote holding a panel; an extension
-    /// body with a heading). `ADF_CONTAINER_PROBES_SHAPES=<name,…>` limits
+    /// body with a heading), and from step 6 lists in columns
+    /// (`listSections`). `ADF_CONTAINER_PROBES_SHAPES=<name,…>` limits
     /// them.
-    static var sections: [Section] {
+    static var sections: [Section] { proseSections + listSections }
+
+    /// Lists in columns (PR 4 step 6): the nested-list shapes of
+    /// `TK2ContainerLists` beside a paragraph, and a list beside a list.
+    static var listSections: [Section] {
+        let p = { (count: Int, from: Int) in P.paragraph(P.t(P.words(count, from: from))) }
+        let shapes = Dictionary(uniqueKeysWithValues: TK2ContainerLists.allShapes.map { ($0.name, $0.body) })
+        let all: [Section] = [
+            Section(name: "list-nestedList", json: P.section([(40, shapes["nestedList"]!), (60, [p(12, 3)])])),
+            Section(name: "list-orderedTasks", json: P.section([(50, [p(6, 2)]), (50, shapes["orderedTasks"]!)])),
+            Section(name: "list-ruleARow", json: P.section([(30, [p(5, 7)]), (70, shapes["ruleARow"]!)])),
+            Section(name: "list-beside-list", json: P.section([(50, shapes["multiParagraphItem"]!), (50, shapes["decisions"]!)])),
+        ]
+        return all.filter { TK2ContainerBody.only?.contains($0.name) ?? true }
+    }
+
+    static var proseSections: [Section] {
         let p = { (count: Int, from: Int) in P.paragraph(P.t(P.words(count, from: from))) }
         let linked = P.paragraph(P.t(P.words(4, from: 2) + " "), P.t("a link in a column", P.link))
         let list = P.bulletList([P.item(p(6, 3)), P.item(p(3, 9))])
@@ -71,12 +89,15 @@ enum TK2ContainerColumns {
     /// (`TextKit2ContainerScopeTests.expectedPanelKeeps`); with
     /// `sideBySide`, only the column children of a family the off-grid
     /// probe passed (`TextKit2ContainerScopeTests.sideBySideFamilies`: none)
-    /// and what is below them. No list, code or expand text.
+    /// and what is below them. List text from step 6 where PR 2's rules keep
+    /// it (`TK2ContainerBody.listOwners`; never right to left, which the
+    /// caller subtracts). No code or expand text.
     static func expectedOwners(_ blocks: [RenderBlock], sideBySide: Bool, inContainer: Bool = false) -> Set<String> {
         var owners: Set<String> = []
         for block in blocks {
             switch block.kind {
             case .richText: if inContainer { owners.insert(block.id) }
+            case .listRows(let rows): if inContainer { owners.formUnion(TK2ContainerBody.listOwners(rows)) }
             case .quote(let children): owners.formUnion(expectedOwners(children, sideBySide: sideBySide, inContainer: true))
             case .extensionPlaceholder(_, let body): owners.formUnion(expectedOwners(body, sideBySide: sideBySide, inContainer: true))
             case .panel(_, let children):
@@ -157,18 +178,19 @@ extension TextKit2ContainerParityTests {
     /// One section's matrix on the production path, stacked or side by
     /// side, asserting the engine (exactly the expected owners on TextKit
     /// 2, none on the SwiftUI arm) and parity.
-    func columnMatrix(_ test: String, sideBySide: Bool) async throws {
+    func columnMatrix(_ test: String, sideBySide: Bool, sections: [Columns.Section] = Columns.sections) async throws {
         let clock = ContinuousClock()
         let start = clock.now
         let tally = P.Tally()
         var failures: [String] = []
         let gated = !TextKit2Eligibility.containerTextMatchesText
-        for section in Columns.sections {
+        for section in sections {
             let block = try #require(try await P.prepared([section.json]).first)
             guard case .layoutColumns(let columns) = block.kind else { throw TestFailure("\(section.name): not a layout section") }
-            let expected = Columns.expectedOwners([block], sideBySide: sideBySide)
+            let expectedLTR = Columns.expectedOwners([block], sideBySide: sideBySide)
+            let listText = TK2ContainerBody.listOwners(in: [block])
             let everyOwner = Columns.allTextOwners([block])
-            print("CONTAINER_PARITY_SHAPE test=\(test) container=columns shape=\(section.name) sideBySide=\(sideBySide) expected=\(expected.sorted()) prepared=\(P.shapeDescription(block))")
+            print("CONTAINER_PARITY_SHAPE test=\(test) container=columns shape=\(section.name) sideBySide=\(sideBySide) expected=\(expectedLTR.sorted()) prepared=\(P.shapeDescription(block))")
             // The boundary's family rule, for every column child.
             for child in columns.flatMap(\.blocks) {
                 let gate = TextKit2Scope.containerGate(for: child.kind, in: .column(sideBySide: sideBySide), layoutDirection: .leftToRight)
@@ -188,7 +210,7 @@ extension TextKit2ContainerParityTests {
                 if !(a.rows.isEmpty && b.rows.isEmpty) { failures.append("\(section.name): before iOS 26 TextKit 2 drew \(b.owners.sorted())") }
                 var notGated: [String] = []
                 TextKit2Scope.forEachLeaf(in: [block]) { leaf in
-                    guard leaf.position == .containerProse else { return }
+                    guard [.containerProse, .containerListLeader, .containerListTrailing].contains(leaf.position) else { return }
                     if case .fallback(.osGatedContainer) = leaf.verdict { return }
                     if case .fallback = leaf.verdict { return }
                     notGated.append(leaf.ownerID)
@@ -216,6 +238,11 @@ extension TextKit2ContainerParityTests {
                 for documentWidth in P.documentWidths {
                     let rowWidth = P.rowWidth(documentWidth: documentWidth)
                     let rtl = env.direction == .rightToLeft
+                    // Right to left no list text (rule C), nor where a
+                    // stacked column (the row's bound) leaves a row no text
+                    // column (rule D).
+                    let narrow = sideBySide ? [] : TK2ContainerLists.narrowListText(in: [block], bound: rowWidth, size: env.size)
+                    let expected = (rtl ? expectedLTR.subtracting(listText) : expectedLTR).subtracting(narrow)
                     let pixels = P.comparesPixels(env, documentWidth: documentWidth)
                     let (a, b) = try P.pair(width: rowWidth, pixels: pixels) { arm in
                         P.environment(BlockView(block: block), arm: TK2ContainerBody.rowRenderer(block, arm), env: env, rowWidth: rowWidth,
@@ -279,9 +306,10 @@ extension TextKit2ContainerParityTests {
         #expect(failures.isEmpty, "\(failures.count) failing cases: \(failures.prefix(6))")
     }
 
-    @Test("stackedColumns: column prose (paragraphs, headings, panels, quotes and extension bodies in columns) matches SwiftUI through the production path when the columns stack; lists and code beside it stay on SwiftUI")
+    @Test("stackedColumns: column prose (paragraphs, headings, panels, quotes and extension bodies in columns, and from step 6 a list beside them) matches SwiftUI through the production path when the columns stack; code beside it stays on SwiftUI")
     func stackedColumns() async throws {
-        try await columnMatrix("stackedColumns", sideBySide: false)
+        // The list shapes run in `nestedListInStackedColumn`.
+        try await columnMatrix("stackedColumns", sideBySide: false, sections: Columns.proseSections)
     }
 
     @Test("horizontalColumns: side by side, every column family stays on SwiftUI (the off-grid probe passed none) and both arms draw the section alike")

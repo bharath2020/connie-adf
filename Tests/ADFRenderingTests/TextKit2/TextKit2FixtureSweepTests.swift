@@ -75,8 +75,11 @@ struct TextKit2FixtureSweepTests {
     /// renderer (`TextKit2Scope`), linked ones included (0, 0, 3 and 586
     /// are TextKit 1-backed). Pinned so a walk that finds no list text, or
     /// text that all falls back, fails here rather than passing by
-    /// measuring nothing.
-    nonisolated static let expectedEligibleListLeaves = ["kitchen-sink": 8, "stress-5k": 7_543, "lists-parity": 40, "list-dense": 3_537]
+    /// measuring nothing. From step 6 the walk also reaches list text below
+    /// a container: lists-parity's 40 top-level leaves gain the five
+    /// leaders of the quote 0.15 (two) and the layout section 0.18 (three);
+    /// the other documents hold no list in a container the scope reaches.
+    nonisolated static let expectedEligibleListLeaves = ["kitchen-sink": 8, "stress-5k": 7_543, "lists-parity": 45, "list-dense": 3_537]
 
     /// The leader as `ListRowView` hosts it, on one arm.
     static func leaderHeight(_ segments: [InlineSegment], arm: ADFTextRenderer, size: DynamicTypeSize, width: CGFloat) -> CGFloat {
@@ -152,15 +155,16 @@ struct TextKit2FixtureSweepTests {
     // MARK: Container leaves
 
     nonisolated static let containerDocuments = ["containers-parity", "kitchen-sink", "stress-1k", "stress-5k"]
-    /// Container prose leaves in scope per document (step 3: paragraphs and
+    /// Container leaves in scope per document (step 3: paragraphs and
     /// headings in panels, quotes and bodied extensions; step 4: and in
-    /// layout columns), as hand-counted from the JSON
-    /// (`TextKit2ContainerCoverageTests.fixturePins`; stress-5k 400
-    /// one-paragraph panels and 400 quotes of 606 paragraphs, its layout
-    /// sections all in expand bodies), with the eligible ones
-    /// (containers-parity has two atom paragraphs).
+    /// layout columns; step 6: list text in those but panels), as
+    /// hand-counted from the JSON (`TextKit2ContainerCoverageTests.fixturePins`;
+    /// containers-parity 64 prose leaves and 16 list leaders, its 0.64,
+    /// 0.65, 0.67 and 0.68; stress-5k 400 one-paragraph panels and 400
+    /// quotes of 606 paragraphs, its layout sections all in expand bodies),
+    /// with the eligible ones (containers-parity has two atom paragraphs).
     nonisolated static let expectedContainerLeaves: [String: (leaves: Int, eligible: Int)] = [
-        "containers-parity": (64, 62), "kitchen-sink": (11, 11), "stress-1k": (199, 199), "stress-5k": (1_006, 1_006),
+        "containers-parity": (80, 78), "kitchen-sink": (11, 11), "stress-1k": (199, 199), "stress-5k": (1_006, 1_006),
     ]
     /// The document widths whose rows (16 pt in from each side) the
     /// container leaves are swept in: an iPhone SE and an iPhone 17 Pro.
@@ -170,12 +174,15 @@ struct TextKit2FixtureSweepTests {
     /// the width it is given (`PanelBlockView`: padding on both sides, the
     /// stack spacing and its icon; `QuoteBlockView`: its leading inset;
     /// the extension body: its inset; a layout column, stacked as on these
-    /// phone widths: nothing, each column is proposed the section's width).
+    /// phone widths: nothing, each column is proposed the section's width;
+    /// a list row: its depth padding, decision padding, marker column and
+    /// gap, `ListRowView.textColumnInset`).
     enum Inset: Hashable {
         case panel(symbol: String)
         case quote
         case extensionBody
         case stackedColumn
+        case listRow(depth: Int, decision: Bool)
 
         @MainActor
         func points(_ env: TK2Parity.Environment) -> CGFloat {
@@ -185,18 +192,31 @@ struct TextKit2FixtureSweepTests {
             case .quote: return spacing * 2
             case .extensionBody: return spacing * 3
             case .stackedColumn: return 0
+            case .listRow(let depth, let decision):
+                let marker = TextKit2ListParityTests.markerWidth(env.size)
+                return CGFloat(depth) * (marker + spacing) + (decision ? 2 * spacing : 0) + marker + spacing
             }
         }
     }
 
-    /// The paragraphs and headings below panels, quotes, extension bodies
-    /// and layout columns in `blocks`, with the containers above each,
-    /// outermost first.
-    static func containerChains(_ blocks: [RenderBlock], chain: [Inset] = []) -> [String: (segments: [InlineSegment], style: TextBlockStyle, chain: [Inset])] {
-        var found: [String: (segments: [InlineSegment], style: TextBlockStyle, chain: [Inset])] = [:]
+    /// The paragraphs, headings and list text below panels, quotes,
+    /// extension bodies and layout columns in `blocks`, with the containers
+    /// above each, outermost first, and for list text its row last (a
+    /// leader has no block style: `nil`).
+    @MainActor
+    static func containerChains(_ blocks: [RenderBlock], chain: [Inset] = []) -> [String: (segments: [InlineSegment], style: TextBlockStyle?, chain: [Inset])] {
+        var found: [String: (segments: [InlineSegment], style: TextBlockStyle?, chain: [Inset])] = [:]
         for block in blocks {
             switch block.kind {
             case .richText(let segments, let style): if !chain.isEmpty { found[block.id] = (segments, style, chain) }
+            case .listRows(let rows) where !chain.isEmpty:
+                for row in rows {
+                    let rowChain = chain + [.listRow(depth: row.depth, decision: TextKit2ListParityTests.isDecision(row))]
+                    if !row.segments.isEmpty { found[row.id] = (row.segments, nil, rowChain) }
+                    for trailing in row.trailingBlocks {
+                        if case .richText(let segments, let style) = trailing.kind { found[trailing.id] = (segments, style, rowChain) }
+                    }
+                }
             case .panel(let palette, let children): found.merge(containerChains(children, chain: chain + [.panel(symbol: palette.iconSystemName)])) { a, _ in a }
             case .quote(let children): found.merge(containerChains(children, chain: chain + [.quote])) { a, _ in a }
             case .extensionPlaceholder(_, let body): found.merge(containerChains(body, chain: chain + [.extensionBody])) { a, _ in a }
@@ -209,15 +229,18 @@ struct TextKit2FixtureSweepTests {
 
     /// Every container leaf the production scope hands to TextKit 2, swept
     /// at the width its containers actually give it (the row width less
-    /// each container's inset, the panel's icon measured at that size) on
-    /// two document widths, each distinct (text, style, width) once. Before
-    /// iOS 26 container text is gated: every leaf must fall back as
-    /// `osGatedContainer`, which the sweep asserts instead of measuring.
+    /// each container's inset, the panel's icon measured at that size, and
+    /// for list text its row's inset; a list leader hosted as the list row
+    /// hosts it) on two document widths, each distinct (text, style, width)
+    /// once; a width under 1 pt stays on SwiftUI (rule D, the under-1-pt
+    /// guard) and is not measured. Before iOS 26 container text is gated:
+    /// every leaf must fall back as `osGatedContainer` (list text as
+    /// `osGatedList`), which the sweep asserts instead of measuring.
     @Test("every eligible container leaf of the demo documents measures as Text does at its effective child width")
     func everyEligibleContainerLeaf() async throws {
         struct Key: Hashable {
             let segments: [InlineSegment]
-            let style: TextBlockStyle
+            let style: TextBlockStyle?
             let width: CGFloat
             let size: DynamicTypeSize
         }
@@ -229,7 +252,7 @@ struct TextKit2FixtureSweepTests {
             let blocks = DocumentPreparer(theme: TK2Parity.theme).prepare(doc)
             var leaves: [TextKit2Scope.Leaf] = []
             TextKit2Scope.forEachLeaf(in: blocks) { leaf in
-                if leaf.position == .containerProse { leaves.append(leaf) }
+                if [.containerProse, .containerListLeader, .containerListTrailing].contains(leaf.position) { leaves.append(leaf) }
             }
             let chains = Self.containerChains(blocks)
             let pin = try #require(Self.expectedContainerLeaves[document])
@@ -239,7 +262,7 @@ struct TextKit2FixtureSweepTests {
             var measured: Set<Key> = []
             for leaf in leaves {
                 switch leaf.verdict {
-                case .fallback(.osGatedContainer): gated += 1; continue
+                case .fallback(.osGatedContainer), .fallback(.osGatedList): gated += 1; continue
                 case .fallback: continue
                 case .eligible: eligible += 1
                 }
@@ -248,9 +271,16 @@ struct TextKit2FixtureSweepTests {
                     for size in Self.sizes {
                         let env = TK2Parity.Environment(size: size)
                         let width = documentWidth - 4 * TK2Parity.theme.spacing - entry.chain.reduce(0) { $0 + $1.points(env) }
+                        guard width >= TextKit2Scope.minimumTextWidth else { continue }
                         guard measured.insert(Key(segments: entry.segments, style: entry.style, width: width, size: size)).inserted else { continue }
                         widthsSeen.insert(width)
-                        let h = TK2Parity.heights(TK2Parity.Fixture(name: leaf.ownerID, segments: entry.segments, style: entry.style), size: size, width: width)
+                        let h: (swiftUI: CGFloat, textKit2: CGFloat)
+                        if let style = entry.style {
+                            h = TK2Parity.heights(TK2Parity.Fixture(name: leaf.ownerID, segments: entry.segments, style: style), size: size, width: width)
+                        } else {
+                            h = (Self.leaderHeight(entry.segments, arm: .swiftUI, size: size, width: width),
+                                 Self.leaderHeight(entry.segments, arm: .textKit2, size: size, width: width))
+                        }
                         let delta = abs(h.swiftUI - h.textKit2)
                         let label = "\(document) \(leaf.ownerID) in \(entry.chain) \(size) W=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)"
                         checked += 1
