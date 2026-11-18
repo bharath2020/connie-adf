@@ -77,8 +77,14 @@ struct CodeBlockView: View {
         TextBlockStyle(font: theme.code, isHeading: false, headingLevel: nil, alignment: nil, indentation: 0, breakout: nil)
     }
 
+    /// What Copy puts on the pasteboard for a block's prepared `code`: its
+    /// characters exactly, never the drawn (highlighted) copy.
+    static func copyText(_ code: AttributedString) -> String {
+        String(code.characters)
+    }
+
     private func copyCode() {
-        let text = String(code.characters)
+        let text = Self.copyText(code)
         #if canImport(UIKit)
         UIPasteboard.general.string = text
         #elseif canImport(AppKit)

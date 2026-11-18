@@ -11,11 +11,14 @@ import ADFPreparation
 // extension bodies joined first, then open expand and nested-expand bodies,
 // then layout columns (stacked; side by side no family keeps the renderer,
 // `horizontalColumnKeepsRenderer`), then lists (where the list rules A–D
-// and the iOS 26 list gate pass at the nested width; never in a panel,
-// whose shape rule keeps a body holding a list on SwiftUI), then code
+// and the iOS 26 list gate pass at the nested width, below the
+// accessibility text sizes, `nestedListSizeKeepsRenderer`; never in a
+// panel, whose shape rule keeps a body holding a list on SwiftUI), then code
 // blocks (PR 3's code block, whole, through `BlockView`: its own gate
 // still decides its code text); every other container child still gets
-// `.swiftUI`, as before containers joined the renderer's scope.
+// `.swiftUI`, as before containers joined the renderer's scope. Right to
+// left (`containerDirectionKeepsRenderer`) and from xxxLarge
+// (`containerSizeKeepsRenderer`) every container keeps its body on SwiftUI.
 
 /// A `RenderBlock.Kind` case without its payload: what the container allow
 /// list (`TextKit2Scope.containerChildKinds`) holds.
@@ -135,14 +138,18 @@ extension TextKit2Scope {
     /// iOS 26 the text it reaches still stays on SwiftUI
     /// (`TextKit2Eligibility.containerTextMatchesText`, and for code
     /// `containerCodeVerdict`). A layout section passes the renderer to its
-    /// columns' blocks when the columns stack (compact width, accessibility
-    /// text sizes); side by side, no family keeps it yet
+    /// columns' blocks when the columns stack (compact width; at the
+    /// accessibility text sizes, where they stack too, the size rule keeps
+    /// them on SwiftUI, `containerSizeKeepsRenderer`); side by side, no
+    /// family keeps it yet
     /// (`horizontalColumnKeepsRenderer`). A list below a boundary is drawn
     /// by the list row as at the top level: rules A–D and the iOS 26 list
     /// gate decide its rows, rule D at the width bound the containers above
     /// it computed (`ListRowView`); a row they reject keeps everything in it
     /// on SwiftUI. A panel holding a list keeps its whole body on SwiftUI
-    /// (`panelKeepsRenderer`), and side by side no list keeps the renderer.
+    /// (`panelKeepsRenderer`), side by side no list keeps the renderer, and
+    /// at an accessibility text size no list below a boundary does
+    /// (`nestedListSizeKeepsRenderer`).
     /// A code block that receives the renderer is PR 3's whole code block:
     /// its code text still passes the content rules and the code gate
     /// (direction, canvas bound) where it is drawn; a panel holding code
@@ -202,20 +209,50 @@ extension TextKit2Scope {
     ///   shift, kept out here until the leaf is fixed.
     /// One paragraph, body paragraphs (links, inline code, bold, italic,
     /// emoji) and a paragraph with a nested quote matched within 0.01 pt.
+    ///
+    /// The list, code and small-run conditions read the whole body, through
+    /// the quotes, extension bodies, layout columns and panels in it (code
+    /// review F-R8): the panel's stack lays out every descendant again, so
+    /// a list in a quote in the panel, or code or a small run in a quote
+    /// beside a paragraph, keeps the body on SwiftUI as the same block
+    /// directly in the panel does; "beside" counts the body's blocks at any
+    /// depth. An expand in the body (its body is prepared on opening, out
+    /// of this rule's sight) keeps it on SwiftUI too. ADF's schema puts
+    /// none of these containers in a panel, but the parser accepts them
+    /// (containers-parity 0.33, 0.73). The heading condition stays on the
+    /// direct children: a heading in a quote in a panel matched (the
+    /// nested shape `quoteHeadingInPanel`).
     static func panelKeepsRenderer(_ children: [RenderBlock]) -> Bool {
         var smallRun = false
         var code = false
-        for child in children {
-            switch child.kind {
-            case .listRows: return false
-            case .codeBlock: code = true
-            case .richText(let segments, let style):
-                if style.isHeading { return false }
-                if !isBodyText(segments) { smallRun = true }
-            default: continue
+        var blocks = 0
+        func walk(_ body: [RenderBlock], direct: Bool) -> Bool {
+            for child in body {
+                switch child.kind {
+                case .listRows, .expand: return false
+                case .codeBlock:
+                    code = true
+                    blocks += 1
+                case .richText(let segments, let style):
+                    if style.isHeading {
+                        if direct { return false }
+                    } else if !isBodyText(segments) {
+                        smallRun = true
+                    }
+                    blocks += 1
+                case .quote(let nested), .extensionPlaceholder(_, let nested), .panel(_, let nested):
+                    guard walk(nested, direct: false) else { return false }
+                case .layoutColumns(let columns):
+                    for column in columns {
+                        guard walk(column.blocks, direct: false) else { return false }
+                    }
+                default: blocks += 1
+                }
             }
+            return true
         }
-        return !((smallRun || code) && children.count > 1)
+        guard walk(children, direct: true) else { return false }
+        return !((smallRun || code) && max(children.count, blocks) > 1)
     }
 
     /// Whether media captions may use TextKit 2 at all: the caption
@@ -236,6 +273,25 @@ extension TextKit2Scope {
         }
     }
 
+    /// Whether a caption's runs keep it on TextKit 2: none carries a run
+    /// background (a `backgroundColor` mark's fill, or inline code's band,
+    /// `ADFTheme.codeBackground`). A caption whose text has one stays on
+    /// SwiftUI, reason `captionRunBackground` (lead dispositions M2,
+    /// reversing C42). Measured cause: a caption is centred under the
+    /// default `.center` layout, and centred text with a run background is
+    /// PR 1's residual 5: the row draws the band one device pixel larger
+    /// than `Text` (CAP-07, captions-parity 0.7.0, in dark mode: 0.574 %
+    /// and 0.774 % of its text crop differ at sizes 0 and 3, against the
+    /// visual gate's 0.5 %; glyphs in place). Fixing the band needs `Text`'s
+    /// own line origins (the PR 6 follow-up), so the caption family keeps
+    /// every run-background caption on SwiftUI, centred or not, inline code
+    /// included. The caption verdict reads it
+    /// (`TextKit2Eligibility.verdict(_:owner:context:)` in the caption
+    /// context), so the view and the coverage walk agree.
+    static func captionRunsKeepRenderer(_ text: AttributedString) -> Bool {
+        !text.runs.contains { $0.backgroundColor != nil }
+    }
+
     /// The renderer a container hands a child block of `kind` in `parent`:
     /// `.swiftUI` whenever it inherited `.swiftUI` (so a container never
     /// turns TextKit 2 back on below a list row, a table cell or a
@@ -243,15 +299,16 @@ extension TextKit2Scope {
     /// input, never a preference), and otherwise `.textKit2` only for a
     /// kind in `allowed` that passes its whole-block rule
     /// (`blockKeepsRenderer`) and the boundary's view-time rules
-    /// (`containerGate(for:in:layoutDirection:)`). It does not consult
-    /// `inheritsRenderer`, so a test host that widens `allowed` can nest a
-    /// family before its stage.
+    /// (`containerGate(for:in:layoutDirection:dynamicTypeSize:)`). It does
+    /// not consult `inheritsRenderer`, so a test host that widens `allowed`
+    /// can nest a family before its stage.
     static func childRenderer(
         for kind: RenderBlock.Kind, in parent: TextKit2ContainerParent, inherited: ADFTextRenderer,
-        allowed: Set<TextKit2BlockKind>, layoutDirection: LayoutDirection
+        allowed: Set<TextKit2BlockKind>, layoutDirection: LayoutDirection, dynamicTypeSize: DynamicTypeSize
     ) -> ADFTextRenderer {
         guard inherited == .textKit2, allowed.contains(TextKit2BlockKind(kind)), blockKeepsRenderer(kind),
-              containerGate(for: kind, in: parent, layoutDirection: layoutDirection) == nil else { return .swiftUI }
+              containerGate(for: kind, in: parent, layoutDirection: layoutDirection, dynamicTypeSize: dynamicTypeSize) == nil
+        else { return .swiftUI }
         return .textKit2
     }
 
@@ -259,9 +316,10 @@ extension TextKit2Scope {
 
     /// Why text eligible by content stays on SwiftUI inside a container for
     /// a reason only the view knows (the width, the layout direction, the
-    /// size class). The coverage walk evaluates none of them: it counts a
-    /// document as stacked and left to right, so coverage is the static
-    /// potential. Decided by `containerGate`.
+    /// size class, the text size). The coverage walk evaluates none of
+    /// them: it counts a document as stacked, left to right and below the
+    /// accessibility text sizes, so coverage is the static potential.
+    /// Decided by `containerGate`.
     enum ContainerGate: Sendable, Hashable, CaseIterable {
         /// A wrapping leaf whose width bound, less its own inset, is under
         /// `minimumTextWidth` (`textFits`).
@@ -269,21 +327,36 @@ extension TextKit2Scope {
         /// A wrapping leaf below a container that cannot bound its insets
         /// (`TextKit2WidthBound.unproven`).
         case unprovenNestedWidth
-        /// A panel laid out right to left (`panelDirectionKeepsRenderer`).
-        case panelDirection
+        /// A child of a container laid out right to left
+        /// (`containerDirectionKeepsRenderer`).
+        case containerDirection
         /// A family kept out of side-by-side layout columns
         /// (`horizontalColumnKeepsRenderer`).
         case horizontalColumn
+        /// A list below a container's boundary at an accessibility text
+        /// size (`nestedListSizeKeepsRenderer`).
+        case nestedListSize
+        /// A child of a container at xxxLarge or above
+        /// (`containerSizeKeepsRenderer`).
+        case containerSize
     }
 
-    /// Whether a panel laid out in `direction` may pass the renderer to its
-    /// body: in both directions. The panel shape probes found no failure
-    /// right to left that the same shape does not have left to right (and
-    /// `panelKeepsRenderer` excludes); the extra right-to-left differences
-    /// were pixels the blocks alone reproduce, not the panel's. Kept as a
-    /// rule so a direction found failing later is a one-line change.
-    static func panelDirectionKeepsRenderer(_ direction: LayoutDirection) -> Bool {
-        true
+    /// Whether a container laid out in `direction` may pass the renderer to
+    /// its children (a panel, a quote, an expand body, an extension body or
+    /// a layout column): left to right only. Right to left, container
+    /// bodies stay on SwiftUI (lead dispositions M3, F-Q6). Measured once
+    /// a leaf-drawing failure had to be the leaf's own pixels (the step 3
+    /// to 7 family matrices, iOS 26.3, 3x): at AX5 in a 320 pt document, a
+    /// quote's paragraph in a stacked 50/50 column differs in 30,159 pixels
+    /// (the whole paragraph's ink, drawn at another horizontal pixel
+    /// phase) while the same quote alone matches, and a panel holding a
+    /// paragraph and a quote (Bold Text) differs in its icon column and in
+    /// 55,677 pixels of the quote's paragraph that the blocks alone do not
+    /// differ in. Left to right the same cases pass. Lists and code were
+    /// already kept on SwiftUI right to left below a boundary (rule C, the
+    /// code gate); this keeps the prose, headings and captions there too.
+    static func containerDirectionKeepsRenderer(_ direction: LayoutDirection) -> Bool {
+        direction == .leftToRight
     }
 
     /// Whether a child of `kind` may keep the renderer in a side-by-side
@@ -314,21 +387,75 @@ extension TextKit2Scope {
         }
     }
 
+    /// Whether a list below a container's boundary may keep the renderer
+    /// at the text size `size`: below the accessibility sizes only. There a
+    /// row's marker column and depth padding (about 85 pt a level at AX4)
+    /// take most of a nested list's width, and a deep row's text column
+    /// narrows to a glyph or less. Measured (iOS 26.3, 3x, the step 6
+    /// parity matrix and `ADF_CONTAINER_PROBES_WIDTHS`): a list 268 pt wide
+    /// at AX4, in a quote of a 316 pt document, an extension body at 324,
+    /// an open expand body at 320 and a stacked column at 300, gives its
+    /// depth-2 row a 12 pt column; `Text` and TextKit 2 break its one-glyph
+    /// lines apart and the list's first or last baseline lands 28 pt off
+    /// (624,490 to 817,989 differing pixels), and in a bodied extension at
+    /// 316 with Bold Text so does a 260 pt one. The same list hosted alone
+    /// at that width differs too: PR 2's list leaf in that regime (rule D,
+    /// `listTextFits`, only rejects a column under 1 pt), which top-level
+    /// lists keep unchanged. Containers narrow a list by their insets, so
+    /// below a boundary the whole accessibility range stays on SwiftUI,
+    /// whatever the width: a category rule, not a measured column floor.
+    /// Below the accessibility sizes a marker and gap take under 50 pt a
+    /// level, and no measured case failed.
+    static func nestedListSizeKeepsRenderer(_ size: DynamicTypeSize) -> Bool {
+        !size.isAccessibilitySize
+    }
+
+    /// Whether a container at the text size `size` may pass the renderer
+    /// to its children: below xxxLarge only. Measured (code review F-R4 and
+    /// F-Q1: the container-leaf sweep comparing baselines as well as
+    /// heights, iOS 26.3, 3x; every eligible container leaf of
+    /// containers-parity, kitchen-sink, stress-1k and stress-5k hosted alone
+    /// at the width its containers give it in 320 to 440 pt documents, at
+    /// every size, and at off-grid widths 268 to 276 pt at Large and AX5):
+    /// - A paragraph set a line low at the same height, in panel bodies at
+    ///   every size from xSmall to AX5 (31 leaves at real widths): the row
+    ///   re-laid out at the pixel it reported. The row now keeps that
+    ///   layout (`TextKit2RowView.layoutResult(forProposedWidth:)`), and
+    ///   the sweep finds none at any size.
+    /// - A paragraph one to three lines taller or shorter, still: panel
+    ///   bodies 183 to 271 pt wide at AX4 (2) and AX5 (40), and quote bodies
+    ///   at off-grid widths at AX5, long words broken apart differently
+    ///   (heights 58 to 682 pt apart).
+    /// So from xxxLarge every container keeps its body on SwiftUI: a
+    /// category rule, not a width floor. xxxLarge to AX3 stay out with AX4
+    /// and AX5 though only the line shift, now fixed, was measured there. A
+    /// list below a boundary at an accessibility size reports
+    /// `nestedListSize` first (lead dispositions M1).
+    static func containerSizeKeepsRenderer(_ size: DynamicTypeSize) -> Bool {
+        size < .xxxLarge
+    }
+
     /// The boundary's view-time rules for a child of `kind` in `parent`
-    /// laid out in `layoutDirection` (`childRenderer`): a panel's direction
-    /// (`.panelDirection`), a side-by-side column's family
-    /// (`.horizontalColumn`); `nil` when neither keeps it on SwiftUI.
+    /// laid out in `layoutDirection` at `dynamicTypeSize`
+    /// (`childRenderer`): the container's direction
+    /// (`.containerDirection`), a side-by-side column's family
+    /// (`.horizontalColumn`), a list at an accessibility size
+    /// (`.nestedListSize`), the text size (`.containerSize`); `nil` when
+    /// none keeps it on SwiftUI.
     static func containerGate(
-        for kind: RenderBlock.Kind, in parent: TextKit2ContainerParent, layoutDirection: LayoutDirection
+        for kind: RenderBlock.Kind, in parent: TextKit2ContainerParent, layoutDirection: LayoutDirection,
+        dynamicTypeSize: DynamicTypeSize
     ) -> ContainerGate? {
+        if !containerDirectionKeepsRenderer(layoutDirection) { return .containerDirection }
         switch parent {
-        case .panel:
-            return panelDirectionKeepsRenderer(layoutDirection) ? nil : .panelDirection
         case .column(sideBySide: true):
-            return horizontalColumnKeepsRenderer(TextKit2BlockKind(kind)) ? nil : .horizontalColumn
-        case .quote, .expandBody, .extensionBody, .column(sideBySide: false):
-            return nil
+            if !horizontalColumnKeepsRenderer(TextKit2BlockKind(kind)) { return .horizontalColumn }
+        case .panel, .quote, .expandBody, .extensionBody, .column(sideBySide: false):
+            break
         }
+        if case .listRows = kind, !nestedListSizeKeepsRenderer(dynamicTypeSize) { return .nestedListSize }
+        if !containerSizeKeepsRenderer(dynamicTypeSize) { return .containerSize }
+        return nil
     }
 
     /// The leaf's view-time width rules (`TextKit2Leaf`): for wrapping text,
@@ -371,8 +498,10 @@ extension View {
     /// the width bound the container computed for its children
     /// (`widthBound`: its own bound less its insets) and the context
     /// `.container`. Where the container itself inherited `.swiftUI` the
-    /// bound is written as `.pending`, so the SwiftUI path depends on no
-    /// width arithmetic.
+    /// bound is written as `.pending`, so no SwiftUI child reads the
+    /// container's arithmetic. (The five container views still read their
+    /// own bound and compute the child bound on that path; nothing below
+    /// them uses it, and the drawing does not depend on it.)
     func adfContainerChild(_ block: RenderBlock, in parent: TextKit2ContainerParent, widthBound: TextKit2WidthBound) -> some View {
         modifier(TextKit2ContainerChild(kind: block.kind, parent: parent, widthBound: widthBound))
     }
@@ -401,10 +530,12 @@ private struct TextKit2ContainerChild: ViewModifier {
     @Environment(\.adfTextRenderer) private var inherited
     @Environment(\.adfContainerChildKinds) private var allowed
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     func body(content: Content) -> some View {
         let renderer = TextKit2Scope.childRenderer(
-            for: kind, in: parent, inherited: inherited, allowed: allowed, layoutDirection: layoutDirection
+            for: kind, in: parent, inherited: inherited, allowed: allowed, layoutDirection: layoutDirection,
+            dynamicTypeSize: dynamicTypeSize
         )
         content
             .environment(\.adfTextRenderer, renderer)

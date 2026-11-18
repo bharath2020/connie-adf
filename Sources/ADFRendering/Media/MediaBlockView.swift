@@ -52,8 +52,10 @@ struct MediaBlockView: View {
     /// prepared caption run carries its own font, so `.footnote` sets no
     /// caption metric and the row needs no font of its own. A layout whose
     /// caption frame does not match keeps it on SwiftUI
-    /// (`TextKit2Scope.captionLayoutKeepsRenderer`). No selection: the
-    /// caption has none on either engine.
+    /// (`TextKit2Scope.captionLayoutKeepsRenderer`), and so does a caption
+    /// whose runs carry a run background (the caption verdict,
+    /// `TextKit2Scope.captionRunsKeepRenderer`). No selection: the caption
+    /// has none on either engine.
     static func caption(_ segments: [InlineSegment], ownerID: String, layout: ADFMediaLayout, theme: ADFTheme) -> some View {
         TextEngineLeaf(
             segments: segments, style: captionStyle(theme: theme), ownerID: ownerID,

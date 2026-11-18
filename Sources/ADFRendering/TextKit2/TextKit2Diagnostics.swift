@@ -400,11 +400,9 @@ extension ADFTextRenderer {
     /// admitted canvas bound at this text size, legibility weight and
     /// display scale, or, before iOS 26, an interior empty line above AX3
     /// (`TextKit2Scope.CodeGate`). `admittedCodeRoots + gatedCodeRoots ==
-    /// ADFTextKit2Coverage.eligibleCodeRoots`. The same split of the
-    /// content-eligible code below containers in scope is
-    /// `nestedCodeAdmitted` and `nestedCodeGated`, which sum to
-    /// `ADFTextKit2Coverage.eligibleNestedCode` and never join the root
-    /// counts.
+    /// ADFTextKit2Coverage.eligibleCodeRoots`. Root code only, as before
+    /// containers joined the scope: the code below containers is measured
+    /// by `textKit2CodeAdmissionIncludingNested`.
     ///
     /// It applies the rule the code views apply, to the same prepared text,
     /// so pass the environment the document is drawn in (the size after any
@@ -419,17 +417,37 @@ extension ADFTextRenderer {
         legibilityWeight: LegibilityWeight?,
         displayScale: CGFloat,
         layoutDirection: LayoutDirection
+    ) -> (admittedCodeRoots: Int, gatedCodeRoots: Int) {
+        let counts = textKit2CodeAdmissionIncludingNested(
+            of: blocks, allowed: TextKit2Scope.containerChildKinds, dynamicTypeSize: dynamicTypeSize,
+            legibilityWeight: legibilityWeight, displayScale: displayScale, layoutDirection: layoutDirection
+        )
+        return (counts.admittedCodeRoots, counts.gatedCodeRoots)
+    }
+
+    /// `textKit2CodeAdmission(of:…)` and, in the same walk, the same split
+    /// of the content-eligible code below the containers in scope:
+    /// `nestedCodeAdmitted` and `nestedCodeGated`, which sum to
+    /// `ADFTextKit2Coverage.eligibleNestedCode` and never join the root
+    /// counts (the root pair is `textKit2CodeAdmission`'s, unchanged).
+    @MainActor
+    public static func textKit2CodeAdmissionIncludingNested(
+        of blocks: [RenderBlock],
+        dynamicTypeSize: DynamicTypeSize,
+        legibilityWeight: LegibilityWeight?,
+        displayScale: CGFloat,
+        layoutDirection: LayoutDirection
     ) -> (admittedCodeRoots: Int, gatedCodeRoots: Int, nestedCodeAdmitted: Int, nestedCodeGated: Int) {
-        textKit2CodeAdmission(
+        textKit2CodeAdmissionIncludingNested(
             of: blocks, allowed: TextKit2Scope.containerChildKinds, dynamicTypeSize: dynamicTypeSize,
             legibilityWeight: legibilityWeight, displayScale: displayScale, layoutDirection: layoutDirection
         )
     }
 
-    /// `textKit2CodeAdmission(of:…)` with `allowed` as the container allow
-    /// list (as `textKit2Coverage(of:allowed:)`).
+    /// `textKit2CodeAdmissionIncludingNested(of:…)` with `allowed` as the
+    /// container allow list (as `textKit2Coverage(of:allowed:)`).
     @MainActor
-    static func textKit2CodeAdmission(
+    static func textKit2CodeAdmissionIncludingNested(
         of blocks: [RenderBlock],
         allowed: Set<TextKit2BlockKind>,
         dynamicTypeSize: DynamicTypeSize,
@@ -505,6 +523,12 @@ enum TextKit2Eligibility {
         /// A caption under a media layout whose caption frame does not match
         /// `Text`'s (`TextKit2Scope.captionLayoutKeepsRenderer`).
         case captionLayout
+        /// A caption whose text carries a run background (a highlight, or
+        /// inline code's band): the row draws a centred band one device
+        /// pixel larger than `Text` (PR 1 residual 5,
+        /// `TextKit2Scope.captionRunsKeepRenderer`). From iOS 26, after the
+        /// content reasons; before it such a caption is `osGatedContainer`.
+        case captionRunBackground
         /// Non-empty code that is not one plain prepared run: no
         /// `ADFCodeShape` over all of it (text assembled outside
         /// `DocumentPreparer`), more than one run, or a link or baseline
@@ -641,8 +665,10 @@ enum TextKit2Eligibility {
     /// (`TextKit2Scope.Leaf.verdict`) both decide through it. Before
     /// iOS 26, text below a container's boundary and captions fall back as
     /// `.osGatedContainer` (`containerTextMatchesText`), after the content
-    /// reasons and the list gate. List text in a container is still
-    /// `.list`, so the list rules below apply to it unchanged.
+    /// reasons and the list gate; from iOS 26 a caption whose text carries
+    /// a run background falls back as `.captionRunBackground`
+    /// (`TextKit2Scope.captionRunsKeepRenderer`). List text in a container
+    /// is still `.list`, so the list rules below apply to it unchanged.
     static func verdict(
         _ segments: [InlineSegment], owner: TextKit2OwnerKind = .root, context: TextKit2ContainerContext = .none
     ) -> Verdict {
@@ -661,6 +687,7 @@ enum TextKit2Eligibility {
         }
         if owner == .list, !listsMatchText { return .fallback(.osGatedList) }
         if context != .none, !containerTextMatchesText { return .fallback(.osGatedContainer) }
+        if context == .caption, !TextKit2Scope.captionRunsKeepRenderer(text) { return .fallback(.captionRunBackground) }
         return .eligible(text)
     }
 
@@ -932,6 +959,12 @@ final class TextKit2Diagnostics {
                 if let ownerID { containerRows[ownerID]?.nativeDraws += 1 }
             }
         case .caption:
+            // A linked caption row draws through its TextKit 1 stack: that
+            // pass counts in `textKit1BackedDrawCount` only, with no caption
+            // TextKit 1 counter beside `containerTextKit1DrawCount`, and its
+            // per-owner record keeps 0 native draws. The record is the
+            // native proof, so 0 is right for it; a linked caption's draws
+            // show in the global TextKit 1 count (code review F-R26).
             if native {
                 captionNativeDrawCount += 1
                 if let ownerID { captionRows[ownerID]?.nativeDraws += 1 }

@@ -33,13 +33,17 @@ import SwiftUI
 /// extension or an open expand's (or nested expand's) body, and in those
 /// nested in one another, go to TextKit 2 too; the container's icon, bar,
 /// fill, border, padding and title (an expand's title and chevron
-/// included) stay SwiftUI. A panel whose body holds a list, a heading, or a
-/// sub/superscript or small-text run or a code block beside another block
-/// keeps its whole body on SwiftUI. An expand body is prepared when it
-/// opens, as before; the renderer never starts or restarts that
-/// preparation. A layout section's columns pass the same choice to their
-/// blocks while the columns stack (compact width, accessibility text
-/// sizes); columns laid out side by side keep all their text on SwiftUI.
+/// included) stay SwiftUI. A panel whose body holds a list or an expand, a
+/// heading of its own, or a sub/superscript or small-text run or a code
+/// block beside another block (directly or in a quote, extension body or
+/// layout column in it) keeps its whole body on SwiftUI. Laid out right to
+/// left, or at xxxLarge and above, every container keeps its body on
+/// SwiftUI. An expand body is prepared when it opens, as before; the
+/// renderer never starts or restarts that preparation. A layout section's
+/// columns pass the same choice to their blocks while the columns stack
+/// (compact width; at the accessibility text sizes, where they also
+/// stack, the size rule keeps them on SwiftUI); columns laid out side by
+/// side keep all their text on SwiftUI.
 /// The lists in a quote, an expand or extension body or a stacked column
 /// follow the list rules above at the width the container leaves them; a
 /// panel holding a list keeps its whole body on SwiftUI. Code blocks in
@@ -48,13 +52,14 @@ import SwiftUI
 /// another block keeps its whole body on SwiftUI).
 ///
 /// A media caption's text follows the setting from iOS 26 when its text
-/// is eligible and its media is in scope (a top-level row, or a child a
-/// container's boundary passes the setting to), drawn in the caption's
-/// secondary foreground; the media box is SwiftUI.
+/// is eligible (and has no highlighted or inline-code run) and its media
+/// is in scope (a top-level row, or a child a container's boundary passes
+/// the setting to), drawn in the caption's secondary foreground; the media
+/// box is SwiftUI.
 ///
 /// Everything else stays on SwiftUI regardless of the setting: side-by-side
-/// layout columns, code inside a list item, table cells, and atom-bearing
-/// text. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.
+/// layout columns, container bodies laid out right to left or at xxxLarge
+/// and above, code inside a list item, table cells, and atom-bearing text. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
     case swiftUI = "swiftui"
     case textKit2 = "textkit2"

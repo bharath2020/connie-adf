@@ -28,8 +28,9 @@ import ADFPreparation
 /// only once it is open and prepared), and in side-by-side layout columns
 /// to none (`horizontalColumnKeepsRenderer`). A list below a boundary keeps
 /// PR 2's row rules unchanged (A to D and the list gate, rule D against the
-/// container's width bound). A code block reached that way is the whole
-/// code block, as at the top level: the code rules and the code gate still
+/// container's width bound) and stays on SwiftUI at the accessibility text
+/// sizes (`nestedListSizeKeepsRenderer`). A code block reached that way is
+/// the whole code block, as at the top level: the code rules and the code gate still
 /// decide its text. A media block's only text is its caption
 /// (`MediaBlockView.caption`, `captionsUseTextKit2`,
 /// `captionLayoutKeepsRenderer`). Every other top-level kind (table, card,
@@ -260,9 +261,11 @@ enum TextKit2Scope {
         /// The engine verdict for this leaf where it sits: what
         /// `TextEngineLeaf` decides for it. Paragraphs, headings, list
         /// text and captions are judged from their segments
-        /// (`TextKit2Eligibility.verdict(_:owner:context:)`), a caption
-        /// then by its media layout (`captionLayoutKeepsRenderer`, which
-        /// the caption's view passes as `allowsTextKit2`); code is judged
+        /// (`TextKit2Eligibility.verdict(_:owner:context:)`, which in the
+        /// caption context also keeps a run-background caption on SwiftUI,
+        /// `captionRunsKeepRenderer`), a caption then by its media layout
+        /// (`captionLayoutKeepsRenderer`, which the caption's view passes as
+        /// `allowsTextKit2`); code is judged
         /// from its prepared string by the code rules
         /// (`TextKit2Eligibility.codeVerdict`, and below a container
         /// `containerCodeVerdict`), never by a list rule.
@@ -292,8 +295,9 @@ enum TextKit2Scope {
     /// then `childRenderer` at each boundary, with `allowed` as the allow
     /// list), its paragraphs, headings, list text, code and captions at
     /// the container positions. Containers are walked as the views draw
-    /// them stacked and left to right; no view-time rule
-    /// (`containerGate`) is evaluated. A row with empty segments has no
+    /// them stacked, left to right and below the accessibility text sizes
+    /// (at Large); no other view-time rule (`containerGate`) is evaluated.
+    /// A row with empty segments has no
     /// leader view, so it is not a leaf, and neither is an absent or empty
     /// caption. An expand's body is not prepared with the document, so the
     /// walk never enters one: it reports each expand in scope to
@@ -341,7 +345,8 @@ enum TextKit2Scope {
     ) {
         func children(_ blocks: [RenderBlock], in parent: TextKit2ContainerParent) {
             for child in blocks where childRenderer(
-                for: child.kind, in: parent, inherited: .textKit2, allowed: allowed, layoutDirection: .leftToRight
+                for: child.kind, in: parent, inherited: .textKit2, allowed: allowed, layoutDirection: .leftToRight,
+                dynamicTypeSize: .large
             ) == .textKit2 {
                 switch child.kind {
                 case .richText(let segments, let style):
