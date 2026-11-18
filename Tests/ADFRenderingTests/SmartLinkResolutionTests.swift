@@ -51,7 +51,9 @@ struct SmartLinkResolutionTests {
         _ resolver: any ADFSmartLinkResolver, mode: ADFSmartLinkResolution, blocks: [RenderBlock] = [],
         dwell: Duration = .zero, maxConcurrent: Int = 4, sleeper: ManualSleeper? = nil, feed: Bool = true
     ) async -> (SmartLinkCoordinator, StubSmartLinkDocument) {
-        var timing = SmartLinkTiming(dwell: dwell, maxConcurrent: maxConcurrent)
+        // The loading look shows as a call starts (design §10's delay is
+        // proven in `SmartLinkLandingTests`).
+        var timing = SmartLinkTiming(dwell: dwell, resolvingDelay: .zero, maxConcurrent: maxConcurrent)
         timing.prefetchPause = .zero
         if let sleeper { timing.sleep = { try await sleeper.sleep($0) } }
         let coordinator = SmartLinkCoordinator(timing: timing, hasVisibilityFeed: feed)
@@ -64,9 +66,12 @@ struct SmartLinkResolutionTests {
         return (coordinator, document)
     }
 
+    /// An on-screen leaf, all of it on screen (design §10: a leaf
+    /// straddling an edge reports only the first).
     static func show(_ coordinator: SmartLinkCoordinator, _ leaf: String, _ keys: [SmartLinkKey]) {
         coordinator.attach(leaf: leaf, keys: keys)
         coordinator.setLeafVisible(leaf, true)
+        coordinator.setLeafFullyVisible(leaf, true)
     }
 
     /// Gives queued tasks (dwells, nearby plans, landing results) a chance.
@@ -236,7 +241,7 @@ struct SmartLinkResolutionTests {
         await Self.settle()
         #expect(resolver.calls.count == 4)
         #expect(coordinator.stage(for: Self.key("n31")) == .plain)
-        #expect(coordinator.prefetchedStage(for: Self.key("n31")) == .resolved(Self.page))
+        #expect(coordinator.heldStage(for: Self.key("n31")) == .resolved(Self.page))
         // Drawn by a leaf built now, without observing anything new.
         #expect(coordinator.displayStages(for: [Self.key("n31")], owner: nil) == [Self.key("n31"): .resolved(Self.page)])
 
@@ -303,7 +308,7 @@ struct SmartLinkResolutionTests {
         let stats = coordinator.stats
         #expect(stats.prefetchInFlight == 0 && stats.inFlight == 0 && stats.cancellations == 3, "\(stats)")
         for key in batch {
-            #expect(coordinator.stage(for: key) == .plain && coordinator.prefetchedStage(for: key) == nil)
+            #expect(coordinator.stage(for: key) == .plain && coordinator.heldStage(for: key) == nil)
         }
         await Self.settle()
         #expect(resolver.calls.count == 4, "a batch started while scrolling")
@@ -350,7 +355,7 @@ struct SmartLinkResolutionTests {
         #expect(Self.names(coordinator.prefetchingKeys.map(\.url)) == ["fresh"])
         resolver.answer(fresh.url, .failure(ADFSmartLinkError.notFound))
         resolver.answer(shared.url, .success(Self.page))
-        try await smartLinkEventually("fresh cached as failed") { coordinator.prefetchedStage(for: fresh) == .failed(.notFound) }
+        try await smartLinkEventually("fresh cached as failed") { coordinator.heldStage(for: fresh) == .failed(.notFound) }
         await Self.settle()
         #expect(resolver.calls.count == 3, "\(resolver.calls)")
         // A cached failure is terminal: on screen it is published, never asked again.
@@ -384,7 +389,7 @@ struct SmartLinkResolutionTests {
     func visibleFirst() async throws {
         let resolver = ScriptedSmartLinkResolver()
         let sleeper = ManualSleeper()
-        var timing = SmartLinkTiming(dwell: .milliseconds(150), maxConcurrent: 4)
+        var timing = SmartLinkTiming(dwell: .milliseconds(150), resolvingDelay: .zero, maxConcurrent: 4)
         timing.prefetchPause = .zero
         // Dwells go through the manual sleeper; nearby pauses are zero.
         timing.sleep = { duration in
@@ -466,10 +471,10 @@ struct SmartLinkResolutionTests {
         )
         defer { withExtendedLifetime(document) {} }
         Self.show(coordinator, "p0", [Self.key("n0")])
-        try await smartLinkEventually("prefetched") { coordinator.prefetchedStage(for: Self.key("n4")) == .resolved(Self.page) }
+        try await smartLinkEventually("prefetched") { coordinator.heldStage(for: Self.key("n4")) == .resolved(Self.page) }
         try await smartLinkEventually("settled") { coordinator.stats.inFlight == 0 && coordinator.stats.prefetchCalls == 9 }
         coordinator.reset()
-        #expect(coordinator.prefetchedStage(for: Self.key("n4")) == nil)
+        #expect(coordinator.heldStage(for: Self.key("n4")) == nil)
         #expect(coordinator.displayStages(for: [Self.key("n4")], owner: nil).isEmpty)
 
         let idle = SmartLinkCoordinator(hasVisibilityFeed: true)

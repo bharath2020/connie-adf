@@ -158,21 +158,26 @@ struct SmartLinkCoordinatorTests {
 
     nonisolated static let page = ADFSmartLinkMetadata(title: "Q3 Roadmap", icon: .page)
 
+    /// The loading look shows as a call starts here (`resolvingDelay`
+    /// zero): these tests prove the stage machine, and
+    /// `SmartLinkLandingTests` proves the delay (design §10).
     static func coordinator(
         _ resolver: any ADFSmartLinkResolver, dwell: Duration = .zero, maxConcurrent: Int = 4,
-        sleeper: ManualSleeper? = nil, feed: Bool = true
+        sleeper: ManualSleeper? = nil, feed: Bool = true, resolvingDelay: Duration = .zero
     ) -> SmartLinkCoordinator {
-        var timing = SmartLinkTiming(dwell: dwell, maxConcurrent: maxConcurrent)
+        var timing = SmartLinkTiming(dwell: dwell, resolvingDelay: resolvingDelay, maxConcurrent: maxConcurrent)
         if let sleeper { timing.sleep = { try await sleeper.sleep($0) } }
         let coordinator = SmartLinkCoordinator(timing: timing, hasVisibilityFeed: feed)
         coordinator.resolver = resolver
         return coordinator
     }
 
-    /// Attaches a leaf and reports it on screen, as an on-screen leaf does.
+    /// Attaches a leaf and reports it on screen, all of it, as an on-screen
+    /// paragraph does (a leaf straddling an edge reports only the first).
     static func show(_ coordinator: SmartLinkCoordinator, _ leaf: String, _ keys: [SmartLinkKey]) {
         coordinator.attach(leaf: leaf, keys: keys)
         coordinator.setLeafVisible(leaf, true)
+        coordinator.setLeafFullyVisible(leaf, true)
     }
 
     @Test("a visible leaf's key goes plain → resolving → resolved, with one resolver call")
@@ -530,12 +535,15 @@ struct SmartLinkCoordinatorTests {
         // live view: no new visibility crossing is reported.
         let visible = old.knownVisibility(of: "0.0")
         #expect(visible == true)
+        #expect(old.knownFullVisibility(of: "0.0") == true)
         SmartLinkAttachment.move(
             from: .init(coordinator: old, ownerID: "0.0", keys: [a]),
             to: .init(coordinator: old, ownerID: "new-id", keys: [a])
         )
         #expect(old.attachedLeafIDs == ["new-id"])
         #expect(old.knownVisibility(of: "new-id") == true)
+        #expect(old.knownFullVisibility(of: "new-id") == true, "the move lost the leaf's full visibility")
+        #expect(old.fullyVisibleLeafIDs == ["new-id"])
         #expect(old.demandCounts == [a: 1])
         #expect(resolver.cancelled.isEmpty, "the move cancelled the lookup")
 
@@ -546,8 +554,10 @@ struct SmartLinkCoordinatorTests {
             to: .init(coordinator: new, ownerID: "new-id", keys: [a])
         )
         #expect(old.attachedLeafIDs.isEmpty && old.demandCounts.isEmpty)
+        #expect(old.fullyVisibleLeafIDs.isEmpty)
         #expect(new.demandCounts == [a: 1])
         #expect(new.knownVisibility(of: "new-id") == true)
+        #expect(new.knownFullVisibility(of: "new-id") == true)
         // A report the leaf already made wins over the carried one.
         new.setLeafVisible("x", true)
         new.attach(leaf: "x", keys: [Self.key("x")], visible: false)

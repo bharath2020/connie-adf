@@ -48,6 +48,9 @@ struct TextKit2SmartLinkTests {
     ) async throws -> Hosted {
         let model = ADFDocumentModel()
         model.smartLinks.timing.dwell = .zero
+        // The loading look shows as a call starts (the delay of design §10
+        // is proven in `SmartLinkLandingTests`).
+        model.smartLinks.timing.resolvingDelay = .zero
         model.smartLinks.hasVisibilityFeed = feed
         // As a host that builds its view before loading: the resolver is
         // installed when the blocks prepare (inline cards become smart links).
@@ -262,6 +265,106 @@ struct TextKit2SmartLinkTests {
         #expect(stats.cancellations == 1, "\(stats)")
         #expect(resolver.calls.filter { $0 == URL(string: Self.a)! }.count == 1)
         print("SMARTLINK feed: calls=\(resolver.calls.map(\.path)) stats=\(stats) contentHeight=\(scroll.contentSize.height)")
+    }
+
+    /// One programmatic scroll step: lay out, and give SwiftUI its turns to
+    /// report visibility crossings.
+    static func scrollStep(_ scroll: UIScrollView, to offset: CGFloat, in window: UIWindow) async throws {
+        scroll.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+        for _ in 0..<3 {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    /// Design §10. The threshold is 0.99999, not 1.0: on iOS 27.1 a 1.0
+    /// feed never reported `true` (this sweep saw off, partly, off on both
+    /// renderers), and a probe of thresholds against measured frames found
+    /// 0.99999 switching exactly at the visible region's edges.
+    @Test("the full-visibility feed reports a leaf fully on screen exactly while all of it is; a title landing mid-scroll on it waits for that",
+          arguments: [ADFTextRenderer.swiftUI, .textKit2])
+    func fullVisibilityFeedHoldsTitles(renderer: ADFTextRenderer) async throws {
+        #expect(SmartLinkAttachment.fullVisibilityThreshold == 0.99999)
+        let filler = (0..<14).map {
+            Self.paragraph(Self.text("Filler paragraph \($0) with enough words to take a line or two of the column."))
+        }
+        let link = Self.paragraph(Self.text("See "), Self.link(Self.a),
+                                  Self.text(" before the review, with enough words around it to wrap onto three or four lines."))
+        let json = Self.document(filler + [link] + filler)
+        let owner = "0.14"
+        let a = Self.key(Self.a)
+        let resolver = ScriptedSmartLinkResolver()
+        let hosted = try await Self.host(json, renderer: renderer, resolver: resolver, feed: true, height: 400)
+        defer { hosted.close() }
+        let coordinator = hosted.model.smartLinks
+        let scroll = try #require(Self.scrollView(in: hosted.root))
+
+        // Sweep the leaf up through the viewport, in steps that land on
+        // fractional offsets, from below the bottom edge to above the top.
+        enum Seen: String { case off, partly, fully }
+        var trace: [(offset: CGFloat, seen: Seen)] = []
+        var offset: CGFloat = 0
+        while offset <= max(0, scroll.contentSize.height - scroll.bounds.height) {
+            try await Self.scrollStep(scroll, to: offset, in: hosted.window)
+            let visible = coordinator.attachedLeafIDs.contains(owner) && coordinator.knownVisibility(of: owner) == true
+            let fully = coordinator.fullyVisibleLeafIDs.contains(owner)
+            #expect(!fully || visible, "reported fully on screen but not on screen at \(offset)")
+            // TextKit 2: the row's own frame against the visible region
+            // (the scroll view's bounds inside its safe-area insets).
+            if renderer == .textKit2, let row = hosted.rows()[owner] {
+                let frame = row.convert(row.bounds, to: hosted.window)
+                let region = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: hosted.window)
+                let margin = min(frame.minY - region.minY, region.maxY - frame.maxY)
+                if margin > 0.5 { #expect(fully, "all of the row is on screen (margin \(margin)) at \(offset), not reported") }
+                if margin < -0.5 { #expect(!fully, "\(-margin) pt of the row is cut off at \(offset), reported fully on screen") }
+            }
+            trace.append((offset, fully ? .fully : visible ? .partly : .off))
+            if trace.last?.seen == .off, trace.contains(where: { $0.seen == .fully }) { break }
+            offset += 9.75
+        }
+        var runs: [(seen: Seen, offsets: [CGFloat])] = []
+        for (offset, seen) in trace {
+            if runs.last?.seen == seen { runs[runs.count - 1].offsets.append(offset) } else { runs.append((seen, [offset])) }
+        }
+        let shape = runs.map { "\($0.seen.rawValue)×\($0.offsets.count)" }
+        print("SMARTLINK full visibility (\(renderer)): \(shape.joined(separator: " ")) insets=\(scroll.adjustedContentInset)")
+        #expect(runs.map(\.seen) == [.off, .partly, .fully, .partly, .off],
+                "expected off, partly (bottom edge), fully, partly (top edge), off: \(shape)")
+        guard runs.count == 5 else { return }
+        let topEdge = runs[3].offsets[runs[3].offsets.count / 2]
+        let inside = runs[2].offsets[runs[2].offsets.count / 2]
+
+        // Mid-scroll, straddling the top edge: the title that lands waits.
+        coordinator.scrollPhaseChanged(scrolling: true, offset: topEdge)
+        try await Self.scrollStep(scroll, to: topEdge, in: hosted.window)
+        try await hosted.settle()
+        try await smartLinkEventually("the lookup") { resolver.waitingURLs == [a.url] }
+        // The loading look it showed has been drawn before recording starts.
+        try await hosted.settle()
+        #expect(!coordinator.fullyVisibleLeafIDs.contains(owner))
+        coordinator.recordsLeafBodies = true
+        resolver.answer(a.url, .success(Self.page))
+        try await smartLinkEventually("the title held") { coordinator.heldKeys == [a] }
+        try await hosted.settle()
+        #expect(coordinator.stage(for: a) == .resolving)
+        let bodies = { renderer == .textKit2 ? coordinator.engineLeafBodiesByOwner : coordinator.leafBodiesByOwner }
+        #expect(bodies()[owner] == nil, "the held title redrew the leaf straddling the edge: \(bodies())")
+        if renderer == .textKit2 {
+            #expect(!Self.hasAttachment(hosted.rows()[owner]), "the straddling row drew the title")
+        }
+
+        // Still scrolling, all of it on screen: the title shows.
+        try await Self.scrollStep(scroll, to: inside, in: hosted.window)
+        try await smartLinkEventually("released") { coordinator.stage(for: a) == .resolved(Self.page) }
+        try await hosted.settle()
+        #expect(coordinator.heldKeys.isEmpty)
+        #expect(bodies()[owner] != nil, "the leaf did not redraw with its title")
+        if renderer == .textKit2 {
+            #expect(Self.hasAttachment(hosted.rows()[owner]), "the row did not draw the title")
+        }
+        let stats = hosted.model.smartLinkStats
+        #expect(stats.titlesHeld == 1 && stats.titlesHeldNow == 0 && stats.isScrolling, "\(stats)")
+        coordinator.scrollPhaseChanged(scrolling: false, offset: inside)
     }
 
     @Test("a tall list row resolves only the items on screen: visibility is per leaf, not per row", arguments: [
