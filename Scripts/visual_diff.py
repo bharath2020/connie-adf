@@ -99,8 +99,12 @@ LIST PAIRS (--list-pair NAME_PREFIX[:MIN_MARKERS], repeatable)
     by more than --fill-threshold (default 6) in any channel. That catches a
     missing or moved low-contrast fill (the decision row background is
     ~20 grey levels: below the tolerant threshold of 24) that the tolerant
-    pixel rule cannot see. Other pairs report fill for information only.
-    Markers and decision backgrounds are never masked by default.
+    pixel rule cannot see. A pair with a container or caption declaration
+    (CONTAINER AND CAPTION CAPTURES) is held to the same fill limit: a
+    panel's tint, a quote's bar, an expand's frame and a column's gutter
+    are low-contrast fills of the same kind. Other pairs report fill for
+    information only. Markers and decision backgrounds are never masked by
+    default.
 
 CODE BOXES (every pair)
     A code block is a grey box: CodeBlockView fills a rounded rectangle with
@@ -264,6 +268,8 @@ CONTAINER AND CAPTION CAPTURES (--code-capture NAME KIND:CLASS ..., PR 4)
     either image is INVALID. A positive capture on arm C without an owner
     text crop holding ink in both images is INVALID. Noise and exact pairs
     have no owner crop: their whole viewport is held to the exact rule.
+    Fill: the pair is held to --max-fill-pct as a list pair is (LIST
+    PAIRS), whatever its kind and class.
     Coverage is counted per kind as for code (a fallback capture never
     counts).
 
@@ -1860,10 +1866,10 @@ def score_pair(kind: str, name: str, ref_path: str, cand_path: str, out_dir: Pat
     if failing_markers:
         verdict = "FAIL"
         notes.append(f"{len(failing_markers)} marker crop(s) fail")
+    if (list_rule is not None or owner_rules) and fill_pct > args.max_fill_pct:
+        verdict = "FAIL"
+        notes.append(f"fill {fill_px} px ({fill_pct:.4f}%) > {args.max_fill_pct}%, bbox {fill_bbox}")
     if list_rule is not None:
-        if fill_pct > args.max_fill_pct:
-            verdict = "FAIL"
-            notes.append(f"fill {fill_px} px ({fill_pct:.4f}%) > {args.max_fill_pct}%, bbox {fill_bbox}")
         if len(markers) < list_rule[1] and verdict != "FAIL":
             verdict = "INVALID"
             notes.append(f"list capture with {len(markers)} marker crop(s) < {list_rule[1]} required")
@@ -2117,7 +2123,8 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         f"Container and caption captures ({sum(len(set(k) - {'code'}) for k in args.capture_rules.values())} "
         f"declared): the kind's owner-level engine proof after SCROLL_LANDED, the capture-time geometry (each "
         f"tk2 owner's non-code row shown with its ink, no TextKit 2 row for a swiftui owner, the landing "
-        f"measured) and on arm C a text crop over each tk2 owner's on-screen row, held to the code text rule.",
+        f"measured), on arm C a text crop over each tk2 owner's on-screen row, held to the code text rule, and "
+        f"fill <= {args.max_fill_pct}% as for list pairs.",
         "",
         "| kind | pair | verdict | viewport % (px) | viewport % (aa) | crops (fail) | max crop % | "
         "max \\|offset\\| px | last px | markers (fail) | max \\|pos Δ\\| px | fill px | "
@@ -2126,7 +2133,7 @@ def write_outputs(scores: list[Score], out_dir: Path, rects: list[tuple[int, int
         "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---|---|---|",
     ]
     for s in scores:
-        fill_cell = f"{s.fill_px}" + ("" if s.list_pair else " (info)")
+        fill_cell = f"{s.fill_px}" + ("" if s.list_pair or s.owner_class else " (info)")
         lines.append(f"| {s.kind} | {s.name} | **{s.verdict}** | {s.viewport_pct:.4f} ({s.viewport_px}) | "
                      f"{s.viewport_pct_aa:.4f} ({s.viewport_px_aa}) | "
                      f"{s.crops} ({s.failing_crops}) | {s.max_crop_pct:.3f} | {s.max_abs_offset} | "
@@ -2222,7 +2229,7 @@ def main(argv: list[str]) -> int:
                         help="pairs named with this prefix need MIN_MARKERS marker crops (default 1) and pass the fill check")
     parser.add_argument("--fill-threshold", type=int, default=6, help="fill pixel rule: per-channel |Δ| above this")
     parser.add_argument("--fill-ink-radius", type=int, default=4, help="fill ignores pixels this close to ink")
-    parser.add_argument("--max-fill-pct", type=float, default=0.01, help="list pairs: max fill %% of the viewport")
+    parser.add_argument("--max-fill-pct", type=float, default=0.01, help="list pairs and container/caption captures: max fill %% of the viewport")
     parser.add_argument("--code-capture", nargs=5, action="append", default=[],
                         metavar=("NAME", "CLASS", "OWNERS", "ENGINE", "LOG"),
                         help="declare pair NAME a capture: CLASS [code|container|caption:]positive | fallback "

@@ -759,18 +759,23 @@ check("a declaration without land= -> usage error (the landing is measured)",
 # held to the code text rule.
 
 def container_page(name: str, *, text_dx: int = 0, text_dy: int = 0, lines: tuple[int, ...] = (200, 150, 110),
-                   text: bool = True, caption_dx: int = 0) -> str:
+                   text: bool = True, caption_dx: int = 0, line_dx: tuple[int, ...] = (),
+                   band_tint: tuple[int, int, int] | None = None) -> str:
     """A 300x400 white page: a page text line (y 30-40), a tinted panel
     (x 20-280, y 80-200) holding soft-edged text lines from (40, 100) every
-    14 px (a container owner's text; `text_dx`/`text_dy` move it), and a
-    light media box (y 220-300) with a soft-edged caption line at (40, 310)
-    (`caption_dx` moves it). Tint and media box stay under the ink
-    threshold, as a panel's tint does."""
+    14 px (a container owner's text; `text_dx`/`text_dy` move it, and
+    `line_dx[i]` moves line i alone), and a light media box (y 220-300)
+    with a soft-edged caption line at (40, 310) (`caption_dx` moves it).
+    Tint and media box stay under the ink threshold, as a panel's tint
+    does. `band_tint` repaints the panel's bottom band (y 160-198, away
+    from its text) in another low-contrast tint: a fill difference."""
     background, ink = 255, 20
     img = np.full((400, 300, 3), background, dtype=np.uint8)
     img[30:40, 20:220] = ink
     tint = (224, 241, 255)
     img[80:200, 20:280] = tint
+    if band_tint is not None:
+        img[160:198, 20:280] = band_tint
 
     def soft_line(top: int, left: int, width: int, level: float) -> None:
         profile = np.full(width, float(ink))
@@ -780,7 +785,8 @@ def container_page(name: str, *, text_dx: int = 0, text_dy: int = 0, lines: tupl
 
     if text:
         for index, width in enumerate(lines):
-            soft_line(100 + index * 14 + text_dy, 40 + text_dx, width, float(np.mean(tint)))
+            dx = text_dx + (line_dx[index] if index < len(line_dx) else 0)
+            soft_line(100 + index * 14 + text_dy, 40 + dx, width, float(np.mean(tint)))
     img[220:300, 20:280] = 235
     soft_line(310, 40 + caption_dx, 180, float(background))
     path = os.path.join(work, name + ".png")
@@ -797,13 +803,15 @@ ROW_060 = "0.6.0|root|36,306,264,323|36,306,264,323|-"
 def owner_log(name: str, *, renderer: str = "textkit2", container: tuple[int, int] | None = (1, 4),
               caption: tuple[int, int] | None = (0, 0), container_rows: str | None = "0.4.0:4",
               caption_rows: str | None = "-", landed: str = "0.3", geo: list[str] | None = None,
-              visible: str = "0.3,0.4,0.5,0.6") -> str:
+              visible: str = "0.3,0.4,0.5,0.6", code: tuple[int, int] = (0, 0), code_rows: str = "-") -> str:
     """A launch log of a container or caption capture: READY, then after
-    SCROLL_LANDED the stats with the container and caption keys (`container`
-    / `caption` = (live, native draws); None leaves the keys out: a build
-    without them), TK2_CODE_ROWS, TK2_CONTAINER_ROWS and TK2_CAPTION_ROWS
-    (None leaves a line out) and the geometry (default: 0.4.0's row)."""
-    keys = "tk2CodeLive=0 tk2CodeDraws=0 eligibleCodeRoots=0 fallbackCodeRoots=0 codeAdmitted=0 codeGated=0"
+    SCROLL_LANDED the stats with the code, container and caption keys
+    (`code` / `container` / `caption` = (live, draws); None leaves the
+    container or caption keys out: a build without them), TK2_CODE_ROWS
+    (`code_rows`), TK2_CONTAINER_ROWS and TK2_CAPTION_ROWS (None leaves a
+    line out) and the geometry (default: 0.4.0's row)."""
+    keys = (f"tk2CodeLive={code[0]} tk2CodeDraws={code[1]} eligibleCodeRoots=0 fallbackCodeRoots=0 "
+            "codeAdmitted=0 codeGated=0")
     if container is not None:
         keys += f" tk2ContainerLive={container[0]} tk2ContainerNativeDraws={container[1]} tk2ContainerTK1Draws=0"
     if caption is not None:
@@ -811,7 +819,8 @@ def owner_log(name: str, *, renderer: str = "textkit2", container: tuple[int, in
     text = ["APP: /builds/ADFReader.app", "READY fixture=containers-parity blocks=12 firstChunkMs=9",
             f"RENDERER_STATS renderer={renderer} tk2Live=0 {keys}",
             f"SCROLL_LANDED fixture=containers-parity fraction=0.25 index=3 block={landed} blocks=12",
-            f"RENDERER_STATS renderer={renderer} tk2Live=3 {keys}", "TK2_CODE_ROWS live=0 owners=-"]
+            f"RENDERER_STATS renderer={renderer} tk2Live=3 {keys}",
+            f"TK2_CODE_ROWS live={0 if code_rows == '-' else code_rows.count(',') + 1} owners={code_rows}"]
     for marker, rows in (("TK2_CONTAINER_ROWS", container_rows), ("TK2_CAPTION_ROWS", caption_rows)):
         if rows is not None:
             text.append(f"{marker} live={0 if rows == '-' else rows.count(',') + 1} owners={rows}")
@@ -861,6 +870,32 @@ check("container text missing in the candidate under its row -> FAIL", (code, pa
 expect("... and its crop says the row's drawing is not on screen",
        "no candidate ink inside owner 0.4.0's on-screen frame" in (pair.get("owner_details") or [{}])[0].get("notes", ""), True)
 
+# F-R24: two tk2 owners of one kind, only one failing. 0.4.0's row holds
+# the panel's first line (y 100-109), 0.4.1's the second and third.
+ROW_040_TOP = "0.4.0|root|36,96,264,112|36,96,264,112|-"
+ROW_041 = "0.4.1|list|36,112,264,141|36,112,264,141|-"
+two_pos = "0.4.0=tk2,0.4.1=tk2;land=0.3"
+two_geo = geometry(ROW_040_TOP + ";" + ROW_041, visible="0.3,0.4")
+code, pair = owner_case("o-two", "container:positive", two_pos,
+                        owner_log("own-two", container=(2, 7), container_rows="0.4.0:4,0.4.1:3", geo=two_geo))
+check("two tk2 container owners, identical -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... one crop per owner", owner_crops_of(pair), [("0.4.0", "PASS"), ("0.4.1", "PASS")])
+code, pair = owner_case("o-two-one-moved", "container:positive", two_pos,
+                        owner_log("own-two-one-moved", container=(2, 7), container_rows="0.4.0:4,0.4.1:3", geo=two_geo),
+                        cand=container_page("panel-line2-1px-right", line_dx=(0, 1, 0)))
+check("two tk2 owners, only 0.4.1's second line 1 px right -> FAIL", (code, pair["verdict"]), 1, "FAIL")
+expect("... 0.4.0's crop passes, 0.4.1's fails", owner_crops_of(pair), [("0.4.0", "PASS"), ("0.4.1", "FAIL")])
+code, pair = owner_case("o-two-one-tk1", "container:positive", two_pos,
+                        owner_log("own-two-one-tk1", container=(2, 4), container_rows="0.4.0:4,0.4.1:0", geo=two_geo))
+check("two tk2 owners, only 0.4.1 TextKit 1-backed (0 native draws) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names 0.4.1 only", ("owner 0.4.1 is a live TextKit 2 container row with no native draw" in notes_of(pair),
+                                "owner 0.4.0 is a live" in notes_of(pair)), (True, False))
+code, pair = owner_case("o-two-one-off", "container:positive", two_pos,
+                        owner_log("own-two-one-off", container=(2, 7), container_rows="0.4.0:4,0.4.1:3",
+                                  geo=geometry(ROW_040_TOP + ";0.4.1|list|36,500,264,545|-|-", visible="0.3,0.4")))
+check("two tk2 owners, only 0.4.1's row off screen -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names 0.4.1", "owner 0.4.1: its row is clipped off screen" in notes_of(pair), True)
+
 # Engine proof (the kind's keys and per-owner line).
 code, pair = owner_case("o-no-keys", "container:positive", container_pos, owner_log("own-no-keys", container=None))
 check("a build without the container keys -> INVALID", (code, pair["verdict"]), 1, "INVALID")
@@ -879,6 +914,24 @@ check("the code counters alone prove no container (code draws, container 0) -> I
       run("o-code-only", "tolerant", panel_ref, panel_cand,
           *code_capture("o-code-only", "container:positive", container_pos, "textkit2",
                         owner_log("own-code-only", container=(0, 0), container_rows="-"))), 1, "INVALID")
+# F-R24: the owner's text drawn natively by a live code row (code counters
+# and TK2_CODE_ROWS > 0, its geometry row a code row with draws), the
+# container counters 0: the code proof is never container proof.
+code_only_geo = geometry(ROW_040.replace("|root|", "|code|").replace("|-", "|4"), visible="0.3,0.4")
+code, pair = owner_case("o-code-draws", "container:positive", container_pos,
+                        owner_log("own-code-draws", container=(0, 0), container_rows="-", code=(1, 4),
+                                  code_rows="0.4.0:4", geo=code_only_geo))
+check("the owner drawn natively by a code row (code 1/4, 0.4.0:4 in TK2_CODE_ROWS), container 0 -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... the container proof names the zero counters, the geometry the code row",
+       ("tk2ContainerLive=0" in notes_of(pair), "owner 0.4.0: its TextKit 2 row is a code row" in notes_of(pair)),
+       (True, True))
+code, pair = owner_case("o-code-draws-listed", "container:positive", container_pos,
+                        owner_log("own-code-draws-listed", container=(1, 4), container_rows="-", code=(1, 4),
+                                  code_rows="0.4.0:4", geo=code_only_geo))
+check("... with container counters > 0 but the owner listed only as a code row -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0 has no live TextKit 2 container row (declared tk2)" in notes_of(pair), True)
 
 # Owner geometry (O3, O4, O6, O8).
 code, pair = owner_case("o-code-row", "container:positive", container_pos,
@@ -927,6 +980,27 @@ code, pair = owner_case("o-fallback-absent", "container:fallback", fallback_pos,
                         owner_log("own-fallback-absent", container=(0, 0), container_rows="-",
                                   geo=geometry("-", visible="0.3,0.5")))
 check("container fallback, the owner's top-level block 0.4 not visible (O8) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+# F-R7: container and caption captures are held to the fill limit. The
+# candidate's panel band is 12 levels lighter (y 160-198): under the
+# tolerant threshold, away from ink, a fill difference.
+band_cand = container_page("panel-band", band_tint=(236, 253, 255))
+check("panel band 12 levels lighter, undeclared pair -> PASS (fill is information only)",
+      run("o-fill-undeclared", "tolerant", panel_ref, band_cand), 0, "PASS")
+code, pair = owner_case("o-fill", "container:positive", container_pos, owner_log("own-fill"), cand=band_cand)
+check("panel band 12 levels lighter, container positive -> FAIL (fill)", (code, pair["verdict"]), 1, "FAIL")
+expect("... the note gives the fill's box", "fill 9880 px (8.2333%) > 0.01%, bbox 20,160,280,198" in notes_of(pair), True)
+expect("... and the owner text crop still passes", owner_crops_of(pair), [("0.4.0", "PASS")])
+code, pair = owner_case("o-fill-fallback", "container:fallback", fallback_pos, fallback_log, cand=band_cand)
+check("panel band 12 levels lighter, container fallback -> FAIL (fill, whatever the class)",
+      (code, pair["verdict"]), 1, "FAIL")
+code, pair = owner_case("o-fill-same", "container:fallback", fallback_pos, fallback_log)
+check("... the same fallback pair without the band -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... fill 0", pair.get("fill_px"), 0)
+fill_b_log = owner_log("own-fill-b", renderer="swiftui", container=(0, 0), container_rows="-",
+                       geo=geometry("-", visible="0.3,0.4"))
+code, pair = owner_case("o-fill-b", "container:positive", container_pos, fill_b_log, engine="swiftui", cand=band_cand)
+check("panel band 12 levels lighter on arm B (swiftui, tolerant) -> FAIL (fill)", (code, pair["verdict"]), 1, "FAIL")
+
 code, pair = owner_case("o-fallback-land", "container:fallback", fallback_pos,
                         owner_log("own-fallback-land", container=(0, 0), container_rows="-", landed="0.2",
                                   geo=geometry("-", visible="0.3,0.4")))
