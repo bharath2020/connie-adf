@@ -896,6 +896,36 @@ code, pair = owner_case("o-two-one-off", "container:positive", two_pos,
 check("two tk2 owners, only 0.4.1's row off screen -> INVALID", (code, pair["verdict"]), 1, "INVALID")
 expect("... names 0.4.1", "owner 0.4.1: its row is clipped off screen" in notes_of(pair), True)
 
+# F-Q5: the capture-geometry bracket reports a container or caption row's
+# draws at the screenshot (a number on a root or list row); O3 then needs
+# them > 0, as G3 does for a code row. A row remade after the TK2_*_ROWS
+# line has drawn nothing yet. "-" (an older build) is not checked.
+ROW_040_DRAWN = ROW_040[:-1] + "4"
+code, pair = owner_case("o-geo-draws", "container:positive", container_pos,
+                        owner_log("own-geo-draws", geo=geometry(ROW_040_DRAWN, visible="0.3,0.4")))
+check("F-Q5: the owner's row reports 4 draws at the screenshot -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... the geometry summary carries them", "draws 4" in pair.get("owner_geometry", ""), True)
+code, pair = owner_case("o-geo-draws-0", "container:positive", container_pos,
+                        owner_log("own-geo-draws-0", geo=geometry(ROW_040[:-1] + "0", visible="0.3,0.4")))
+check("F-Q5: listed with 4 draws at the landing, but its row reports 0 at the screenshot -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0: its shown row has not drawn natively at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("o-geo-draws-bad", "container:positive", container_pos,
+                        owner_log("own-geo-draws-bad", geo=geometry(ROW_040[:-1] + "x", visible="0.3,0.4")))
+check("F-Q5: a root row's draws that are not a number -> INVALID (malformed geometry)", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "bad draws on a root row" in notes_of(pair), True)
+code, pair = owner_case("o-geo-draws-other", "container:positive", container_pos,
+                        owner_log("own-geo-draws-other", container=(2, 4), container_rows="0.4.0:4,0.4.9:0",
+                                  geo=geometry(ROW_040_DRAWN + ";0.4.9|root|36,150,264,160|36,150,264,160|0",
+                                               visible="0.3,0.4")))
+check("F-Q5: an undeclared owner's row with 0 draws is information on a positive capture -> PASS",
+      (code, pair["verdict"]), 0, "PASS")
+code, pair = owner_case("c-geo-draws-0", "caption:positive", "0.6.0=tk2;land=0.3",
+                        owner_log("cap-geo-draws-0", caption=(1, 2), caption_rows="0.6.0:2", container=(0, 0),
+                                  container_rows="-", geo=geometry(ROW_060[:-1] + "0", visible="0.3,0.4,0.5,0.6")))
+check("F-Q5: a caption row reporting 0 draws at the screenshot -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.6.0: its shown row has not drawn natively at the screenshot" in notes_of(pair), True)
+
 # Engine proof (the kind's keys and per-owner line).
 code, pair = owner_case("o-no-keys", "container:positive", container_pos, owner_log("own-no-keys", container=None))
 check("a build without the container keys -> INVALID", (code, pair["verdict"]), 1, "INVALID")

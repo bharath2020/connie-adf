@@ -191,7 +191,11 @@ CODE CAPTURES (--code-capture NAME CLASS OWNERS ENGINE LOG, repeatable)
               rows=<owner>|<root|list|code>|<frame>|<visible|->|<draws|->[;...]|-
         (points, rectangles x0,y0,x1,y1 in window coordinates; frame is
         where the row can draw, its bounds and canvas; visible is that
-        frame clipped by the scroll views and the window). Points are
+        frame clipped by the scroll views and the window; draws is the
+        owner's native draws at that moment: always a number on a code
+        row, a number on a root or list row whose owner is a live
+        container or caption row, - otherwise or from a build before
+        PR 4's review fixes). Points are
         converted to pixels at the line's scale: inner pixels (wholly
         inside, for containment) and outer pixels grown by 1 (every pixel
         it touches, for exclusion), so both errors fall on the strict
@@ -251,7 +255,10 @@ CONTAINER AND CAPTION CAPTURES (--code-capture NAME KIND:CLASS ..., PR 4)
       O3 (C, positive) every tk2 owner has a TextKit 2 row in the window
          that is not a code row (owner kind root or list: the container
          proof counts no code row) and is shown, with candidate ink inside
-         its on-screen frame (inner pixels, scorable);
+         its on-screen frame (inner pixels, scorable); and where the
+         bracket reports a shown row's draws, they are > 0 before the
+         screenshot (G3's draw check: the TK2_*_ROWS line is read at the
+         landing, and a row remade since then has drawn nothing yet);
       O4 (C) an on-screen row of an owner the kind's line lists but the
          declaration does not name: INVALID on a fallback capture,
          information on a positive one (never coverage);
@@ -943,7 +950,7 @@ class GeometryRow:
     kind: str               # root | list | code
     frame: Rect             # where the row can draw: its bounds and canvas
     visible: Rect | None    # frame clipped by its scroll views and the window; None: not shown
-    draws: int | None       # native draws, code rows only
+    draws: int | None       # native draws: code rows always, root/list rows when reported (else None)
 
 
 @dataclass
@@ -1006,9 +1013,9 @@ def parse_geometry(line: str) -> CaptureGeometry | str:
             return f"bad row rectangle in '{item}'"
         if parts[1] == "code" and not parts[4].isdigit():
             return f"code row without its draws: '{item}'"
-        if parts[1] != "code" and parts[4] != "-":
-            return f"draws on a {parts[1]} row: '{item}'"
-        rows.append(GeometryRow(parts[0], parts[1], frame, visible, int(parts[4]) if parts[1] == "code" else None))
+        if parts[1] != "code" and parts[4] != "-" and not parts[4].isdigit():
+            return f"bad draws on a {parts[1]} row: '{item}'"
+        rows.append(GeometryRow(parts[0], parts[1], frame, visible, int(parts[4]) if parts[4].isdigit() else None))
     return CaptureGeometry(int(seq), scale_value, screen, window, visible_rows, rows)
 
 
@@ -1312,9 +1319,13 @@ def evaluate_owner_geometry(rule: CodeRule, lines: list[str], landed_at: int, im
                                     "counts no code row)")
                 elif not shown:
                     problems.append(f"owner {owner}: its row is clipped off screen (or hidden) at the screenshot")
+                elif any(r.draws == 0 for r in shown):
+                    problems.append(f"owner {owner}: its shown row has not drawn natively at the screenshot "
+                                    "(draws 0 in the geometry)")
                 else:
                     crop_rows += shown
                     summary.append(f"{owner} " + ",".join(f"{r.kind}@{','.join(f'{v:g}' for v in r.visible)}"
+                                                          + ("" if r.draws is None else f" draws {r.draws}")
                                                           for r in shown))
             elif rows:   # O6
                 problems.append(f"owner {owner} (declared swiftui) has a TextKit 2 row in the window "
