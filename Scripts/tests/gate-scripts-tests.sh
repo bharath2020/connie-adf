@@ -121,6 +121,10 @@ expect_eq "ten code positions x 4 x three pairs are declared (step 7's KP-S10 on
     "$(grep -cv -e '|container:' -e '|caption:' "$OUT.decl") $(grep -c -- '|container:' "$OUT.decl") $(grep -c -- '|caption:' "$OUT.decl") $(lines_of "$OUT.decl")" "120 126 96 342"
 expect_has "CAP-12 in a panel and CAP-13 in a column (stacked on a phone, step 4) are TextKit 2 captions" "$OUT.decl" \
     "captions-parity-p0.54-light-s0-AC|caption:positive|0.13.1.0=tk2,0.14.0.0.0=tk2;land=0.13|textkit2|"
+expect_has "M2: CAP-04 (inline code's band) is a swiftui owner beside CAP-03 in a positive caption capture" "$OUT.decl" \
+    "captions-parity-p0.14-dark-s3-AC|caption:positive|0.3.0=tk2,0.4.0=swiftui;land=0.3|textkit2|"
+expect_has "M2: CAP-07 (a highlight) is a swiftui owner beside CAP-08 in a positive caption capture" "$OUT.decl" \
+    "captions-parity-p0.30-dark-s0-AC|caption:positive|0.7.0=swiftui,0.8.0=tk2;land=0.7|textkit2|"
 expect_has "kitchen-sink names code block 0.12 native and lands on 0.10" "$OUT.decl" \
     "kitchen-sink-p0.275-dark-s3-AC|positive|0.12=tk2;land=0.10|textkit2|$OUT/captures/kitchen-sink-p0.275-dark-s3-C.log"
 expect_has "arm B of a positive capture must prove SwiftUI from its own log" "$OUT.decl" \

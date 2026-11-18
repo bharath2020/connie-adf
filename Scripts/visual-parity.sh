@@ -255,8 +255,10 @@
 #              Step 7 (nested code; CP-S6 in code-parity stays fallback):
 #                @0.8218 block 71, KP-S10: the quote's code 0.72.0
 #              Step 8 (captions): captions-parity (25 prepared blocks)
-#                @0.14   block 3: CAP-03 plain, CAP-04 marks
-#                @0.30   block 7: CAP-07 colour/highlight, CAP-08 placeholder
+#                @0.14   block 3: CAP-03 plain, CAP-04 marks (SwiftUI:
+#                        inline code's run background)
+#                @0.30   block 7: CAP-07 colour/highlight (SwiftUI: the
+#                        highlight's run background), CAP-08 placeholder
 #                @0.38   block 9: CAP-09 atoms (SwiftUI), CAP-10 wrapping
 #                @0.46   block 11: CAP-11 mixed scripts and emoji
 #                @0.54   block 13: CAP-12 in a panel, CAP-13 in a column
@@ -543,11 +545,15 @@ CONTAINER_CAPTURES_DEFAULT=(
     # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions
     # (CAP-05 0.5.0, CAP-06 0.6.0) are TextKit 1-backed rows with no native
     # draws, never proof: they are not named.
-    # CAP-03 plain, CAP-04 bold, italic, inline code, strike, underline,
-    # sub/superscript.
-    "captions-parity@0.14=caption:positive;0.3.0=tk2,0.4.0=tk2;land=0.3"
-    # CAP-07 author colour and highlight, CAP-08 placeholder.
-    "captions-parity@0.30=caption:positive;0.7.0=tk2,0.8.0=tk2;land=0.7"
+    # CAP-03 plain; CAP-04 bold, italic, inline code, strike, underline,
+    # sub/superscript stays on SwiftUI: a caption whose text carries a run
+    # background (inline code's band, a highlight) keeps the renderer from
+    # iOS 26 (TextKit2Scope.captionRunsKeepRenderer, code review M2: the
+    # TextKit 2 centred band was one device pixel larger, PR 1 residual 5).
+    "captions-parity@0.14=caption:positive;0.3.0=tk2,0.4.0=swiftui;land=0.3"
+    # CAP-07 author colour and highlight (SwiftUI, the same rule), CAP-08
+    # placeholder.
+    "captions-parity@0.30=caption:positive;0.7.0=swiftui,0.8.0=tk2;land=0.7"
     # CAP-09 (mention, date, status: atoms) stays on SwiftUI beside CAP-10
     # (wrapping, hard break).
     "captions-parity@0.38=caption:positive;0.9.0=swiftui,0.10.0=tk2;land=0.9"
