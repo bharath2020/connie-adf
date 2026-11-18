@@ -254,8 +254,24 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     // MARK: Measurement
 
     /// The layout for a proposed width: `nil` or infinite = natural width
-    /// (unbounded container), zero = `.zero` without any layout. Pure in
-    /// (inputs, width); memoized.
+    /// (unbounded container), zero = `.zero` without any layout. Memoized,
+    /// and pure in (inputs, width) but for one case:
+    ///
+    /// A paragraph or heading row (`ownerKind == .root`) proposed exactly
+    /// the width it reported for a narrower bounded proposal answers with
+    /// that proposal's layout. A line that fills its width reports the
+    /// width ceiled to the pixel grid (`proposalCeil`), so a proposal a few
+    /// ulps past a device pixel (a panel's child width, with its icon's
+    /// measured width in the arithmetic: 225.66666666666669 at 3x) reports
+    /// the next pixel (226), as `Text` does, and SwiftUI then places the
+    /// row by proposing that width again. Laid out anew there, a word more
+    /// fitted a line and the row came out a line shorter, centred in the
+    /// slot measured first, where `Text` keeps its lines (code review F-R4:
+    /// the container-leaf sweep's equal-height baseline shift, in panel
+    /// bodies from xSmall to AX5). Proposed that width fresh, both lay out
+    /// anew. List rows (`.list`) keep laying out anew: a list that grows to
+    /// a row's reported width proposes every row that width again, and
+    /// `Text` lays out anew there (lists-parity at 385.333 pt, AX1).
     ///
     /// Text that never wraps (`TextKit2LayoutPolicy.natural`: code) has the
     /// natural layout only, and it answers every positive width as well: the
@@ -270,7 +286,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         guard let inputs else { return .zero }
         if let proposed, proposed.isFinite {
             guard proposed > 0 else { return .zero }
-            if inputs.layoutPolicy == .wrapping { return result(atWidth: proposed) }
+            if inputs.layoutPolicy == .wrapping {
+                if ownerKind == .root, let reported = cache.mostRecent(where: {
+                    $0.width != Self.unboundedWidth && $0.width < proposed && $0.size.width == proposed
+                }) {
+                    return reported
+                }
+                return result(atWidth: proposed)
+            }
         }
         if let natural = cache.value(for: .infinity) { return natural }
         let natural = compute(atContainerWidth: Self.unboundedWidth)
