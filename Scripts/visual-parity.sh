@@ -227,8 +227,9 @@
 #                @0.362  block 31, KP-S4: panel in quote, quote in panel,
 #                        panel in and quote in an extension body
 #                @0.4425 block 38, KP-S5: extension body 0.39
-#                @0.8103 block 70, KP-S10: panel 0.71, prose beside a code
-#                        block, stays on SwiftUI (the panel shape rule)
+#                @0.8218 block 71, KP-S10: panel 0.71, prose beside a code
+#                        block, stays on SwiftUI (the panel shape rule;
+#                        declared at step 3 only, from step 6)
 #              Step 4 (layout columns; positive on a phone, where the
 #              columns stack — side by side every column stays SwiftUI):
 #                @0.5229 block 45, KP-S6: the 25/75 and 33/67 columns
@@ -243,6 +244,8 @@
 #                        3: the first two rows), the panel 0.63 SwiftUI
 #                @0.7643 block 66: lists in the extension 0.67 and the
 #                        stacked 25/75 section 0.68
+#              Step 7 (nested code; CP-S6 in code-parity stays fallback):
+#                @0.8218 block 71, KP-S10: the quote's code 0.72.0
 #              Step 8 (captions): captions-parity (25 prepared blocks)
 #                @0.14   block 3: CAP-03 plain, CAP-04 marks
 #                @0.30   block 7: CAP-07 colour/highlight, CAP-08 placeholder
@@ -474,12 +477,14 @@ CONTAINER_CAPTURES_DEFAULT=(
     # bodied sync block's paragraph 0.43.0 below it is root text).
     "containers-parity@0.4425=container:positive;0.39.0=tk2,0.39.1=tk2,0.39.2=tk2;land=0.38"
     # KP-S10: panel 0.71's paragraph sits beside a code block, so the panel
-    # stays on SwiftUI; no TextKit 2 container row is on screen (the quote,
-    # panel and extension below it hold only code). From PR 4 step 7 that
-    # code (the quote's 0.72.0, the panel's quote's 0.73.0.0) draws as
-    # TextKit 2 code rows on arm C: code rows, never container rows, so this
-    # container fallback is unaffected.
-    "containers-parity@0.8103=container:fallback;0.71.0=swiftui;land=0.70"
+    # stays on SwiftUI (the quote, panel and extension below it hold only
+    # code: code rows from step 7, never container rows). Landed on the
+    # panel itself, at step 3 only: from step 6 the stacked 25/75 section
+    # 0.68 above it holds TextKit 2 list rows, and at step 0 its last row
+    # (0.68.1.1.0) is still on screen under the top band with any landing
+    # that keeps 0.71.0 in view, which a fallback capture refuses. Landed
+    # on the heading 0.70 (0.8103) the rows are on screen at both steps.
+    "containers-parity@0.8218#s3=container:fallback;0.71.0=swiftui;land=0.71"
     # Step 4, layout columns. On a phone (a compact width) the columns
     # stack and their text is TextKit 2; side by side (a regular width) no
     # family keeps the renderer, so on an iPad these positions would show
@@ -519,6 +524,12 @@ CONTAINER_CAPTURES_DEFAULT=(
     # 3 the decision 0.68.1.1.0 runs into the bottom band.
     "containers-parity@0.7643#s0=container:positive;0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2,0.68.1.1.0=tk2;land=0.66"
     "containers-parity@0.7643#s3=container:positive;0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2;land=0.66"
+    # Step 7, nested code (KP-S10, landed on the panel 0.71): the quote's
+    # code 0.72.0 is a TextKit 2 code row at both steps. The panel's
+    # quote's code 0.73.0.0 is a TextKit 2 code row too, but its box is
+    # not found as a scored code box (the panel's fill around it), so it is
+    # not named.
+    "containers-parity@0.8218=code:positive;0.72.0=tk2;land=0.71"
     # Captions (step 8): captions-parity, 25 prepared blocks (`Int(f x 25)`).
     # Each landing, owner and live caption row was checked on the enabled
     # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions
