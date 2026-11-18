@@ -22,6 +22,8 @@ targets:
         product: ADFYouTube
       - package: ADFKit
         product: ADFBeam
+      - package: ADFKit
+        product: ADFAtlassianAuth
     info:
       path: ADFReader/Info.plist
       properties:
@@ -33,7 +35,13 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: {}
-        NSCameraUsageDescription: Scans ADF Beam QR codes to import documents.
+        NSCameraUsageDescription: Scans ADF Beam QR codes to import documents, and the pairing code adf-auth shows on your Mac to add your Atlassian account.
+        # Scan from Mac fetches the sealed credential from `adf-auth push`
+        # over plain HTTP on the LAN (one GET; the payload is ChaChaPoly-sealed
+        # with a key that only travels in the QR fragment).
+        NSLocalNetworkUsageDescription: ADFReader fetches your Atlassian sign-in from the adf-auth command on your Mac over your local network, once, when you scan its pairing code.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -45,8 +53,17 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # No custom crypto and no HTTPS beyond Apple-exempt use, so the build
-        # skips the Missing Compliance prompt that otherwise blocks TestFlight.
+        # Exempt encryption only, so the build skips the Missing Compliance
+        # prompt that otherwise blocks TestFlight. All crypto is Apple
+        # OS-provided (CryptoKit, Security, URLSession TLS); no proprietary
+        # or custom algorithms. ChaChaPoly (RFC 8439, a standard AEAD from
+        # CryptoKit) only protects an authentication credential (the user's
+        # Atlassian email + API token) during the one-time local handoff from
+        # `adf-auth push` on the user's Mac. Encryption limited to
+        # authentication, and encryption within Apple's OS, are both exempt
+        # (EAR Category 5 Part 2; Apple's export compliance "limited to
+        # authentication" and "only uses encryption within Apple's operating
+        # system" exemptions).
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:

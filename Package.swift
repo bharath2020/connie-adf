@@ -9,6 +9,8 @@ let package = Package(
         .library(name: "ADFYouTube", targets: ["ADFYouTube"]),
         .library(name: "ADFBeam", targets: ["ADFBeam"]),
         .executable(name: "ADFSearchBench", targets: ["ADFSearchBench"]),
+        .library(name: "ADFAtlassianAuth", targets: ["ADFAtlassianAuth"]),
+        .executable(name: "adf-auth", targets: ["ADFAuthCLI"]),
     ],
     targets: [
         .target(name: "ADFModel"),
@@ -24,5 +26,8 @@ let package = Package(
         .testTarget(name: "ADFPreparationTests", dependencies: ["ADFPreparation", "ADFModel"]),
         .testTarget(name: "ADFRenderingTests", dependencies: ["ADFRendering", "ADFPreparation", "ADFModel"]),
         .testTarget(name: "ADFConfluenceTests", dependencies: ["ADFConfluence", "ADFModel"]),
+        .target(name: "ADFAtlassianAuth"),
+        .executableTarget(name: "ADFAuthCLI", dependencies: ["ADFAtlassianAuth"]),
+        .testTarget(name: "ADFAtlassianAuthTests", dependencies: ["ADFAtlassianAuth"]),
     ]
 )

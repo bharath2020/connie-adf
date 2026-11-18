@@ -100,6 +100,10 @@ import UIKit
 ///   the TextKit 2 row whose frame holds its pixels, and measures the
 ///   landing from `visibleRows`. Without the flag no observer exists and
 ///   nothing is read or printed.
+/// - `-openAccounts` starts with the Settings sheet open and already pushed
+///   to Atlassian Accounts (`AccountsView`), for UI tests and demo
+///   recordings. Ignored with `-fixture` (the space list, which owns the
+///   gear button, is not shown then).
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -122,6 +126,7 @@ struct LaunchOptions: Sendable {
     var scenePhaseProbe = false
     var interactionProbe = false
     var captureGeometryHook = false
+    var openAccounts = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -165,6 +170,8 @@ struct LaunchOptions: Sendable {
                 interactionProbe = true
             case "-captureGeometryHook":
                 captureGeometryHook = true
+            case "-openAccounts":
+                openAccounts = true
             default:
                 break
             }
@@ -176,8 +183,10 @@ struct LaunchOptions: Sendable {
 @main
 struct ADFReaderApp: App {
     private let options = LaunchOptions()
+    @State private var accountStore: AccountStore
 
     init() {
+        _accountStore = State(initialValue: AccountStore.live())
         // Before the scene builds: `ReaderView` reads the renderer key through
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)
@@ -208,7 +217,7 @@ struct ADFReaderApp: App {
                         )
                     }
                 } else {
-                    SpaceListView()
+                    SpaceListView(openAccounts: options.openAccounts)
                 }
             }
             .overlay(alignment: .bottomLeading) {
@@ -216,6 +225,7 @@ struct ADFReaderApp: App {
                     ScenePhaseProbe()
                 }
             }
+            .environment(accountStore)
         }
     }
 }
