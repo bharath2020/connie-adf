@@ -43,7 +43,8 @@ enum TK2ContainerColumns {
     /// heading, 33/67 with a link, 50/50 holding a panel and a quote,
     /// three equal columns), a column holding a list and a code block
     /// beside its prose (the list migrates from step 6 when the columns
-    /// stack, the code stays on SwiftUI until step 7), and
+    /// stack; from step 7 the code block draws on TextKit 2 when the
+    /// columns stack, left to right: `TK2ContainerBody.expectedCode`), and
     /// containers nested in columns (a quote holding a panel; an extension
     /// body with a heading), and from step 6 lists in columns
     /// (`listSections`). `ADF_CONTAINER_PROBES_SHAPES=<name,…>` limits
@@ -91,7 +92,8 @@ enum TK2ContainerColumns {
     /// probe passed (`TextKit2ContainerScopeTests.sideBySideFamilies`: none)
     /// and what is below them. List text from step 6 where PR 2's rules keep
     /// it (`TK2ContainerBody.listOwners`; never right to left, which the
-    /// caller subtracts). No code or expand text.
+    /// caller subtracts). No code or expand text (the code blocks are
+    /// `TK2ContainerBody.expectedCode`).
     static func expectedOwners(_ blocks: [RenderBlock], sideBySide: Bool, inContainer: Bool = false) -> Set<String> {
         var owners: Set<String> = []
         for block in blocks {
@@ -187,8 +189,12 @@ extension TextKit2ContainerParityTests {
         for section in sections {
             let block = try #require(try await P.prepared([section.json]).first)
             guard case .layoutColumns(let columns) = block.kind else { throw TestFailure("\(section.name): not a layout section") }
-            let expectedLTR = Columns.expectedOwners([block], sideBySide: sideBySide)
+            let text = Columns.expectedOwners([block], sideBySide: sideBySide)
             let listText = TK2ContainerBody.listOwners(in: [block])
+            // From step 7 the code blocks in stacked columns, left to right
+            // (side by side no column family passes: C32).
+            let code = TK2ContainerBody.expectedCode([block], direction: .leftToRight, sideBySide: sideBySide)
+            let expectedLTR = text.union(code)
             let everyOwner = Columns.allTextOwners([block])
             print("CONTAINER_PARITY_SHAPE test=\(test) container=columns shape=\(section.name) sideBySide=\(sideBySide) expected=\(expectedLTR.sorted()) prepared=\(P.shapeDescription(block))")
             // The boundary's family rule, for every column child.
@@ -210,7 +216,10 @@ extension TextKit2ContainerParityTests {
                 if !(a.rows.isEmpty && b.rows.isEmpty) { failures.append("\(section.name): before iOS 26 TextKit 2 drew \(b.owners.sorted())") }
                 var notGated: [String] = []
                 TextKit2Scope.forEachLeaf(in: [block]) { leaf in
-                    guard [.containerProse, .containerListLeader, .containerListTrailing].contains(leaf.position) else { return }
+                    // Prose, list text and, from step 7, code below the
+                    // columns: every one is gated by the OS first
+                    // (`containerCodeVerdict` for code).
+                    guard [.containerProse, .containerListLeader, .containerListTrailing, .containerCode].contains(leaf.position) else { return }
                     if case .fallback(.osGatedContainer) = leaf.verdict { return }
                     if case .fallback = leaf.verdict { return }
                     notGated.append(leaf.ownerID)
@@ -238,11 +247,12 @@ extension TextKit2ContainerParityTests {
                 for documentWidth in P.documentWidths {
                     let rowWidth = P.rowWidth(documentWidth: documentWidth)
                     let rtl = env.direction == .rightToLeft
-                    // Right to left no list text (rule C), nor where a
+                    // Right to left no list text (rule C) and no code (the
+                    // code gate's direction rule), nor list text where a
                     // stacked column (the row's bound) leaves a row no text
                     // column (rule D).
                     let narrow = sideBySide ? [] : TK2ContainerLists.narrowListText(in: [block], bound: rowWidth, size: env.size)
-                    let expected = (rtl ? expectedLTR.subtracting(listText) : expectedLTR).subtracting(narrow)
+                    let expected = (rtl ? expectedLTR.subtracting(listText).subtracting(code) : expectedLTR).subtracting(narrow)
                     let pixels = P.comparesPixels(env, documentWidth: documentWidth)
                     let (a, b) = try P.pair(width: rowWidth, pixels: pixels) { arm in
                         P.environment(BlockView(block: block), arm: TK2ContainerBody.rowRenderer(block, arm), env: env, rowWidth: rowWidth,
@@ -306,7 +316,7 @@ extension TextKit2ContainerParityTests {
         #expect(failures.isEmpty, "\(failures.count) failing cases: \(failures.prefix(6))")
     }
 
-    @Test("stackedColumns: column prose (paragraphs, headings, panels, quotes and extension bodies in columns, and from step 6 a list beside them) matches SwiftUI through the production path when the columns stack; code beside it stays on SwiftUI")
+    @Test("stackedColumns: column prose (paragraphs, headings, panels, quotes and extension bodies in columns) matches SwiftUI through the production path when the columns stack; from step 7 code beside it draws on TextKit 2 left to right")
     func stackedColumns() async throws {
         // The list shapes run in `nestedListInStackedColumn`.
         try await columnMatrix("stackedColumns", sideBySide: false, sections: Columns.proseSections)

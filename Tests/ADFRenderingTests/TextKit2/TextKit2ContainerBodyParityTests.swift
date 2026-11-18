@@ -46,11 +46,12 @@ enum TK2ContainerBody {
     }
 
     /// The probe shapes (`TK2ContainerProbe.allShapes`) plus prose beside a
-    /// code block, which stays on SwiftUI until code joins the allow list
-    /// (the fixtures hold it: containers-parity 0.71, 0.77, 0.78). A panel
-    /// keeps a heading, a list and a superscript or small-text run beside
-    /// another block on SwiftUI (`panelKeepsRenderer`); in a quote or an
-    /// extension body only the code does (lists joined at step 6).
+    /// code block (the fixtures hold it: containers-parity 0.71, 0.77,
+    /// 0.78). A panel keeps a heading, a list, a code block and a
+    /// superscript or small-text run beside another block on SwiftUI
+    /// (`panelKeepsRenderer`); in a quote or an extension body nothing
+    /// does: lists joined at step 6 and, from PR 4 step 7, the code block
+    /// there draws on TextKit 2 too, left to right (`expectedCode`).
     static func shapes(for container: P.Container) -> [Shape] {
         let probe = Dictionary(uniqueKeysWithValues: P.allShapes.map { ($0.name, $0.body) })
         let codeBeside = [P.paragraph(P.t(P.words(14, from: 3))), codeBlock, P.paragraph(P.t(P.words(5, from: 11)))]
@@ -159,12 +160,49 @@ enum TK2ContainerBody {
         return owners
     }
 
-    /// Every paragraph, heading and list leader under `blocks`.
+    /// The code blocks below a container in `blocks` that draw on TextKit 2
+    /// under the step 7 rules (`containerChildKinds` holds `.codeBlock`),
+    /// laid out in `direction`, written out rather than read from the walk:
+    /// code in quotes, bodied extensions, panels whose body the probes kept
+    /// (`TextKit2ContainerScopeTests.expectedPanelKeeps`) and stacked layout
+    /// columns (side by side, only below a family the off-grid probe passed:
+    /// none). Right to left the code gate keeps code on SwiftUI
+    /// (`codeDirectionKeepsRenderer`), so the set is empty. Every code block
+    /// these suites build is a few short lines of printable ASCII, far
+    /// under the canvas bound at every size.
+    static func expectedCode(
+        _ blocks: [RenderBlock], direction: LayoutDirection, sideBySide: Bool = false, inContainer: Bool = false
+    ) -> Set<String> {
+        guard direction == .leftToRight, TextKit2Scope.containerChildKinds.contains(.codeBlock) else { return [] }
+        var owners: Set<String> = []
+        for block in blocks {
+            switch block.kind {
+            case .codeBlock: if inContainer { owners.insert(block.id) }
+            case .quote(let children):
+                owners.formUnion(expectedCode(children, direction: direction, sideBySide: sideBySide, inContainer: true))
+            case .extensionPlaceholder(_, let body):
+                owners.formUnion(expectedCode(body, direction: direction, sideBySide: sideBySide, inContainer: true))
+            case .panel(_, let children):
+                if TextKit2ContainerScopeTests.expectedPanelKeeps(children) {
+                    owners.formUnion(expectedCode(children, direction: direction, sideBySide: sideBySide, inContainer: true))
+                }
+            case .layoutColumns(let columns):
+                for child in columns.flatMap(\.blocks) {
+                    if sideBySide, !TextKit2ContainerScopeTests.sideBySideFamilies.contains(TextKit2ContainerScopeTests.family(child.kind)) { continue }
+                    owners.formUnion(expectedCode([child], direction: direction, sideBySide: sideBySide, inContainer: true))
+                }
+            default: continue
+            }
+        }
+        return owners
+    }
+
+    /// Every paragraph, heading, list leader and code block under `blocks`.
     static func allTextOwners(_ blocks: [RenderBlock]) -> Set<String> {
         var owners: Set<String> = []
         for block in blocks {
             switch block.kind {
-            case .richText: owners.insert(block.id)
+            case .richText, .codeBlock: owners.insert(block.id)
             case .listRows(let rows):
                 for row in rows {
                     if !row.segments.isEmpty { owners.insert(row.id) }
@@ -202,8 +240,9 @@ enum TK2ContainerBody {
     /// The leaf control on the production path: each child of the
     /// container hosted alone at the child width (document margins around
     /// it, as `TK2ContainerProbe.leafControl`), with the renderer and
-    /// context the container's boundary gives it, so a list or code block
-    /// that stays on SwiftUI in the container stays on SwiftUI here.
+    /// context the container's boundary gives it, so a list (or a code
+    /// block laid out right to left) that stays on SwiftUI in the container
+    /// stays on SwiftUI here.
     @MainActor
     static func leafControl(
         _ children: [RenderBlock], in container: P.Container, width: CGFloat, env: TK2Parity.Environment
@@ -272,9 +311,12 @@ extension TextKit2ContainerParityTests {
                 children = blocks
             default: throw TestFailure("\(shape.name): not a panel, quote, expand or extension")
             }
-            let expected = shape.migrates ? B.expectedOwners([stand]) : []
+            let text = shape.migrates ? B.expectedOwners([stand]) : []
             let listText = B.listOwners(in: [stand])
-            #expect(shape.migrates == !expected.isEmpty, "\(shape.name): the shape's text and its expectation disagree")
+            #expect(shape.migrates == !text.isEmpty, "\(shape.name): the shape's text and its expectation disagree")
+            // From step 7 the code blocks beside that text, left to right.
+            let code = shape.migrates ? B.expectedCode([stand], direction: .leftToRight) : []
+            let expected = text.union(code)
             let everyOwner = B.allTextOwners([stand])
             let model = ADFDocumentModel()
             if case .expand = block.kind { model.expandedBlocks.insert(block.id) }
@@ -314,8 +356,11 @@ extension TextKit2ContainerParityTests {
                 }
                 var notGated: [String] = []
                 var leaves = 0
+                // Prose, list text and, from step 7, code below the
+                // container: every one is gated by the OS first
+                // (`containerCodeVerdict` for code).
                 TextKit2Scope.forEachLeaf(in: [stand], allowed: allowList) { leaf in
-                    guard [.containerProse, .containerListLeader, .containerListTrailing].contains(leaf.position) else { return }
+                    guard [.containerProse, .containerListLeader, .containerListTrailing, .containerCode].contains(leaf.position) else { return }
                     leaves += 1
                     // List text meets the list gate first (`osGatedList`).
                     if case .fallback(.osGatedContainer) = leaf.verdict { return }
@@ -333,14 +378,15 @@ extension TextKit2ContainerParityTests {
                     let width = P.rowWidth(documentWidth: documentWidth)
                     let pixels = shape.migrates && P.comparesPixels(env, documentWidth: documentWidth)
                     // The engine: exactly the expected owners on TextKit 2
-                    // (no list text right to left, rule C, nor where the
+                    // (no list text right to left, rule C, and no code, the
+                    // code gate's direction rule; nor list text where the
                     // container's bound leaves a row no text column, rule
                     // D), nothing on the SwiftUI arm, and for a shape kept
                     // on SwiftUI no row at all.
                     let narrow = TK2ContainerLists.narrowListText(
                         in: children, bound: P.childWidth(container, rowWidth: width, env: env), size: env.size
                     )
-                    let expected = (env.direction == .rightToLeft ? expected.subtracting(listText) : expected).subtracting(narrow)
+                    let expected = (env.direction == .rightToLeft ? expected.subtracting(listText).subtracting(code) : expected).subtracting(narrow)
                     let (a, b) = try await host(width, env, pixels: pixels, rows: !expected.isEmpty)
                     var verdict = P.geometry(a.guides, b.guides)
                     verdict.engine = a.rows.isEmpty && b.owners == expected && b.rows.count == expected.count
@@ -373,8 +419,9 @@ extension TextKit2ContainerParityTests {
                     } else if known != nil {
                         failures.append("\(fields): the known issue no longer reproduces (\(known!)); remove it")
                     }
-                    // Nothing outside the expected owners (a list or code
-                    // block left on SwiftUI) drew through TextKit 2.
+                    // Nothing outside the expected owners (a list, or code
+                    // laid out right to left, left on SwiftUI) drew through
+                    // TextKit 2.
                     let unexpected = b.owners.intersection(everyOwner).subtracting(expected)
                     if !unexpected.isEmpty { failures.append("\(fields): unexpected TextKit 2 owners \(unexpected.sorted())") }
                 }
@@ -390,12 +437,12 @@ extension TextKit2ContainerParityTests {
         try await productionMatrix("panelBody", container: .panel, shapes: B.shapes(for: .panel), nested: false)
     }
 
-    @Test("quoteBody: quote prose (and from step 6 its lists) matches SwiftUI through the production path, beside code that stays on SwiftUI")
+    @Test("quoteBody: quote prose (and from step 6 its lists) matches SwiftUI through the production path, beside code that draws on TextKit 2 from step 7 (left to right)")
     func quoteBody() async throws {
         try await productionMatrix("quoteBody", container: .quote, shapes: B.shapes(for: .quote), nested: false)
     }
 
-    @Test("extensionBody: bodied-extension prose (and from step 6 its lists) matches SwiftUI through the production path, beside code that stays on SwiftUI")
+    @Test("extensionBody: bodied-extension prose (and from step 6 its lists) matches SwiftUI through the production path, beside code that draws on TextKit 2 from step 7 (left to right)")
     func extensionBody() async throws {
         try await productionMatrix("extensionBody", container: .bodiedExtension, shapes: B.shapes(for: .bodiedExtension), nested: false)
     }

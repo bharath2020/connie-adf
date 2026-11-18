@@ -203,9 +203,12 @@
 #                @0.66   block 22: CP-S5, tabs, emoji/CJK, combining marks,
 #                        RTL, "" and "\n" (all SwiftUI: expected fallback)
 #                @0.78   block 26: CP-22 (its header under the band), CP-23,
-#                        CP-24, then CP-S6, nested code (all SwiftUI;
-#                        lands three blocks above CP-S6 because the
-#                        document end clamps a landing on CP-S6 itself)
+#                        CP-24, then CP-S6, nested code (all SwiftUI,
+#                        after PR 4 step 7 too: CP-25 is in a list item,
+#                        CP-26 in a panel beside the panel's paragraph,
+#                        CP-27 in a closed expand; lands three blocks
+#                        above CP-S6 because the document end clamps a
+#                        landing on CP-S6 itself)
 #              code-dense (600 blocks, code only)
 #                @0      block 0 (its header under the band), blocks 1, 2
 #                @0.5    block 300 (its header under the band), then 301
@@ -419,7 +422,13 @@ CODE_CAPTURES_DEFAULT=(
     # the admitted cohort.
     "code-parity@0.66=fallback;0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22"
     # CP-S6: nested code stays on SwiftUI (CP-25 in a bullet item, CP-26 in
-    # a panel; CP-27 is in a collapsed expand and not on screen). The
+    # a panel; CP-27 is in a collapsed expand and not on screen). PR 4
+    # step 7 puts code in containers on TextKit 2, but not these: a list
+    # item keeps its code on SwiftUI (P5), and CP-26's panel holds a
+    # paragraph beside the code, a panel shape that keeps the whole body
+    # on SwiftUI (`panelKeepsRenderer`), so 0.31.1 stays swiftui and this
+    # declaration (and its pins in tests/gate-scripts-tests.sh) is
+    # unchanged. An opened CP-27 would draw on TextKit 2. The
     # landing block CP-22 (non-ASCII) is outside the admitted cohort, and
     # CP-23 ("") and CP-24 ("\n") below it hold no drawable text (fallback
     # .empty), so none of the five may have a TextKit 2 row (G6).
@@ -466,7 +475,10 @@ CONTAINER_CAPTURES_DEFAULT=(
     "containers-parity@0.4425=container:positive;0.39.0=tk2,0.39.1=tk2,0.39.2=tk2;land=0.38"
     # KP-S10: panel 0.71's paragraph sits beside a code block, so the panel
     # stays on SwiftUI; no TextKit 2 container row is on screen (the quote,
-    # panel and extension below it hold only code).
+    # panel and extension below it hold only code). From PR 4 step 7 that
+    # code (the quote's 0.72.0, the panel's quote's 0.73.0.0) draws as
+    # TextKit 2 code rows on arm C: code rows, never container rows, so this
+    # container fallback is unaffected.
     "containers-parity@0.8103=container:fallback;0.71.0=swiftui;land=0.70"
     # Step 4, layout columns. On a phone (a compact width) the columns
     # stack and their text is TextKit 2; side by side (a regular width) no

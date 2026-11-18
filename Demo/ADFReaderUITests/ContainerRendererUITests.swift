@@ -418,22 +418,28 @@ final class ContainerRendererUITests: XCTestCase {
 
     // MARK: - Code nested in containers (step 7)
 
-    /// Code inside a panel (0.71.1): under TextKit 2 a TextKit 2 code row
+    /// Code inside a quote (0.72.0): under TextKit 2 a TextKit 2 code row
     /// (after step 7); a 230 pt horizontal pan moves it at least 200 pt
     /// sideways and not vertically; Copy writes the exact code (read
     /// through the host agent's pasteboard: run through `--only
     /// ContainerRendererUITests/testNestedCodePansAndCopiesExactBytes`;
     /// without the agent the test skips after the taps, "not run"). The
-    /// over-budget block in a panel (0.78.1) is never a TextKit 2 row.
+    /// code in a panel beside its paragraph (0.71.1) and the over-budget
+    /// block in a panel (0.78.1) are never TextKit 2 rows: a panel holding
+    /// a code block beside another block keeps its whole body on SwiftUI
+    /// (`panelKeepsRenderer`), and the canvas gate would keep the second
+    /// there anyway.
     func testNestedCodePansAndCopiesExactBytes() throws {
         let agent = try? HostAgent.fromEnvironment()
-        let code = KP.codePanel
+        let code = KP.codeQuote
         var mismatches: [String] = []
         for textKit2 in [false, true] {
             let arm = Self.arm(textKit2)
             let driver = launch(textKit2: textKit2)
             let reader = driver.reader
-            XCTAssertTrue(show(driver, section: KP.s10, through: code), "\(code) never came into view")
+            XCTAssertTrue(show(driver, section: KP.s10, through: KP.codePanel), "\(KP.codePanel) never came into view")
+            XCTAssertTrue(driver.isSwiftUI(KP.codePanel, timeout: 5), "\(arm): the code beside a paragraph in a panel is a TextKit 2 row")
+            XCTAssertTrue(driver.scroll(by: 250, until: driver.element(code), maxDrags: 12), "\(code) never came into view")
             driver.expectEngine(code, textKit2: textKit2, arm)
             let text = driver.element(code)
             let rest = text.frame
@@ -451,14 +457,19 @@ final class ContainerRendererUITests: XCTestCase {
             try XCTUnwrap(copy, "\(arm): no Copy button above \(code)").tap()
             driver.pause()
             print("CONTAINER_CODE_COPY owner=\(code.owner) arm=\(arm) utf8_base64="
-                + Data(KP.codePanelText.utf8).base64EncodedString())
+                + Data(KP.codeQuoteText.utf8).base64EncodedString())
             if let agent {
                 let pasted = try agent.pasteboard()
-                if pasted != KP.codePanelText {
+                if pasted != KP.codeQuoteText {
                     mismatches.append("\(arm): the pasteboard holds \(pasted.debugDescription.prefix(160))")
                 }
             }
-            XCTAssertTrue(driver.scroll(by: 250, until: driver.element(KP.codeOver), maxDrags: 12), "KP-CODE-OVER not in view")
+            // The over-budget block is 39 lines, taller than a small phone's
+            // viewport (an iPhone SE's at Large), so it is never shown whole:
+            // part of it on screen is enough for the engine check.
+            let over = driver.element(KP.codeOver)
+            _ = driver.scroll(by: 250, until: over, maxDrags: 12)
+            XCTAssertTrue(driver.isPartlyShown(over), "KP-CODE-OVER not in view")
             XCTAssertTrue(driver.isSwiftUI(KP.codeOver, timeout: 5), "\(arm): the over-budget block is a TextKit 2 row")
             containerUIAttach(driver.app, "nested-code-\(textKit2 ? "tk2" : "swiftui")")
             driver.app.terminate()
@@ -467,7 +478,7 @@ final class ContainerRendererUITests: XCTestCase {
             throw XCTSkip("Copy was tapped but the pasteboard was not read: ADF_LIFECYCLE_DIR is not set. Run through "
                 + "Scripts/lifecycle-gate.sh --only ContainerRendererUITests/testNestedCodePansAndCopiesExactBytes.")
         }
-        try agent.record("Container nested code Copy puts the exact code on the pasteboard (containers-parity 0.71.1)",
+        try agent.record("Container nested code Copy puts the exact code on the pasteboard (containers-parity 0.72.0)",
                          pass: mismatches.isEmpty, ["owner": code.owner, "mismatches": mismatches])
         XCTAssertTrue(mismatches.isEmpty, mismatches.joined(separator: "; "))
     }

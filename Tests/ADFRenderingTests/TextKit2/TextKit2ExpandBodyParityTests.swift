@@ -43,7 +43,8 @@ enum TK2ExpandParity {
     }
 
     /// The step 3 body shapes in an open expand: every one has prose that
-    /// migrates (a list or a code block beside it stays on SwiftUI).
+    /// migrates (a list beside it stays on SwiftUI; from step 7 a code block
+    /// beside it draws on TextKit 2 left to right).
     static var bodyShapes: [Shape] {
         B.shapes(for: .expand).map { Shape(name: $0.name, json: P.expand($0.body), open: ["0.0"]) }
     }
@@ -83,6 +84,21 @@ enum TK2ExpandParity {
             let body = body(of: block)
             owners.formUnion(B.expectedOwners(body, inContainer: true))
             owners.formUnion(expectedOwners(body, open: open))
+        }
+        return owners
+    }
+
+    /// The code blocks that draw on TextKit 2 under the step 7 rules in the
+    /// open expands among `blocks` (and in the open expands directly in
+    /// their bodies), laid out in `direction`
+    /// (`TK2ContainerBody.expectedCode`; none right to left).
+    static func expectedCode(_ blocks: [RenderBlock], open: Set<String>, direction: LayoutDirection) -> Set<String> {
+        var owners: Set<String> = []
+        for block in blocks {
+            guard case .expand = block.kind, open.contains(block.id) else { continue }
+            let body = body(of: block)
+            owners.formUnion(B.expectedCode(body, direction: direction, inContainer: true))
+            owners.formUnion(expectedCode(body, open: open, direction: direction))
         }
         return owners
     }
@@ -159,10 +175,13 @@ extension TextKit2ContainerParityTests {
         for shape in shapes {
             let block = try #require(try await P.prepared([shape.json]).first)
             guard case .expand = block.kind else { throw TestFailure("\(shape.name): not an expand") }
-            let expected = E.expectedOwners([block], open: shape.open)
+            let prose = E.expectedOwners([block], open: shape.open)
+            // From step 7 the code blocks in the open bodies, left to right.
+            let expectedLTR = prose.union(E.expectedCode([block], open: shape.open, direction: .leftToRight))
+            let expected = expectedLTR
             let everyOwner = E.allTextOwners([block], open: shape.open)
             let children = E.outerBody(block)
-            #expect(!expected.isEmpty, "\(shape.name): no body text migrates")
+            #expect(!prose.isEmpty, "\(shape.name): no body text migrates")
             print("CONTAINER_PARITY_SHAPE test=\(test) container=expand shape=\(shape.name) open=\(shape.open.sorted()) expected=\(expected.sorted()) prepared=\(P.shapeDescription(block)) body=\(children.map(P.shapeDescription).joined(separator: ","))")
             let model = ADFDocumentModel()
             model.expandedBlocks = shape.open
@@ -187,6 +206,7 @@ extension TextKit2ContainerParityTests {
             }
 
             for env in P.environments() {
+                let expected = env.direction == .leftToRight ? expectedLTR : prose
                 for documentWidth in P.documentWidths {
                     let width = P.rowWidth(documentWidth: documentWidth)
                     let pixels = P.comparesPixels(env, documentWidth: documentWidth)
@@ -228,7 +248,7 @@ extension TextKit2ContainerParityTests {
         #expect(failures.isEmpty, "\(failures.count) failing cases: \(failures.prefix(6))")
     }
 
-    @Test("expandBody: open-expand body prose matches SwiftUI through the production path, beside lists and code that stay on SwiftUI")
+    @Test("expandBody: open-expand body prose matches SwiftUI through the production path, beside lists that stay on SwiftUI and code that draws on TextKit 2 from step 7")
     func expandBody() async throws {
         try await expandMatrix("expandBody", shapes: E.bodyShapes)
     }

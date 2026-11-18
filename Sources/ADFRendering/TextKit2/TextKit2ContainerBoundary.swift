@@ -12,9 +12,10 @@ import ADFPreparation
 // then layout columns (stacked; side by side no family keeps the renderer,
 // `horizontalColumnKeepsRenderer`), then lists (where the list rules A–D
 // and the iOS 26 list gate pass at the nested width; never in a panel,
-// whose shape rule keeps a body holding a list on SwiftUI); every other
-// container child still gets `.swiftUI`, as before containers joined the
-// renderer's scope.
+// whose shape rule keeps a body holding a list on SwiftUI), then code
+// blocks (PR 3's code block, whole, through `BlockView`: its own gate
+// still decides its code text); every other container child still gets
+// `.swiftUI`, as before containers joined the renderer's scope.
 
 /// A `RenderBlock.Kind` case without its payload: what the container allow
 /// list (`TextKit2Scope.containerChildKinds`) holds.
@@ -126,23 +127,27 @@ extension TextKit2Scope {
     /// expands (an expand or nested expand passes the renderer to its open
     /// body, which is prepared on opening as before, so the coverage walk
     /// reports it as unprepared rather than entering it), layout columns,
-    /// lists (here), then code; until a kind is listed every child of that
+    /// lists, then code blocks; until a kind is listed every child of that
     /// kind stays on SwiftUI, and so does everything below it.
     /// `inheritsRenderer` reads it for top-level container rows,
     /// `adfContainerChild` (through `adfContainerChildKinds`) at every child
     /// boundary, and the coverage walk (`forEachLeaf`) for both. Before
     /// iOS 26 the text it reaches still stays on SwiftUI
-    /// (`TextKit2Eligibility.containerTextMatchesText`). A layout section
-    /// passes the renderer to its columns' blocks when the columns stack
-    /// (compact width, accessibility text sizes); side by side, no family
-    /// keeps it yet (`horizontalColumnKeepsRenderer`). A list below a
-    /// boundary is drawn by the list row as at the top level: rules A–D and
-    /// the iOS 26 list gate decide its rows, rule D at the width bound the
-    /// containers above it computed (`ListRowView`); a row they reject
-    /// keeps everything in it on SwiftUI. A panel holding a list keeps its
-    /// whole body on SwiftUI (`panelKeepsRenderer`), and side by side no
-    /// list keeps the renderer.
-    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns, .listRows]
+    /// (`TextKit2Eligibility.containerTextMatchesText`, and for code
+    /// `containerCodeVerdict`). A layout section passes the renderer to its
+    /// columns' blocks when the columns stack (compact width, accessibility
+    /// text sizes); side by side, no family keeps it yet
+    /// (`horizontalColumnKeepsRenderer`). A list below a boundary is drawn
+    /// by the list row as at the top level: rules A–D and the iOS 26 list
+    /// gate decide its rows, rule D at the width bound the containers above
+    /// it computed (`ListRowView`); a row they reject keeps everything in it
+    /// on SwiftUI. A panel holding a list keeps its whole body on SwiftUI
+    /// (`panelKeepsRenderer`), and side by side no list keeps the renderer.
+    /// A code block that receives the renderer is PR 3's whole code block:
+    /// its code text still passes the content rules and the code gate
+    /// (direction, canvas bound) where it is drawn; a panel holding code
+    /// beside another block keeps its body on SwiftUI (`panelKeepsRenderer`).
+    static let containerChildKinds: Set<TextKit2BlockKind> = [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns, .listRows, .codeBlock]
 
     /// Kinds that never join the container scope, whatever an allow list
     /// says: tables (a later stage), plugin blocks (their renderer owns

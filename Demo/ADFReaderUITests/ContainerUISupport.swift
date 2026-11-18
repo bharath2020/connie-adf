@@ -138,7 +138,9 @@ enum ContainersParity {
     static let listCol25L1 = ContainerLeaf("KP-LIST-COL25-L1", "0.68.0.0.0")
     static let listItemPanel = ContainerLeaf("KP-NEG-LISTITEM-PANEL", "0.84.0.1.0")
 
-    // Code in containers (step 7).
+    // Code in containers (step 7). The panel's code sits beside the panel's
+    // paragraph, so the panel keeps its body on SwiftUI (`panelKeepsRenderer`);
+    // the quote's is the positive.
     static let codePanel = ContainerLeaf("// KP-CODE-PANEL", "0.71.1")
     static let codePanelText = """
         // KP-CODE-PANEL code inside a panel
@@ -149,6 +151,14 @@ enum ContainersParity {
         guard let document = fixture[364] else { return nil } // expand stream glyph media token
         """
     static let codeQuote = ContainerLeaf("// KP-CODE-QUOTE", "0.72.0")
+    static let codeQuoteText = """
+        // KP-CODE-QUOTE code inside a quote
+        // .:...10....:...20....:...30....:...40....:...50....:...60....:...70....:...80....:...90....:..100
+        if atlas.layout > 686 { return signal } // stream batch matrix
+            chunk.theme().stream(5)
+                // inline token schema 832 buffer lazy confluence corpus stress stress
+                signal.matrix()
+        """
     static let codeExpand = ContainerExpand(
         title: "KP-CODE-EXPAND code inside an expand", id: "0.74",
         first: ContainerLeaf("KP-CODE-EXPAND-P", "0.74.0"), last: ContainerLeaf("// KP-CODE-EXPAND-BODY", "0.74.1")

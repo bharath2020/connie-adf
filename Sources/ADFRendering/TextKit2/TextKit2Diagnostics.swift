@@ -161,8 +161,9 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
 /// columns) can still keep counted text on SwiftUI. Expand bodies are not
 /// prepared with the document, so their text is never counted:
 /// `unpreparedExpands` counts the expands in scope whose bodies the count
-/// could not enter. Before iOS 26 the container leaves and captions in
-/// scope count as fallbacks (`TextKit2Eligibility.containerTextMatchesText`).
+/// could not enter. Before iOS 26 the container leaves, nested code and
+/// captions in scope count as fallbacks
+/// (`TextKit2Eligibility.containerTextMatchesText`, `containerCodeVerdict`).
 public struct ADFTextKit2Coverage: Sendable, Hashable {
     /// Top-level paragraphs and headings TextKit 2 draws (root richText,
     /// legacy).
@@ -215,8 +216,10 @@ public struct ADFTextKit2Coverage: Sendable, Hashable {
     public var eligibleCaptionLeaves: Int
     public var fallbackCaptionLeaves: Int
     /// Code blocks below a container's boundary in scope, by the content
-    /// verdict (`TextKit2Eligibility.containerCodeVerdict`): never in the
-    /// code root counts.
+    /// verdict (`TextKit2Eligibility.containerCodeVerdict`: PR 3's content
+    /// rules from iOS 26, `osGatedContainer` before it): never in the code
+    /// root counts, so `eligibleCodeRoots + fallbackCodeRoots` still sums to
+    /// the top-level code blocks.
     public var eligibleNestedCode: Int
     public var fallbackNestedCode: Int
     /// Expands (nested ones included) in scope whose bodies, not prepared
@@ -496,8 +499,8 @@ enum TextKit2Eligibility {
         /// placement (`listsMatchText`).
         case osGatedList
         /// Text below a container's boundary (`TextKit2ContainerContext
-        /// .container`) or a caption (`.caption`) before iOS 26
-        /// (`containerTextMatchesText`).
+        /// .container`), code there included (`containerCodeVerdict`), or a
+        /// caption (`.caption`) before iOS 26 (`containerTextMatchesText`).
         case osGatedContainer
         /// A caption under a media layout whose caption frame does not match
         /// `Text`'s (`TextKit2Scope.captionLayoutKeepsRenderer`).
@@ -567,14 +570,25 @@ enum TextKit2Eligibility {
     }
 
     /// The engine verdict for a code block's code text below a container's
-    /// boundary (`context` `.container`): the content verdict
-    /// (`codeVerdict`). The container stage's OS rule for nested code joins
-    /// here with its own evidence; until then nested code is judged exactly
-    /// as top-level code. The view (through `verdict(_:owner:context:)`)
-    /// and the coverage walk (`TextKit2Scope.Leaf.verdict`) both decide
-    /// through it.
-    static func containerCodeVerdict(_ code: AttributedString, context: TextKit2ContainerContext) -> Verdict {
-        codeVerdict(code)
+    /// boundary (`context` `.container`). Before iOS 26 it is
+    /// `.osGatedContainer` first, whatever the content: the container gate
+    /// keeps everything below a boundary on SwiftUI there
+    /// (`containerTextMatchesText`; no hosted sweep of code at container
+    /// widths has run on an older runtime). From iOS 26 it is PR 3's content
+    /// verdict (`codeVerdict`) unchanged, and the code gate
+    /// (`TextKit2Scope.codeGate`: direction, canvas bound) then decides
+    /// where the block is drawn, as for top-level code. The view (through
+    /// `verdict(_:owner:context:)`) and the coverage walk
+    /// (`TextKit2Scope.Leaf.verdict`, counted in `eligibleNestedCode` and
+    /// `fallbackNestedCode`) both decide through it. `matchesText` is the
+    /// OS rule, passed explicitly only by tests; top-level code
+    /// (`context` `.none`) is never gated here.
+    static func containerCodeVerdict(
+        _ code: AttributedString, context: TextKit2ContainerContext,
+        matchesText: Bool = TextKit2Eligibility.containerTextMatchesText
+    ) -> Verdict {
+        if context != .none, !matchesText { return .fallback(.osGatedContainer) }
+        return codeVerdict(code)
     }
 
     /// The engine verdict for a code block's code text, by content. The
@@ -673,8 +687,9 @@ enum TextKit2Eligibility {
         return false
     }
 
-    /// Whether text below a container's boundary and captions may use
-    /// TextKit 2 on this OS: from iOS 26, where the container parity suites
+    /// Whether text below a container's boundary (code there included,
+    /// `containerCodeVerdict`) and captions may use TextKit 2 on this OS:
+    /// from iOS 26, where the container parity suites
     /// (`TextKit2ContainerParityTests`) were measured. Before iOS 26 such
     /// text that would otherwise be eligible falls back as
     /// `.osGatedContainer`, and the coverage counts it; only a hosted sweep

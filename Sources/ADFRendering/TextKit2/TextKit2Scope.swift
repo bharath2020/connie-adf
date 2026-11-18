@@ -19,23 +19,26 @@ import ADFPreparation
 /// A container (panel, quote, expand, layout columns, extension, and media
 /// for its caption) keeps the choice at the top level only when its kind
 /// is in the container allow list (`containerChildKinds`: panels, quotes,
-/// extension bodies, media, expands, layout columns and lists so far) and
-/// passes its whole-block rule (`blockKeepsRenderer`, for a panel
+/// extension bodies, media, expands, layout columns, lists and code
+/// blocks) and passes its whole-block rule (`blockKeepsRenderer`, for a panel
 /// `panelKeepsRenderer`); its child boundary (`View.adfContainerChild`,
 /// `childRenderer`) then passes the choice to the children the same list
-/// and rules allow (paragraphs and headings, media, lists, and nested
-/// panels, quotes, extensions and expands so far; an expand's body only
-/// once it is open and prepared), and in side-by-side layout columns to
-/// none (`horizontalColumnKeepsRenderer`). A list below a boundary keeps
+/// and rules allow (paragraphs and headings, media, lists, code blocks, and
+/// nested panels, quotes, extensions and expands so far; an expand's body
+/// only once it is open and prepared), and in side-by-side layout columns
+/// to none (`horizontalColumnKeepsRenderer`). A list below a boundary keeps
 /// PR 2's row rules unchanged (A to D and the list gate, rule D against the
-/// container's width bound). A media block's only text is its caption
+/// container's width bound). A code block reached that way is the whole
+/// code block, as at the top level: the code rules and the code gate still
+/// decide its text. A media block's only text is its caption
 /// (`MediaBlockView.caption`, `captionsUseTextKit2`,
 /// `captionLayoutKeepsRenderer`). Every other top-level kind (table, card,
 /// plugin, unknown) gets `.swiftUI`, and so does everything inside it, and
-/// so does every child kind the list does not hold (code in a container
-/// included); code inside a list item gets `.swiftUI` from its row. Before
-/// iOS 26 container text and captions stay on SwiftUI at the leaf
-/// (`TextKit2Eligibility.containerTextMatchesText`). Those three places are
+/// so does every child kind the list does not hold; code inside a list
+/// item gets `.swiftUI` from its row. Before iOS 26 container text, code
+/// and captions stay on SwiftUI at the leaf
+/// (`TextKit2Eligibility.containerTextMatchesText`,
+/// `containerCodeVerdict`). Those three places are
 /// the only ones that set `adfTextRenderer`. The coverage walk
 /// (`forEachLeaf`) follows the same rules, so the diagnostics count
 /// exactly the leaves the views may hand to TextKit 2 (stacked, left to

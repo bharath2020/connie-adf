@@ -12,8 +12,9 @@ import ADFPreparation
 /// (`inheritsRenderer`); the panel shape rule (`panelKeepsRenderer`); and
 /// the view-time rules (`containerGate`). The production allow list holds
 /// the families enabled so far (paragraphs and headings, panels, quotes,
-/// extension bodies, captioned media, expands, layout columns).
-/// Cross-platform.
+/// the families enabled so far (paragraphs and headings, panels, quotes,
+/// extension bodies, captioned media, expands, layout columns, lists,
+/// code). Cross-platform.
 @Suite("TextKit 2 container scope: rules")
 struct TextKit2ContainerScopeTests {
     /// The allow list at each stage of the container work (plan §5), and
@@ -237,14 +238,15 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies, captioned media, expands, layout columns and lists")
+    @Test("top-level rows read the same allow list and whole-block rules; the production list holds prose, panels, quotes, extension bodies, captioned media, expands, layout columns, lists and code")
     func topLevelRowsReadTheAllowList() async throws {
         // Step 3: paragraphs and headings in panels, quotes and extension
         // bodies; step 8: captions; step 5: expands (their open bodies);
         // step 4: layout columns; step 6: lists below a boundary (a
-        // top-level list never reads the list). Each later stage changes
-        // this pin deliberately, with the family it enables.
-        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns, .listRows])
+        // top-level list never reads the list); step 7: code blocks. Each
+        // later stage changes this pin deliberately, with the family it
+        // enables.
+        #expect(TextKit2Scope.containerChildKinds == [.richText, .panel, .quote, .extensionPlaceholder, .media, .expand, .layoutColumns, .listRows, .codeBlock])
         #expect(EnvironmentValues().adfContainerChildKinds == TextKit2Scope.containerChildKinds)
         #expect(EnvironmentValues().adfTextContainerContext == .none)
         #expect(TextKit2Scope.captionsUseTextKit2 == true)

@@ -49,12 +49,13 @@ enum TK2ContainerCoverage {
     ///
     /// With the production list (step 3: prose, panels, quotes, extension
     /// bodies; step 8: media; step 5: expands; step 4: layout columns; step
-    /// 6: lists) only 0.2.0, the list leader in 0.2, 0.3.0, 0.3.1, 0.4.0.0,
-    /// 0.4.1.0, 0.4.1.1.0, 0.7.0 and 0.12.0 are container leaves (0.14's
-    /// list fails rule B), 0.9's caption is the one caption leaf (code is
-    /// not listed yet), and the expands 0.5 and 0.6.0 are reported
-    /// unprepared: an expand's body is prepared when it opens, so listing
-    /// expands adds no leaf.
+    /// 6: lists; step 7: code) only 0.2.0, the list leader in 0.2, 0.3.0,
+    /// 0.3.1, 0.4.0.0, 0.4.1.0, 0.4.1.1.0, 0.7.0 and 0.12.0 are container
+    /// leaves (0.14's list fails rule B), 0.9's caption is the one caption
+    /// leaf, 0.2.1 and 0.13.0 are nested code (0.13.0 a fallback by content
+    /// from iOS 26; both `osGatedContainer` before it), and the expands 0.5
+    /// and 0.6.0 are reported unprepared: an expand's body is prepared when
+    /// it opens, so listing expands adds no leaf.
     static func content() -> [[String: Any]] {
         let paragraph = TK2CodeLogic.paragraph
         return [
@@ -183,11 +184,12 @@ enum TK2ContainerCoverage {
 /// nested code and captions count only in their own fields; the legacy
 /// fields keep their depth-0 meaning; the sums hold at every allow-list
 /// stage; unprepared expands are counted, not entered; the walk visits
-/// owners in search's order. With the production list (steps 3 to 6 and
+/// owners in search's order. With the production list (steps 3 to 7 and
 /// captions) only the container leaf fields move, where a panel, quote,
 /// extension body or layout column holds prose or (not in a panel) a list,
-/// the caption fields, where captioned media is in scope, and
-/// `unpreparedExpands`, where the walk reaches an expand.
+/// the nested code fields, where one holds code, the caption fields, where
+/// captioned media is in scope, and `unpreparedExpands`, where the walk
+/// reaches an expand.
 @Suite("TextKit 2 container coverage")
 @MainActor
 struct TextKit2ContainerCoverageTests {
@@ -197,9 +199,8 @@ struct TextKit2ContainerCoverageTests {
     func handCounted() async throws {
         let blocks = try await TK2ContainerCoverage.blocks()
         let lists = TextKit2Eligibility.listsMatchText
-        // Before iOS 26 every container leaf falls back
-        // (`containerTextMatchesText`); nested code keeps the code rules
-        // until code joins the allow list.
+        // Before iOS 26 every container leaf and every nested code block
+        // falls back (`containerTextMatchesText`, `containerCodeVerdict`).
         let containers = TextKit2Eligibility.containerTextMatchesText
         // Each top-level node prepares to one block.
         #expect(blocks.count == 16)
@@ -210,14 +211,14 @@ struct TextKit2ContainerCoverageTests {
             listLeaderLeaves: 1, listTrailingLeaves: 1, eligibleCodeRoots: 1, fallbackCodeRoots: 0,
             eligibleContainerLeaves: containers ? 8 : 0, linkedContainerLeaves: containers ? 1 : 0, fallbackContainerLeaves: containers ? 1 : 9,
             containerListLeaves: 1, eligibleCaptionLeaves: containers ? 1 : 0, fallbackCaptionLeaves: containers ? 0 : 1,
-            eligibleNestedCode: 1, fallbackNestedCode: 1, unpreparedExpands: 2
+            eligibleNestedCode: containers ? 1 : 0, fallbackNestedCode: containers ? 1 : 2, unpreparedExpands: 2
         )
         #expect(all == expected)
 
         // The empty list: the legacy fields only.
         let legacy = TK2ContainerCoverage.legacy(expected)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks, allowed: []) == legacy)
-        // The production list (steps 3 to 6 and captions): prose in the
+        // The production list (steps 3 to 7 and captions): prose in the
         // quotes 0.2 and 0.3, the section 0.4 (both columns and the panel
         // in one, counted stacked), the extension 0.7 and the panel 0.12
         // (an atom: a fallback), and the list leader in the quote 0.2 (step
@@ -226,7 +227,8 @@ struct TextKit2ContainerCoverageTests {
         // quote 0.14 fails rule B. The caption of the top-level media 0.9
         // (from iOS 26; `osGatedContainer` before). The top-level expand
         // 0.5 and the nested expand in the panel 0.6 are reported, not
-        // entered.
+        // entered. Step 7: the code in the quotes 0.2 (eligible) and 0.13
+        // (a tab: a fallback), both gated before iOS 26.
         var production = legacy
         production.eligibleContainerLeaves = containers ? 8 : 0
         production.linkedContainerLeaves = containers ? 1 : 0
@@ -235,6 +237,8 @@ struct TextKit2ContainerCoverageTests {
         production.eligibleCaptionLeaves = containers ? 1 : 0
         production.fallbackCaptionLeaves = containers ? 0 : 1
         production.unpreparedExpands = 2
+        production.eligibleNestedCode = containers ? 1 : 0
+        production.fallbackNestedCode = containers ? 1 : 2
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == production)
         var visitedProduction: [String] = []
         TextKit2Scope.forEachLeaf(in: blocks) { if $0.position.context == .container { visitedProduction.append($0.ownerID) } }
@@ -242,7 +246,7 @@ struct TextKit2ContainerCoverageTests {
             guard case .quote(let children) = blocks[2].kind, case .listRows(let rows) = children[2].kind else { return nil }
             return rows.first?.id
         }()
-        #expect(visitedProduction == ["0.2.0", try #require(quotedListRow), "0.3.0", "0.3.1", "0.4.0.0", "0.4.1.0", "0.4.1.1.0", "0.7.0", "0.12.0"])
+        #expect(visitedProduction == ["0.2.0", "0.2.1", try #require(quotedListRow), "0.3.0", "0.3.1", "0.4.0.0", "0.4.1.0", "0.4.1.1.0", "0.7.0", "0.12.0", "0.13.0"])
 
         // The order and position of every leaf the widest walk visits.
         var visited: [(String, TextKit2Scope.Position)] = []
@@ -344,7 +348,10 @@ struct TextKit2ContainerCoverageTests {
             let production = ADFTextRenderer.textKit2CodeAdmission(
                 of: blocks, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3, layoutDirection: .leftToRight
             )
-            #expect(production.nestedCodeAdmitted == 0 && production.nestedCodeGated == 0, "\(name): no nested code with the production list")
+            // From step 7 the production list holds code: its nested code is
+            // split by admission as the root code is.
+            let productionCoverage = ADFTextRenderer.textKit2Coverage(of: blocks)
+            #expect(production.nestedCodeAdmitted + production.nestedCodeGated == productionCoverage.eligibleNestedCode, "\(name)")
             for (stage, allowed) in Self.stages {
                 let label = "\(name) at \(stage)"
                 let coverage = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: allowed)
@@ -363,18 +370,23 @@ struct TextKit2ContainerCoverageTests {
             }
         }
         // The hand-counted document: one eligible nested code block, which
-        // is admitted at Large, and one falling back by content.
+        // is admitted at Large, and one falling back by content; before
+        // iOS 26 both nested blocks are gated by the OS
+        // (`containerCodeVerdict`), so neither is eligible.
         let blocks = try await TK2ContainerCoverage.blocks()
-        let admission = ADFTextRenderer.textKit2CodeAdmission(
-            of: blocks, allowed: TK2ContainerCoverage.every, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3,
-            layoutDirection: .leftToRight
-        )
-        #if canImport(UIKit)
-        let expected = [1, 0, 1, 0]
-        #else
-        let expected = [0, 1, 0, 1]
-        #endif
-        #expect([admission.admittedCodeRoots, admission.gatedCodeRoots, admission.nestedCodeAdmitted, admission.nestedCodeGated] == expected)
+        let nested = TextKit2Eligibility.containerTextMatchesText ? 1 : 0
+        for allowed in [TK2ContainerCoverage.every, TextKit2Scope.containerChildKinds] {
+            let admission = ADFTextRenderer.textKit2CodeAdmission(
+                of: blocks, allowed: allowed, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3,
+                layoutDirection: .leftToRight
+            )
+            #if canImport(UIKit)
+            let expected = [1, 0, nested, 0]
+            #else
+            let expected = [0, 1, 0, nested]
+            #endif
+            #expect([admission.admittedCodeRoots, admission.gatedCodeRoots, admission.nestedCodeAdmitted, admission.nestedCodeGated] == expected)
+        }
     }
 
     @Test("expands whose bodies are not prepared are counted, never entered: top-level and nested, only where the allow list reaches them")
@@ -442,6 +454,12 @@ struct TextKit2ContainerCoverageTests {
         /// in layout columns, which count once the column family is listed.
         var expands = 0
         var expandsInColumns = 0
+        /// Code blocks below the containers the walk enters with the
+        /// production list (step 7), hand-counted from the JSON
+        /// (`<data>/code7/tools/nestedcode.py`); every one is in PR 3's
+        /// admitted cohort, so eligible from iOS 26 and `osGatedContainer`
+        /// before it.
+        var nestedCode = 0
         /// Leaves expected to stay on SwiftUI for a view-time reason on the
         /// gate device (iPhone, left to right, the demo's environment): none
         /// at step 4. No panel is right to left, the demo sets no font or
@@ -505,7 +523,7 @@ struct TextKit2ContainerCoverageTests {
     static let pins: [FixturePin] = [
         FixturePin(name: "containers-parity", panel: 18, quote: 17, extensionBody: 7, column: 22, headings: 3, linked: 4, atoms: 2,
                    panelShapeExcluded: ["0.11", "0.12", "0.15", "0.63", "0.71", "0.77", "0.78"],
-                   lists: ["quote": 7, "extension": 3, "column": 6], expands: 5, expandsInColumns: 1),
+                   lists: ["quote": 7, "extension": 3, "column": 6], expands: 5, expandsInColumns: 1, nestedCode: 6),
         FixturePin(name: "kitchen-sink", panel: 7, quote: 1, extensionBody: 1, column: 2, headings: 0, linked: 0, atoms: 0, panelShapeExcluded: [],
                    captions: 1, expands: 1),
         FixturePin(name: "stress-1k", panel: 80, quote: 119, extensionBody: 0, column: 0, headings: 0, linked: 43, atoms: 0, panelShapeExcluded: [],
@@ -539,7 +557,7 @@ struct TextKit2ContainerCoverageTests {
         return found
     }
 
-    @Test("fixturePins: hand-counted container leaves of containers-parity, kitchen-sink and stress-1k at step 6, by container, list text apart, with the excluded panel shapes, their captions and the unprepared expands; before iOS 26 every leaf is gated")
+    @Test("fixturePins: hand-counted container leaves of containers-parity, kitchen-sink and stress-1k at step 7, by container, list text apart, with the excluded panel shapes, their captions, the unprepared expands and the nested code; before iOS 26 every leaf and nested code block is gated")
     func fixturePins() async throws {
         let containers = TextKit2Eligibility.containerTextMatchesText
         for pin in Self.pins {
@@ -550,7 +568,8 @@ struct TextKit2ContainerCoverageTests {
             #expect(coverage.linkedContainerLeaves == (containers ? pin.linked : 0), "\(pin.name): \(coverage)")
             #expect(coverage.fallbackContainerLeaves == (containers ? pin.atoms : pin.leaves), "\(pin.name): \(coverage)")
             #expect(coverage.containerListLeaves == pin.listLeaves, "\(pin.name)")
-            #expect(coverage.eligibleNestedCode + coverage.fallbackNestedCode == 0, "\(pin.name)")
+            #expect(coverage.eligibleNestedCode == (containers ? pin.nestedCode : 0), "\(pin.name): \(coverage)")
+            #expect(coverage.fallbackNestedCode == (containers ? 0 : pin.nestedCode), "\(pin.name): \(coverage)")
             #expect(coverage.unpreparedExpands == pin.unpreparedExpands, "\(pin.name): \(coverage.unpreparedExpands) unprepared expands")
             #expect(coverage.eligibleCaptionLeaves == (containers ? pin.captions : 0), "\(pin.name): \(coverage)")
             #expect(coverage.fallbackCaptionLeaves == (containers ? 0 : pin.captions), "\(pin.name): \(coverage)")
@@ -593,7 +612,7 @@ struct TextKit2ContainerCoverageTests {
         }
     }
 
-    static func find(_ id: String, in blocks: [RenderBlock]) -> RenderBlock? {
+    nonisolated static func find(_ id: String, in blocks: [RenderBlock]) -> RenderBlock? {
         for block in blocks {
             if block.id == id { return block }
             let children: [RenderBlock]
@@ -678,13 +697,31 @@ struct TextKit2ContainerCoverageTests {
     /// never enters an unprepared body.
     static let containerListLeaves = ["containers-parity": 16, "containers-dense": 206, "lists-parity": 5]
 
-    @Test("with the production list (steps 3 to 6 and captions) only the container leaf fields, as the step-6 stage counts them, container list text where the hand count has it, the caption fields, for the captioned media in scope, and the unprepared expands, as hand-counted, move; listing expands adds no leaf; no nested code on any fixture; the legacy fields are the empty list's")
+    /// Nested code the walk counts with the production list, on every
+    /// fixture, hand-counted from the JSON (`<data>/code7/tools/nestedcode.py`,
+    /// which re-implements the scope over the raw ADF, not the walk):
+    /// containers-parity 0.52.0.1 (the zero-percent column, stacked), 0.72.0
+    /// (a quote), 0.73.0.0 (a quote in a panel), 0.75.0 (an extension body),
+    /// 0.76.0.0 and 0.76.1.1 (a 50/50 section); its other code sits in panels
+    /// whose body the shape rule keeps on SwiftUI (0.71, 0.77, 0.78), an
+    /// expand (0.74), a table and a list item. containers-dense: the four in
+    /// quotes (0.5.1, 0.215.2, 0.425.2, 0.635.5); its other eight sit beside
+    /// prose in panels. Every one is in PR 3's admitted cohort, under the
+    /// canvas bound at Large on 3x. Every other fixture: none (lists, which
+    /// joined at step 6, hold no code a row keeps: code in a list item
+    /// stays SwiftUI).
+    static let nestedCodePins: [String: Int] = ["containers-parity": 6, "containers-dense": 4]
+
+    @Test("with the production list (steps 3 to 7 and captions) only the container leaf fields, as the step-6 stage counts them, container list text where the hand count has it, the nested code and the unprepared expands, as hand-counted, and the caption fields, for the captioned media in scope, move; listing expands adds no leaf and listing code moves only the nested code fields; the legacy fields are the empty list's")
     func newFieldsReadZeroOnEveryFixture() async throws {
         let step6 = try #require(Self.stages.first { $0.name.hasPrefix("step 6") }).kinds
-        // The step-6 stage holds steps 3 to 6 (expands included); captions
-        // (step 8) joined before columns, expands and lists in this PR.
-        let production = step6.union([.media])
+        let step7 = try #require(Self.stages.first { $0.name.hasPrefix("step 7") }).kinds
+        // The step-7 stage holds steps 3 to 7 (expands included); captions
+        // (step 8) joined before columns, expands, lists and code in this
+        // PR.
+        let production = step7.union([.media])
         #expect(production == TextKit2Scope.containerChildKinds)
+        let containers = TextKit2Eligibility.containerTextMatchesText
         let columns = TextKit2Scope.containerChildKinds.contains(.layoutColumns)
         let fixtures = try TK2ContainerCoverage.allFixtures()
         #expect(Set(fixtures) == Set(Self.expandPins.keys), "every fixture has an expand pin")
@@ -696,11 +733,20 @@ struct TextKit2ContainerCoverageTests {
             #expect(coverage.unpreparedExpands == pin.expands + (columns ? pin.inColumns : 0), "\(name): \(coverage.unpreparedExpands) unprepared expands")
             // Listing expands moves nothing but `unpreparedExpands`: their
             // bodies are prepared on opening, never by the walk (nor the
-            // lists in them).
+            // lists and code in them).
             var withoutExpands = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: production.subtracting([.expand]))
             #expect(withoutExpands.unpreparedExpands == 0, "\(name)")
             withoutExpands.unpreparedExpands = coverage.unpreparedExpands
             #expect(coverage == withoutExpands, "\(name)")
+            // Listing code moves nothing but the nested code fields.
+            var withoutCode = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: production.subtracting([.codeBlock]))
+            #expect(withoutCode.eligibleNestedCode + withoutCode.fallbackNestedCode == 0, "\(name)")
+            withoutCode.eligibleNestedCode = coverage.eligibleNestedCode
+            withoutCode.fallbackNestedCode = coverage.fallbackNestedCode
+            #expect(coverage == withoutCode, "\(name)")
+            let nested = Self.nestedCodePins[name] ?? 0
+            #expect(coverage.eligibleNestedCode == (containers ? nested : 0), "\(name): \(coverage)")
+            #expect(coverage.fallbackNestedCode == (containers ? 0 : nested), "\(name): \(coverage)")
             // Media adds captions only: the container leaf fields are the
             // step-6 stage's.
             let atStep6 = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: step6)
@@ -710,7 +756,6 @@ struct TextKit2ContainerCoverageTests {
                 && coverage.containerListLeaves == atStep6.containerListLeaves, "\(name): \(coverage)")
             #expect(TK2ContainerCoverage.legacy(coverage) == ADFTextRenderer.textKit2Coverage(of: blocks, allowed: []), "\(name)")
             #expect(coverage.containerListLeaves == Self.containerListLeaves[name, default: 0], "\(name): \(coverage)")
-            #expect(coverage.eligibleNestedCode + coverage.fallbackNestedCode == 0, "\(name): \(coverage)")
             #expect(coverage.eligibleCaptionLeaves + coverage.fallbackCaptionLeaves == TK2ContainerCoverage.captionsInScope(blocks), "\(name): \(coverage)")
             if !TextKit2Eligibility.containerTextMatchesText {
                 #expect(coverage.eligibleContainerLeaves == 0 && coverage.linkedContainerLeaves == 0, "\(name): container text is gated before iOS 26")
@@ -720,7 +765,13 @@ struct TextKit2ContainerCoverageTests {
             let admission = ADFTextRenderer.textKit2CodeAdmission(
                 of: blocks, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3, layoutDirection: .leftToRight
             )
-            #expect(admission.nestedCodeAdmitted == 0 && admission.nestedCodeGated == 0, "\(name)")
+            // Every nested block is under the canvas bound at Large on 3x,
+            // left to right: all admitted.
+            #if canImport(UIKit)
+            #expect(admission.nestedCodeAdmitted == coverage.eligibleNestedCode && admission.nestedCodeGated == 0, "\(name)")
+            #else
+            #expect(admission.nestedCodeAdmitted == 0 && admission.nestedCodeGated == coverage.eligibleNestedCode, "\(name)")
+            #endif
         }
     }
 }
@@ -891,10 +942,11 @@ struct TextKit2ContainerDiagnosticsTests {
         hosted.show(Self.quoteView(quote, .textKit2))
         try await hosted.settle()
         var rows = hosted.rows
-        // Before iOS 26 the prose stays on SwiftUI (`osGatedContainer`);
-        // the code row is the code family's and is not gated.
+        // Before iOS 26 the prose stays on SwiftUI (`osGatedContainer`),
+        // and from PR 4 step 7 so does the code beside it: nested code is
+        // gated by the OS first (`containerCodeVerdict`, P14).
         let containers = TextKit2Eligibility.containerTextMatchesText
-        #expect(Set(rows.compactMap(\.ownerID)) == (containers ? [prose, code] : [code]))
+        #expect(Set(rows.compactMap(\.ownerID)) == (containers ? [prose, code] : []))
         for row in rows {
             #expect(row.containerContext == .container, "\(row.ownerID ?? "?")")
             #expect(row.ownerKind == (row.ownerID == code ? .code : .root), "\(row.ownerID ?? "?")")
@@ -903,7 +955,7 @@ struct TextKit2ContainerDiagnosticsTests {
         #expect(ADFTextRenderer.textKit2ContainerRowDraws == diagnostics.containerRowDraws)
         #expect(ADFTextRenderer.textKit2CaptionRowDraws == diagnostics.captionRowDraws)
         #expect(ADFTextRenderer.textKit2ContainerRowDraws[code] == nil, "code is never container proof")
-        #expect(ADFTextRenderer.textKit2CodeRowDraws[code] != nil, "nested code is in the code record")
+        #expect((ADFTextRenderer.textKit2CodeRowDraws[code] != nil) == containers, "nested code is in the code record (from iOS 26)")
         #expect(diagnostics.containerRowDraws.count <= diagnostics.liveContainerRowCount)
         if containers {
             let listed = try #require(ADFTextRenderer.textKit2ContainerRowDraws[prose], "a live container row is listed, drawn or not")
@@ -911,11 +963,12 @@ struct TextKit2ContainerDiagnosticsTests {
             for row in rows { TK2CodeLogic.draw(row) }
             #expect(ADFTextRenderer.textKit2ContainerRowDraws[prose] == listed + 1)
             #expect(diagnostics.containerNativeDrawCount - native == 1)
+            // Two rows drawn, one container draw: the code row's draw is
+            // never a container draw.
+            #expect(rows.count == 2)
         } else {
             #expect(ADFTextRenderer.textKit2ContainerRowDraws[prose] == nil, "gated before iOS 26: no container row")
-            let native = diagnostics.containerNativeDrawCount
-            for row in rows { TK2CodeLogic.draw(row) }
-            #expect(diagnostics.containerNativeDrawCount == native, "a code row's draw is never a container draw")
+            #expect(ADFTextRenderer.textKit2CodeRowDraws[code] == nil, "gated before iOS 26: no nested code row")
         }
 
         hosted.show(Self.quoteView(quote, .swiftUI))
