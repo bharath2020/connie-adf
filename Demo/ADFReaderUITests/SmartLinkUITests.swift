@@ -193,9 +193,14 @@ final class SmartLinkUITests: XCTestCase {
         XCTAssertTrue(Self.intro[0].showsPrepared(firstLabel),
                       "the Roadmap link was not first shown as its URL: \(firstLabel)")
 
-        // 2a. Probe A: four lookups in flight, the fifth queued (cap of 4).
-        let a = waitForProbe(reader, "A (4 lookups in flight)", timeout: 6) { $0["calls"] == 4 && $0["inFlight"] == 4 }
-        XCTAssertTrue(a.met, "A: expected 4 calls in flight: \(a.stats)")
+        // 2a. Probe A: four lookups in flight, the fifth queued (cap of 4),
+        // each showing the loading look, which a lookup shows once it has
+        // run 300 ms (design §10).
+        let a = waitForProbe(reader, "A (4 lookups in flight)", timeout: 6) {
+            $0["calls"] == 4 && $0["inFlight"] == 4 && $0["refreshes"] == 4
+        }
+        XCTAssertTrue(a.met, "A: expected 4 calls in flight, each showing the loading look: \(a.stats)")
+        XCTAssertEqual(a.stats["dims"], 4, "A: \(a.stats)")
         XCTAssertEqual(a.stats["resolved"], 0, "A: \(a.stats)")
         XCTAssertEqual(a.stats["refreshes"], 4, "A: four leaves went plain → loading: \(a.stats)")
         // Still the URL (the card: its host) while loading; design §6 speaks
@@ -251,6 +256,8 @@ final class SmartLinkUITests: XCTestCase {
         XCTAssertEqual(b.stats["failed"], 0, "B: \(b.stats)")
         XCTAssertEqual(b.stats["owners"], Self.intro.count, "B: \(b.stats)")
         XCTAssertEqual(b.stats["refreshes"], 2 * Self.intro.count, "B: each leaf plain → loading → title: \(b.stats)")
+        XCTAssertEqual(b.stats["dims"], Self.intro.count, "B: each 8 s lookup showed the loading look once: \(b.stats)")
+        XCTAssertEqual(b.stats["held"], 0, "B: a title is held at rest: \(b.stats)")
         XCTAssertEqual(b.stats["mockCalls"], Self.intro.count, "B: the mock saw other calls: \(b.stats)")
         XCTAssertLessThan(b.stats["calls"], Self.uniqueURLs)
 
@@ -326,6 +333,7 @@ final class SmartLinkUITests: XCTestCase {
             + "\(flung["cancelled"])); back at the top \(d["calls"]) (cancelled \(d["cancelled"]))")
         XCTAssertGreaterThan(flung["cancelled"], e["cancelled"], "the fling cancelled nothing: \(e) → \(flung)")
         XCTAssertEqual(d["inFlight"], 0, "D: \(d)")
+        XCTAssertEqual(d["held"], 0, "D: a title is still held at rest (design §10): \(d)")
         XCTAssertEqual(d["calls"], d["resolved"] + d["failed"] + d["cancelled"] + d["inFlight"],
                        "D: the counters do not add up: \(d)")
         XCTAssertEqual(d["mockCalls"], d["calls"], "D: the mock saw other calls: \(d)")
@@ -354,8 +362,11 @@ final class SmartLinkUITests: XCTestCase {
         let reader = launch(textKit2: textKit2, delay: Self.functionalDelay, failureRate: 1)
         XCTAssertTrue(link(Self.intro[0], reader, textKit2: textKit2).waitForExistence(timeout: 20),
                       "the Roadmap intro link never appeared")
-        let a = waitForProbe(reader, "A (4 lookups in flight)", timeout: 6) { $0["calls"] == 4 && $0["inFlight"] == 4 }
-        XCTAssertTrue(a.met, "A: expected 4 calls in flight: \(a.stats)")
+        // Each showing the loading look (after 300 ms of lookup, design §10).
+        let a = waitForProbe(reader, "A (4 lookups in flight)", timeout: 6) {
+            $0["calls"] == 4 && $0["inFlight"] == 4 && $0["refreshes"] == 4
+        }
+        XCTAssertTrue(a.met, "A: expected 4 calls in flight, each showing the loading look: \(a.stats)")
         let b = waitForProbe(reader, "B (all failed, settled)", timeout: 2 * Self.functionalDelay + 10, settle: 1.5) {
             $0["failed"] == Self.intro.count && $0["inFlight"] == 0
         }
@@ -531,6 +542,13 @@ final class SmartLinkUITests: XCTestCase {
         // The lift can leave the scroll view settling for a moment.
         let rest = waitForProbe(reader, "\(arm) mode 1: at rest after the held drag", timeout: 10) { $0["scrolling"] == 0 }
         XCTAssertGreaterThan(rest.stats["scrollEnds"], before["scrollEnds"], "no scroll phase was reported: \(rest.stats)")
+        // Titles that landed during the drag on a paragraph not fully on
+        // screen waited for it (design §10); at rest none is held.
+        let settledRest = waitForProbe(reader, "\(arm) mode 1: settled", timeout: 15, settle: 1) {
+            $0["scrolling"] == 0 && $0["inFlight"] == 0
+        }
+        note("\(arm) mode 1 held drag: titles held \(settledRest.stats["holds"]), loading looks \(settledRest.stats["dims"])")
+        XCTAssertEqual(settledRest.stats["held"], 0, "a title is still held at rest: \(settledRest.stats)")
         XCTAssertEqual(after["deferred"], 0, "mode 1 held a lookup back: \(after)")
         XCTAssertEqual(after["pfCalls"], 0, "mode 1 prefetched: \(after)")
         attach(reader.app, "\(arm)-mode1-held-drag")
@@ -595,6 +613,7 @@ final class SmartLinkUITests: XCTestCase {
         }
         XCTAssertTrue(settled.met, "lookups never settled at rest: \(settled.stats)")
         let d = settled.stats
+        XCTAssertEqual(d["held"], 0, "a title is still held at rest (design §10): \(d)")
         XCTAssertEqual(d["scrollCalls"], 0, "a lookup started while scrolling: \(d)")
         XCTAssertGreaterThan(d["calls"], held["calls"], "nothing was looked up at rest: \(held) → \(d)")
         XCTAssertEqual(d["pfCalls"], 0, "mode 2 looked up an off-screen link: \(d)")
@@ -682,6 +701,8 @@ final class SmartLinkUITests: XCTestCase {
         XCTAssertTrue(stopped.met, "scrolling did not cancel the nearby batch in flight: \(inFlight.stats) → \(stopped.stats)")
         XCTAssertEqual(stopped.stats["scrollCalls"], 0, "a lookup started while scrolling: \(stopped.stats)")
         let end = waitForNearbyToFinish(reader, "\(arm) mode 3: final rest", timeout: 120).stats
+        XCTAssertEqual(end["held"], 0, "a title is still held at rest (design §10): \(end)")
+        note("\(arm) mode 3: titles held \(end["holds"]), loading looks \(end["dims"])")
         XCTAssertEqual(end["scrollCalls"], 0, "\(end)")
         XCTAssertLessThanOrEqual(end["pfMaxBatch"], Self.batchLimit, "\(end)")
         XCTAssertLessThanOrEqual(end["pfPeak"], Self.batchLimit, "\(end)")
