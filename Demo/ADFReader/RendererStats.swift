@@ -123,9 +123,12 @@ import ADFPreparation
 /// TextKit 2 row in the window (`ADFTextRenderer.textKit2RowFrames(in:)`,
 /// sorted by owner id, then top): its owner, kind, the frame it can draw
 /// in (bounds and canvas), that frame clipped by its clipping ancestors and
-/// the window (`-` when nothing of it shows) and, for a code row, its
-/// native draws (`TK2_CODE_ROWS`); `rows=-` when there is none. Ids are
-/// node paths, which hold none of ` ,;|` (any would print as `_`).
+/// the window (`-` when nothing of it shows) and its owner's native draws
+/// at this moment: always for a code row (`TK2_CODE_ROWS`), for a
+/// container or caption row when its owner is live there
+/// (`TK2_CONTAINER_ROWS`, `TK2_CAPTION_ROWS`), else `-` (a top-level
+/// row); `rows=-` when there is none. Ids are node paths, which hold none
+/// of ` ,;|` (any would print as `_`).
 @MainActor
 enum RendererStats {
     /// The environment the reader draws a document in, for the measured
@@ -233,6 +236,8 @@ enum RendererStats {
         }
         let screen = window.screen
         let draws = ADFTextRenderer.textKit2CodeRowDraws
+        let textDraws = ADFTextRenderer.textKit2ContainerRowDraws
+            .merging(ADFTextRenderer.textKit2CaptionRowDraws) { container, _ in container }
         let rows = ADFTextRenderer.textKit2RowFrames(in: window).sorted { first, second in
             let order = first.ownerID.compare(second.ownerID, options: .numeric)
             if order != .orderedSame { return order == .orderedAscending }
@@ -254,7 +259,8 @@ enum RendererStats {
         line += " visibleRows=\(visibleRows)"
         let rowList = rows.map { row in
             let visible = row.visible.map(geometryRect) ?? "-"
-            let rowDraws = row.kind == .code ? String(draws[row.ownerID] ?? 0) : "-"
+            let rowDraws = row.kind == .code
+                ? String(draws[row.ownerID] ?? 0) : textDraws[row.ownerID].map(String.init) ?? "-"
             return "\(geometryID(row.ownerID))|\(row.kind.rawValue)|\(geometryRect(row.frame))|\(visible)|\(rowDraws)"
         }
         line += " rows=\(rowList.isEmpty ? "-" : rowList.joined(separator: ";"))"
