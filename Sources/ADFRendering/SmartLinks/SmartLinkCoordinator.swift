@@ -14,21 +14,27 @@ enum SmartLinkFailure: Hashable, Sendable {
     case other
 }
 
-/// A smart link's stage in one loaded document (design §2):
+/// A smart link's stage in one loaded document (design §2, §10):
 ///
 /// ```
-///             leaf visible + dwell            resolver returns
-///  .plain ───────────────────────▶ .resolving ─────────────────▶ .resolved   (terminal)
-///    ▲                               │   │ resolver throws, or an empty title
-///    │  demand drops to 0 (cancel)   │   └──────────────────────▶ .failed     (terminal, drawn plain)
-///    └───────────────────────────────┘
+///          leaf visible + dwell, then 300 ms of lookup     resolver returns
+///  .plain ──────────────────────────────────▶ .resolving ─────────────────▶ .resolved   (terminal)
+///    │ ▲                                        │   │ resolver throws, or an empty title
+///    │ │  demand drops to 0 (cancel)            │   └──────────────────────▶ .failed     (terminal, drawn plain)
+///    │ └────────────────────────────────────────┘
+///    └─ a lookup that lands within 300 ms goes straight to .resolved / .failed
 /// ```
+///
+/// While the document scrolls, a `.resolved` outcome for a link whose leaf
+/// is not fully on screen is held (`SmartLinkEntry.held`) until it is, or
+/// until scrolling stops (design §10).
 enum SmartLinkStage: Hashable, Sendable {
     /// The link as prepared (URL text, or an inline card's host; link
     /// colour). Also the stage of a cancelled lookup: cancellation is not
     /// failure, the next appearance retries.
     case plain
-    /// A lookup is running: the same text, link colour at reduced opacity.
+    /// A lookup has run for `SmartLinkTiming.resolvingDelay`: the same
+    /// text, link colour at reduced opacity.
     case resolving
     /// An icon and the title, linking to the same URL.
     case resolved(ADFSmartLinkMetadata)
@@ -56,14 +62,25 @@ enum SmartLinkStage: Hashable, Sendable {
 final class SmartLinkEntry {
     private(set) var stage: SmartLinkStage = .plain
 
-    /// The outcome of a nearby lookup (`.afterScrollingWithNearby`) made
-    /// while no leaf showing the key was on screen, not yet published as
-    /// `stage`. Not observed: storing it invalidates no leaf, so no
-    /// off-screen row redraws. A leaf built afterwards draws it on its
-    /// first frame (`SmartLinkCoordinator.displayStages` reads it when
-    /// `stage` is `.plain`); it becomes `stage` when a leaf holding the key
-    /// comes on screen (design §8.5).
-    @ObservationIgnored private(set) var prefetched: SmartLinkStage?
+    /// An outcome kept without publishing it as `stage`. Not observed:
+    /// storing it invalidates no leaf, so no row redraws. It is
+    /// - a nearby lookup's (`.afterScrollingWithNearby`), made while no
+    ///   leaf showing the key was on screen (design §8.5), or
+    /// - a landed title held because the document was scrolling and a leaf
+    ///   showing the key was not fully on screen (design §10); it stays
+    ///   here if that leaf leaves the screen first.
+    ///
+    /// A leaf drawing the key for the first time draws it
+    /// (`SmartLinkCoordinator.displayStages`), so a leaf built afterwards
+    /// has its final height on its first frame; a leaf that already drew
+    /// the key keeps what it drew. It becomes `stage` when the coordinator
+    /// publishes it: when a leaf holding the key is on screen, at once at
+    /// rest, else once every such leaf is fully on screen or scrolling
+    /// stops.
+    @ObservationIgnored private(set) var held: SmartLinkStage?
+    /// Whether `held` came from a nearby lookup (a `prefetchHit` once it is
+    /// published).
+    @ObservationIgnored private(set) var heldFromNearby = false
 
     /// Writes `stage` only when it changes, so an unchanged write
     /// invalidates no reader.
@@ -72,26 +89,30 @@ final class SmartLinkEntry {
         self.stage = stage
     }
 
-    /// Keeps a nearby lookup's outcome without publishing it.
-    func storePrefetched(_ outcome: SmartLinkStage) {
-        prefetched = outcome
+    /// Keeps an outcome without publishing it.
+    func hold(_ outcome: SmartLinkStage, nearby: Bool) {
+        held = outcome
+        heldFromNearby = nearby
     }
 
-    /// Publishes the prefetched outcome as the stage; false when there is
-    /// none.
-    func publishPrefetched() -> Bool {
-        guard let outcome = prefetched else { return false }
-        prefetched = nil
+    /// Publishes the held outcome as the stage. Returns whether it came
+    /// from a nearby lookup, or `nil` when nothing was held.
+    func publishHeld() -> Bool? {
+        guard let outcome = held else { return nil }
+        let nearby = heldFromNearby
+        held = nil
+        heldFromNearby = false
         publish(outcome)
-        return true
+        return nearby
     }
 
-    /// Back to `.plain` (a new document). Leaves that drew a prefetched
-    /// outcome did so without observing a change, so every reader is
-    /// notified when one is dropped.
+    /// Back to `.plain` (a new document). Leaves that drew a held outcome
+    /// did so without observing a change, so every reader is notified when
+    /// one is dropped.
     func reset() {
-        if prefetched != nil {
-            prefetched = nil
+        if held != nil {
+            held = nil
+            heldFromNearby = false
             withMutation(keyPath: \.stage) {}
         }
         publish(.plain)
@@ -104,6 +125,12 @@ struct SmartLinkTiming: Sendable {
     /// How long a key must stay in demand before its lookup starts. Free to
     /// cancel: a fling past a link starts nothing. Zero starts at once.
     var dwell: Duration = .milliseconds(150)
+    /// How long a visible lookup runs before its links show the loading
+    /// look (`.resolving`, design §10). A lookup that lands or is cancelled
+    /// sooner never shows it: a link passed in a fling costs no redraw, and
+    /// a fast lookup goes from plain to its title in one. Zero shows it as
+    /// the call starts.
+    var resolvingDelay: Duration = .milliseconds(300)
     /// Lookups running at once; the rest queue in the order their dwell
     /// ended.
     var maxConcurrent = 4
@@ -117,7 +144,8 @@ struct SmartLinkTiming: Sendable {
     /// `.afterScrollingWithNearby`: the pause before each nearby batch is
     /// planned (after coming to rest, or after the previous batch ended).
     var prefetchPause: Duration = .milliseconds(150)
-    /// Waits out a dwell or a pause; throws when its task is cancelled.
+    /// Waits out a dwell, a resolving delay or a pause; throws when its
+    /// task is cancelled.
     var sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
 }
 
@@ -195,6 +223,20 @@ public struct ADFSmartLinkStats: Sendable, Hashable {
     /// positions (`SmartLinkNeighbourhood`).
     public var farthestPrefetch = 0
 
+    // Landing without layout shift; delayed loading look (design §10).
+
+    /// Times a title (a lookup's, or a nearby one coming on screen) was held
+    /// back because the document was scrolling and a leaf showing the link
+    /// was not fully on screen. Each is shown once every such leaf is fully
+    /// on screen, or when scrolling stops.
+    public var titlesHeld = 0
+    /// Links on screen now whose title is held: zero at rest.
+    public var titlesHeldNow = 0
+    /// Times a lookup's links showed the loading look (`.resolving`). A
+    /// lookup shows it only after it has run for 300 ms, so a link passed in
+    /// a fling, or a lookup that lands sooner, never does.
+    public var resolvingShown = 0
+
     public init() {}
 }
 
@@ -212,19 +254,31 @@ public struct ADFSmartLinkStats: Sendable, Hashable {
 ///   are visible. Before iOS 18 / macOS 15 (no visibility feed) an attached
 ///   leaf counts as visible.
 /// - A demanded `.plain` key dwells (`SmartLinkTiming.dwell`), then waits
-///   for one of `maxConcurrent` slots, then goes `.resolving` and asks the
-///   resolver. Losing all demand drops the dwell or queue place, or cancels
-///   the call and returns the key to `.plain`. A cancelled call keeps its
-///   slot until its task actually ends, so a resolver slow to stop can
-///   never push the calls past `maxConcurrent`, nor run two calls for one
-///   URL: a key asked for again meanwhile restarts once the old call ends.
+///   for one of `maxConcurrent` slots, then asks the resolver; once the
+///   call has run for `resolvingDelay` the key goes `.resolving` (a call
+///   that ends sooner never shows it, design §10). Losing all demand drops
+///   the dwell or queue place, or cancels the call and returns the key to
+///   `.plain`. A cancelled call keeps its slot until its task actually
+///   ends, so a resolver slow to stop can never push the calls past
+///   `maxConcurrent`, nor run two calls for one URL: a key asked for again
+///   meanwhile restarts once the old call ends.
+/// - Landing without layout shift (design §10, every mode): a title that
+///   lands while the document scrolls is published only when every
+///   attached leaf holding its key is fully on screen (`setLeafFullyVisible`,
+///   the leaf's 1.0-threshold feed). Otherwise it is held
+///   (`SmartLinkEntry.held`, not observed) and published when those leaves
+///   are fully on screen or scrolling stops, so a paragraph that shrinks
+///   under its new title never moves text across the screen's edge. The
+///   same holds for a nearby result coming on screen. Failures are
+///   published at once (they draw as the prepared text). Without a
+///   visibility feed nothing is held.
 /// - `resolution` (design §8): `.whileScrolling` ignores the scroll phase.
 ///   `.afterScrolling` holds every new dwell and the queue while the
 ///   document scrolls (`scrollPhaseChanged`) and starts the visible keys
 ///   once it rests; calls already running keep running.
 ///   `.afterScrollingWithNearby` also looks up, at rest, batches of the
 ///   off-screen keys nearest the screen (`SmartLinkNeighbourhood`), keeps
-///   their outcomes unpublished (`SmartLinkEntry.prefetched`) and cancels
+///   their outcomes unpublished (`SmartLinkEntry.held`) and cancels
 ///   them when scrolling resumes.
 /// - `.resolved` and `.failed` are terminal until `reset()` (`load`), which
 ///   bumps the generation: every task is cancelled and late results are
@@ -281,6 +335,10 @@ final class SmartLinkCoordinator {
     /// arrive before the leaf attaches; it is forgotten when the leaf
     /// detaches (and a `false` for a detached leaf is not kept).
     private var leafVisibility: [String: Bool] = [:]
+    /// Leaves whose last full-visibility report (`setLeafFullyVisible`) said
+    /// all of the leaf is on screen. Kept like `leafVisibility`: a report
+    /// may come before the attach, and detaching forgets it.
+    private var fullyVisible: Set<String> = []
     private var demand: [SmartLinkKey: Int] = [:]
     /// When each demanded key came on screen (a sequence number), so keys
     /// held during a scroll start in that order once it ends.
@@ -320,14 +378,20 @@ final class SmartLinkCoordinator {
         /// (`.afterScrollingWithNearby`): publishes no stage, and scrolling
         /// cancels it.
         var prefetch = false
+        /// A running visible call's pending loading look: publishes
+        /// `.resolving` once the call has run `resolvingDelay`. Cancelled
+        /// whenever the call ends, stops or is reset.
+        var dim: Task<Void, Never>?
     }
     private var lookups: [SmartLinkKey: Lookup] = [:]
     private var queue: [SmartLinkKey] = []
     /// Slots in use: calls running or stopping.
     private var running = 0
     private var nextLookupID = 0
-    /// What each owner's leaf last drew, for `leafRefreshes`.
-    private var shown: [String: [SmartLinkStage]] = [:]
+    /// What each owner's leaf last drew, per key, for `leafRefreshes` and
+    /// for held outcomes (`displayStages`). Forgotten when the owner's leaf
+    /// detaches, so a leaf built later draws as a new one.
+    private var shown: [String: [SmartLinkKey: SmartLinkStage]] = [:]
 
     // Scroll phase and nearby lookups (design §8).
 
@@ -367,6 +431,7 @@ final class SmartLinkCoordinator {
         // afterwards.
         for lookup in lookups.values {
             lookup.phase.task?.cancel()
+            lookup.dim?.cancel()
         }
         prefetchTick?.cancel()
     }
@@ -379,9 +444,10 @@ final class SmartLinkCoordinator {
         stats.waiting = demand.keys.filter { key in
             guard lookups[key] == nil else { return false }
             guard let entry = entries[key] else { return true }
-            return entry.stage == .plain && entry.prefetched == nil
+            return entry.stage == .plain && entry.held == nil
         }.count
         stats.prefetchInFlight = prefetchRunning
+        stats.titlesHeldNow = heldKeys.count
         return stats
     }
 
@@ -402,27 +468,43 @@ final class SmartLinkCoordinator {
 
     /// The stages among `keys` that change the display, read in a leaf's
     /// `body`: reading every entry is the leaf's observation dependency on
-    /// exactly its own keys. A key still `.plain` with a nearby result
-    /// draws that result (read without observing it, design §8.5). Empty
-    /// when every key draws as prepared. Also counts the leaf's smart-link
-    /// redraw for `owner`.
+    /// exactly its own keys. Empty when every key draws as prepared. Also
+    /// counts the leaf's smart-link redraw for `owner`.
+    ///
+    /// A key still `.plain` with a held outcome (a nearby result, or a
+    /// title held while its leaf was not fully on screen; read without
+    /// observing it, design §8.5, §10) draws that outcome in a leaf drawing
+    /// the key for the first time, so a leaf built after it landed has its
+    /// final height on its first frame. A leaf that already drew the key
+    /// keeps what it drew (the prepared text, or the outcome it drew first)
+    /// until the outcome is published, so a redraw for another reason (the
+    /// loading look of another link in the same paragraph) never reflows it
+    /// mid-scroll. A loading look it drew counts as the prepared text: it
+    /// only shows while a call runs.
     func displayStages(for keys: [SmartLinkKey], owner: String?) -> [SmartLinkKey: SmartLinkStage] {
+        let previous = owner.flatMap { shown[$0] }
         var stages: [SmartLinkKey: SmartLinkStage] = [:]
-        var drawn: [SmartLinkStage] = []
+        var drawn: [SmartLinkKey: SmartLinkStage] = [:]
         drawn.reserveCapacity(keys.count)
         for key in keys {
             let entry = entry(for: key)
             var stage = entry.stage
-            if stage == .plain, let prefetched = entry.prefetched { stage = prefetched }
+            if stage == .plain, let held = entry.held {
+                if let before = previous?[key] {
+                    stage = before == .resolving ? .plain : before
+                } else {
+                    stage = held
+                }
+            }
             stage = stage.displayed
-            drawn.append(stage)
+            drawn[key] = stage
             if stage.changesDisplay { stages[key] = stage }
         }
         if let owner { noteDrawn(owner: owner, drawn) }
         return stages
     }
 
-    private func noteDrawn(owner: String, _ drawn: [SmartLinkStage]) {
+    private func noteDrawn(owner: String, _ drawn: [SmartLinkKey: SmartLinkStage]) {
         guard let previous = shown[owner] else {
             shown[owner] = drawn
             return
@@ -465,13 +547,14 @@ final class SmartLinkCoordinator {
     // MARK: Leaves
 
     /// A text leaf whose owner has smart links appeared (`onAppear`).
-    /// `visible` carries a visibility already known for this leaf (its
-    /// view moved here from another owner id or coordinator,
+    /// `visible` and `fullyVisible` carry the visibility already known for
+    /// this leaf (its view moved here from another owner id or coordinator,
     /// `SmartLinkTextLeaf`); a report the leaf already made wins.
-    func attach(leaf id: String, keys: [SmartLinkKey], visible: Bool? = nil) {
+    func attach(leaf id: String, keys: [SmartLinkKey], visible: Bool? = nil, fullyVisible: Bool? = nil) {
         guard resolver != nil, !keys.isEmpty else { return }
-        if hasVisibilityFeed, leafVisibility[id] == nil, let visible {
-            leafVisibility[id] = visible
+        if hasVisibilityFeed, leafVisibility[id] == nil {
+            if let visible { leafVisibility[id] = visible }
+            if fullyVisible == true { self.fullyVisible.insert(id) }
         }
         if var leaf = leaves[id] {
             leaf.count += 1
@@ -500,10 +583,14 @@ final class SmartLinkCoordinator {
             addDemand(keys)
             removeDemand(old)
         }
+        // The leaf no longer holds back the titles of the keys it dropped.
+        releaseHeld(old)
     }
 
     /// A leaf disappeared (`onDisappear`). Once its last attachment goes,
-    /// its visibility is forgotten too (the render-region backstop).
+    /// its visibility is forgotten too (the render-region backstop), and so
+    /// is what it drew: a leaf built later for the same owner is a new one
+    /// (`displayStages`).
     func detach(leaf id: String) {
         guard var leaf = leaves[id] else { return }
         leaf.count -= 1
@@ -514,7 +601,11 @@ final class SmartLinkCoordinator {
         let wasVisible = isVisible(id)
         leaves[id] = nil
         leafVisibility[id] = nil
+        fullyVisible.remove(id)
+        shown[id] = nil
         if wasVisible { removeDemand(leaf.keys) }
+        // A leaf that was not fully on screen no longer holds titles back.
+        releaseHeld(leaf.keys)
     }
 
     /// A leaf's viewport visibility (any point of it on screen), reported on
@@ -534,6 +625,22 @@ final class SmartLinkCoordinator {
         if visible { addDemand(keys) } else { removeDemand(keys) }
     }
 
+    /// Whether all of a leaf is on screen (inside the scroll view's visible
+    /// region), from the leaf's 1.0-threshold `onScrollVisibilityChange`,
+    /// reported on every crossing (design §10). A set update and, only when
+    /// an attached leaf comes fully on screen, the titles it held back are
+    /// published if no other leaf holds them back. Never invalidates a view.
+    func setLeafFullyVisible(_ id: String, _ fully: Bool) {
+        guard resolver != nil, hasVisibilityFeed else { return }
+        guard fully else {
+            fullyVisible.remove(id)
+            return
+        }
+        // A report before the attach is kept for it, as for visibility.
+        guard fullyVisible.insert(id).inserted, let keys = leaves[id]?.keys else { return }
+        releaseHeld(keys)
+    }
+
     /// The visibility this coordinator knows for a leaf: `nil` when it has
     /// had no report (or tracks nothing: no resolver, no feed).
     func knownVisibility(of id: String) -> Bool? {
@@ -541,8 +648,95 @@ final class SmartLinkCoordinator {
         return leafVisibility[id]
     }
 
+    /// Whether this coordinator knows all of a leaf to be on screen: `nil`
+    /// when it tracks nothing (no feed).
+    func knownFullVisibility(of id: String) -> Bool? {
+        guard hasVisibilityFeed else { return nil }
+        return fullyVisible.contains(id)
+    }
+
     private func isVisible(_ id: String) -> Bool {
         !hasVisibilityFeed || leafVisibility[id] == true
+    }
+
+    // MARK: Landing without layout shift (design §10)
+
+    /// Whether a title for `key` may be published now: at rest, or without
+    /// a visibility feed, always; while the document scrolls, only when
+    /// every attached leaf holding the key is fully on screen. A leaf
+    /// straddling an edge would reflow across it (a paragraph straddling
+    /// the top edge shifts the whole screen); a leaf taller than the screen
+    /// is never fully on screen, so its titles wait for rest; a leaf built
+    /// off screen (attached, not visible) holds them back too.
+    private func mayPublish(_ key: SmartLinkKey) -> Bool {
+        guard hasVisibilityFeed, isScrolling else { return true }
+        return !leaves.contains { id, leaf in !fullyVisible.contains(id) && leaf.keys.contains(key) }
+    }
+
+    /// Publishes the held titles among `keys` that are in demand and may be
+    /// published now.
+    private func releaseHeld(_ keys: some Sequence<SmartLinkKey>) {
+        for key in keys where demand[key] != nil && entries[key]?.held != nil && mayPublish(key) {
+            publishHeld(key)
+        }
+    }
+
+    private func publishHeld(_ key: SmartLinkKey) {
+        guard let nearby = entries[key]?.publishHeld() else { return }
+        if nearby { counters.prefetchHits += 1 }
+    }
+
+    /// A visible lookup's outcome: published, unless it is a title landing
+    /// while the document scrolls and a leaf holding the key is not fully
+    /// on screen. Then it is held until it may be (`releaseHeld`). A
+    /// failure is published at once: it draws as the prepared text, so it
+    /// moves nothing, and it ends the loading look.
+    private func land(_ key: SmartLinkKey, _ outcome: SmartLinkStage) {
+        let entry = entry(for: key)
+        if outcome.changesDisplay, !mayPublish(key) {
+            entry.hold(outcome, nearby: false)
+            counters.titlesHeld += 1
+        } else {
+            entry.publish(outcome)
+        }
+    }
+
+    // MARK: Delayed loading look (design §10)
+
+    /// A visible call is running: its links show the loading look once it
+    /// has run for `resolvingDelay` (at once when that is zero). A call that
+    /// lands or is cancelled sooner never shows it.
+    private func showResolving(_ key: SmartLinkKey, id: Int) {
+        let delay = timing.resolvingDelay
+        guard delay > .zero else {
+            publishResolving(key)
+            return
+        }
+        let sleep = timing.sleep
+        lookups[key]?.dim = Task { [weak self] in
+            do { try await sleep(delay) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.resolvingDelayEnded(key, id: id)
+        }
+    }
+
+    private func resolvingDelayEnded(_ key: SmartLinkKey, id: Int) {
+        guard let lookup = lookups[key], lookup.id == id, !lookup.prefetch, case .running = lookup.phase else { return }
+        lookups[key]?.dim = nil
+        publishResolving(key)
+    }
+
+    private func publishResolving(_ key: SmartLinkKey) {
+        let entry = entry(for: key)
+        guard entry.stage == .plain, entry.held == nil else { return }
+        entry.publish(.resolving)
+        counters.resolvingShown += 1
+    }
+
+    /// Stops a call's pending loading look.
+    private func cancelDim(_ key: SmartLinkKey) {
+        lookups[key]?.dim?.cancel()
+        lookups[key]?.dim = nil
     }
 
     // MARK: Scroll phase (design §8.2)
@@ -564,6 +758,8 @@ final class SmartLinkCoordinator {
             if let start = scrollStartOffset, offset != start { scrollsDown = offset > start }
             scrollStartOffset = nil
             counters.scrollEnds += 1
+            // Every mode: the titles held while scrolling show now (design §10).
+            releaseHeld(Array(demand.keys))
             guard resolution != .whileScrolling else { return }
             startDemanded()
             startQueued()
@@ -616,7 +812,7 @@ final class SmartLinkCoordinator {
             if count == 1 {
                 nextDemandOrder += 1
                 demandOrder[key] = nextDemandOrder
-                demandStarted(key)
+                demandStarted(key, arrived: true)
             }
         }
         schedulePrefetch()
@@ -637,20 +833,28 @@ final class SmartLinkCoordinator {
     }
 
     /// Demand appeared for `key`. A nearby lookup for it becomes a visible
-    /// one; a nearby result is published at once (no lookup); otherwise a
+    /// one; a held outcome (a nearby result, or a title held while its leaf
+    /// was not fully on screen) is published without a lookup — at once,
+    /// or, while the document scrolls, once every leaf holding the key is
+    /// fully on screen or scrolling stops (design §10); otherwise a
     /// `.plain` key without a lookup dwells — unless the document is
     /// scrolling under a mode that waits for rest. A key whose cancelled
     /// call is still stopping waits for it to end (`finish` starts it again
-    /// then).
-    private func demandStarted(_ key: SmartLinkKey) {
+    /// then). `arrived`: the key just came on screen (counted as a held
+    /// title if it waits), not a re-scan of keys already on screen.
+    private func demandStarted(_ key: SmartLinkKey, arrived: Bool = false) {
         guard resolver != nil else { return }
         if let lookup = lookups[key] {
             if lookup.prefetch { promote(key) }
             return
         }
         let entry = entry(for: key)
-        if entry.publishPrefetched() {
-            counters.prefetchHits += 1
+        if let held = entry.held {
+            if held.changesDisplay, !mayPublish(key) {
+                if arrived { counters.titlesHeld += 1 }
+            } else {
+                publishHeld(key)
+            }
             return
         }
         guard entry.stage == .plain else { return }
@@ -676,10 +880,18 @@ final class SmartLinkCoordinator {
     }
 
     /// Demand for `key` dropped to zero: drop its dwell or queue place, or
-    /// cancel its call (back to `.plain`; the slot frees when the call's
-    /// task ends).
+    /// cancel its call (back to `.plain`, which redraws nothing if the
+    /// loading look never showed; the slot frees when the call's task
+    /// ends). A title held for leaves that have all left the screen stays
+    /// held, so a leaf built later draws it on its first frame and the key
+    /// shows it when it is wanted again; only a loading look it showed is
+    /// cleared (design §10).
     private func demandEnded(_ key: SmartLinkKey) {
-        guard let lookup = lookups[key], !lookup.prefetch else { return }
+        guard let lookup = lookups[key] else {
+            if let entry = entries[key], entry.held != nil { entry.publish(.plain) }
+            return
+        }
+        guard !lookup.prefetch else { return }
         switch lookup.phase {
         case .dwelling(let task):
             task?.cancel()
@@ -689,6 +901,7 @@ final class SmartLinkCoordinator {
             lookups[key] = nil
         case .running(let task):
             task.cancel()
+            cancelDim(key)
             lookups[key]?.phase = .stopping(task)
             entry(for: key).publish(.plain)
         case .stopping:
@@ -746,8 +959,6 @@ final class SmartLinkCoordinator {
             counters.prefetchCalls += 1
             prefetchRunning += 1
             counters.peakPrefetchInFlight = max(counters.peakPrefetchInFlight, prefetchRunning)
-        } else {
-            entry(for: key).publish(.resolving)
         }
         let url = key.url
         // Detached: the resolver runs off the main actor, and so does title
@@ -763,17 +974,22 @@ final class SmartLinkCoordinator {
             await self?.finish(key, id: id, outcome: outcome)
         }
         lookups[key] = Lookup(id: id, generation: generation, phase: .running(task), prefetch: prefetch)
+        guard !prefetch else { return }
+        showResolving(key, id: id)
         // A visible key leaving the queue may be the last visible work a
         // nearby batch waits for.
-        if !prefetch { schedulePrefetch() }
+        schedulePrefetch()
     }
 
     /// A call's task ended. A current call lands its outcome (a nearby one
-    /// unpublished, design §8.5); a cancelled one (stopping, possibly from
-    /// an older generation) only frees its slot, and its key starts over if
-    /// it is in demand again.
+    /// unpublished, design §8.5; a visible title held while its leaf is not
+    /// fully on screen during a scroll, §10); a cancelled one (stopping,
+    /// possibly from an older generation) only frees its slot, and its key
+    /// starts over if it is in demand again. Either way its pending loading
+    /// look is dropped.
     private func finish(_ key: SmartLinkKey, id: Int, outcome: SmartLinkStage) {
         guard let lookup = lookups[key], lookup.id == id else { return }
+        lookup.dim?.cancel()
         switch lookup.phase {
         case .running where lookup.generation == generation:
             lookups[key] = nil
@@ -782,10 +998,10 @@ final class SmartLinkCoordinator {
             if case .resolved = outcome { counters.resolved += 1 } else { counters.failed += 1 }
             if lookup.prefetch {
                 prefetchRunning -= 1
-                entry(for: key).storePrefetched(outcome)
+                entry(for: key).hold(outcome, nearby: true)
                 leaveBatch(key)
             } else {
-                entry(for: key).publish(outcome)
+                land(key, outcome)
             }
         case .running, .stopping:
             lookups[key] = nil
@@ -830,8 +1046,9 @@ final class SmartLinkCoordinator {
     // MARK: Nearby lookups (design §8.5)
 
     /// A nearby lookup's key came on screen: it is a visible lookup now
-    /// (shows `.resolving` if it runs, queues ahead of nearby keys if it
-    /// waits, and scrolling no longer cancels it).
+    /// (shows `.resolving` if it runs for `resolvingDelay` from now, queues
+    /// ahead of nearby keys if it waits, and scrolling no longer cancels
+    /// it).
     private func promote(_ key: SmartLinkKey) {
         guard var lookup = lookups[key], lookup.prefetch else { return }
         switch lookup.phase {
@@ -845,7 +1062,7 @@ final class SmartLinkCoordinator {
             lookup.prefetch = false
             lookups[key] = lookup
             prefetchRunning -= 1
-            entry(for: key).publish(.resolving)
+            showResolving(key, id: lookup.id)
             leaveBatch(key)
         case .dwelling, .stopping:
             // A stopping nearby call restarts as a visible one when it ends.
@@ -977,12 +1194,12 @@ final class SmartLinkCoordinator {
     }
 
     /// No leaf on screen holds it, nothing is looking it up, and it has no
-    /// result (resolved, failed or nearby): dedup, cache and in-flight
-    /// lookups are never asked again.
+    /// result (resolved, failed, nearby or held): dedup, cache and
+    /// in-flight lookups are never asked again.
     private func needsNearbyLookup(_ key: SmartLinkKey) -> Bool {
         guard demand[key] == nil, lookups[key] == nil else { return false }
         guard let entry = entries[key] else { return true }
-        return entry.stage == .plain && entry.prefetched == nil
+        return entry.stage == .plain && entry.held == nil
     }
 
     /// The document's positions, indexed on first use and extended as
@@ -1004,13 +1221,14 @@ final class SmartLinkCoordinator {
     // MARK: Reload
 
     /// A new document is loading (`ADFDocumentModel.load`): bump the
-    /// generation, cancel every dwell, queue place, call and nearby plan,
-    /// and return every entry to `.plain` (dropping nearby results). Cancelled
-    /// calls keep their slots until their tasks end. Leaves and their
-    /// visibility are kept — they describe live views, which detach (or,
-    /// under a reused identity, stay and are asked about again) on their
-    /// own — and keys still in demand start over. The scroll phase is the
-    /// view's, so it is kept too.
+    /// generation, cancel every dwell, queue place, call, pending loading
+    /// look and nearby plan, and return every entry to `.plain` (dropping
+    /// held outcomes: nearby results and held titles). Cancelled calls keep
+    /// their slots until their tasks end. Leaves and their visibility are
+    /// kept — they describe live views, which detach (or, under a reused
+    /// identity, stay and are asked about again) on their own — and keys
+    /// still in demand start over. The scroll phase is the view's, so it is
+    /// kept too.
     func reset() {
         generation += 1
         prefetchTick?.cancel()
@@ -1025,6 +1243,7 @@ final class SmartLinkCoordinator {
                 lookups[key] = nil
             case .running(let task):
                 task.cancel()
+                cancelDim(key)
                 lookups[key]?.phase = .stopping(task)
             case .stopping:
                 break
@@ -1053,8 +1272,15 @@ final class SmartLinkCoordinator {
     var prefetchBatchKeys: Set<SmartLinkKey> { prefetchBatch }
     /// Keys with a nearby lookup (queued, running or stopping) (tests).
     var prefetchingKeys: Set<SmartLinkKey> { Set(lookups.filter { $0.value.prefetch }.keys) }
-    /// The unpublished nearby result of `key` (tests).
-    func prefetchedStage(for key: SmartLinkKey) -> SmartLinkStage? { entries[key]?.prefetched }
+    /// The held (unpublished) outcome of `key`: a nearby result or a held
+    /// title (tests).
+    func heldStage(for key: SmartLinkKey) -> SmartLinkStage? { entries[key]?.held }
+    /// Keys on screen (in demand) whose outcome is held: empty at rest.
+    var heldKeys: Set<SmartLinkKey> { Set(demand.keys.filter { entries[$0]?.held != nil }) }
+    /// Leaves that last reported all of themselves on screen (tests).
+    var fullyVisibleLeafIDs: Set<String> { fullyVisible }
+    /// Keys whose call has a pending loading look (tests).
+    var pendingDimKeys: Set<SmartLinkKey> { Set(lookups.filter { $0.value.dim != nil }.keys) }
 }
 
 private struct ADFSmartLinksKey: EnvironmentKey {

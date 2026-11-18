@@ -68,9 +68,11 @@ extension View {
     /// on disappear (the backstop: a leaf that leaves the render region is
     /// no longer visible), and, from iOS 18 / macOS 15, the leaf's
     /// `onScrollVisibilityChange(threshold: 0.01)` (any point on screen,
-    /// through nested scroll views such as a table's). Visibility is the
-    /// leaf's, not its row's, so a tall list row resolves only the items on
-    /// screen; a prefetched leaf is attached but not visible and asks
+    /// through nested scroll views such as a table's) and
+    /// `onScrollVisibilityChange(threshold: 0.99999)` (all of it on screen,
+    /// design §10: a title landing mid-scroll waits for it). Visibility is
+    /// the leaf's, not its row's, so a tall list row resolves only the items
+    /// on screen; a prefetched leaf is attached but not visible and asks
     /// nothing. A change of coordinator, owner id or keys under a stable
     /// view moves the attachment (and its known visibility) to the new one.
     ///
@@ -115,16 +117,37 @@ struct SmartLinkAttachment: ViewModifier {
             }
     }
 
-    /// The leaf's visibility feed. The `#available` branch sits on a leaf
-    /// with smart links, deep inside its row — never at a lazy stack's
-    /// per-item position, which stays conditional-free (§18; the same shape
-    /// as `ScrollVisibilityGate` on media).
+    /// The full-visibility feed's threshold: the share of the leaf inside
+    /// the scroll view's visible region (its safe area) above which it
+    /// reports "fully on screen". Not 1.0: SwiftUI never reports `true` at
+    /// 1.0, even for a view far inside the viewport (it compares strictly
+    /// above the threshold; measured on iOS 27.1). 0.99999 switches exactly
+    /// where the leaf's frame enters and leaves the visible region, at
+    /// fractional offsets too (measured at 3.25 pt steps, alongside 0.9999,
+    /// 0.999, 0.995 and 0.99, which agreed; 0.95 reported a view with
+    /// 1.7 pt cut off as fully visible). At most 0.001 % of a leaf's height
+    /// can be cut off, far below a pixel; floating-point noise in the frames
+    /// (about 1e-13 pt) is far below that. Proven per renderer in
+    /// `TextKit2SmartLinkTests.fullVisibilityFeedHoldsTitles`.
+    static let fullVisibilityThreshold = 0.99999
+
+    /// The leaf's visibility feeds: any point on screen (demand) and all of
+    /// it on screen (when a title may land mid-scroll, design §10). Both
+    /// write only the coordinator's non-observable state (§16/§20). The
+    /// `#available` branch sits on a leaf with smart links, deep inside its
+    /// row — never at a lazy stack's per-item position, which stays
+    /// conditional-free (§18; the same shape as `ScrollVisibilityGate` on
+    /// media).
     @ViewBuilder
     private func visibilityFeed(_ content: Content) -> some View {
         if #available(iOS 18.0, macOS 15.0, *) {
-            content.onScrollVisibilityChange(threshold: 0.01) { [smartLinks, ownerID] visible in
-                smartLinks?.setLeafVisible(ownerID, visible)
-            }
+            content
+                .onScrollVisibilityChange(threshold: 0.01) { [smartLinks, ownerID] visible in
+                    smartLinks?.setLeafVisible(ownerID, visible)
+                }
+                .onScrollVisibilityChange(threshold: Self.fullVisibilityThreshold) { [smartLinks, ownerID] fully in
+                    smartLinks?.setLeafFullyVisible(ownerID, fully)
+                }
         } else {
             content
         }
@@ -133,10 +156,11 @@ struct SmartLinkAttachment: ViewModifier {
     /// Moves a live leaf's attachment: keys alone change in place; a new
     /// coordinator (the host swapped models) or owner id (`apply(.replace)`
     /// gave the block a new id) detaches from the old and attaches to the
-    /// new, carrying the visibility the old one knew, since a leaf that
-    /// stays on screen reports no new crossing. Under one coordinator the
-    /// new attachment lands first, so a key both show never loses demand
-    /// and its running lookup is not cancelled by the move.
+    /// new, carrying the visibility (any point, and all of it) the old one
+    /// knew, since a leaf that stays on screen reports no new crossing.
+    /// Under one coordinator the new attachment lands first, so a key both
+    /// show never loses demand and its running lookup is not cancelled by
+    /// the move.
     @MainActor
     static func move(from old: Attachment, to new: Attachment) {
         if old.coordinator === new.coordinator, old.ownerID == new.ownerID {
@@ -144,12 +168,13 @@ struct SmartLinkAttachment: ViewModifier {
             return
         }
         let visible = old.coordinator?.knownVisibility(of: old.ownerID)
+        let fully = old.coordinator?.knownFullVisibility(of: old.ownerID)
         if old.coordinator === new.coordinator {
-            new.coordinator?.attach(leaf: new.ownerID, keys: new.keys, visible: visible)
+            new.coordinator?.attach(leaf: new.ownerID, keys: new.keys, visible: visible, fullyVisible: fully)
             old.coordinator?.detach(leaf: old.ownerID)
         } else {
             old.coordinator?.detach(leaf: old.ownerID)
-            new.coordinator?.attach(leaf: new.ownerID, keys: new.keys, visible: visible)
+            new.coordinator?.attach(leaf: new.ownerID, keys: new.keys, visible: visible, fullyVisible: fully)
         }
     }
 }

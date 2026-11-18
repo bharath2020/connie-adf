@@ -8,6 +8,15 @@ import Foundation
 /// The scroll phase that `.afterScrolling` and `.afterScrollingWithNearby`
 /// wait on is reported from iOS 18 / macOS 15. Before that both behave as
 /// `.whileScrolling`.
+///
+/// In every mode:
+/// - a link shows its loading look only once its lookup has run for
+///   300 ms: a link scrolled past sooner, or a lookup that answers sooner,
+///   never shows it;
+/// - from iOS 18 / macOS 15, a title that arrives while the reader scrolls
+///   is shown once the paragraph showing the link is fully on screen, or
+///   when scrolling stops, so text never jumps across the screen's edge (a
+///   paragraph usually gets shorter under its title).
 public enum ADFSmartLinkResolution: String, CaseIterable, Sendable, Identifiable {
     /// Links are looked up as they come on screen, also while the reader
     /// scrolls (after a short dwell, so a fling past a link asks nothing).
