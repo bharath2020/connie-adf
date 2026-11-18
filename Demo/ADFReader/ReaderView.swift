@@ -16,6 +16,11 @@ import ADFYouTube
 /// on the same screen of text. The same menu picks when smart links are
 /// looked up (`ADFSmartLinkResolution`), also live: the document's
 /// coordinator takes the new mode with no row invalidated.
+///
+/// The toolbar shows the active renderer as a coloured badge (orange
+/// SwiftUI, green TextKit 2), and the menu's "Tint Text by Engine" switch
+/// fills every text leaf with the colour of the engine that actually drew
+/// it (`View.adfEngineTint`), so SwiftUI fallbacks under TextKit 2 show.
 struct ReaderView: View {
     let source: DocumentSource
     let options: LaunchOptions
@@ -40,6 +45,9 @@ struct ReaderView: View {
     /// `SmartLinkResolutionPreference`).
     @AppStorage(SmartLinkResolutionPreference.key)
     private var smartLinkResolution: ADFSmartLinkResolution = .whileScrolling
+    /// Persisted "Tint Text by Engine" switch; `-engineTint` /
+    /// `-rendererReset` seed it at launch (see `EngineTintPreference`).
+    @AppStorage(EngineTintPreference.key) private var engineTint = false
     /// Whether the last TextKit 2 pick was a memory-control pick
     /// (`-rebuildControlPicks`, `RebuildControl`).
     @State private var rebuildControl = false
@@ -79,6 +87,7 @@ struct ReaderView: View {
                         smartLinkResolution: smartLinkResolution)
             .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
             .adfRebuildControl(rebuildControl)
+            .adfEngineTint(engineTint)
             .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
             .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -196,8 +205,9 @@ struct ReaderView: View {
         }
     }
 
-    /// The label is the active renderer's name as plain text, so a screen
-    /// recording shows which engine is drawing without opening the menu.
+    /// The label is the active renderer's badge (`RendererBadge`): its name
+    /// on its colour, so a screen recording shows which engine is drawing
+    /// without opening the menu.
     private var rendererMenu: some View {
         Menu {
             Section("Text Renderer") {
@@ -233,6 +243,15 @@ struct ReaderView: View {
                     .accessibilityIdentifier("smartlink-resolution-\(mode.rawValue)")
                 }
             }
+            // The legend is the toggle's subtitle, in the colours'
+            // own names (`ADFEngineTint.colorName`).
+            Section("Engine Tint") {
+                Toggle(isOn: engineTintBinding) {
+                    Text("Tint Text by Engine")
+                    Text(Self.engineTintLegend)
+                }
+                .accessibilityIdentifier("engine-tint-toggle")
+            }
             Section {
                 Toggle(
                     "Frame Rate HUD",
@@ -247,14 +266,27 @@ struct ReaderView: View {
                 .accessibilityIdentifier("renderer-about")
             }
         } label: {
-            Text(activeRenderer.displayName)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .fixedSize()
-                .accessibilityIdentifier("renderer-active")
+            RendererBadge(renderer: activeRenderer)
         }
         .accessibilityIdentifier("renderer-menu")
+        .accessibilityValue(RendererBadge.tint(for: activeRenderer).colorName)
         .accessibilityHint("Chooses the text renderer")
+    }
+
+    /// "Orange: SwiftUI · Green: TextKit 2 · Blue: TextKit 2 row on TextKit
+    /// 1 (links)".
+    private static let engineTintLegend = ADFEngineTint.allCases
+        .map { "\($0.colorName.capitalized): \($0.displayName)" }
+        .joined(separator: " · ")
+
+    private var engineTintBinding: Binding<Bool> {
+        Binding(
+            get: { engineTint },
+            set: { on in
+                EngineTintPreference.userChose()
+                engineTint = on
+            }
+        )
     }
 
     private static func choiceIdentifier(for renderer: ADFTextRenderer) -> String {
@@ -420,6 +452,36 @@ struct ReaderView: View {
         let elapsed = start.duration(to: ContinuousClock.now)
         let (seconds, attoseconds) = elapsed.components
         return Double(seconds) * 1_000 + Double(attoseconds) / 1e15
+    }
+}
+
+/// The renderer menu's label: the active renderer's name, white on its
+/// engine's colour (`ADFEngineTint`: orange SwiftUI, green TextKit 2), the
+/// same colours "Tint Text by Engine" fills text with. The name stays the
+/// label of `renderer-active` (and of `renderer-menu`) for the UI tests; the
+/// colour's name is its accessibility value.
+struct RendererBadge: View {
+    let renderer: ADFTextRenderer
+
+    static func tint(for renderer: ADFTextRenderer) -> ADFEngineTint {
+        switch renderer {
+        case .swiftUI: return .swiftUI
+        case .textKit2: return .textKit2
+        }
+    }
+
+    var body: some View {
+        let tint = Self.tint(for: renderer)
+        Text(renderer.displayName)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.color, in: Capsule())
+            .accessibilityIdentifier("renderer-active")
+            .accessibilityValue(tint.colorName)
     }
 }
 

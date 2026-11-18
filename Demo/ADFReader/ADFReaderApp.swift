@@ -42,6 +42,16 @@ import UIKit
 /// - `-rendererReset` removes that key first, so a UI test always starts on
 ///   SwiftUI regardless of what a previous run left behind. With both flags
 ///   the reset applies first, then `-textkit2`.
+/// - `-engineTint` turns on the renderer menu's "Tint Text by Engine"
+///   switch (`View.adfEngineTint`) for this launch: every text leaf is
+///   filled with the colour of the engine that drew it (`ADFEngineTint`:
+///   orange SwiftUI, green TextKit 2, blue a TextKit 2 row whose links
+///   TextKit 1 lays out), so the text that stays on SwiftUI under TextKit 2
+///   stands out. The toolbar's renderer badge uses the same colours. It
+///   seeds the persisted switch (`adf.engineTint.enabled`) the way
+///   `-textkit2` seeds the renderer: written with an automation mark and
+///   removed on the next launch without the flag; `-rendererReset` clears
+///   it too.
 /// - `-rendererStats` prints one `RENDERER_STATS …` line (active renderer,
 ///   live/cumulative TextKit 2 row counters, coverage counts) right
 ///   after READY and again right after `SCROLL_METRICS` — the perf gate's
@@ -172,6 +182,9 @@ struct LaunchOptions: Sendable {
     /// `-smartLinkResolution <name>`: an `ADFSmartLinkResolution` raw value
     /// (`SmartLinkResolutionPreference` validates and applies it).
     var smartLinkResolution: String?
+    /// `-engineTint`: tint text by the engine that drew it
+    /// (`EngineTintPreference` applies it).
+    var engineTint = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -200,6 +213,8 @@ struct LaunchOptions: Sendable {
                 textKit2 = true
             case "-rendererReset":
                 rendererReset = true
+            case "-engineTint":
+                engineTint = true
             case "-rendererStats":
                 rendererStats = true
             case "-switchDuringLoad":
@@ -254,6 +269,7 @@ struct ADFReaderApp: App {
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)
         SmartLinkResolutionPreference.apply(options)
+        EngineTintPreference.apply(options)
         RebuildControl.picksLeft = options.rebuildControlPicks ?? 0
         RebuildControl.configured = options.rebuildControlPicks != nil
         InteractionProbe.enabled = options.interactionProbe
