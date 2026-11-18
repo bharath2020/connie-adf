@@ -90,26 +90,27 @@ enum SmartLinkResolutionPreference {
     }
 }
 
-/// The persisted "Tint Text by Engine" switch (`View.adfEngineTint`), shared
-/// by `ReaderView`'s `@AppStorage` menu toggle and the `-engineTint` launch
-/// argument. A missing key means off.
+/// The persisted "Identify Renderer" switch
+/// (`ADFDocumentView(identifiesRenderer:)`), shared by `ReaderView`'s
+/// `@AppStorage` menu toggle and the `-identifyRenderer` launch argument
+/// (`-engineTint` is its old name, still accepted). A missing key means off.
 ///
 /// It follows `RendererPreference` exactly: the flag writes `true` with an
 /// automation mark, the next launch without the flag removes a value
 /// automation wrote, a menu toggle clears the mark and persists, and
 /// `-rendererReset` removes the value. The flag is not spelled like the
 /// key, so `NSArgumentDomain` never shadows it.
-enum EngineTintPreference {
-    static let key = "adf.engineTint.enabled"
-    static let automationKey = "adf.engineTint.setByAutomation"
+enum RendererIdentityPreference {
+    static let key = "adf.rendererIdentity.enabled"
+    static let automationKey = "adf.rendererIdentity.setByAutomation"
 
     /// Runs from `ADFReaderApp.init`, before any view reads the key.
     static func apply(_ options: LaunchOptions, to defaults: UserDefaults = .standard) {
-        if options.rendererReset || (!options.engineTint && defaults.bool(forKey: automationKey)) {
+        if options.rendererReset || (!options.identifyRenderer && defaults.bool(forKey: automationKey)) {
             defaults.removeObject(forKey: key)
             defaults.removeObject(forKey: automationKey)
         }
-        if options.engineTint {
+        if options.identifyRenderer {
             defaults.set(true, forKey: key)
             defaults.set(true, forKey: automationKey)
         }

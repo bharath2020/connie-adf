@@ -17,10 +17,11 @@ import ADFYouTube
 /// looked up (`ADFSmartLinkResolution`), also live: the document's
 /// coordinator takes the new mode with no row invalidated.
 ///
-/// The toolbar shows the active renderer as a coloured badge (orange
-/// SwiftUI, green TextKit 2), and the menu's "Tint Text by Engine" switch
-/// fills every text leaf with the colour of the engine that actually drew
-/// it (`View.adfEngineTint`), so SwiftUI fallbacks under TextKit 2 show.
+/// The menu's "Identify Renderer" switch makes the renderer identify itself
+/// (`ADFDocumentView(identifiesRenderer:)`): every text block shows the
+/// engine that drew it, so SwiftUI fallbacks under TextKit 2 show, and the
+/// toolbar badge shows the renderer's own report of the text on screen
+/// (`RendererBadge`), never the menu's setting.
 struct ReaderView: View {
     let source: DocumentSource
     let options: LaunchOptions
@@ -45,9 +46,9 @@ struct ReaderView: View {
     /// `SmartLinkResolutionPreference`).
     @AppStorage(SmartLinkResolutionPreference.key)
     private var smartLinkResolution: ADFSmartLinkResolution = .whileScrolling
-    /// Persisted "Tint Text by Engine" switch; `-engineTint` /
-    /// `-rendererReset` seed it at launch (see `EngineTintPreference`).
-    @AppStorage(EngineTintPreference.key) private var engineTint = false
+    /// Persisted "Identify Renderer" switch; `-identifyRenderer` /
+    /// `-rendererReset` seed it at launch (see `RendererIdentityPreference`).
+    @AppStorage(RendererIdentityPreference.key) private var identifiesRenderer = false
     /// Whether the last TextKit 2 pick was a memory-control pick
     /// (`-rebuildControlPicks`, `RebuildControl`).
     @State private var rebuildControl = false
@@ -84,10 +85,10 @@ struct ReaderView: View {
                         mentionContent: { AnyView(ProfileCard(name: $0)) },
                         textRenderer: activeRenderer,
                         smartLinkResolver: smartLinkResolver,
-                        smartLinkResolution: smartLinkResolution)
+                        smartLinkResolution: smartLinkResolution,
+                        identifiesRenderer: identifiesRenderer)
             .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
             .adfRebuildControl(rebuildControl)
-            .adfEngineTint(engineTint)
             .dynamicTypeSize(systemTypeSize.shifted(by: fontSizeStep))
             .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -205,9 +206,10 @@ struct ReaderView: View {
         }
     }
 
-    /// The label is the active renderer's badge (`RendererBadge`): its name
-    /// on its colour, so a screen recording shows which engine is drawing
-    /// without opening the menu.
+    /// The label is `RendererBadge`: with "Identify Renderer" on, the
+    /// renderer's own report of the text on screen, on the reporting
+    /// engine's colour, so a screen recording shows which engine is drawing
+    /// without opening the menu; off, the setting's name as plain text.
     private var rendererMenu: some View {
         Menu {
             Section("Text Renderer") {
@@ -225,6 +227,12 @@ struct ReaderView: View {
                     }
                     .accessibilityIdentifier(Self.choiceIdentifier(for: renderer))
                 }
+                // The legend is the toggle's subtitle.
+                Toggle(isOn: identifiesRendererBinding) {
+                    Text("Identify Renderer")
+                    Text(Self.identifyLegend)
+                }
+                .accessibilityIdentifier("renderer-identify")
             }
             // Each option is labelled with the API's own name
             // (`ADFSmartLinkResolution.displayName`).
@@ -243,15 +251,6 @@ struct ReaderView: View {
                     .accessibilityIdentifier("smartlink-resolution-\(mode.rawValue)")
                 }
             }
-            // The legend is the toggle's subtitle, in the colours'
-            // own names (`ADFEngineTint.colorName`).
-            Section("Engine Tint") {
-                Toggle(isOn: engineTintBinding) {
-                    Text("Tint Text by Engine")
-                    Text(Self.engineTintLegend)
-                }
-                .accessibilityIdentifier("engine-tint-toggle")
-            }
             Section {
                 Toggle(
                     "Frame Rate HUD",
@@ -266,25 +265,24 @@ struct ReaderView: View {
                 .accessibilityIdentifier("renderer-about")
             }
         } label: {
-            RendererBadge(renderer: activeRenderer)
+            RendererBadge(report: model.rendererReport, setting: activeRenderer)
         }
         .accessibilityIdentifier("renderer-menu")
-        .accessibilityValue(RendererBadge.tint(for: activeRenderer).colorName)
         .accessibilityHint("Chooses the text renderer")
     }
 
-    /// "Orange: SwiftUI · Green: TextKit 2 · Blue: TextKit 2 row on TextKit
-    /// 1 (links)".
-    private static let engineTintLegend = ADFEngineTint.allCases
-        .map { "\($0.colorName.capitalized): \($0.displayName)" }
-        .joined(separator: " · ")
+    /// "Each text block shows the engine that drew it: orange SwiftUI ·
+    /// green TextKit 2 · blue TextKit 1 (a TextKit 2 row with links)".
+    private static let identifyLegend = "Each text block shows the engine that drew it: "
+        + ADFTextEngine.allCases.map { "\(RendererBadge.colorName($0)) \($0.displayName)" }.joined(separator: " · ")
+        + " (a TextKit 2 row with links)"
 
-    private var engineTintBinding: Binding<Bool> {
+    private var identifiesRendererBinding: Binding<Bool> {
         Binding(
-            get: { engineTint },
+            get: { identifiesRenderer },
             set: { on in
-                EngineTintPreference.userChose()
-                engineTint = on
+                RendererIdentityPreference.userChose()
+                identifiesRenderer = on
             }
         )
     }
@@ -455,33 +453,75 @@ struct ReaderView: View {
     }
 }
 
-/// The renderer menu's label: the active renderer's name, white on its
-/// engine's colour (`ADFEngineTint`: orange SwiftUI, green TextKit 2), the
-/// same colours "Tint Text by Engine" fills text with. The name stays the
-/// label of `renderer-active` (and of `renderer-menu`) for the UI tests; the
-/// colour's name is its accessibility value.
+/// The renderer menu's label. With "Identify Renderer" on it reads only the
+/// renderer's own report (`ADFDocumentModel.rendererReport`), never the
+/// menu's setting: the engine that drew the text on screen, white on that
+/// engine's colour ("TextKit 2" while any TextKit row is on screen, else
+/// "SwiftUI"), and beside "TextKit 2" an orange count of the SwiftUI-drawn
+/// blocks on screen. Off, or before the first report, there is no report:
+/// the label is the setting's name as plain text, as it always was.
+///
+/// `renderer-active`'s label is the name shown (so `ReaderDriver`
+/// still finds the renderer by it); with a report, its value is the counts
+/// ("TextKit 2 9, TextKit 1 1, SwiftUI 4"). It is the only view that
+/// observes the report: a change re-evaluates this label, nothing else.
 struct RendererBadge: View {
-    let renderer: ADFTextRenderer
+    let report: ADFRendererReport
+    let setting: ADFTextRenderer
 
-    static func tint(for renderer: ADFTextRenderer) -> ADFEngineTint {
-        switch renderer {
-        case .swiftUI: return .swiftUI
-        case .textKit2: return .textKit2
+    static func colorName(_ engine: ADFTextEngine) -> String {
+        switch engine {
+        case .swiftUI: return "orange"
+        case .textKit2: return "green"
+        case .textKit1: return "blue"
         }
     }
 
+    /// The engine the badge names: TextKit 2 while any TextKit row (native
+    /// or TextKit 1-backed) is on screen, else SwiftUI; nil with no report.
+    static func shown(_ report: ADFRendererReport) -> ADFTextEngine? {
+        guard report.isIdentifying else { return nil }
+        if report.count(.textKit2) + report.count(.textKit1) > 0 { return .textKit2 }
+        return report.count(.swiftUI) > 0 ? .swiftUI : nil
+    }
+
+    static func summary(_ report: ADFRendererReport) -> String {
+        ADFTextEngine.allCases.filter { report.count($0) > 0 }
+            .map { "\($0.displayName) \(report.count($0))" }
+            .joined(separator: ", ")
+    }
+
     var body: some View {
-        let tint = Self.tint(for: renderer)
-        Text(renderer.displayName)
-            .font(.subheadline.weight(.semibold))
+        if let shown = Self.shown(report) {
+            let fallbacks = shown == .swiftUI ? 0 : report.count(.swiftUI)
+            HStack(spacing: 4) {
+                Self.capsule(shown.displayName, colour: shown.color, font: .subheadline.weight(.semibold))
+                if fallbacks > 0 {
+                    Self.capsule("\(fallbacks)", colour: ADFTextEngine.swiftUI.color, font: .caption.weight(.bold))
+                }
+            }
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(shown.displayName)
+            .accessibilityValue(Self.summary(report))
+            .accessibilityIdentifier("renderer-active")
+        } else {
+            Text(setting.displayName)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityIdentifier("renderer-active")
+        }
+    }
+
+    private static func capsule(_ text: String, colour: Color, font: Font) -> some View {
+        Text(text)
+            .font(font)
             .foregroundStyle(.white)
             .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(tint.color, in: Capsule())
-            .accessibilityIdentifier("renderer-active")
-            .accessibilityValue(tint.colorName)
+            .background(colour, in: Capsule())
     }
 }
 
