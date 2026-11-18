@@ -84,4 +84,32 @@ final class LifecycleSupportTests: XCTestCase {
         XCTAssertFalse(shift.proven)
         XCTAssertEqual(shift.measured, 0)
     }
+
+    /// K7's per-expand limits are the M2 formula over each expand's two
+    /// B-only pilot samples (open, reopen), rounded to the millisecond and
+    /// never looser than the pooled limit.
+    func testK7PerExpandLimitsFollowThePilot() throws {
+        let pooled = try XCTUnwrap(ContainerLifecycleLimits.k7OpenSeconds)
+        let samples = ContainerLifecycleLimits.k7PilotSamples
+        XCTAssertEqual(samples.count, 10)
+        let derived = stride(from: 0, to: samples.count, by: 2).map { index -> Double in
+            let limit = ContainerLifecycleLimits.formula(Array(samples[index ..< index + 2])) ?? .infinity
+            return min((limit * 1000).rounded() / 1000, pooled)
+        }
+        XCTAssertEqual(ContainerLifecycleLimits.k7OpenSecondsPerExpand.count, 5)
+        for (frozen, expected) in zip(ContainerLifecycleLimits.k7OpenSecondsPerExpand, derived) {
+            XCTAssertEqual(frozen, expected, accuracy: 0.0005)
+            XCTAssertLessThanOrEqual(frozen, pooled)
+        }
+    }
+
+    /// The M2 flip limit is the M2 formula over its B-only pilot samples,
+    /// rounded to the millisecond.
+    func testM2FlipLimitFollowsThePilot() throws {
+        let frozen = try XCTUnwrap(ContainerLifecycleLimits.m2FlipSeconds)
+        let samples = ContainerLifecycleLimits.m2FlipPilotSamples
+        XCTAssertEqual(samples.count, 5)
+        let limit = try XCTUnwrap(ContainerLifecycleLimits.formula(samples))
+        XCTAssertEqual(frozen, (limit * 1000).rounded() / 1000, accuracy: 0.0005)
+    }
 }

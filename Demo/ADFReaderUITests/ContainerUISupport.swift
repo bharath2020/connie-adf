@@ -290,11 +290,21 @@ enum CaptionsParity {
     static func fraction(_ index: Int) -> String { containerFraction(index, of: preparedBlocks) }
 }
 
-/// `containers-dense`: 840 top-level containers; container i's first leaf
-/// starts `KD-<iiii>`.
+/// `containers-dense`: 840 top-level containers (840 prepared blocks: it
+/// has no table), 40 of them closed expands titled `KD-EXPAND-<nn>`; every
+/// other container's first leaf starts `KD-<nnnn>`, numbered over the
+/// non-expand containers only (index 838 is KD-0798).
 enum ContainersDense {
     static let fixture = "containers-dense"
     static let first = "KD-0000"
+    static let preparedBlocks = 840
+    /// The panel at index 838 (a warning panel of three paragraphs) and its
+    /// first paragraph: in the last of the seventeen 50-block chunks the
+    /// document streams in.
+    static let lastPanelIndex = 838
+    static let lastPanel = ContainerLeaf("KD-0798", "0.838.0")
+
+    static func fraction(_ index: Int) -> String { containerFraction(index, of: preparedBlocks) }
 }
 
 // MARK: - Interaction probe (`-interactionProbe`)
@@ -382,6 +392,40 @@ struct ContainerDriver {
     func isSwiftUI(_ leaf: ContainerLeaf, timeout: TimeInterval = ContainerDriver.engineTimeout) -> Bool {
         let row = textKit2Row(owner: leaf.owner)
         return !row.exists || reader.waitForDisappearance(of: row, timeout: timeout)
+    }
+
+    /// A search match's per-owner fallback: `leaf`'s text is in the tree
+    /// and at least partly in the viewport, and no TextKit 2 row owned by
+    /// it is (waiting up to `timeout` for one to leave). Unlike
+    /// `isSwiftUI`, a text that is not there, or not on screen, never
+    /// passes. nil: it holds; otherwise what failed.
+    func searchFallbackProblem(_ leaf: ContainerLeaf, timeout: TimeInterval = ContainerDriver.engineTimeout) -> String? {
+        guard element(leaf).waitForExistence(timeout: 5) else { return "\(leaf): its text is not in the tree" }
+        guard isSwiftUI(leaf, timeout: timeout) else { return "\(leaf) is still a TextKit 2 row while highlighted" }
+        // No TextKit 2 row of the owner is left, so the element is its
+        // SwiftUI text.
+        let text = element(leaf)
+        guard text.exists else { return "\(leaf): its text left the tree with its TextKit 2 row" }
+        guard isPartlyShown(text) else {
+            return "\(leaf): its SwiftUI text is not on screen (frame \(text.frame), viewport \(reader.viewport))"
+        }
+        return nil
+    }
+
+    /// A match's neighbour keeps TextKit 2: brings `leaf` at least partly
+    /// into view first (drags of `step` points, > 0 toward the end, at most
+    /// `maxDrags`; once it is in the tree they step toward it), then it must
+    /// be its owner's TextKit 2 row. nil: it holds; otherwise what failed.
+    func searchNeighbourProblem(_ leaf: ContainerLeaf, step: CGFloat, maxDrags: Int = 6) -> String? {
+        if !isPartlyShown(element(leaf)) {
+            var drags = 0
+            while !isPartlyShown(element(leaf)), drags < maxDrags {
+                _ = scroll(by: step, until: element(leaf), maxDrags: 1)
+                drags += 1
+            }
+        }
+        guard isPartlyShown(element(leaf)) else { return "\(leaf): the neighbour could not be brought into view" }
+        return isTextKit2(leaf) ? nil : "\(leaf) left TextKit 2 (the fallback is per owner)"
     }
 
     /// The engine `leaf` must have in an arm: its own TextKit 2 row under

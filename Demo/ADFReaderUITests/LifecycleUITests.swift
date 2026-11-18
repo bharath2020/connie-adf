@@ -341,7 +341,7 @@ final class LifecycleUITests: XCTestCase {
         }
 
         let scroll = app.scrollViews.firstMatch
-        var flings: [String: Any] = [:]
+        var flings: KFlings?
         if let expands {
             flings = kFlingEndToEnd(reader, end: ContainersExpand.end, start: expands.startLabel, rounds: 3)
         } else {
@@ -408,7 +408,7 @@ final class LifecycleUITests: XCTestCase {
         // reads runningForeground at every stop on the simulator.
         let leftForeground = unconfirmed.isEmpty
         let horizontalOK = horizontal.map { $0.ok(textKit2: textKit2, maxSettle: Self.maxSettleSeconds) } ?? true
-        let expandsOK = (expands?.ok ?? true) && (walk?.ok ?? true)
+        let expandsOK = (expands?.ok ?? true) && (walk?.ok ?? true) && (flings?.ok ?? true)
         let pass = flingOK && thrashOK && leftForeground && growth <= Self.maxGrowthKB && cpuMean <= 2.0
             && rendererKept && horizontalOK && expandsOK
         let check = codeProof ? "C5" : containerProof ? "K10" : !openExpands.isEmpty ? "K5"
@@ -428,11 +428,13 @@ final class LifecycleUITests: XCTestCase {
         }
         if let expands {
             figures["open_expands"] = expands.figures
-            figures["end_to_end_flings"] = flings
+            figures["end_to_end_flings"] = flings?.figures ?? [:]
+            figures["end_to_end_fling_failures"] = flings?.failures ?? []
             figures["walk_after_fling"] = walk?.figures ?? [:]
         }
         try agent.record("\(check) fling + thrash + 60 s soak (\(fixture), \(arm))", pass: pass, figures)
         XCTAssertTrue(expands?.ok ?? true, "opening the expands: \(expands?.failures ?? [])")
+        XCTAssertTrue(flings?.ok ?? true, "the end-to-end flings: \(flings?.failures ?? [])")
         XCTAssertTrue(walk?.ok ?? true, "after the fling: \(walk?.failures ?? [])")
         XCTAssertTrue(flingOK, "CPU did not settle within 5 s after the fling: \(fling.samples)")
         XCTAssertTrue(horizontalOK, "horizontal fling inside a wide code block: \(horizontal?.figures ?? [:])")
@@ -2794,13 +2796,16 @@ extension LifecycleUITests {
         reader.pause()
     }
 
-    /// The live counters (About) and the census of one snapshot, with the
-    /// §6.5 cross-check and §8.4's on-window identity
-    /// `tk2Live − tk2OffWindow == census rows`.
+    /// The live counters (About, one visit) and the census of one
+    /// snapshot, with the census-only §6.5 cross-check (`cross_check`:
+    /// its failures, gated by the callers) and §8.4's on-window identity
+    /// `tk2Live − tk2OffWindow == census rows`, recorded only: call C22
+    /// disproved it (rows the lazy stack keeps beyond the viewport have a
+    /// window but are not in the census).
     private func kCounters(_ reader: ReaderDriver) throws -> [String: Any] {
-        let live = reader.liveTextKit2Rows(until: { _ in true }, settled: true) ?? -1
         let counters = reader.liveRowCounters()
         let snapshot = try reader.documentSnapshot()
+        let live = counters.total ?? -1
         let offWindow = counters.offWindow ?? -1
         return [
             "tk2_live": live, "list_live": counters.list ?? -1, "code_live": counters.code ?? -1,
@@ -2828,7 +2833,10 @@ extension LifecycleUITests {
     }
 
     /// K1 (plan §8.3): one launch on containers-parity, five ON/OFF round
-    /// trips at each of a deep multi-child panel (0.11), a three-level
+    /// trips at each of the first four palette panels (0.1–0.4; the plan's
+    /// multi-child panel 0.11 holds headings, so its whole body stays on
+    /// SwiftUI in both arms, call C18's `panelKeepsRenderer`, and has no
+    /// engine to swap), a three-level
     /// quote (0.29), the 25/75 columns (0.46) and an open outer expand with
     /// its nested expand open (0.58); then one launch on captions-parity at
     /// a caption (0.3.0). At every switch: the landmark's leaves are drawn
@@ -2843,9 +2851,12 @@ extension LifecycleUITests {
         typealias KP = ContainersParity
         let outer = KP.expandOuter
         let parity: [KLandmark] = [
-            KLandmark(name: "panel 0.11", leaves: [KP.panelP1, KP.panelP2, KP.panelP3], follower: KP.afterPanels) { driver in
+            KLandmark(name: "panels 0.1-0.4",
+                      leaves: [ContainerLeaf("KP-PANEL-INFO", "0.1.0"), ContainerLeaf("KP-PANEL-NOTE", "0.2.0"),
+                               ContainerLeaf("KP-PANEL-TIP", "0.3.0"), ContainerLeaf("KP-PANEL-WARNING", "0.4.0")],
+                      follower: ContainerLeaf("KP-PANEL-ERROR", "0.5.0")) { driver in
                 driver.jump(toHeading: KP.s1, settleDrag: 0)
-                return driver.scroll(by: 300, until: driver.element(KP.afterPanels))
+                return driver.scroll(by: 300, until: driver.element(ContainerLeaf("KP-PANEL-ERROR", "0.5.0")))
             },
             KLandmark(name: "quote 0.29", leaves: [KP.quoteOuter, KP.quoteInner, KP.quoteInnermost, KP.quoteOuterAfter],
                       follower: KP.afterQuotes) { driver in
@@ -2957,9 +2968,12 @@ extension LifecycleUITests {
     /// no-switch SwiftUI control trip (twelve 600 pt drags toward the top,
     /// far past the render region, and back); forward: ON in place, away,
     /// OFF there, back; reverse: OFF in place, away, ON there, back. At
-    /// each far point the expand's leaves have left the tree and the live
-    /// rows are what the census shows (`tk2Live − tk2OffWindow == census`:
-    /// the open row collapsed and released its views). Back: both titles
+    /// each far point the expand's leaves have left the tree (the open row
+    /// collapsed) and the census passes its census-only cross-check
+    /// (`TextKit2RowCensus.crossCheck`: each class within its counter, the
+    /// census plus the off-window rows within tk2Live); the identity
+    /// `tk2Live − tk2OffWindow == census` is recorded, not gated (call
+    /// C22). Back: both titles
     /// still read "Expanded" (the model's open state), every body leaf is
     /// drawn by the arm's engine (its own owner under TextKit 2), and the
     /// leaves' tops, measured from the outer title, are within 2 px of the
@@ -2992,8 +3006,8 @@ extension LifecycleUITests {
             let alive = leaves.filter { driver.element($0).exists }.map(\.sentinel)
             if !alive.isEmpty { failures.append("\(name): still in the tree far away: \(alive)") }
             let counters = try kCounters(reader)
-            if counters["on_window_identity"] as? Bool != true {
-                failures.append("\(name): live rows are not the census far away: \(counters)")
+            if let check = counters["cross_check"] as? [String], !check.isEmpty {
+                failures.append("\(name): the census far away: \(check) (\(counters))")
             }
             return ["alive_far": alive, "counters_far": counters]
         }
@@ -3143,19 +3157,29 @@ extension LifecycleUITests {
     /// 25/75 columns (0.46; `-fontSizeStep 0`). An excursion to the top
     /// and back first caches the distant container roots as spacers. Then a
     /// no-change control (the same pause and re-anchor without a change),
-    /// a rotation round trip and Text Size 0 → 3 → 0, each measured from
-    /// KP-COL25-A after re-aligning it (the rotation can re-anchor the
-    /// viewport in both arms, as on list-dense): drift ≤ the arm's control
-    /// drift + 2 px. The column layout (side by side or stacked) is recorded
-    /// before, rotated and after; a phone stays stacked in both
-    /// orientations, so the side-by-side boundary is crossed only on a
-    /// regular-width device (recorded, `crossed_boundary`). The column
-    /// text is TextKit 2 under the switch only while the columns stack (no
-    /// family keeps the renderer side by side, PR 4 step 4), so the
-    /// engine each check expects follows the layout of the moment. The live
-    /// TextKit 2 row count after each size step is at most the count before
-    /// it + `unshownRowAllowance` (no mass re-materialisation, ADR §16), and
-    /// CPU settles ≤ 2 % within 5 s after each change. Passes after step 4.
+    /// a rotation round trip, Text Size 0 → 3 → 0 and the column boundary
+    /// leg, Text Size 0 → 4 → 0: +4 is accessibility1 from the system's
+    /// large, where `LayoutColumnsView` stacks at every width. Each round
+    /// trip is measured from KP-COL25-A after re-aligning it (the rotation
+    /// can re-anchor the viewport in both arms, as on list-dense): drift ≤
+    /// the arm's control drift + 2 px. The column text is TextKit 2 under
+    /// the switch only while the columns stack (no family keeps the
+    /// renderer side by side, PR 4 step 4), so the engine every tracked
+    /// leaf in the tree must have follows the layout of the moment; it is
+    /// asserted at every stage (parked, control, rotated, back, after the
+    /// size steps, at accessibility1 and back), the anchor in the tree at
+    /// each but the rotated one. Where the columns sit side by side at
+    /// size 0 (a regular-width device: the iPad), the boundary leg must
+    /// cross it both ways (side by side → stacked → side by side, gated
+    /// `crossed_boundary`), so the column text changes engine twice under
+    /// the switch; a compact-width device stacks at every size and
+    /// orientation, and records the boundary as not crossable there. Live
+    /// TextKit 2 rows: after Text Size 3 and back at most the count before
+    /// + `unshownRowAllowance` (no mass re-materialisation, ADR §16); after
+    /// the boundary leg back at most its own starting count + the same
+    /// allowance (the rows the stacked columns made are released; the count
+    /// at accessibility1 is recorded). CPU settles ≤ 2 % within 5 s after
+    /// each change. Passes after step 4.
     func testK3WidthAndTypeSizeChangesInContainers() throws {
         let agent = try HostAgent.fromEnvironment()
         typealias KP = ContainersParity
@@ -3172,9 +3196,15 @@ extension LifecycleUITests {
             kAway(reader)
             try park(reader, agent)
             let scale = reader.pixelScale()
+            var armFailures: [String] = []
+            var stages: [[String: Any]] = []
+            /// Side by side, the right column shares the left's row, so it
+            /// is in the tree whenever the left one is: a left column
+            /// without the right one beside it is stacked.
             func layout() -> String {
-                guard let sideBySide = driver.columnsSideBySide(KP.col25A, KP.col75A) else { return "unknown" }
-                return sideBySide ? "side-by-side" : "stacked"
+                guard driver.element(KP.col25A).exists else { return "unknown" }
+                guard driver.element(KP.col75A).exists else { return "stacked" }
+                return driver.columnsSideBySide(KP.col25A, KP.col75A) == true ? "side-by-side" : "stacked"
             }
             /// The engine the column leaves have now: TextKit 2 under the
             /// switch while the columns stack.
@@ -3183,19 +3213,34 @@ extension LifecycleUITests {
             }
             func aligned() throws -> [String: CGFloat] {
                 _ = driver.scroll(by: 300, until: driver.element(anchor), maxDrags: 10)
-                kWaitForEngine(driver, tracked, textKit2: engine())
+                kWaitForEngine(driver, tracked.filter { driver.element($0).exists }, textKit2: engine())
                 return LabelShift.relative(Self.kTops(try reader.documentSnapshot(), tracked), to: anchor.sentinel) ?? [:]
+            }
+            /// Every tracked leaf in the tree has the engine of the layout
+            /// of the moment; the anchor must be in the tree (`anchored`).
+            func engines(_ stage: String, anchored: Bool = true) throws {
+                let current = layout()
+                let snapshot = try reader.documentSnapshot()
+                let present = tracked.filter { leaf in snapshot.all.contains { $0.label.hasPrefix(leaf.prefix) } }
+                if anchored, !present.contains(where: { $0.sentinel == anchor.sentinel }) {
+                    armFailures.append("\(stage): \(anchor.sentinel) is not in the tree")
+                }
+                let expected = ContainerDriver.columnTextKit2(textKit2, sideBySide: current == "side-by-side")
+                let wrong = Self.kWrongEngine(snapshot, present, textKit2: expected)
+                armFailures += wrong.map { "\(stage) (\(current)): \($0)" }
+                stages.append(["stage": stage, "layout": current, "expected_textkit2": expected,
+                               "leaves_in_tree": present.map(\.sentinel), "wrong_engine": wrong])
             }
             func live() -> Int {
                 textKit2 ? reader.liveTextKit2Rows(until: { _ in true }, settled: true) ?? -1 : 0
             }
-            let wrongEngine = Self.kWrongEngine(try reader.documentSnapshot(), tracked, textKit2: engine())
-            failures += wrongEngine.map { "\(arm) parked (\(layout())): \($0)" }
+            try engines("parked")
 
             let c0 = try aligned()
             reader.pause(5)
             let c1 = try aligned()
             let control = LabelShift(from: c0, to: c1, scale: scale)
+            try engines("control")
 
             let layoutBefore = layout()
             let r0 = try aligned()
@@ -3204,12 +3249,14 @@ extension LifecycleUITests {
             let layoutRotated = layout()
             attach(reader.app, "k3-\(arm)-rotated")
             let rotatedSettle = try agent.cpuSettleSeconds()
+            try engines("rotated", anchored: false)
             try agent.request("rotate")
             reader.pause(2.5)
             let rotationSettle = try agent.cpuSettleSeconds()
             let r1 = try aligned()
             let rotation = LabelShift(from: r0, to: r1, scale: scale)
             let layoutAfter = layout()
+            try engines("rotated back")
 
             let s0 = try aligned()
             let live0 = live()
@@ -3221,30 +3268,74 @@ extension LifecycleUITests {
             let liveBack = live()
             let s1 = try aligned()
             let size = LabelShift(from: s0, to: s1, scale: scale)
+            try engines("text size 3 and back")
+
+            // The column boundary: Text Size +4 is accessibility1, where the
+            // columns stack at every width.
+            let b0 = try aligned()
+            let layoutB0 = layout()
+            let liveB0 = live()
+            let axUp = reader.stepTextSize(4)
+            let axUpSettle = try agent.cpuSettleSeconds()
+            _ = try aligned()
+            let layoutAX = layout()
+            try engines("accessibility1")
+            attach(reader.app, "k3-\(arm)-accessibility1")
+            let liveAX = live()
+            let axDown = reader.stepTextSize(-4)
+            let axDownSettle = try agent.cpuSettleSeconds()
+            let b1 = try aligned()
+            let layoutB1 = layout()
+            let liveB1 = live()
+            let boundaryShift = LabelShift(from: b0, to: b1, scale: scale)
+            try engines("accessibility1 and back")
             reader.app.terminate()
 
-            let settles = [rotatedSettle, rotationSettle, upSettle, downSettle].map { $0.seconds ?? .infinity }
-            var armFailures: [String] = []
-            for (name, shift) in [("rotation", rotation), ("text size", size)] {
+            let crossable = layoutBefore == "side-by-side"
+            let crossed = layoutB0 == "side-by-side" && layoutAX == "stacked" && layoutB1 == "side-by-side"
+            let settles = [rotatedSettle, rotationSettle, upSettle, downSettle, axUpSettle, axDownSettle]
+                .map { $0.seconds ?? .infinity }
+            for (name, shift) in [("rotation", rotation), ("text size", size), ("boundary", boundaryShift)] {
                 if shift.common < 2 { armFailures.append("\(name): only \(shift.common) landmarks compared") }
                 if shift.maxPixels - control.maxPixels > Self.shiftLimit {
                     armFailures.append("\(name): \(shift.worstLabel) drifted \(shift.maxPixels) px "
                         + "(control \(control.maxPixels) px)")
                 }
             }
+            for (name, value) in [("parked", layoutBefore), ("rotated back", layoutAfter), ("before the boundary leg", layoutB0),
+                                  ("back from accessibility1", layoutB1)] where value == "unknown" {
+                armFailures.append("column layout unknown \(name)")
+            }
+            if layoutAX != "stacked" { armFailures.append("the columns did not stack at accessibility1 (\(layoutAX))") }
+            if crossable, !crossed {
+                armFailures.append("the boundary was not crossed both ways: \(layoutB0) → \(layoutAX) → \(layoutB1)")
+            }
             if settles.contains(where: { $0 > Self.maxSettleSeconds }) { armFailures.append("CPU settle \(settles) s") }
             if textKit2, live3 > live0 + Self.unshownRowAllowance || liveBack > live0 + Self.unshownRowAllowance {
                 armFailures.append("live rows jumped across the size steps: \(live0) → \(live3) → \(liveBack)")
             }
+            if textKit2, liveB1 > liveB0 + Self.unshownRowAllowance {
+                armFailures.append("live rows after the boundary leg: \(liveB0) → \(liveAX) → \(liveB1)")
+            }
             if up == nil || down != "100%" { armFailures.append("size readout \(up ?? "nil") → \(down ?? "nil")") }
+            if axUp == nil || axDown != "100%" {
+                armFailures.append("accessibility1 readout \(axUp ?? "nil") → \(axDown ?? "nil")")
+            }
             failures += armFailures.map { "\(arm): \($0)" }
             arms.append([
                 "arm": arm, "control_px": Double(control.maxPixels), "rotation_px": Double(rotation.maxPixels),
                 "rotation_worst": rotation.worstLabel, "size_px": Double(size.maxPixels), "size_worst": size.worstLabel,
+                "boundary_px": Double(boundaryShift.maxPixels), "boundary_worst": boundaryShift.worstLabel,
                 "layout": [layoutBefore, layoutRotated, layoutAfter],
-                "crossed_boundary": layoutBefore != layoutRotated, "settle_s": settles,
-                "live_rows_size_0_3_0": [live0, live3, liveBack], "size_readouts": [up ?? "nil", down ?? "nil"],
-                "failures": armFailures,
+                "layout_boundary_leg": [layoutB0, layoutAX, layoutB1],
+                "crossed_boundary_rotation": layoutBefore != layoutRotated,
+                "crossed_boundary": crossed,
+                "boundary_gate": crossable ? "gated: side by side at size 0 (regular width)"
+                    : "not crossable here: the columns stack at size 0 (compact width), recorded",
+                "settle_s": settles, "live_rows_size_0_3_0": [live0, live3, liveBack],
+                "live_rows_boundary_0_ax1_0": [liveB0, liveAX, liveB1],
+                "size_readouts": [up ?? "nil", down ?? "nil"], "accessibility1_readouts": [axUp ?? "nil", axDown ?? "nil"],
+                "stages": stages, "failures": armFailures,
             ])
         }
         try agent.record("K3 width and type-size changes in containers (containers-parity 0.46)", pass: failures.isEmpty, [
@@ -3256,27 +3347,56 @@ extension LifecycleUITests {
 
     // MARK: K4 — load and search
 
-    /// K4 (plan §8.3), one launch on containers-parity:
-    /// `-switchDuringLoad` flips to TextKit 2 on the first block-count
-    /// change the reader sees while the document still loads; once
-    /// streaming has finished, `load-switch-blocks` is between 1 and the
-    /// document's full count and `load-ready-blocks` is the full count, 87
-    /// (call E9: how many blocks the switch sees is harness timing), landing on
-    /// the panel at KP-NEG-PLUGIN-P (0.83.0), which must be a TextKit 2
-    /// row. A task inside a quote (0.64.2.0) is toggled on TextKit 2 and
+    /// K4 (plan §8.3). First the switch before the last chunk, on
+    /// containers-dense, as test 3 on stress-5k: `-switchDuringLoad` flips
+    /// to TextKit 2 on the first block-count change the reader sees while
+    /// the document still loads, and its 840 blocks stream in seventeen
+    /// 50-block chunks, so once streaming has finished `load-ready-blocks`
+    /// is 840 and `load-switch-blocks` is between 1 and 839 (gated: the
+    /// switch came before the last chunk) and at most 838, the landing
+    /// block: the warning panel at index 838 (KD-0798, owner 0.838.0, in
+    /// the last chunk) arrived after the switch and must be a TextKit 2
+    /// row. Then one launch on containers-parity, which streams in two
+    /// chunks, so its switch may see every block (call E9): `load-ready-
+    /// blocks` is 87 and `load-switch-blocks` between 1 and 87 (whether it
+    /// came before the last chunk is recorded), landing on the panel at
+    /// KP-NEG-PLUGIN-P (0.83.0), which must be a TextKit 2 row. A task
+    /// inside a quote (0.64.2.0) is toggled on TextKit 2 and
     /// keeps its state over OFF and ON. A search for
     /// `KP-EXPAND-NESTED-P1` opens the chain (0.58 and 0.58.3 read
     /// "Expanded"); the matching owner 0.58.3.0 draws on SwiftUI while the
-    /// search is active and its neighbour 0.58.3.1 on TextKit 2; clearing
+    /// search is active (its text shown, no TextKit 2 row) and its
+    /// neighbour 0.58.3.1, brought into view, on TextKit 2; clearing
     /// returns 0.58.3.0 to TextKit 2. Then the caption case on
     /// captions-parity: a search matching CAP-03's caption only (0.3.0)
-    /// falls back that owner while CAP-04 (0.4.0) stays a TextKit 2 row;
-    /// clearing returns it. Passes after step 8 (the expand part step 5,
+    /// falls back that owner (shown, no TextKit 2 row) while CAP-04
+    /// (0.4.0), brought into view, stays a TextKit 2 row; clearing returns
+    /// it. Passes after step 8 (the expand part step 5,
     /// the task step 6).
     func testK4SwitchDuringLoadAndSearchInContainers() throws {
         let agent = try HostAgent.fromEnvironment()
         typealias KP = ContainersParity
+        typealias KD = ContainersDense
         var failures: [String] = []
+
+        // The switch before the last chunk (containers-dense).
+        let dense = ContainerDriver(fixture: KD.fixture, fraction: KD.fraction(KD.lastPanelIndex),
+                                    extra: ["-switchDuringLoad"])
+        dense.reader.waitForRenderer("TextKit 2", timeout: 30)
+        let denseLanded = dense.element(KD.lastPanel).waitForExistence(timeout: 60)
+        if !denseLanded { failures.append("containers-dense: did not land on \(KD.lastPanel)") }
+        let denseLastTextKit2 = dense.isTextKit2(KD.lastPanel)
+        if !denseLastTextKit2 { failures.append("containers-dense: \(KD.lastPanel) is not a TextKit 2 row after the load") }
+        let (denseAtSwitch, denseAtReady) = Self.kLoadSwitchCounts(dense.reader)
+        dense.app.terminate()
+        if denseAtReady != KD.preparedBlocks {
+            failures.append("containers-dense: blocks at READY \(denseAtReady), expected \(KD.preparedBlocks)")
+        }
+        if !(denseAtSwitch > 0 && denseAtSwitch < denseAtReady && denseAtSwitch <= KD.lastPanelIndex) {
+            failures.append("containers-dense: blocks at the switch \(denseAtSwitch), expected 1…\(KD.lastPanelIndex) "
+                + "(before the last chunk and the landing block)")
+        }
+
         let plugin = ContainerLeaf("KP-NEG-PLUGIN-P", "0.83.0")
         let driver = ContainerDriver(fixture: KP.fixture, fraction: KP.fraction(84), extra: ["-switchDuringLoad"])
         let reader = driver.reader
@@ -3295,12 +3415,7 @@ extension LifecycleUITests {
         // below) and the switch's count is compared against the document's
         // full count: at least one block, at most all of them. Whether the
         // switch came before the last chunk is recorded, not gated.
-        reader.openAbout()
-        let switchField = reader.app.staticTexts[ReaderDriver.Identifier.loadSwitchBlocks]
-        let readyField = reader.app.staticTexts[ReaderDriver.Identifier.loadReadyBlocks]
-        let atReady = readyField.waitForExistence(timeout: 30) ? Int(readyField.label) ?? -1 : -1
-        let atSwitch = switchField.waitForExistence(timeout: 5) ? Int(switchField.label) ?? -1 : -1
-        reader.closeAbout()
+        let (atSwitch, atReady) = Self.kLoadSwitchCounts(reader)
         if atReady != KP.preparedBlocks { failures.append("blocks at READY: \(atReady), expected \(KP.preparedBlocks)") }
         if !(atSwitch > 0 && atSwitch <= atReady) {
             failures.append("blocks at the switch: \(atSwitch), expected 1…\(atReady) (the full count once streamed)")
@@ -3339,11 +3454,10 @@ extension LifecycleUITests {
         if !counter.hasPrefix("1 /") { failures.append("search \(match.sentinel): counter \(counter)") }
         let chain = [expand.title, expand.nestedTitle ?? ""].map { driver.expandValue($0) ?? "missing" }
         if chain != ["Expanded", "Expanded"] { failures.append("search did not open the chain: \(chain)") }
-        if !driver.isSwiftUI(match) { failures.append("\(match) is still a TextKit 2 row while highlighted") }
-        if driver.isPartlyShown(driver.element(neighbour)), !driver.isTextKit2(neighbour) {
-            failures.append("\(neighbour) left TextKit 2 (the fallback is per owner)")
-        }
+        if let problem = driver.searchFallbackProblem(match) { failures.append("highlighted: \(problem)") }
         attach(reader.app, "k4-search-nested-expand")
+        if let problem = driver.searchNeighbourProblem(neighbour, step: 200) { failures.append(problem) }
+        _ = driver.scroll(by: -200, until: driver.element(match), maxDrags: 6)
         driver.clearSearch()
         if !driver.isTextKit2(match) { failures.append("\(match) did not return to TextKit 2 after clearing") }
         reader.app.terminate()
@@ -3355,16 +3469,19 @@ extension LifecycleUITests {
         XCTAssertTrue(captions.element(caption).waitForExistence(timeout: 30), "captions-parity missing")
         let captionCounter = captions.search("plain caption under")
         if !captionCounter.hasPrefix("1 /") { failures.append("caption search: counter \(captionCounter)") }
-        if !captions.isSwiftUI(caption) { failures.append("\(caption) is still a TextKit 2 row while highlighted") }
-        if captions.isPartlyShown(captions.element(next)), !captions.isTextKit2(next) {
-            failures.append("\(next) left TextKit 2 during the caption search")
-        }
+        if let problem = captions.searchFallbackProblem(caption) { failures.append("highlighted caption: \(problem)") }
         attach(captions.app, "k4-search-caption")
+        if let problem = captions.searchNeighbourProblem(next, step: 200) { failures.append("caption search: \(problem)") }
+        _ = captions.scroll(by: -200, until: captions.element(caption), maxDrags: 6)
         captions.clearSearch()
         if !captions.isTextKit2(caption) { failures.append("\(caption) did not return to TextKit 2 after clearing") }
         captions.app.terminate()
 
         try agent.record("K4 switch during load, task state and search in containers", pass: failures.isEmpty, [
+            "dense_blocks_at_switch": denseAtSwitch, "dense_blocks_at_ready": denseAtReady,
+            "dense_total_blocks": KD.preparedBlocks, "dense_landed_owner": KD.lastPanel.owner,
+            "dense_landed_index": KD.lastPanelIndex, "dense_landed_textkit2": denseLastTextKit2,
+            "dense_switch_before_last_chunk": denseAtSwitch > 0 && denseAtSwitch < denseAtReady,
             "blocks_at_switch": atSwitch, "blocks_at_ready": atReady, "total_blocks": KP.preparedBlocks,
             "switch_before_last_chunk": atSwitch > 0 && atSwitch < atReady,
             "landed_owner": plugin.owner, "task_owner": KP.taskOpen.owner, "task_states_off_on": taskStates,
@@ -3372,6 +3489,19 @@ extension LifecycleUITests {
             "caption_owner": caption.owner, "caption_neighbour": next.owner, "failures": failures,
         ])
         XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
+    }
+
+    /// `load-switch-blocks` and `load-ready-blocks` from About, once
+    /// streaming has finished (the ready count appears at READY); -1 for a
+    /// field that never appeared.
+    private static func kLoadSwitchCounts(_ reader: ReaderDriver) -> (atSwitch: Int, atReady: Int) {
+        reader.openAbout()
+        let switchField = reader.app.staticTexts[ReaderDriver.Identifier.loadSwitchBlocks]
+        let readyField = reader.app.staticTexts[ReaderDriver.Identifier.loadReadyBlocks]
+        let atReady = readyField.waitForExistence(timeout: 30) ? Int(readyField.label) ?? -1 : -1
+        let atSwitch = switchField.waitForExistence(timeout: 5) ? Int(switchField.label) ?? -1 : -1
+        reader.closeAbout()
+        return (atSwitch, atReady)
     }
 
     // MARK: K5 — fling across open expands
@@ -3448,27 +3578,60 @@ extension LifecycleUITests {
         return result
     }
 
+    /// The most fast swipes `kFlingEndToEnd` spends on one leg: a loop
+    /// guard, not a measured limit. From open expand 1's heading (CE-S3) to
+    /// CE-END takes 28 to 42 fast swipes on either arm, scrolling down
+    /// (2026-11-18, iPhone 17 Pro: SwiftUI 32 and 37, TextKit 2 42 and 28;
+    /// an earlier TextKit 2 run ran out of the old guard of 40 in round 2
+    /// and reached CE-END on the 40th in round 3); back up it takes 19 to
+    /// 25 (SwiftUI's lazy stack jumps scrolling up past open expands). 80
+    /// is about twice the longest down leg on either arm, so a leg that
+    /// runs out has stalled or keeps jumping back (code review F-R12), not
+    /// merely flung short.
+    static let kFlingSwipeCap = 80
+
+    /// What `kFlingEndToEnd` saw.
+    private struct KFlings {
+        var failures: [String] = []
+        var figures: [String: Any] = [:]
+        var ok: Bool { failures.isEmpty }
+    }
+
     /// `rounds` end-to-end flings: fast swipes toward the end until `end`
-    /// is in the tree, then back until the label `start` is (at most 40
-    /// swipes each way).
-    private func kFlingEndToEnd(_ reader: ReaderDriver, end: ContainerLeaf, start: String, rounds: Int) -> [String: Any] {
+    /// is in the tree, then back until the label `start` is (at most
+    /// `kFlingSwipeCap` swipes each way). Each leg must reach its end, after
+    /// at least one swipe: a leg that ran out of swipes, or never had to
+    /// fling, fails.
+    private func kFlingEndToEnd(_ reader: ReaderDriver, end: ContainerLeaf, start: String, rounds: Int) -> KFlings {
+        let cap = Self.kFlingSwipeCap
         let scroll = reader.app.scrollViews.firstMatch
         let endElement = reader.element(labelPrefix: end.prefix)
         let startElement = reader.element(labelled: start)
+        var result = KFlings()
         var swipes: [[Int]] = []
-        for _ in 0 ..< rounds {
+        var reached: [[Bool]] = []
+        for round in 1 ... rounds {
             var down = 0, up = 0
-            while !endElement.exists, down < 40 {
+            while !endElement.exists, down < cap {
                 scroll.swipeUp(velocity: .fast)
                 down += 1
             }
-            while !startElement.exists, up < 40 {
+            let reachedEnd = endElement.exists
+            while !startElement.exists, up < cap {
                 scroll.swipeDown(velocity: .fast)
                 up += 1
             }
+            let reachedStart = startElement.exists
+            if !reachedEnd { result.failures.append("fling round \(round): \(end.sentinel) not reached in \(cap) swipes") }
+            if reachedEnd, down == 0 { result.failures.append("fling round \(round): \(end.sentinel) in the tree before any swipe") }
+            if !reachedStart { result.failures.append("fling round \(round): '\(start)' not reached in \(cap) swipes back") }
+            if reachedStart, up == 0 { result.failures.append("fling round \(round): '\(start)' in the tree before any swipe back") }
             swipes.append([down, up])
+            reached.append([reachedEnd, reachedStart])
         }
-        return ["rounds": rounds, "swipes_down_up": swipes]
+        result.figures = ["rounds": rounds, "swipes_down_up": swipes, "reached_end_start": reached,
+                          "end": end.sentinel, "start": start, "swipe_cap": cap]
+        return result
     }
 
     /// What `kWalkOpenExpands` saw.
@@ -3524,13 +3687,19 @@ extension LifecycleUITests {
     /// alternating (`kContainerFlips`); the median TextKit 2 growth may
     /// exceed the control's by at most 5,120 KB. Every series: both titles
     /// read "Expanded" after every pick; every ON pick shows the same
-    /// nonzero count of its kind and none of the other; under TextKit 2
-    /// every OFF pick leaves no `tk2-row` in the census and
-    /// `tk2Live − tk2OffWindow == 0` within 5 s (the off-window count
-    /// recorded); the census after the series (one more ON) has container
-    /// rows > 0 (classifier, §6.5), checked against the live counters; and
-    /// after the closing OFF and a retrace the live count is 0. Passes
-    /// after step 5.
+    /// nonzero count of its kind and none of the other, and (TextKit 2)
+    /// live container rows > 0 (heading and filler rows alone never pass),
+    /// none under the control; every OFF pick leaves no `tk2-row` in the
+    /// tree (read from the accessibility tree, not from any counter) and,
+    /// under TextKit 2, `tk2Live − tk2OffWindow == 0` within 5 s; the
+    /// census after the series (one more ON) has container rows > 0
+    /// (classifier, §6.5) and passes the census-only cross-check against
+    /// the live counters (call C22), whose census + off-window <= tk2Live
+    /// backs up the off-window count the OFF picks read; the identity
+    /// `tk2Live − tk2OffWindow == census` is recorded only; and after the
+    /// closing OFF and a retrace the live count is 0, which no counter of
+    /// rows off the window can satisfy for rows still alive. Passes after
+    /// step 5.
     func testK6TwentyFlipsContainers() throws {
         let agent = try HostAgent.fromEnvironment()
         var control: [KFlipSeries] = [], flips: [KFlipSeries] = []
@@ -3612,7 +3781,8 @@ extension LifecycleUITests {
             } while Date() < deadline
             return (waited, other, offWindow, container)
         }
-        var on: [Int] = [], onOther: [Int] = [], offLive: [Int] = [], offWindows: [Int] = [], offInTree: [Int] = []
+        var on: [Int] = [], onOther: [Int] = [], onContainer: [Int] = [], offLive: [Int] = [], offWindows: [Int] = []
+        var offInTree: [Int] = []
         var values: [[String]] = []
         do {
             let start = try agent.settledFootprintKB()
@@ -3632,6 +3802,10 @@ extension LifecycleUITests {
                 if isOn {
                     on.append(rows.waited)
                     onOther.append(rows.other)
+                    onContainer.append(rows.container)
+                    if control ? rows.container != 0 : rows.container <= 0 {
+                        series.failures.append("\(arm) ON pick \(flip): \(rows.container) live container rows")
+                    }
                 } else {
                     let live = control ? rows.other : rows.waited
                     offLive.append(live)
@@ -3658,6 +3832,7 @@ extension LifecycleUITests {
                 if census.containerOwnedRows == 0 { series.failures.append("TextKit 2: no container rows in the census") }
                 let check = census.census.crossCheck(counters)
                 if !check.isEmpty { series.failures.append("TextKit 2 census: \(check)") }
+                if (counters.container ?? 0) <= 0 { series.failures.append("TextKit 2 census: no live container rows") }
             }
             // Closing OFF, then a retrace of the materialised region.
             reader.chooseRenderer(textKit2: false)
@@ -3670,13 +3845,18 @@ extension LifecycleUITests {
             let retraced = reader.liveTextKit2Rows(until: { $0 == 0 }, settled: true) ?? -1
             if retraced != 0 { series.failures.append("\(arm): \(retraced) live rows after the retrace") }
             series.figures = [
-                "arm": arm, "on_rows": on, "on_other_kind_rows": onOther, "off_live_rows": offLive,
+                "arm": arm, "on_rows": on, "on_other_kind_rows": onOther, "on_container_rows": onContainer,
+                "off_live_rows": offLive,
                 "off_window_rows": offWindows, "off_tk2_rows_in_tree": offInTree, "titles_after_each_pick": values,
                 "start_kb": start, "after_each_off_kb": settled, "growth_kb": series.growth,
                 "census_after_series": census.census.figures,
-                "census_counters": ["list": counters.list ?? -1, "code": counters.code ?? -1,
+                "census_counters": ["live": counters.total ?? -1, "list": counters.list ?? -1, "code": counters.code ?? -1,
                                     "container": counters.container ?? -1, "caption": counters.caption ?? -1,
                                     "offwindow": counters.offWindow ?? -1],
+                "census_rows": census.census.rows,
+                "census_code_owners_by_tree": census.codeOwnersByTree.sorted(),
+                "census_code_owners_by_geometry": census.codeOwnersByGeometry.sorted(),
+                "census_identity_recorded": (counters.total ?? -1) - (counters.offWindow ?? 0) == census.census.rows,
                 "closing_off": ["live": immediateLive, "offwindow": immediate.offWindow ?? -1, "retraced_live": retraced],
             ]
         } catch {
@@ -3715,9 +3895,11 @@ extension LifecycleUITests {
     /// growth minus arm B's (as K6 and M4 compare TextKit 2 with its
     /// SwiftUI control; the B-only pilot grew 20,512 KB on SwiftUI alone);
     /// arm C's median open time ≤
-    /// `ContainerLifecycleLimits.k7OpenSeconds` (frozen from a B-only
-    /// pilot: `ADF_CONTAINER_LIMITS_PILOT=1` runs arm B alone and gates
-    /// only completeness). Passes after step 5.
+    /// `ContainerLifecycleLimits.k7OpenSeconds`, and per expand the median
+    /// of its open and reopen ≤ its own
+    /// `ContainerLifecycleLimits.k7OpenSecondsPerExpand` (both frozen from
+    /// the same B-only pilot: `ADF_CONTAINER_LIMITS_PILOT=1` runs arm B
+    /// alone and gates only completeness). Passes after step 5.
     func testK7ExpandOpenCloseCycles() throws {
         let agent = try HostAgent.fromEnvironment()
         let pilot = ContainerLifecycleLimits.isPilot
@@ -3756,6 +3938,24 @@ extension LifecycleUITests {
             } else {
                 failures.append("ContainerLifecycleLimits.k7OpenSeconds is not frozen")
             }
+            // Per expand: the cycles store (open, reopen) for CE-OPEN-1 … 5
+            // in order.
+            let perExpand = ContainerLifecycleLimits.k7OpenSecondsPerExpand
+            var expandFigures: [[String: Any]] = []
+            for (index, limit) in perExpand.enumerated() {
+                let pair = Array(c.openSeconds.dropFirst(2 * index).prefix(2))
+                let b2 = Array(b.openSeconds.dropFirst(2 * index).prefix(2))
+                let median = pair.count == 2 ? ContainerLifecycleLimits.median(pair) : .infinity
+                expandFigures.append(["expand": "CE-OPEN-\(index + 1)", "c_open_reopen_s": pair,
+                                      "b_open_reopen_s": b2, "c_median_s": pair.count == 2 ? median : -1,
+                                      "limit_s": limit])
+                if pair.count != 2 {
+                    failures.append("CE-OPEN-\(index + 1): arm C has \(pair.count) of 2 open samples")
+                } else if median > limit {
+                    failures.append("CE-OPEN-\(index + 1): arm C median open \(median) s > its frozen limit \(limit) s")
+                }
+            }
+            figures["per_expand"] = expandFigures
         }
         try agent.record("K7 expand open/close cycles (containers-expand CE-OPEN-1…5)\(pilot ? " — B-only pilot" : "")",
                          pass: failures.isEmpty, figures.merging(["failures": failures]) { first, _ in first })
@@ -3876,6 +4076,7 @@ extension LifecycleUITests {
         var mount: Double?
         var mountSettle: Double?
         var footprintKB: Int?
+        var flip: Double?
         var flipSettle: Double?
         var failures: [String] = []
         var figures: [String: Any] = [:]
@@ -3888,12 +4089,18 @@ extension LifecycleUITests {
     /// title to CE-TALL-300 existing), M3 CPU settle after the mount, M4
     /// settled footprint with the body open, then a flip with the body
     /// open — B: a TextKit 2 pick the control rebuilds as SwiftUI; C: OFF,
-    /// then the timed ON — and M3 after it. Limits: C's median mount ≤
-    /// `ContainerLifecycleLimits.m2MountSeconds` (frozen from a B-only
-    /// pilot); every settle ≤ 2 % within 5 s; median footprint C − B ≤ 15 %
-    /// of B's; C's median flip settle ≤ the M2 formula over this run's B
-    /// flips. `ADF_CONTAINER_LIMITS_PILOT=1` runs B alone (the pilot).
-    /// Passes after step 5.
+    /// then the timed ON — timed from just before the menu item's tap to
+    /// the toolbar naming the new renderer and CE-TALL-300 drawn by it (C:
+    /// its `tk2-row`; B: its rebuilt SwiftUI text), so the switch's work is
+    /// inside the time (`ReaderDriver.chooseRendererTimed`), and M3 after
+    /// it. Limits: C's median mount ≤
+    /// `ContainerLifecycleLimits.m2MountSeconds` and C's median flip time ≤
+    /// `ContainerLifecycleLimits.m2FlipSeconds` (each frozen from a B-only
+    /// pilot); every settle ≤ 2 % within 5 s (the post-flip one is the
+    /// livelock check); median footprint C − B ≤ 15 % of B's; C's median
+    /// flip settle ≤ the M2 formula over this run's B flip settles.
+    /// `ADF_CONTAINER_LIMITS_PILOT=1` runs B alone (the pilot of both
+    /// times). Passes after step 5.
     func testK8TallExpandMountAndFlip() throws {
         let agent = try HostAgent.fromEnvironment()
         let pilot = ContainerLifecycleLimits.isPilot
@@ -3912,12 +4119,20 @@ extension LifecycleUITests {
             "runs": runs.map(\.figures), "pilot": pilot, "provenance": ContainerLifecycleLimits.provenance,
             "b_mount_s": bMounts, "c_mount_s": cMounts,
         ]
+        let bFlipTimes = b.compactMap(\.flip), cFlipTimes = c.compactMap(\.flip)
+        figures["b_flip_s"] = bFlipTimes
+        figures["c_flip_s"] = cFlipTimes
         if pilot {
             let limit = ContainerLifecycleLimits.formula(bMounts) ?? -1
             figures["pilot_limit_s"] = limit
             print("M2_PILOT_SAMPLES=" + bMounts.map { String(format: "%.3f", $0) }.joined(separator: ","))
             print(String(format: "M2_PILOT_LIMIT=%.3f", limit))
             if bMounts.count != 5 { failures.append("pilot: \(bMounts.count) of 5 mounts measured") }
+            let flipLimit = ContainerLifecycleLimits.formula(bFlipTimes) ?? -1
+            figures["pilot_flip_limit_s"] = flipLimit
+            print("M2_FLIP_PILOT_SAMPLES=" + bFlipTimes.map { String(format: "%.3f", $0) }.joined(separator: ","))
+            print(String(format: "M2_FLIP_PILOT_LIMIT=%.3f", flipLimit))
+            if bFlipTimes.count != 5 { failures.append("pilot: \(bFlipTimes.count) of 5 flips timed") }
         } else {
             let cMedian = ContainerLifecycleLimits.median(cMounts)
             figures["c_mount_median_s"] = cMedian
@@ -3936,6 +4151,15 @@ extension LifecycleUITests {
             let cFlip = ContainerLifecycleLimits.median(cFlips)
             figures["flip_settle_s"] = ["b": bFlips, "c": cFlips, "limit": flipLimit]
             if cFlip > flipLimit { failures.append("M2 flip: C median settle \(cFlip) s > \(flipLimit) s (B formula)") }
+            let cFlipTime = ContainerLifecycleLimits.median(cFlipTimes)
+            figures["c_flip_median_s"] = cFlipTime
+            if cFlipTimes.count != c.count { failures.append("M2 flip: \(cFlipTimes.count) of \(c.count) arm C flips timed") }
+            if let limit = ContainerLifecycleLimits.m2FlipSeconds {
+                figures["m2_flip_limit_s"] = limit
+                if cFlipTime > limit { failures.append("M2 flip: arm C median flip \(cFlipTime) s > frozen \(limit) s") }
+            } else {
+                failures.append("ContainerLifecycleLimits.m2FlipSeconds is not frozen")
+            }
         }
         try agent.record("K8 tall expand mount and flip (containers-expand CE-TALL)\(pilot ? " — B-only pilot" : "")",
                          pass: failures.isEmpty, figures.merging(["failures": failures]) { first, _ in first })
@@ -3972,20 +4196,24 @@ extension LifecycleUITests {
         var rebuilt = -1
         if textKit2 {
             reader.chooseRenderer(textKit2: false)
+            if !reader.waitForDisappearance(of: driver.textKit2Row(owner: CE.tall.last.owner), timeout: 10) {
+                run.failures.append("\(arm): CE-TALL-300's TextKit 2 row outlived the OFF pick")
+            }
             _ = try agent.cpuSettleSeconds()
-            reader.chooseRenderer(textKit2: true)
+            run.flip = reader.chooseRendererTimed(textKit2: true, until: driver.textKit2Row(owner: CE.tall.last.owner))
             run.flipSettle = try agent.cpuSettleSeconds().seconds
         } else {
-            reader.chooseRenderer(textKit2: true)
+            run.flip = reader.chooseRendererTimed(textKit2: true, until: driver.element(CE.tall.last))
             run.flipSettle = try agent.cpuSettleSeconds().seconds
             rebuilt = reader.liveRows(control: true, until: { $0 > 0 }, settled: true).control ?? -1
             if rebuilt <= 0 { run.failures.append("\(arm): the rebuild control rebuilt no rows") }
             reader.chooseRenderer(textKit2: false)
         }
+        if run.flip == nil { run.failures.append("\(arm): the flip never completed within 60 s") }
         if driver.expandValue(CE.tall.title) != "Expanded" { run.failures.append("\(arm): CE-TALL closed on the flip") }
         reader.app.terminate()
         run.figures = ["arm": arm, "mount_s": run.mount ?? -1, "mount_settle_s": run.mountSettle ?? -1,
-                       "footprint_kb": run.footprintKB ?? -1, "flip_settle_s": run.flipSettle ?? -1,
+                       "footprint_kb": run.footprintKB ?? -1, "flip_s": run.flip ?? -1, "flip_settle_s": run.flipSettle ?? -1,
                        "control_rebuilt_rows": rebuilt, "engine_ok": engineOK]
         return run
     }

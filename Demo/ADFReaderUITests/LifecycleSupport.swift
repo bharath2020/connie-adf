@@ -188,6 +188,34 @@ struct ReaderDriver {
         waitForRenderer(label)
     }
 
+    /// `chooseRenderer`, timed (K8's M2 flip): wall seconds from just
+    /// before the tap on the menu item to the toolbar naming the new
+    /// renderer and `done` existing, polled every 50 ms (as
+    /// `ContainerDriver.seconds`: `waitForExistence` checks about once a
+    /// second); nil when that is not reached within `timeout`. XCUITest
+    /// waits for the app to idle after the tap and every poll reads the
+    /// tree on the app's main thread, so the rebuild the pick causes there
+    /// is inside the time.
+    func chooseRendererTimed(textKit2: Bool, until done: XCUIElement, timeout: TimeInterval = 60) -> Double? {
+        let (identifier, label) = textKit2
+            ? (Identifier.rendererTextKit2, "TextKit 2") : (Identifier.rendererSwiftUI, "SwiftUI")
+        openRendererMenu()
+        let item = menuItem(identifier: identifier, label: label)
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "\(label) missing from the renderer menu")
+        let active = app.descendants(matching: .any).matching(NSPredicate(
+            format: "(identifier == %@ OR identifier == %@) AND label CONTAINS %@",
+            Identifier.rendererMenu, Identifier.rendererActive, label
+        )).firstMatch
+        let tapped = Date()
+        item.tap()
+        let deadline = tapped.addingTimeInterval(timeout)
+        while Date() < deadline {
+            if active.exists, done.exists { return Date().timeIntervalSince(tapped) }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return active.exists && done.exists ? Date().timeIntervalSince(tapped) : nil
+    }
+
     // MARK: About This Build
 
     func openAbout() {
@@ -289,8 +317,8 @@ struct ReaderDriver {
     /// Opens About and reads the live counters a row census is checked
     /// against (`TextKit2RowCensus.crossCheck`, PR 4 plan §6.5), top to
     /// bottom because `revealAboutField` only scrolls toward the end:
-    /// `tk2-list-live-rows`, then `tk2-code-live-rows` and PR 4's
-    /// `tk2-container-live-rows`, `tk2-caption-live-rows` and
+    /// `tk2-live-rows`, `tk2-list-live-rows`, then `tk2-code-live-rows` and
+    /// PR 4's `tk2-container-live-rows`, `tk2-caption-live-rows` and
     /// `tk2-offwindow-rows` below it. With `settled`, each value counts
     /// once two reads 250 ms apart agree. A field this build's About sheet
     /// lacks reads nil (a pre-PR 4 build has none of the last three), and
@@ -298,6 +326,7 @@ struct ReaderDriver {
     func liveRowCounters(settled: Bool = true) -> LiveRowCounters {
         openAbout()
         var counters = LiveRowCounters()
+        counters.total = readOptionalCount(Identifier.liveTextKit2Rows, settled: settled)
         counters.list = readOptionalCount(Identifier.liveTextKit2ListRows, settled: settled)
         counters.code = readOptionalCount(Identifier.liveTextKit2CodeRows, settled: settled)
         counters.container = readOptionalCount(Identifier.liveTextKit2ContainerRows, settled: settled)
@@ -510,9 +539,13 @@ struct ReaderDriver {
             rows: rows.map { (owner: $0.owner, inNestedScroll: $0.nested || inside($0.frame)) },
             fixture: fixtureName, table: fixtureName.flatMap { RowOwnerTable.byFixture[$0] }
         )
-        return DocumentSnapshot(
+        var snapshot = DocumentSnapshot(
             all: all, viewport: viewport, textKit2Rows: textKit2Rows, textKit2Nodes: textKit2Nodes, census: census
         )
+        snapshot.nestedScrollViews = nestedScrolls.count
+        snapshot.codeOwnersByTree = Set(rows.filter(\.nested).map(\.owner))
+        snapshot.codeOwnersByGeometry = Set(rows.filter { !$0.nested && inside($0.frame) }.map(\.owner))
+        return snapshot
     }
 
     /// Waits up to `timeout` for `element` to be fully inside the viewport.
@@ -819,6 +852,14 @@ struct DocumentSnapshot {
     let textKit2Nodes: Int
     /// Every TextKit 2 row's class (PR 4 plan §6.5).
     let census: TextKit2RowCensus
+    /// How a TextKit 2 row was told to be code (review F-Q4): owners whose
+    /// row sits under a scroll-view node of the tree below the document's
+    /// own (`codeOwnersByTree`), and owners only the geometry fallback
+    /// (`inside`) placed in one (`codeOwnersByGeometry`); and the nested
+    /// scroll-view nodes the tree listed.
+    var codeOwnersByTree: Set<String> = []
+    var codeOwnersByGeometry: Set<String> = []
+    var nestedScrollViews = 0
 
     init(all: [Node], viewport: CGRect, textKit2Rows: [String: String], textKit2Nodes: Int,
          census: TextKit2RowCensus)
@@ -1020,6 +1061,7 @@ struct LiveRowCounters: Sendable, Equatable {
     var container: Int?   // tk2-container-live-rows (PR 4)
     var caption: Int?     // tk2-caption-live-rows (PR 4)
     var offWindow: Int?   // tk2-offwindow-rows (PR 4)
+    var total: Int?       // tk2-live-rows: every live TextKit 2 row
 }
 
 /// One snapshot's TextKit 2 rows by class (PR 4 plan §6.5).
@@ -1096,17 +1138,23 @@ struct TextKit2RowCensus: Sendable {
         classes.filter { $0.value == rowClass }.map(\.key).sorted()
     }
 
-    /// The §6.5 cross-check against the live counters, which overlap the
-    /// classes: code <= tk2CodeLive, caption <= tk2CaptionLive, container
-    /// <= tk2ContainerLive, list rows plus the container class's
-    /// nested-list rows <= tk2ListLive; each equal when `tk2-offwindow-rows`
-    /// is 0 and `equalWhenOnWindow`. Returns the failures (empty: passed);
-    /// a counter that could not be read, and an unclassified row, are
-    /// failures.
-    func crossCheck(_ counters: LiveRowCounters, equalWhenOnWindow: Bool = true) -> [String] {
+    /// The §6.5 cross-check against the live counters, census-only (call
+    /// C22): rows the lazy stack keeps in its window beyond the viewport
+    /// are live and have a window but are not in the census (list-dense:
+    /// live / off-window / census 81 / 0 / 76), so no class is ever
+    /// required to equal its counter, whatever `tk2-offwindow-rows` reads.
+    /// The counters overlap the classes: code <= tk2CodeLive, caption <=
+    /// tk2CaptionLive, container <= tk2ContainerLive, list rows plus the
+    /// container class's nested-list rows <= tk2ListLive. And the census's
+    /// rows plus the off-window rows <= tk2Live: every census row has a
+    /// window, so an off-window count above the live rows outside the
+    /// census over-counts (it backs up the counter the OFF checks read).
+    /// Returns the failures (empty: passed); a counter that could not be
+    /// read, and an unclassified row, are failures.
+    func crossCheck(_ counters: LiveRowCounters) -> [String] {
         var failures = unclassified.isEmpty ? [] : ["unclassified TextKit 2 rows (owner table: "
             + "\(tableFixture ?? "none")): \(unclassified.joined(separator: ","))"]
-        let exact = equalWhenOnWindow && counters.offWindow == 0
+        if counters.total == nil { failures.append("tk2-live-rows unavailable") }
         if counters.offWindow == nil { failures.append("tk2-offwindow-rows unavailable") }
         let checks: [(String, Int, Int?)] = [
             ("code", count(.code), counters.code),
@@ -1121,12 +1169,16 @@ struct TextKit2RowCensus: Sendable {
             }
             if census > live {
                 failures.append("\(name): census \(census) > live \(live)")
-            } else if exact, census != live {
-                failures.append("\(name): census \(census) != live \(live) with no row off-window")
             }
+        }
+        if let total = counters.total, let offWindow = counters.offWindow, rows + offWindow > total {
+            failures.append("census \(rows) + off-window \(offWindow) > live \(total)")
         }
         return failures
     }
+
+    /// Every row the census saw, classified or not.
+    var rows: Int { classes.count + unclassified.count }
 
     /// The figures a check records for this census.
     var figures: [String: Any] {
