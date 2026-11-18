@@ -10,7 +10,8 @@ import SwiftUI
 ///     conversions=<n> layouts=<n> live=<n> res=<mode> scrolling=<0|1>
 ///     scrollEnds=<n> scrollCalls=<n> deferred=<n> waiting=<n>
 ///     pfBatches=<n> pfCalls=<n> pfInFlight=<n> pfCancelled=<n> pfHits=<n>
-///     pfMaxBatch=<n> pfPeak=<n> pfFar=<n> B=<n> D=<n>
+///     pfMaxBatch=<n> pfPeak=<n> pfFar=<n> B=<n> D=<n> held=<n> holds=<n>
+///     dims=<n>
 ///
 /// under the accessibility identifier `smartlink-probe`: the document's
 /// smart-link counters (`ADFDocumentModel.smartLinkStats`, refreshed owners),
@@ -19,7 +20,9 @@ import SwiftUI
 /// the TextKit 2 conversions, layouts and live rows, then the resolution
 /// mode (`res=`, the `ADFSmartLinkResolution` raw value) and its scroll and
 /// nearby counters, with the nearby limits (`B=` keys per batch, `D=`
-/// positions). One element read in one
+/// positions), then design §10's: titles held now (`held=`, zero at rest),
+/// titles held since launch (`holds=`) and loading looks shown (`dims=`).
+/// One element read in one
 /// query, so a test gets a consistent snapshot in well under a second
 /// without opening About This Build (whose rows are read one at a time). It
 /// polls every 250 ms in its own task and keeps the line in its own state,
@@ -67,6 +70,7 @@ struct SmartLinkProbe: View {
             ("pfHits", stats.prefetchHits), ("pfMaxBatch", stats.largestPrefetchBatch),
             ("pfPeak", stats.peakPrefetchInFlight), ("pfFar", stats.farthestPrefetch),
             ("B", model.smartLinkNearbyLimits.batch), ("D", model.smartLinkNearbyLimits.distance),
+            ("held", stats.titlesHeldNow), ("holds", stats.titlesHeld), ("dims", stats.resolvingShown),
         ]
         return (fields.map { "\($0.0)=\($0.1)" } + ["res=\(stats.resolution.rawValue)"]
             + modeFields.map { "\($0.0)=\($0.1)" }).joined(separator: " ")

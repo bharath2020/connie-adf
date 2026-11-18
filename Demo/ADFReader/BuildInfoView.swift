@@ -244,8 +244,10 @@ struct BuildInfoView: View {
     /// The resolution mode the reader passes (`ADFSmartLinkResolution`) and
     /// the counters it drives (`ADFSmartLinkStats`, design §8): scroll ends,
     /// calls started while scrolling (zero unless While Scrolling), visible
-    /// lookups held back by a scroll, links on screen still waiting, and the
-    /// nearby batches (After Scrolling + Nearby). Each value is its own
+    /// lookups held back by a scroll, links on screen still waiting, the
+    /// nearby batches (After Scrolling + Nearby), and, in every mode, the
+    /// titles held while scrolling until their paragraph was fully on screen
+    /// and the loading looks shown (design §10). Each value is its own
     /// element: `smartlink-resolution` (the mode's raw value), then
     /// `smartlink-mode-<field>`.
     private var smartLinkResolutionSection: some View {
@@ -272,6 +274,9 @@ struct BuildInfoView: View {
             countRow("Nearby Hits", smartLinkStats?.prefetchHits, id: "smartlink-mode-prefetchHits")
             countRow("Largest Batch", smartLinkStats?.largestPrefetchBatch, id: "smartlink-mode-largestPrefetchBatch")
             countRow("Farthest (Positions)", smartLinkStats?.farthestPrefetch, id: "smartlink-mode-farthestPrefetch")
+            countRow("Titles Held (Not Fully On Screen)", smartLinkStats?.titlesHeld, id: "smartlink-mode-titlesHeld")
+            countRow("Titles Held Now", smartLinkStats?.titlesHeldNow, id: "smartlink-mode-titlesHeldNow")
+            countRow("Loading Looks Shown", smartLinkStats?.resolvingShown, id: "smartlink-mode-resolvingShown")
         } header: {
             Text("Smart Link Resolution")
         } footer: {
