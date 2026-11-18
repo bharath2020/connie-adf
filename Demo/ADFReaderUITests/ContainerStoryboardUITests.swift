@@ -268,7 +268,7 @@ final class ContainerStoryboardUITests: XCTestCase {
             check(fallback == nil, "highlighted caption: \(fallback ?? "")")
             pause()
             containerUIAttach(app, "06c-caption-search")
-            let kept = driver.searchNeighbourProblem(CaptionsParity.marks, step: 200)
+            let kept = driver.searchNeighbourProblem(CaptionsParity.linked, step: 200)
             check(kept == nil, "caption search neighbour: \(kept ?? "")")
             _ = driver.scroll(by: -200, until: driver.element(CaptionsParity.plain), maxDrags: 6)
             driver.clearSearch()

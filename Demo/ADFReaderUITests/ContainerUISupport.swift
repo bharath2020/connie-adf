@@ -272,7 +272,16 @@ enum CaptionsParity {
     static let s3 = "CAP-S3 Captions under each media layout"
     static let plain = ContainerLeaf("CAP-03", "0.3.0")
     static let plainImage = "CAP-03 image"
+    /// CAP-04 (bold, italic, inline code, struck, underlined, sub- and
+    /// superscript) and CAP-07 (author colour and a highlight) carry a run
+    /// background (inline code's band, the highlight): from iOS 26 such a
+    /// caption stays on SwiftUI in both arms
+    /// (`TextKit2Scope.captionRunsKeepRenderer`, code review M2), so
+    /// neither is a TextKit 2 neighbour. CAP-05 (linked, 0.5.0) is the
+    /// nearest TextKit 2 caption after CAP-03.
     static let marks = ContainerLeaf("CAP-04", "0.4.0")
+    static let highlighted = ContainerLeaf("CAP-07", "0.7.0")
+    static let runBackground = [marks, highlighted]
     static let linked = ContainerLeaf("CAP-05", "0.5.0")
     static let linkedImage = "CAP-05 image"
     static let linkedURL = "https://example.com/captions-parity/cap-05"

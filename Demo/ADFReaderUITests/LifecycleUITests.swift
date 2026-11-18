@@ -3369,8 +3369,9 @@ extension LifecycleUITests {
     /// neighbour 0.58.3.1, brought into view, on TextKit 2; clearing
     /// returns 0.58.3.0 to TextKit 2. Then the caption case on
     /// captions-parity: a search matching CAP-03's caption only (0.3.0)
-    /// falls back that owner (shown, no TextKit 2 row) while CAP-04
-    /// (0.4.0), brought into view, stays a TextKit 2 row; clearing returns
+    /// falls back that owner (shown, no TextKit 2 row) while CAP-05
+    /// (0.5.0; CAP-04 between them stays SwiftUI, a run background), brought
+    /// into view, stays a TextKit 2 row; clearing returns
     /// it. Passes after step 8 (the expand part step 5,
     /// the task step 6).
     func testK4SwitchDuringLoadAndSearchInContainers() throws {
@@ -3465,7 +3466,7 @@ extension LifecycleUITests {
         // The caption case (captions-parity).
         let captions = ContainerDriver(fixture: CaptionsParity.fixture, textKit2: true)
         captions.reader.waitForRenderer("TextKit 2")
-        let caption = CaptionsParity.plain, next = CaptionsParity.marks
+        let caption = CaptionsParity.plain, next = CaptionsParity.linked
         XCTAssertTrue(captions.element(caption).waitForExistence(timeout: 30), "captions-parity missing")
         let captionCounter = captions.search("plain caption under")
         if !captionCounter.hasPrefix("1 /") { failures.append("caption search: counter \(captionCounter)") }

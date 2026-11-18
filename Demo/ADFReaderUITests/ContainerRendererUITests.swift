@@ -527,20 +527,24 @@ final class ContainerRendererUITests: XCTestCase {
 
     // MARK: - Captions (step 8)
 
-    /// captions-parity: plain and marked captions (0.3.0, 0.4.0) and the
-    /// captions in a panel (0.13.1.0), a column (0.14.0.0.0) and an opened
-    /// expand (0.15.1.0) are TextKit 2 rows under TextKit 2 (after step
-    /// 8); the caption holding a mention, a date and a status (0.9.0) stays
-    /// SwiftUI in both arms (now).
+    /// captions-parity: the plain caption (0.3.0) and the captions in a
+    /// panel (0.13.1.0), a column (0.14.0.0.0) and an opened expand
+    /// (0.15.1.0) are TextKit 2 rows under TextKit 2 (after step 8); the
+    /// caption holding a mention, a date and a status (0.9.0) and the two
+    /// carrying a run background, CAP-04's inline code (0.4.0) and CAP-07's
+    /// highlight (0.7.0), stay SwiftUI in both arms (present, no TextKit 2
+    /// row; `captionRunsKeepRenderer`, code review M2).
     func testCaptionsDrawOnTextKit2AndAtomCaptionStaysSwiftUI() throws {
         typealias CAP = CaptionsParity
         for textKit2 in [false, true] {
             let arm = Self.arm(textKit2)
             let driver = launch(CAP.fixture, textKit2: textKit2)
             XCTAssertTrue(driver.element(CAP.plain).waitForExistence(timeout: 30), "captions-parity missing")
-            for leaf in [CAP.plain, CAP.marks] {
-                XCTAssertTrue(driver.scroll(by: 250, until: driver.element(leaf), maxDrags: 6), "\(leaf) not in view")
-                driver.expectEngine(leaf, textKit2: textKit2, arm)
+            XCTAssertTrue(driver.scroll(by: 250, until: driver.element(CAP.plain), maxDrags: 6), "\(CAP.plain) not in view")
+            driver.expectEngine(CAP.plain, textKit2: textKit2, arm)
+            for leaf in CAP.runBackground {
+                XCTAssertTrue(driver.scroll(by: 250, until: driver.element(leaf), maxDrags: 8), "\(leaf) not in view")
+                driver.expectEngine(leaf, textKit2: false, "\(arm) (a run background stays SwiftUI)")
             }
             XCTAssertTrue(driver.scroll(by: 250, until: driver.element(CAP.atoms), maxDrags: 12), "\(CAP.atoms) not in view")
             XCTAssertTrue(driver.isSwiftUI(CAP.atoms, timeout: 5), "\(arm): the atom caption is a TextKit 2 row")
@@ -605,8 +609,9 @@ final class ContainerRendererUITests: XCTestCase {
 
     /// A search matching CAP-03's caption only: under TextKit 2 its owner
     /// (0.3.0) draws on SwiftUI while the search is active (its text on
-    /// screen, no TextKit 2 row), CAP-04 (0.4.0), brought into view, stays
-    /// a TextKit 2 row, and clearing returns it. After step 8.
+    /// screen, no TextKit 2 row), CAP-05 (0.5.0, the nearest TextKit 2
+    /// caption: CAP-04 between them stays SwiftUI), brought into view,
+    /// stays a TextKit 2 row, and clearing returns it. After step 8.
     func testCaptionSearchFallsBackAndReturns() throws {
         typealias CAP = CaptionsParity
         let driver = launch(CAP.fixture, textKit2: true)
@@ -616,7 +621,7 @@ final class ContainerRendererUITests: XCTestCase {
         XCTAssertTrue(counter.hasPrefix("1 /"), "counter \(counter)")
         if let problem = driver.searchFallbackProblem(CAP.plain) { XCTFail("the highlighted caption: \(problem)") }
         containerUIAttach(driver.app, "caption-search-active")
-        if let problem = driver.searchNeighbourProblem(CAP.marks, step: 200) { XCTFail(problem) }
+        if let problem = driver.searchNeighbourProblem(CAP.linked, step: 200) { XCTFail(problem) }
         _ = driver.scroll(by: -200, until: driver.element(CAP.plain), maxDrags: 6)
         driver.clearSearch()
         XCTAssertTrue(driver.isTextKit2(CAP.plain), "\(CAP.plain) did not return to TextKit 2 after clearing")
