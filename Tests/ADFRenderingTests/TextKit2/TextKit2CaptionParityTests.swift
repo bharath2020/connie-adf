@@ -21,6 +21,10 @@ import ADFPreparation
 //    under each media layout; a layout that fails keeps its captions on
 //    SwiftUI (`TextKit2Scope.captionLayoutKeepsRenderer`).
 // (Rule 4, the media-row hang count, is the UI test K9.)
+// A caption whose runs carry a run background (a highlight, or inline
+// code's band) stays on SwiftUI (`TextKit2Scope.captionRunsKeepRenderer`,
+// reason `captionRunBackground`; lead dispositions M2): the centred band
+// is PR 1's residual 5 (`captionRunBackgroundStaysSwiftUI`).
 //
 // Before iOS 26 every caption stays on SwiftUI (the container OS gate,
 // `TextKit2Eligibility.containerTextMatchesText`, which the caption context
@@ -182,7 +186,8 @@ enum TK2Caption {
 
     /// Whether TextKit 2 draws a caption of `segments` on this OS: its
     /// verdict in the caption context (every caption falls back before
-    /// iOS 26, `osGatedContainer`).
+    /// iOS 26, `osGatedContainer`; a run-background caption from iOS 26,
+    /// `captionRunBackground`).
     static func drawsRow(_ segments: [InlineSegment]) -> Bool {
         if case .eligible = TextKit2Eligibility.verdict(segments, owner: .root, context: .caption) { return true }
         return false
@@ -337,9 +342,10 @@ enum TK2Caption {
     /// this OS and under this layout, owned by the media; the caption's
     /// size, alone at the column's width, within 0.01 pt between the arms
     /// and equal to the placed row's; and, rendered, the ink box of the
-    /// media box and of the caption at the same rows, their columns
-    /// within one device pixel. Returns the failures, the residual-1 flag
-    /// and whether a TextKit 2 caption row was compared.
+    /// media box and of the caption at the same pixel rows and columns,
+    /// exactly (code review F-R21: no unnamed one-pixel allowance). Returns
+    /// the failures, the residual-1 flag and whether a TextKit 2 caption
+    /// row was compared.
     @MainActor
     static func compareFrames(_ media: Media, env: TK2Parity.Environment, width: CGFloat) async throws -> (failures: [String], residual: Bool, compared: Bool) {
         let a = Host(width: width)
@@ -392,9 +398,7 @@ enum TK2Caption {
                 continue
             }
             if ia.rows != ib.rows { failures.append("\(name): ink rows swiftUI=\(ia.rows) textKit2=\(ib.rows)") }
-            if abs(ia.columns.lowerBound - ib.columns.lowerBound) > 1 || abs(ia.columns.upperBound - ib.columns.upperBound) > 1 {
-                failures.append("\(name): ink columns swiftUI=\(ia.columns) textKit2=\(ib.columns)")
-            }
+            if ia.columns != ib.columns { failures.append("\(name): ink columns swiftUI=\(ia.columns) textKit2=\(ib.columns)") }
         }
         return (failures, residual, true)
     }
@@ -488,8 +492,11 @@ struct TextKit2CaptionParityTests {
     /// row in the inherited foreground the caption leaf sets. Every mark
     /// that colours, decorates or fills text, light and dark, Large and
     /// AX3, at the device's scale, under PR 1's pixel rule with no known
-    /// issue. A miss the same marks also show as a root paragraph (no
-    /// inherited colour) is PR 1's residual, not this rule's.
+    /// issue and no exception (lead dispositions M3: the earlier
+    /// root-paragraph exception never fired on 3x, 2x or iOS 18.5, and
+    /// excused any failure, so it is gone). The fill marks (a highlight,
+    /// inline code's band) stay on SwiftUI by the run-background rule
+    /// (`captionRunBackground`), so their arms are both `Text`.
     @Test("drop rule 2: the caption's secondary foreground draws as Text draws it", arguments: [DynamicTypeSize.large, .accessibility3], [false, true])
     func secondaryForegroundPixels(size: DynamicTypeSize, dark: Bool) async throws {
         let env = TK2Parity.Environment(size: size, dark: dark)
@@ -532,22 +539,8 @@ struct TextKit2CaptionParityTests {
                 print("CAPTION_SECONDARY_CONTROL size=\(size) dark=\(dark) differing=\(control.differing)/\(control.total) seen=\(!control.failures.isEmpty)")
             }
             guard !verdict.failures.isEmpty else { continue }
-            // The exception: the same marks as a root paragraph.
-            let root = try await TK2Parity.fixture(caption.name + "-root", content: caption.content)
-            let rootHeight = max(TK2Parity.height(root, arm: .swiftUI, env: env, width: C.width) + 40, 200)
-            let rootVerdict = C.pixelFailures(
-                try TK2Parity.render(root, arm: .swiftUI, env: env, width: C.width, height: rootHeight),
-                try TK2Parity.render(root, arm: .textKit2, env: env, width: C.width, height: rootHeight), dark: dark
-            )
-            if rootVerdict.failures.isEmpty {
-                failed += 1
-                Issue.record("\(label): drop rule 2 fires: \(verdict.failures.joined(separator: "; "))")
-            } else {
-                print("CAPTION_SECONDARY_ROOT_RESIDUAL case=\(caption.name) size=\(size) dark=\(dark) root=\(rootVerdict.failures.joined(separator: "; "))")
-                withKnownIssue("PR 1's residual: the same marks miss as a root paragraph") {
-                    Issue.record("\(label): \(verdict.failures.joined(separator: "; "))")
-                }
-            }
+            failed += 1
+            Issue.record("\(label): drop rule 2 fires: \(verdict.failures.joined(separator: "; "))")
         }
         print("CAPTION_SECONDARY_SUMMARY size=\(size) dark=\(dark) scale=\(TK2Parity.nativeScale) cases=\(C.foregroundCaptions.count) ruleFailures=\(failed)")
     }
@@ -697,6 +690,68 @@ struct TextKit2CaptionParityTests {
         let all = ADFTextRenderer.textKit2Coverage(of: [media.block], allowed: [.media])
         #expect(all.eligibleCaptionLeaves == 0 && all.fallbackCaptionLeaves == (TextKit2Scope.captionsUseTextKit2 ? 1 : 0))
         try await Self.expectSameSwiftUIDrawing(media, theme: C.theme)
+    }
+
+    /// Lead dispositions M2 (reversing C42): a caption whose runs carry a
+    /// run background stays on SwiftUI, reason `captionRunBackground`, from
+    /// iOS 26 (before it every caption is `osGatedContainer`): a highlight
+    /// (CAP-07's mark), inline code's band, both, under every layout. The
+    /// view draws no row on either arm and the same pixels; the coverage
+    /// walk counts the caption as a fallback with the same reason; the
+    /// same words without the fill draw a row (the control). In
+    /// captions-parity exactly CAP-04 (inline code) and CAP-07 (a
+    /// highlight) carry one (`<data>/fixP/tools/capbg.py`).
+    @Test("captionRunBackgroundStaysSwiftUI: a caption with a highlight or inline code stays on SwiftUI on both arms under every layout (captionRunBackground), counted by the walk; the plain control draws a row")
+    func captionRunBackgroundStaysSwiftUI() async throws {
+        let reason: TextKit2Eligibility.Fallback = C.captionsDrawOnThisOS ? .captionRunBackground : .osGatedContainer
+        let shapes: [(name: String, content: String)] = [
+            ("highlight", [C.t("A caption with "), C.t("highlighted words", C.highlight), C.t(" on a light fill")].joined(separator: ",")),
+            ("inline-code", [C.t("A caption with "), C.t("inline code", C.code), C.t(" on its band")].joined(separator: ",")),
+            ("both", [C.t("Code "), C.t("x = 1", C.code), C.t(" and "), C.t("a highlight", C.highlight)].joined(separator: ",")),
+        ]
+        for layout in C.layouts {
+            for shape in shapes {
+                let media = try await C.media("\(shape.name)-\(layout)", shape.content, layout: layout)
+                let verdict = TextKit2Eligibility.verdict(media.caption, owner: .root, context: .caption)
+                guard case .fallback(let got) = verdict, got == reason else {
+                    Issue.record("\(media.name): \(verdict), expected \(reason)")
+                    continue
+                }
+                // Root text with the same marks is not affected.
+                #expect(TextKit2Eligibility.describableText(media.caption) != nil, "\(media.name): the content itself is eligible")
+                #expect(!C.drawsRow(media.caption), "\(media.name)")
+                var reasons: [TextKit2Eligibility.Fallback] = []
+                TextKit2Scope.forEachLeaf(in: [media.block], allowed: [.media]) { leaf in
+                    if leaf.position == .caption, case .fallback(let reason) = leaf.verdict { reasons.append(reason) }
+                }
+                #expect(reasons == [reason], "\(media.name): the walk's reasons \(reasons)")
+                let all = ADFTextRenderer.textKit2Coverage(of: [media.block], allowed: [.media])
+                #expect(all.eligibleCaptionLeaves == 0 && all.fallbackCaptionLeaves == 1, "\(media.name): \(all)")
+                if layout == "center" { try await Self.expectSameSwiftUIDrawing(media, theme: C.theme) }
+            }
+        }
+        // The control: the same words without a fill draw a row from iOS 26.
+        let plain = try await C.media("plain", C.t("A caption with highlighted words on a light fill"))
+        #expect(C.drawsRow(plain.caption) == C.captionsDrawOnThisOS)
+        #expect(TextKit2Scope.captionRunsKeepRenderer(try #require(TextKit2Eligibility.describableText(plain.caption))))
+        let host = C.Host(width: C.width)
+        defer { host.close() }
+        host.show(C.environment(BlockView(block: plain.block), arm: .textKit2, env: TK2Parity.Environment()))
+        try await host.settle()
+        #expect(host.rows.compactMap(\.ownerID) == (C.captionsDrawOnThisOS ? [plain.owner] : []), "the plain control: \(host.rows.map { $0.ownerID ?? "?" })")
+        // captions-parity: CAP-04 (inline code) and CAP-07 (a highlight)
+        // are its run-background captions; every other caption keeps its
+        // verdict.
+        let blocks = try await TextKit2ListCoverageTests.blocks("captions-parity")
+        var runBackground: [String] = []
+        TextKit2Scope.forEachLeaf(in: blocks) { leaf in
+            guard leaf.position == .caption, let text = TextKit2Eligibility.describableText(leaf.segments) else { return }
+            if !TextKit2Scope.captionRunsKeepRenderer(text) {
+                runBackground.append(leaf.ownerID)
+                if case .fallback(let got) = leaf.verdict, got == reason {} else { Issue.record("\(leaf.ownerID): \(leaf.verdict)") }
+            }
+        }
+        #expect(runBackground == ["0.4.0", "0.7.0"], "captions-parity run-background captions \(runBackground)")
     }
 
     @Test("a raw-font theme keeps captions on SwiftUI on both arms")

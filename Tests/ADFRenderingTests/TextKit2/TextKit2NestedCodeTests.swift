@@ -310,13 +310,14 @@ struct TextKit2NestedCodeTests {
 
     // MARK: Copy
 
-    /// Copy takes the prepared string (`CodeBlockView.copyCode`), the same
-    /// `code` the leaf draws: the prepared code is the source's bytes, the
-    /// TextKit 2 row draws exactly those, and, where the unit-test host
-    /// exposes the Copy button to accessibility, activating it puts exactly
-    /// those bytes on the pasteboard (the UI test
-    /// `ContainerRendererUITests.testNestedCodePansAndCopiesExactBytes`
-    /// copies through a real tap).
+    /// Copy takes the prepared string (`CodeBlockView.copyText`, which
+    /// `copyCode` puts on the pasteboard), the same `code` the leaf draws:
+    /// the prepared code is the source's bytes, the TextKit 2 row draws
+    /// exactly those, Copy's text is exactly those, and where the unit-test
+    /// host lists the Copy button to accessibility, activating it must put
+    /// exactly those bytes on the pasteboard (code review F-R17). The UI
+    /// test `ContainerRendererUITests.testNestedCodePansAndCopiesExactBytes`
+    /// copies through a real tap.
     @Test("copyBytesAreExact: nested code is drawn and copied as the source's exact bytes", arguments: TK2NestedCode.proposalPlaces)
     func copyBytesAreExact(place: TK2NestedCode.Place) async throws {
         let source = "let path = \"C:\\\\tmp\\\\nested\" // copy me exactly\n    print(path)   \n\n  }   // trailing spaces"
@@ -340,7 +341,9 @@ struct TextKit2NestedCodeTests {
         try await hosted.settle()
         let changed = pasteboard.changeCount != before
         print("NESTED_CODE_COPY place=\(place) listed=\(copy != nil) activated=\(activated) changed=\(changed) os=\(TK2Parity.osVersion)")
-        if changed {
+        #expect(Array(CodeBlockView.copyText(prepared).utf8) == Array(source.utf8), "\(place): Copy's text \(CodeBlockView.copyText(prepared).debugDescription)")
+        if copy != nil {
+            #expect(activated && changed, "\(place): the listed Copy button did not copy (activated \(activated), changed \(changed))")
             #expect(pasteboard.string.map { Array($0.utf8) } == Array(source.utf8), "\(place): copied \(pasteboard.string?.debugDescription ?? "nil")")
         }
     }
@@ -457,7 +460,7 @@ struct TextKit2NestedCodeTests {
             }
             let want: TextKit2Eligibility.Fallback? = TextKit2Eligibility.containerTextMatchesText ? nil : .osGatedContainer
             #expect(verdicts == [want], "\(place): \(verdicts)")
-            let admission = ADFTextRenderer.textKit2CodeAdmission(
+            let admission = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
                 of: model.blocks, dynamicTypeSize: .large, legibilityWeight: .regular, displayScale: scale, layoutDirection: .leftToRight
             )
             let gated = TextKit2Eligibility.containerTextMatchesText ? 1 : 0
@@ -490,7 +493,7 @@ struct TextKit2NestedCodeTests {
 
         let coverage = ADFTextRenderer.textKit2Coverage(of: model.blocks)
         #expect(coverage.eligibleNestedCode == (migrates ? 7 : 0) && coverage.fallbackNestedCode == (migrates ? 0 : 7), "\(coverage)")
-        let admission = ADFTextRenderer.textKit2CodeAdmission(
+        let admission = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
             of: model.blocks, dynamicTypeSize: .large, legibilityWeight: .regular, displayScale: scale, layoutDirection: .leftToRight
         )
         #expect(admission.nestedCodeAdmitted == (migrates ? 6 : 0) && admission.nestedCodeGated == (migrates ? 1 : 0), "\(admission)")

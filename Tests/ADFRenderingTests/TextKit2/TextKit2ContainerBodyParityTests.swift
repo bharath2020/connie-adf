@@ -121,9 +121,10 @@ enum TK2ContainerBody {
     /// draws left to right (PR 2's rules, unchanged at the nested position):
     /// none when rule B rejects the list; else each row rule A keeps, its
     /// leader (when it has text) and its trailing paragraphs and headings.
-    /// Rule D passes at every width the matrices use (a depth-1 row needs
-    /// 2 × (marker + gap) ≤ 190 pt at AX5), and right to left rule C keeps
-    /// every list row on SwiftUI (`listOwners(in:)`, subtracted per
+    /// Rule D passes at every width the matrices use below the
+    /// accessibility sizes; right to left rule C, and at the accessibility
+    /// sizes the nested-list size rule (`nestedListSizeKeepsRenderer`),
+    /// keep every list row on SwiftUI (`listOwners(in:)`, subtracted per
     /// environment).
     static func listOwners(_ rows: [PreparedListRow]) -> Set<String> {
         guard TextKit2Scope.listKeepsRenderer(rows) else { return [] }
@@ -246,30 +247,30 @@ enum TK2ContainerBody {
     @MainActor
     static func leafControl(
         _ children: [RenderBlock], in container: P.Container, width: CGFloat, env: TK2Parity.Environment
-    ) throws -> (dHeight: CGFloat, dFirst: CGFloat, dLast: CGFloat, differing: Int, pixelFailures: Int) {
-        var result: (dHeight: CGFloat, dFirst: CGFloat, dLast: CGFloat, differing: Int, pixelFailures: Int) = (0, 0, 0, 0, 0)
+    ) throws -> P.LeafControl {
+        var result = P.LeafControl()
+        for (a, b) in try leafArms(children, in: container, width: width, env: env) { result.add(a, b, dark: env.dark) }
+        return result
+    }
+
+    /// Each child hosted alone as the leaf control hosts it, both arms
+    /// rendered (`TextKit2ContainerResidualTests` paints defects into them).
+    @MainActor
+    static func leafArms(
+        _ children: [RenderBlock], in container: P.Container, width: CGFloat, env: TK2Parity.Environment
+    ) throws -> [(swiftUI: P.Arm, textKit2: P.Arm)] {
         let margin = P.spacing * 2
-        for child in children {
-            let (a, b) = try P.pair(width: width + 2 * margin, pixels: true) { arm in
+        return try children.map { child in
+            try P.pair(width: width + 2 * margin, pixels: true, dark: env.dark) { arm in
                 let renderer = TextKit2Scope.childRenderer(
                     for: child.kind, in: parent(container), inherited: arm,
-                    allowed: TextKit2Scope.containerChildKinds, layoutDirection: env.direction
+                    allowed: TextKit2Scope.containerChildKinds, layoutDirection: env.direction, dynamicTypeSize: env.size
                 )
                 return P.environment(
                     BlockView(block: child).padding(.horizontal, margin), arm: renderer, env: env, rowWidth: width, allowed: nil
                 ).environment(\.adfTextContainerContext, .container)
             }
-            var verdict = P.geometry(a.guides, b.guides)
-            result.dHeight += verdict.dHeight
-            result.dFirst = max(result.dFirst, verdict.dFirst)
-            result.dLast = max(result.dLast, verdict.lastResidual ? 0 : verdict.dLast)
-            if let x = a.bitmap, let y = b.bitmap {
-                P.pixels(&verdict, x, y, crops: [P.Crop(name: "leaf", columns: 0..<x.width)], background: (255, 255, 255))
-            }
-            result.differing += verdict.differing
-            if !verdict.pixelFailures.isEmpty { result.pixelFailures += 1 }
         }
-        return result
     }
 }
 
@@ -282,13 +283,13 @@ extension TextKit2ContainerParityTests {
     /// outer container is `container`. `allowed`: the container allow list
     /// (`nil`: the production one); an open expand's body (prepared by the
     /// view on opening) is expected as the same body in a quote, whose
-    /// prepared ids (node paths) it shares. Right to left no list text is
-    /// expected (rule C). `knownIssues`: cases (`shape=… size=… bold=… dir=…
-    /// W=…`) expected to fail, with the reason; each one recorded as a known
-    /// issue when it fails and as a failure when it runs and passes.
+    /// prepared ids (node paths) it shares. Right to left (rule C) and at
+    /// the accessibility sizes (`nestedListSizeKeepsRenderer`) no list text
+    /// is expected. The cases are `TK2ContainerProbe.cases()`: the mode's
+    /// environments and widths, and in the sample its corners (320 pt,
+    /// right to left, Bold Text, dark, AX).
     func productionMatrix(
-        _ test: String, container: P.Container, shapes: [B.Shape], nested: Bool, allowed: Set<TextKit2BlockKind>? = nil,
-        knownIssues: [String: String] = [:]
+        _ test: String, container: P.Container, shapes: [B.Shape], nested: Bool, allowed: Set<TextKit2BlockKind>? = nil
     ) async throws {
         let clock = ContinuousClock()
         let start = clock.now
@@ -327,11 +328,11 @@ extension TextKit2ContainerParityTests {
                     P.environment(BlockView(block: block), arm: B.rowRenderer(block, arm, allowed: allowList), env: env,
                                   rowWidth: width, search: model.search, allowed: allowed)
                 }
-                guard case .expand = block.kind else { return try P.pair(width: width, pixels: pixels, make) }
+                guard case .expand = block.kind else { return try P.pair(width: width, pixels: pixels, dark: env.dark, make) }
                 if !rows {
                     // Nothing to wait for on TextKit 2: settle the opened
                     // body on SwiftUI, then flip.
-                    let host = P.Host(width: width)
+                    let host = P.Host(width: width, dark: env.dark)
                     defer { host.close() }
                     host.show(make(.swiftUI))
                     for _ in 0..<50 { host.layout(); try await Task.sleep(for: .milliseconds(10)) }
@@ -340,7 +341,7 @@ extension TextKit2ContainerParityTests {
                     for _ in 0..<20 { host.layout(); try await Task.sleep(for: .milliseconds(10)) }
                     return (a, P.arm(host))
                 }
-                let (a, b, _) = try await P.expandPair(width: width, pixels: pixels, make)
+                let (a, b, _) = try await P.expandPair(width: width, pixels: pixels, dark: env.dark, make)
                 return (a, b)
             }
             print("CONTAINER_PARITY_SHAPE test=\(test) container=\(container.rawValue) shape=\(shape.name) migrates=\(shape.migrates) expected=\(expected.sorted()) prepared=\(P.shapeDescription(block))")
@@ -373,31 +374,37 @@ extension TextKit2ContainerParityTests {
                 continue
             }
 
-            for env in P.environments() {
-                for documentWidth in P.documentWidths {
+            for (env, documentWidth) in P.cases() {
+                do {
                     let width = P.rowWidth(documentWidth: documentWidth)
                     let pixels = shape.migrates && P.comparesPixels(env, documentWidth: documentWidth)
                     // The engine: exactly the expected owners on TextKit 2
-                    // (no list text right to left, rule C, and no code, the
-                    // code gate's direction rule; nor list text where the
-                    // container's bound leaves a row no text column, rule
-                    // D), nothing on the SwiftUI arm, and for a shape kept
-                    // on SwiftUI no row at all.
+                    // (nothing right to left, the container direction
+                    // rule of lead dispositions F-Q6; no list text at the
+                    // accessibility sizes, the nested-list size rule; nor
+                    // list text where the container's bound leaves a row
+                    // no text column, rule D), nothing on the SwiftUI arm,
+                    // and for a shape kept on SwiftUI no row at all.
                     let narrow = TK2ContainerLists.narrowListText(
                         in: children, bound: P.childWidth(container, rowWidth: width, env: env), size: env.size
                     )
-                    let expected = (env.direction == .rightToLeft ? expected.subtracting(listText).subtracting(code) : expected).subtracting(narrow)
+                    var expected = expected.subtracting(narrow)
+                    if env.direction == .rightToLeft { expected = [] }
+                    // From xxxLarge nothing either (the container size
+                    // rule, code review F-R4 and F-Q1).
+                    if !TextKit2Scope.containerSizeKeepsRenderer(env.size) { expected = [] }
+                    if !TextKit2Scope.nestedListSizeKeepsRenderer(env.size) { expected = expected.subtracting(listText) }
                     let (a, b) = try await host(width, env, pixels: pixels, rows: !expected.isEmpty)
                     var verdict = P.geometry(a.guides, b.guides)
                     verdict.engine = a.rows.isEmpty && b.owners == expected && b.rows.count == expected.count
                     if pixels, let ba = a.bitmap, let bb = b.bitmap {
-                        crops(&verdict, container, ba, bb, width: width, env: env, swiftUIArm: a)
+                        crops(&verdict, container, ba, bb, width: width, env: env, swiftUIArm: a, textKit2Arm: b)
                     }
-                    if !verdict.pass, verdict.geometryPass {
-                        // Pixels only: the leaf's (C1) when the same blocks
-                        // alone at the child width differ too.
-                        verdict.leaf = try B.leafControl(children, in: container, width: P.childWidth(container, rowWidth: width, env: env), env: env)
-                    } else if !verdict.geometryPass {
+                    if !verdict.pass {
+                        // The leaf control: a pixel-only failure is the
+                        // leaf's (C1) when the same blocks alone at the
+                        // child width differ the same way, owner by owner
+                        // (`residualMismatch`).
                         verdict.leaf = try B.leafControl(children, in: container, width: P.childWidth(container, rowWidth: width, env: env), env: env)
                     }
                     let fields = "test=\(test) container=\(container.rawValue) shape=\(shape.name) \(P.fields(env)) W=\(documentWidth)"
@@ -407,17 +414,10 @@ extension TextKit2ContainerParityTests {
                     if !accepted || P.printsEveryCase || !verdict.pass {
                         print(P.line(fields, verdict, a, b).replacingOccurrences(of: "CONTAINER_PROBE ", with: "CONTAINER_PARITY ") + " accepted=\(accepted)")
                     }
-                    let known = knownIssues["shape=\(shape.name) \(P.fields(env)) W=\(documentWidth)"]
                     if !accepted {
-                        let failure = "\(fields): engine=\(verdict.engine) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")"
-                        if let known {
-                            withKnownIssue(Comment(rawValue: known)) { Issue.record(Comment(rawValue: failure)) }
-                        } else {
-                            failures.append(failure)
-                        }
+                        let failure = "\(fields): engine=\(verdict.engine) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")\(verdict.geometryPass && !verdict.pixelFailures.isEmpty ? " residualMismatch={\(verdict.residualMismatch ?? "-")}" : "")"
+                        failures.append(failure)
                         if let ba = a.bitmap, let bb = b.bitmap { P.dump(key, fields, ba, bb) }
-                    } else if known != nil {
-                        failures.append("\(fields): the known issue no longer reproduces (\(known!)); remove it")
                     }
                     // Nothing outside the expected owners (a list, or code
                     // laid out right to left, left on SwiftUI) drew through

@@ -12,8 +12,11 @@ import ADFPreparation
 // (`listKeepsRenderer`) from the prepared rows, rule C
 // (`listDirectionKeepsRenderer`: left to right only), rule D
 // (`listTextFits`) against the container's width bound, and before iOS 26
-// the list gate (`listsMatchText`). Panels holding a list keep their body on
-// SwiftUI (`panelKeepsRenderer`, the panel shape probes), and so does every
+// the list gate (`listsMatchText`). At the accessibility text sizes a list
+// below any container boundary stays on SwiftUI
+// (`nestedListSizeKeepsRenderer`, lead dispositions M1). Panels holding a
+// list keep their body on SwiftUI (`panelKeepsRenderer`, the panel shape
+// probes), and so does every
 // side-by-side column (`horizontalColumnKeepsRenderer`, the off-grid probe):
 // the minimum positions are a quote, an expand body, a bodied-extension
 // body and a stacked layout column.
@@ -105,7 +108,9 @@ enum TK2ContainerLists {
     /// as their boundaries do (quote 2, expand body 2.5, extension body 3
     /// spacings; a stacked column not at all); a panel holding a list keeps
     /// it on SwiftUI anyway, and side by side no column child migrates, so
-    /// neither is walked.
+    /// neither is walked. At the accessibility sizes no nested list text
+    /// migrates at all (`nestedListSizeKeepsRenderer`): callers subtract
+    /// every nested list owner there, and this set is a subset of it.
     @MainActor
     static func narrowListText(in blocks: [RenderBlock], bound: CGFloat, size: DynamicTypeSize) -> Set<String> {
         var owners: Set<String> = []
@@ -152,25 +157,17 @@ extension TextKit2ContainerParityTests {
     /// first checks the list holds `.expand`, so the matrix can never pass
     /// with the expand body on SwiftUI.
     ///
-    /// One full-matrix case is a strict known issue (lead call C35, option
-    /// B): at AX4 a list 268 pt wide (here the 320 pt document's expand
-    /// body) gives a depth-2 row a 12 pt text column, one glyph per line,
-    /// and the engines break and place its last lines apart (dLast 28 pt).
-    /// The list alone at 268 pt differs too, and so do a quote at a 316 pt
-    /// document, an extension body at 324 and a stacked column at 300
-    /// (`ADF_CONTAINER_PROBES_WIDTHS`): PR 2's rule D floor (1 pt), not the
-    /// expand. The PR 4 description carries the follow-up (a text-column
-    /// floor).
+    /// At AX4 a list 268 pt wide (the 320 pt document's expand body) gave
+    /// its depth-2 row a 12 pt text column and the engines placed its last
+    /// lines 28 pt apart; the same list alone, in a quote, an extension
+    /// body and a stacked column did too. Lists below a container now stay
+    /// on SwiftUI at every accessibility size (`nestedListSizeKeepsRenderer`,
+    /// lead dispositions M1, reversing C35), so the matrix expects no list
+    /// text there and asserts every case.
     @Test("nestedListInExpandBody: list text in an open expand's body matches SwiftUI through the production path")
     func nestedListInExpandBody() async throws {
         #expect(TextKit2Scope.containerChildKinds.contains(.expand), "expand bodies are in the production allow list (step 5)")
-        try await productionMatrix(
-            "nestedListInExpandBody", container: .expand, shapes: L.shapes, nested: false,
-            knownIssues: [
-                "shape=nestedList size=accessibility4 bold=0 dir=ltr W=320.0":
-                    "PR 2 rule D residual (lead call C35): a 268 pt list at AX4 gives its depth-2 row a 12 pt text column, which the engines break apart; PR 4 description follow-up",
-            ]
-        )
+        try await productionMatrix("nestedListInExpandBody", container: .expand, shapes: L.shapes, nested: false)
     }
 
     @Test("nestedListInStackedColumn: list text in stacked layout columns (beside a paragraph, beside another list, a rule-A row among them) matches SwiftUI through the production path")
@@ -185,11 +182,13 @@ extension TextKit2ContainerScopeTests {
     /// A document hosted under `.textKit2` the way the app hosts it, at
     /// `width` in `direction` and `size` (compact width: columns stack);
     /// returns this window's rows by owner. `allowed` widens the allow
-    /// list (`nil`: the production list).
+    /// list (`nil`: the production list). `waitFor`: owners to wait for
+    /// (an open expand's body is prepared off the main actor on first
+    /// opening), up to 2 s; every top-level expand opens when it is set.
     @MainActor
     static func hostedListRows(
         _ content: [String], allowed: Set<TextKit2BlockKind>? = nil, width: CGFloat = 390,
-        direction: LayoutDirection = .leftToRight, size: DynamicTypeSize = .large
+        direction: LayoutDirection = .leftToRight, size: DynamicTypeSize = .large, waitFor: Set<String>? = nil
     ) async throws -> (blocks: [RenderBlock], rows: [String: TextKit2RowView]) {
         let json = "{\"version\":1,\"type\":\"doc\",\"content\":[\(content.joined(separator: ","))]}"
         let model = ADFDocumentModel()
@@ -198,6 +197,9 @@ extension TextKit2ContainerScopeTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         try #require(model.phase == .ready)
+        if waitFor != nil {
+            for block in model.blocks { if case .expand = block.kind { model.expandedBlocks.insert(block.id) } }
+        }
         let document = ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2)
             .transformEnvironment(\.adfContainerChildKinds) { kinds in
                 if let allowed { kinds = allowed }
@@ -208,6 +210,12 @@ extension TextKit2ContainerScopeTests {
         let hosted = TK2CodeLogic.Hosted(document, size: CGSize(width: width, height: 6_000))
         defer { hosted.close() }
         try await hosted.settle()
+        if let waitFor {
+            for _ in 0..<100 where !waitFor.isSubset(of: hosted.owners) {
+                try await Task.sleep(for: .milliseconds(20))
+                hosted.window.layoutIfNeeded()
+            }
+        }
         try await hosted.settle()
         var rows: [String: TextKit2RowView] = [:]
         for row in hosted.rows { if let owner = row.ownerID { rows[owner] = row } }
@@ -267,7 +275,7 @@ extension TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("rtlListInContainerStaysSwiftUI: right to left, list text in a quote, an extension body and a stacked column stays on SwiftUI (rule C) while the prose beside it migrates; left to right the same lists migrate")
+    @Test("rtlListInContainerStaysSwiftUI: right to left, list text in a quote, an extension body and a stacked column stays on SwiftUI (rule C), and so does the prose beside it (the container direction rule); left to right the same lists and prose migrate")
     @MainActor
     func rtlListInContainerStaysSwiftUI() async throws {
         let p = { (text: String) in TK2ContainerProbe.paragraph(TK2ContainerProbe.t(text)) }
@@ -284,14 +292,64 @@ extension TextKit2ContainerScopeTests {
         #expect(prose.count == 4, "\(prose.sorted())")
         #expect(Set(ltr.keys) == Self.passing(prose.union(listText)), "left to right: \(ltr.keys.sorted())")
         let (_, rtl) = try await Self.hostedListRows(content, direction: .rightToLeft)
-        #expect(Set(rtl.keys) == Self.passing(prose), "right to left: \(rtl.keys.sorted())")
+        #expect(rtl.isEmpty, "right to left: \(rtl.keys.sorted())")
         #expect(!TextKit2Scope.listDirectionKeepsRenderer(.rightToLeft))
+        #expect(!TextKit2Scope.containerDirectionKeepsRenderer(.rightToLeft))
     }
 
-    @Test("narrowNestedListStaysSwiftUI: rule D reads the container's bound: at a width where a depth-2 row has a text column at the top level, the same row in a quote (16 pt narrower) stays on SwiftUI while its shallower rows migrate")
+    /// Lead dispositions M1 (reversing C35): at AX4 a list 268 pt wide
+    /// gives a depth-2 row a 12 pt text column and the engines place its
+    /// last lines up to 28 pt apart, in a quote, an extension body, an
+    /// expand body and a stacked column alike, and in the list alone. Lists
+    /// below a container therefore stay on SwiftUI at every accessibility
+    /// size (`nestedListSize`), while a top-level list keeps PR 2's rules
+    /// (on TextKit 2 from iOS 26). From xxxLarge the prose beside them
+    /// stays on SwiftUI too (the container size rule, code review F-R4 and
+    /// F-Q1). Below xxxLarge the same nested lists and prose migrate.
+    @Test("nestedListAtAccessibilitySizeStaysSwiftUI: at xxxLarge, AX1, AX4 and AX5 nothing in a quote, an extension body, an open expand's body or a stacked column draws on TextKit 2 (nested lists by the nested-list size rule at the accessibility sizes, everything by the container size rule) while a top-level list migrates; at Large, xLarge and xxLarge the nested lists and the prose beside them migrate")
+    @MainActor
+    func nestedListAtAccessibilitySizeStaysSwiftUI() async throws {
+        let p = { (text: String) in TK2ContainerProbe.paragraph(TK2ContainerProbe.t(text)) }
+        let list = TK2ContainerProbe.bulletList([
+            TK2ContainerProbe.item(p("First row."), TK2ContainerProbe.bulletList([TK2ContainerProbe.item(p("Nested row."))])),
+            TK2ContainerProbe.item(p("Second row.")),
+        ])
+        let expandBody = [p("Expand prose."), list]
+        let content = [
+            list,
+            TK2ContainerProbe.quote([p("Quote prose."), list]),
+            TK2ContainerProbe.bodiedExtension([p("Extension prose."), list]),
+            TK2ContainerProbe.expand(expandBody),
+            TK2ContainerProbe.section([(50, [p("Column prose."), list]), (50, [p("Other column.")])]),
+        ]
+        // The open expand's body shares the prepared ids of the same body
+        // in a quote at its position.
+        var standIn = content
+        standIn[3] = TK2ContainerProbe.quote(expandBody)
+        let blocks = try await TK2ContainerProbe.prepared(standIn)
+        let top = TK2ContainerBody.listOwners(in: [blocks[0]])
+        let nested = TK2ContainerBody.listOwners(in: Array(blocks.dropFirst()))
+        #expect(top.count == 3 && nested.count == 12, "top \(top.sorted()) nested \(nested.sorted())")
+        let prose = TK2ContainerColumns.allTextOwners(Array(blocks.dropFirst())).subtracting(nested)
+        #expect(prose.count == 5, "\(prose.sorted())")
+        let topText = TextKit2Eligibility.listsMatchText ? top : []
+        for size in [DynamicTypeSize.large, .xLarge, .xxLarge, .xxxLarge, .accessibility1, .accessibility4, .accessibility5] {
+            let accessible = size.isAccessibilitySize
+            #expect(TextKit2Scope.nestedListSizeKeepsRenderer(size) == !accessible, "\(size)")
+            let expected = topText.union(TextKit2Scope.containerSizeKeepsRenderer(size) ? Self.passing(prose.union(nested)) : [])
+            let (_, rows) = try await Self.hostedListRows(content, size: size, waitFor: expected)
+            #expect(Set(rows.keys) == expected,
+                    "\(size): missing \(expected.subtracting(rows.keys).sorted()), unexpected \(Set(rows.keys).subtracting(expected).sorted())")
+        }
+    }
+
+    /// Below xxxLarge (where a container may pass the renderer at all,
+    /// `containerSizeKeepsRenderer`), at xxLarge.
+    @Test("narrowNestedListStaysSwiftUI: rule D reads the container's bound: at xxLarge, at a width where a depth-2 row has a text column at the top level, the same row in a quote (16 pt narrower) stays on SwiftUI while its shallower rows migrate")
     @MainActor
     func narrowNestedListStaysSwiftUI() async throws {
-        let size = DynamicTypeSize.accessibility5
+        let size = DynamicTypeSize.xxLarge
+        #expect(TextKit2Scope.nestedListSizeKeepsRenderer(size) && TextKit2Scope.containerSizeKeepsRenderer(size))
         let p = { (text: String) in TK2ContainerProbe.paragraph(TK2ContainerProbe.t(text)) }
         let list = TK2ContainerProbe.bulletList([
             TK2ContainerProbe.item(p("Top."), TK2ContainerProbe.bulletList([

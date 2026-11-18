@@ -187,19 +187,23 @@ struct TextKit2CodeScopeRuleTests {
                 for parent in [TextKit2ContainerParent.panel, .quote, .expandBody, .extensionBody, .column(sideBySide: false), .column(sideBySide: true)] {
                     for direction in [LayoutDirection.leftToRight, .rightToLeft] {
                         let renderer = TextKit2Scope.childRenderer(
-                            for: child.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: direction
+                            for: child.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: direction,
+                            dynamicTypeSize: .large
                         )
-                        let expected: ADFTextRenderer = parent == .column(sideBySide: true) ? .swiftUI : .textKit2
+                        // Right to left no container passes it (the
+                        // container direction rule, lead dispositions F-Q6).
+                        let expected: ADFTextRenderer = parent == .column(sideBySide: true) || direction == .rightToLeft ? .swiftUI : .textKit2
                         #expect(renderer == expected, "\(child.id) in \(parent) \(direction): code is in the container allow list from step 7")
                         #expect(TextKit2Scope.childRenderer(
-                            for: child.kind, in: parent, inherited: .swiftUI, allowed: TextKit2Scope.containerChildKinds, layoutDirection: direction
+                            for: child.kind, in: parent, inherited: .swiftUI, allowed: TextKit2Scope.containerChildKinds, layoutDirection: direction,
+                            dynamicTypeSize: .large
                         ) == .swiftUI, "\(child.id) in \(parent): never turned back on below SwiftUI")
                     }
                     // Before step 7's list (the step-5 stage), the same code
                     // stayed on SwiftUI: the allow list is what changed.
                     let step5 = TextKit2Scope.containerChildKinds.subtracting([.codeBlock])
                     #expect(TextKit2Scope.childRenderer(
-                        for: child.kind, in: parent, inherited: .textKit2, allowed: step5, layoutDirection: .leftToRight
+                        for: child.kind, in: parent, inherited: .textKit2, allowed: step5, layoutDirection: .leftToRight, dynamicTypeSize: .large
                     ) == .swiftUI, "\(child.id) in \(parent) without code in the list")
                 }
             }
@@ -214,7 +218,8 @@ struct TextKit2CodeScopeRuleTests {
         let code = RenderBlock(id: "q.0", kind: .codeBlock(language: nil, code: TK2CodeLogic.stamped("x")))
         #expect(TextKit2Scope.inheritsRenderer(.quote([code])), "a quote keeps the choice for its prose")
         #expect(TextKit2Scope.childRenderer(
-            for: code.kind, in: .quote, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight
+            for: code.kind, in: .quote, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight,
+            dynamicTypeSize: .large
         ) == .textKit2, "and from step 7 for its code")
         // A panel keeps it only where its body passes the shape rule: code
         // alone does, code beside a paragraph does not (step 3's rule).

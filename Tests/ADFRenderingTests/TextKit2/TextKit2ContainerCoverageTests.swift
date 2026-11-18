@@ -36,7 +36,7 @@ enum TK2ContainerCoverage {
     /// | 0.3 | quote: linked paragraph, heading | container prose ×2, one linked |
     /// | 0.4 | section: [paragraph] [paragraph, panel: paragraph] | container prose ×3 |
     /// | 0.5 | expand | an unprepared expand |
-    /// | 0.6 | panel: nested expand | an unprepared expand |
+    /// | 0.6 | panel: nested expand | nothing (`panelKeepsRenderer`: an expand, whose body is prepared on opening) |
     /// | 0.7 | bodied extension: paragraph | container prose |
     /// | 0.8 | extension without a body | nothing |
     /// | 0.9 | media with a caption | caption: eligible from iOS 26, `osGatedContainer` before |
@@ -53,9 +53,11 @@ enum TK2ContainerCoverage {
     /// 0.3.1, 0.4.0.0, 0.4.1.0, 0.4.1.1.0, 0.7.0 and 0.12.0 are container
     /// leaves (0.14's list fails rule B), 0.9's caption is the one caption
     /// leaf, 0.2.1 and 0.13.0 are nested code (0.13.0 a fallback by content
-    /// from iOS 26; both `osGatedContainer` before it), and the expands 0.5
-    /// and 0.6.0 are reported unprepared: an expand's body is prepared when
-    /// it opens, so listing expands adds no leaf.
+    /// from iOS 26; both `osGatedContainer` before it), and the expand 0.5
+    /// is reported unprepared: an expand's body is prepared when it opens,
+    /// so listing expands adds no leaf. The panel 0.6 holds a nested
+    /// expand, whose body the panel's shape rule cannot see, so its body
+    /// stays on SwiftUI and the walk never reaches 0.6.0.
     static func content() -> [[String: Any]] {
         let paragraph = TK2CodeLogic.paragraph
         return [
@@ -211,7 +213,7 @@ struct TextKit2ContainerCoverageTests {
             listLeaderLeaves: 1, listTrailingLeaves: 1, eligibleCodeRoots: 1, fallbackCodeRoots: 0,
             eligibleContainerLeaves: containers ? 8 : 0, linkedContainerLeaves: containers ? 1 : 0, fallbackContainerLeaves: containers ? 1 : 9,
             containerListLeaves: 1, eligibleCaptionLeaves: containers ? 1 : 0, fallbackCaptionLeaves: containers ? 0 : 1,
-            eligibleNestedCode: containers ? 1 : 0, fallbackNestedCode: containers ? 1 : 2, unpreparedExpands: 2
+            eligibleNestedCode: containers ? 1 : 0, fallbackNestedCode: containers ? 1 : 2, unpreparedExpands: 1
         )
         #expect(all == expected)
 
@@ -226,8 +228,9 @@ struct TextKit2ContainerCoverageTests {
         // a heading, so its body stays on SwiftUI, and the list in the
         // quote 0.14 fails rule B. The caption of the top-level media 0.9
         // (from iOS 26; `osGatedContainer` before). The top-level expand
-        // 0.5 and the nested expand in the panel 0.6 are reported, not
-        // entered. Step 7: the code in the quotes 0.2 (eligible) and 0.13
+        // 0.5 is reported, not entered; the panel 0.6 holds a nested
+        // expand, so its body stays on SwiftUI (`panelKeepsRenderer`) and
+        // the walk never reaches it. Step 7: the code in the quotes 0.2 (eligible) and 0.13
         // (a tab: a fallback), both gated before iOS 26.
         var production = legacy
         production.eligibleContainerLeaves = containers ? 8 : 0
@@ -236,7 +239,7 @@ struct TextKit2ContainerCoverageTests {
         production.containerListLeaves = 1
         production.eligibleCaptionLeaves = containers ? 1 : 0
         production.fallbackCaptionLeaves = containers ? 0 : 1
-        production.unpreparedExpands = 2
+        production.unpreparedExpands = 1
         production.eligibleNestedCode = containers ? 1 : 0
         production.fallbackNestedCode = containers ? 1 : 2
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == production)
@@ -345,9 +348,16 @@ struct TextKit2ContainerCoverageTests {
         }
         for (name, blocks) in documents {
             let roots = TK2ContainerCoverage.topLevelCode(blocks)
-            let production = ADFTextRenderer.textKit2CodeAdmission(
+            let production = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
                 of: blocks, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3, layoutDirection: .leftToRight
             )
+            // The public root-only admission keeps PR 3's two-element shape
+            // (two-value destructuring compiles) and is the extended
+            // walk's root pair.
+            let (rootAdmitted, rootGated) = ADFTextRenderer.textKit2CodeAdmission(
+                of: blocks, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3, layoutDirection: .leftToRight
+            )
+            #expect(rootAdmitted == production.admittedCodeRoots && rootGated == production.gatedCodeRoots, "\(name)")
             // From step 7 the production list holds code: its nested code is
             // split by admission as the root code is.
             let productionCoverage = ADFTextRenderer.textKit2Coverage(of: blocks)
@@ -356,7 +366,7 @@ struct TextKit2ContainerCoverageTests {
                 let label = "\(name) at \(stage)"
                 let coverage = ADFTextRenderer.textKit2Coverage(of: blocks, allowed: allowed)
                 #expect(coverage.eligibleCodeRoots + coverage.fallbackCodeRoots == roots, "\(label)")
-                let admission = ADFTextRenderer.textKit2CodeAdmission(
+                let admission = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
                     of: blocks, allowed: allowed, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3,
                     layoutDirection: .leftToRight
                 )
@@ -376,7 +386,7 @@ struct TextKit2ContainerCoverageTests {
         let blocks = try await TK2ContainerCoverage.blocks()
         let nested = TextKit2Eligibility.containerTextMatchesText ? 1 : 0
         for allowed in [TK2ContainerCoverage.every, TextKit2Scope.containerChildKinds] {
-            let admission = ADFTextRenderer.textKit2CodeAdmission(
+            let admission = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
                 of: blocks, allowed: allowed, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3,
                 layoutDirection: .leftToRight
             )
@@ -394,11 +404,11 @@ struct TextKit2ContainerCoverageTests {
         let blocks = try await TK2ContainerCoverage.blocks()
         let cases: [(Set<TextKit2BlockKind>, Int, String)] = [
             ([], 0, "the empty list"),
-            (TextKit2Scope.containerChildKinds, 2, "the production list (steps 3 to 6 and captions): the top-level expand and the nested one in the panel"),
+            (TextKit2Scope.containerChildKinds, 1, "the production list (steps 3 to 7 and captions): the top-level expand; the panel holding the nested one keeps its body on SwiftUI"),
             ([.expand], 1, "the top-level expand only: the nested one is in a panel"),
-            ([.panel], 0, "the panel is entered, the nested expand in it is not allowed"),
-            ([.panel, .expand], 2, "both"),
-            (TK2ContainerCoverage.every, 2, "every kind: the expand in a list item is never reached"),
+            ([.panel], 0, "the panel holds an expand, so its body stays on SwiftUI"),
+            ([.panel, .expand], 1, "both: the panel holding the nested one still keeps its body on SwiftUI"),
+            (TK2ContainerCoverage.every, 1, "every kind: the expand in a list item is never reached"),
         ]
         for (allowed, expected, label) in cases {
             var reported: [String] = []
@@ -410,6 +420,27 @@ struct TextKit2ContainerCoverageTests {
                 if case .expand = block?.kind {} else { Issue.record("\(id) is not an expand") }
             }
         }
+        // A nested expand the walk does reach: in a quote, and in a quote
+        // in a panel beside a paragraph (the panel's shape rule looks
+        // through the quote and finds the expand, so that one is not).
+        let nested = try await TK2CodeLogic.prepared(try TK2CodeLogic.document([
+            TK2CodeLogic.node("blockquote", [
+                TK2CodeLogic.paragraph("Quoted."),
+                TK2CodeLogic.node("nestedExpand", attrs: ["title": "In a quote"], [TK2CodeLogic.paragraph("Not prepared.")]),
+            ]),
+            TK2ContainerCoverage.panel("info", [
+                TK2CodeLogic.paragraph("Beside."),
+                TK2CodeLogic.node("blockquote", [
+                    TK2CodeLogic.node("nestedExpand", attrs: ["title": "In a panel's quote"], [TK2CodeLogic.paragraph("Not prepared.")]),
+                ]),
+            ]),
+        ]))
+        var reportedNested: [String] = []
+        TextKit2Scope.forEachLeaf(in: nested, unpreparedExpand: { reportedNested.append($0.id) }) { _ in }
+        #expect(reportedNested == ["0.0.1"], "\(reportedNested)")
+        #expect(ADFTextRenderer.textKit2Coverage(of: nested).unpreparedExpands == 1)
+        guard case .panel(_, let panelBody) = nested[1].kind else { throw TestFailure("not a panel") }
+        #expect(!TextKit2Scope.panelKeepsRenderer(panelBody))
         // containers-expand: every top-level expand is reported once the
         // family is allowed (the production list from step 5): the chain
         // 0.0, CE-TALL 0.305 and CE-OPEN-1 … 5 (hand count, `expandPins`);
@@ -460,13 +491,13 @@ struct TextKit2ContainerCoverageTests {
         /// admitted cohort, so eligible from iOS 26 and `osGatedContainer`
         /// before it.
         var nestedCode = 0
-        /// Leaves expected to stay on SwiftUI for a view-time reason on the
-        /// gate device (iPhone, left to right, the demo's environment): none
-        /// at step 4. No panel is right to left, the demo sets no font or
-        /// image scale on the document (`unprovenNestedWidth`), a compact
-        /// width stacks every layout section (no `horizontalColumn`), and
-        /// no container leaf is under 1 pt wide.
-        let viewTimeFallbacks = 0
+        // View-time reasons (`TextKit2Scope.ContainerGate`: a right-to-left
+        // container, an unproven width, a side-by-side column, a nested list at
+        // an accessibility size, a column under 1 pt) are not the static
+        // walk's: it counts left to right, stacked, at Large
+        // (`forEachLeaf`). The hosted scope tests prove each one
+        // (`TextKit2ContainerScopeTests`; code review F-R19 removed a
+        // constant pinned to itself here).
 
         var listLeaves: Int { lists.values.reduce(0, +) }
         var leaves: Int { panel + quote + extensionBody + column + listLeaves }
@@ -601,7 +632,6 @@ struct TextKit2ContainerCoverageTests {
             // the list gate decides it first.
             #expect(listsByKind == pin.lists, "\(pin.name): \(listsByKind)")
             #expect(listReasons == (containers || pin.listLeaves == 0 ? [:] : [.osGatedList: pin.listLeaves]), "\(pin.name): \(listReasons)")
-            #expect(pin.viewTimeFallbacks == 0)
 
             // The panels whose shape keeps their body on SwiftUI.
             let excluded = blocks.filter { block in
@@ -727,8 +757,9 @@ struct TextKit2ContainerCoverageTests {
         #expect(Set(fixtures) == Set(Self.expandPins.keys), "every fixture has an expand pin")
         for name in fixtures {
             let blocks = try await TextKit2ListCoverageTests.blocks(name)
+            // The default list is `production` (pinned above), so the
+            // default coverage is the production list's.
             let coverage = ADFTextRenderer.textKit2Coverage(of: blocks)
-            #expect(coverage == ADFTextRenderer.textKit2Coverage(of: blocks, allowed: production), "\(name)")
             let pin = try #require(Self.expandPins[name], "\(name): no expand pin")
             #expect(coverage.unpreparedExpands == pin.expands + (columns ? pin.inColumns : 0), "\(name): \(coverage.unpreparedExpands) unprepared expands")
             // Listing expands moves nothing but `unpreparedExpands`: their
@@ -762,7 +793,7 @@ struct TextKit2ContainerCoverageTests {
                 #expect(coverage.eligibleCaptionLeaves == 0, "\(name): captions are gated before iOS 26")
             }
             #expect(coverage.eligibleCodeRoots + coverage.fallbackCodeRoots == TK2ContainerCoverage.topLevelCode(blocks), "\(name)")
-            let admission = ADFTextRenderer.textKit2CodeAdmission(
+            let admission = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
                 of: blocks, dynamicTypeSize: .large, legibilityWeight: nil, displayScale: 3, layoutDirection: .leftToRight
             )
             // Every nested block is under the canvas bound at Large on 3x,

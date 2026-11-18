@@ -10,16 +10,18 @@ import ADFPreparation
 // path (PR 4 step 5): the real `BlockView(block:)` of an expand, opened on
 // a model, hosted with the production container allow list (nothing
 // widened) and the row's width bound. An expand's body is prepared by the
-// view on opening and cached in view state, so each case flips one host
-// (`TK2ExpandParity.pair`): TextKit 2 until every expected body row is up,
-// then SwiftUI, then TextKit 2 again, which must measure as the first time.
-// The assertions are step 3's (`productionMatrix`): exactly the expected
-// owners on TextKit 2 and none on SwiftUI; height and first and last
-// baseline within 0.01 pt (PR 1's one-pixel last-baseline residual aside);
-// the pixel comparison of PR 2's rows over the whole box, a pixel
-// difference counting as the leaf's only where the same blocks alone at
-// the body's child width differ too (probe call C1). The title and chevron
-// stay SwiftUI on both arms.
+// view on opening and cached in view state, so each case waits for it
+// (`TK2ExpandParity.pair`): TextKit 2 until every expected body row is up;
+// SwiftUI in a fresh host (main's first render of the open body); then the
+// TextKit 2 host flipped to SwiftUI and back, which must measure as the
+// first time. The assertions are step 3's (`productionMatrix`): exactly
+// the expected owners on TextKit 2 and none on SwiftUI; height and first
+// and last baseline within 0.01 pt (PR 1's one-pixel last-baseline
+// residual aside); the pixel comparison of PR 2's rows over the whole box,
+// a pixel difference counting as the leaf's only where the same blocks
+// alone at the body's child width differ the same way, owner by owner
+// (probe call C1, `residualMismatch`). The title and chevron stay SwiftUI
+// on both arms.
 //
 // These live in their own file (as an extension of the parity suite) so
 // step 4's edits to the suite's file do not collide with them.
@@ -155,43 +157,21 @@ enum TK2ExpandParity {
         body(of: block)
     }
 
-    /// An open expand on both arms in one host: TextKit 2 until `expected`
-    /// rows are up and the geometry holds still, SwiftUI until no row is
-    /// left, then TextKit 2 again, which must measure as the first time.
+    /// An open expand on both arms (`TK2ContainerProbe.expandPair`):
+    /// TextKit 2 until `expected` rows are up and the geometry holds still;
+    /// SwiftUI in a fresh host of its own (code review F-R20: the SwiftUI
+    /// arm is main's first render of the open body, never a flipped one);
+    /// then the TextKit 2 host flipped to SwiftUI and back, which must
+    /// measure as the first time (`stable`). With no row expected (right
+    /// to left) nothing signals the opened body: half a second of layout
+    /// turns first, as the gated path waits.
     @MainActor
     static func pair<V: View>(
-        width: CGFloat, pixels: Bool, expected: Int, _ make: (ADFTextRenderer) -> V
+        width: CGFloat, pixels: Bool, dark: Bool = false, expected: Int, _ make: (ADFTextRenderer) -> V
     ) async throws -> (swiftUI: P.Arm, textKit2: P.Arm, stable: Bool) {
-        let host = P.Host(width: width)
-        defer { host.close() }
-        func settle(_ what: String, until done: () -> Bool) async throws {
-            var stableTurns = 0
-            var last = ""
-            for _ in 0..<600 {
-                host.layout()
-                let now = "\(host.guides.height) \(host.guides.first) \(host.guides.last) \(host.rows.count)"
-                stableTurns = (now == last && done()) ? stableTurns + 1 : 0
-                last = now
-                if stableTurns >= 3 { return }
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            throw TestFailure("the open expand did not settle (\(what): \(host.rows.count) rows, expected \(expected))")
-        }
-        host.show(make(.textKit2))
-        try await settle("first TextKit 2") { host.rows.count == expected }
-        var b = P.arm(host)
-        let height = (b.guides.height + 64).rounded(.up)
-        if pixels { b.bitmap = try host.bitmap(height: height) }
-        host.show(make(.swiftUI))
-        try await settle("SwiftUI") { host.rows.isEmpty }
-        var a = P.arm(host)
-        if pixels { a.bitmap = try host.bitmap(height: height) }
-        host.show(make(.textKit2))
-        try await settle("TextKit 2 again") { host.rows.count == expected }
-        let again = P.arm(host)
-        let stable = again.guides.height == b.guides.height && again.guides.first == b.guides.first
-            && again.guides.last == b.guides.last && again.owners == b.owners
-        return (a, b, stable)
+        try await P.expandPair(
+            width: width, pixels: pixels, dark: dark, ready: { $0.count == expected }, minimumTurns: expected > 0 ? 0 : P.noRowTurns, make
+        )
     }
 }
 
@@ -242,26 +222,32 @@ extension TextKit2ContainerParityTests {
                 continue
             }
 
-            for env in P.environments() {
-                for documentWidth in P.documentWidths {
+            for (env, documentWidth) in P.cases() {
+                do {
                     let width = P.rowWidth(documentWidth: documentWidth)
-                    // As `productionMatrix`: no list text right to left
-                    // (rule C) and no code (the code gate's direction
-                    // rule), nor list text where the body's bound leaves a
-                    // row no text column (rule D).
+                    // As `productionMatrix`: nothing right to left (the
+                    // container direction rule, lead dispositions F-Q6);
+                    // no list text at the accessibility sizes (the
+                    // nested-list size rule); nor list text where the
+                    // body's bound leaves a row no text column (rule D).
                     let narrow = E.narrowListText([block], open: shape.open, bound: width, size: env.size)
-                    let expected = (env.direction == .rightToLeft ? expectedLTR.subtracting(listText).subtracting(code) : expectedLTR).subtracting(narrow)
+                    var expected = expectedLTR.subtracting(narrow)
+                    if env.direction == .rightToLeft { expected = [] }
+                    // From xxxLarge nothing either (the container size
+                    // rule, code review F-R4 and F-Q1).
+                    if !TextKit2Scope.containerSizeKeepsRenderer(env.size) { expected = [] }
+                    if !TextKit2Scope.nestedListSizeKeepsRenderer(env.size) { expected = expected.subtracting(listText) }
                     let pixels = P.comparesPixels(env, documentWidth: documentWidth)
                     let make = { (arm: ADFTextRenderer) in
                         P.environment(BlockView(block: block), arm: B.rowRenderer(block, arm), env: env, rowWidth: width, search: model.search, allowed: nil)
                     }
-                    let (a, b, stable) = try await E.pair(width: width, pixels: pixels, expected: expected.count, make)
+                    let (a, b, stable) = try await E.pair(width: width, pixels: pixels, dark: env.dark, expected: expected.count, make)
                     var verdict = P.geometry(a.guides, b.guides)
                     verdict.engine = a.rows.isEmpty && b.owners == expected && b.rows.count == expected.count
                     if !stable { verdict.notes.append("flipUnstable") }
                     if a.guides.height > P.Host.windowHeight - 20 { verdict.notes.append("taller-than-window") }
                     if pixels, let ba = a.bitmap, let bb = b.bitmap {
-                        crops(&verdict, .expand, ba, bb, width: width, env: env, swiftUIArm: a)
+                        crops(&verdict, .expand, ba, bb, width: width, env: env, swiftUIArm: a, textKit2Arm: b)
                     }
                     if !verdict.pass {
                         // The leaf control: the body's blocks alone at the
@@ -277,7 +263,7 @@ extension TextKit2ContainerParityTests {
                         print(P.line(fields, verdict, a, b).replacingOccurrences(of: "CONTAINER_PROBE ", with: "CONTAINER_PARITY ") + " accepted=\(accepted)")
                     }
                     if !accepted {
-                        failures.append("\(fields): engine=\(verdict.engine) stable=\(stable) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")")
+                        failures.append("\(fields): engine=\(verdict.engine) stable=\(stable) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")\(verdict.geometryPass && !verdict.pixelFailures.isEmpty ? " residualMismatch={\(verdict.residualMismatch ?? "-")}" : "")")
                         if let ba = a.bitmap, let bb = b.bitmap { P.dump(key, fields, ba, bb) }
                     }
                     let unexpected = b.owners.intersection(everyOwner).subtracting(expected)
@@ -290,7 +276,7 @@ extension TextKit2ContainerParityTests {
         #expect(failures.isEmpty, "\(failures.count) failing cases: \(failures.prefix(6))")
     }
 
-    @Test("expandBody: open-expand body prose, list text (step 6) and code (step 7) match SwiftUI through the production path; list text and code stay on SwiftUI right to left")
+    @Test("expandBody: open-expand body prose, list text (step 6) and code (step 7) match SwiftUI through the production path; the body stays on SwiftUI right to left and from xxxLarge")
     func expandBody() async throws {
         try await expandMatrix("expandBody", shapes: E.bodyShapes)
     }

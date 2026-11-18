@@ -12,15 +12,62 @@ import Testing
 /// (`TextKit2CodeScopeTests`, UIKit only). The same scan pins the writers
 /// of the values beside it: the owner kind (`adfTextOwnerKind`) is set only
 /// by the list row and the code block, the container context
-/// (`adfTextContainerContext`) only by the boundary, and no library source
-/// writes the container allow list's environment value
-/// (`adfContainerChildKinds`), which only a test host may widen. Source
-/// scan, so it runs on every platform.
+/// (`adfTextContainerContext`) and the inherited foreground
+/// (`adfTextForeground`, the caption leaf) only by the boundary file, the
+/// width bound (`adfTextWidthBound`) by the document row and the boundary,
+/// and no library source writes the container allow list's environment
+/// value (`adfContainerChildKinds`), which only a test host may widen.
+/// Source scan, so it runs on every platform.
 @Suite("TextKit 2 list scope: renderer setters")
 struct TextKit2RendererSetterTests {
-    /// Every write of `\.<key>` under `Sources`, as `<file>:<line>`: an
-    /// `.environment(\.<key>, …)`, a `transformEnvironment(\.<key>` or an
-    /// assignment. Reads are `@Environment(\.<key>)`; comments are skipped.
+    /// `line` up to its first `//` outside a string literal (a URL in a
+    /// string is code, not a comment).
+    static func code(_ line: String) -> String {
+        var result = ""
+        var inString = false
+        var escaped = false
+        var previous: Character?
+        for character in line {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                result.append(character)
+                previous = nil
+                continue
+            }
+            if character == "/", previous == "/" {
+                result.removeLast()
+                return result
+            }
+            if character == "\"" { inString = true }
+            result.append(character)
+            previous = character
+        }
+        return result
+    }
+
+    /// Whether `code` writes `key`: an `.environment(\.<key>, …)` or
+    /// `.environment(\EnvironmentValues.<key>, …)`, a
+    /// `transformEnvironment(\.<key>` (either key path form), or an
+    /// assignment `….<key> = …` with or without spaces (not `==`). Reads
+    /// are `@Environment(\.<key>)` and `values.<key>` on the right.
+    static func writes(_ code: String, key: String) -> Bool {
+        let k = NSRegularExpression.escapedPattern(for: key)
+        let patterns = [
+            #"\\(EnvironmentValues)?\.\#(k)\s*,"#,
+            #"transformEnvironment\(\s*\\(EnvironmentValues)?\.\#(k)\b"#,
+            #"\.\#(k)\s*=(?!=)"#,
+        ]
+        return patterns.contains { code.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    /// Every write of `<key>` under `Sources` (`writes(_:key:)`), as
+    /// `<file>:<line>`; comments are skipped.
     static func writes(of keys: [String]) throws -> (writes: [String: [String]], scanned: Int) {
         var sources = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { sources.deleteLastPathComponent() } // …/Tests/ADFRenderingTests/TextKit2 → repo root
@@ -33,9 +80,8 @@ struct TextKit2RendererSetterTests {
             scanned += 1
             let source = try String(contentsOf: sources.appendingPathComponent(path), encoding: .utf8)
             for (index, line) in source.components(separatedBy: .newlines).enumerated() {
-                let code = line.components(separatedBy: "//").first ?? line
-                for key in keys where code.contains("\\.\(key),") || code.contains("transformEnvironment(\\.\(key)")
-                    || code.contains(".\(key) =") {
+                let code = Self.code(line)
+                for key in keys where Self.writes(code, key: key) {
                     writes[key, default: []].append("\((path as NSString).lastPathComponent):\(index + 1)")
                 }
             }
@@ -47,9 +93,36 @@ struct TextKit2RendererSetterTests {
         Set(sites.map { $0.prefix { $0 != ":" } })
     }
 
-    @Test("the renderer environment key is set in exactly three places; the owner kind, the container context and the allow list have their pinned writers")
+    @Test("the scan sees every write form (both key path spellings, assignment without spaces) and no read or comment, and keeps a // inside a string literal")
+    func scanSeesEveryWriteForm() {
+        let key = "adfTextRenderer"
+        for line in [
+            ".environment(\\.adfTextRenderer, .textKit2)",
+            ".environment(\\EnvironmentValues.adfTextRenderer, renderer)",
+            ".transformEnvironment(\\.adfTextRenderer) { $0 = .swiftUI }",
+            ".transformEnvironment(\\EnvironmentValues.adfTextRenderer) { _ in }",
+            "values.adfTextRenderer = .textKit2",
+            "values.adfTextRenderer=.textKit2",
+            "let url = \"https://example.com\"; values.adfTextRenderer = .swiftUI",
+        ] {
+            #expect(Self.writes(Self.code(line), key: key), "\(line)")
+        }
+        for line in [
+            "@Environment(\\.adfTextRenderer) private var renderer",
+            "if values.adfTextRenderer == .textKit2 {",
+            "// .environment(\\.adfTextRenderer, .textKit2)",
+            "let x = 1 // values.adfTextRenderer = .swiftUI",
+            "let rendererCopy = environment.adfTextRenderer",
+        ] {
+            #expect(!Self.writes(Self.code(line), key: key), "\(line)")
+        }
+        #expect(Self.code("let s = \"a // b\" // comment") == "let s = \"a // b\" ")
+    }
+
+    @Test("the renderer environment key is set in exactly three places; the owner kind, the container context, the inherited foreground, the width bound and the allow list have their pinned writers")
     func threeSetters() throws {
-        let (writes, scanned) = try Self.writes(of: ["adfTextRenderer", "adfTextOwnerKind", "adfTextContainerContext", "adfContainerChildKinds"])
+        let keys = ["adfTextRenderer", "adfTextOwnerKind", "adfTextContainerContext", "adfContainerChildKinds", "adfTextForeground", "adfTextWidthBound"]
+        let (writes, scanned) = try Self.writes(of: keys)
         #expect(scanned > 50, "scanned \(scanned) source files")
         let setters = writes["adfTextRenderer"] ?? []
         #expect(setters.count == 3, "setters: \(setters)")
@@ -60,6 +133,10 @@ struct TextKit2RendererSetterTests {
         #expect(Self.files(context) == ["TextKit2ContainerBoundary.swift"], "container context writers: \(context)")
         let allowList = writes["adfContainerChildKinds"] ?? []
         #expect(allowList.isEmpty, "container allow list writers: \(allowList)")
+        let foreground = writes["adfTextForeground"] ?? []
+        #expect(foreground.count == 1 && Self.files(foreground) == ["TextKit2ContainerBoundary.swift"], "inherited foreground writers: \(foreground)")
+        let widthBound = writes["adfTextWidthBound"] ?? []
+        #expect(widthBound.count == 2 && Self.files(widthBound) == ["ADFDocumentView.swift", "TextKit2ContainerBoundary.swift"], "width bound writers: \(widthBound)")
     }
 }
 

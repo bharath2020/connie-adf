@@ -17,7 +17,8 @@ import ADFPreparation
 /// every top-level code block the code gate hands to TextKit 2: the block's
 /// size and its code's scroll extent (`everyAdmittedCodeRoot`). Container
 /// text (paragraphs and headings in panels, quotes and extension bodies) is
-/// swept at the widths its containers give it (`everyEligibleContainerLeaf`).
+/// swept at the widths its containers give it, by height and first and
+/// last baseline (`everyEligibleContainerLeaf`).
 @Suite("TextKit 2 fixture sweep", .serialized)
 @MainActor
 struct TextKit2FixtureSweepTests {
@@ -167,8 +168,101 @@ struct TextKit2FixtureSweepTests {
         "containers-parity": (80, 78), "kitchen-sink": (11, 11), "stress-1k": (199, 199), "stress-5k": (1_006, 1_006),
     ]
     /// The document widths whose rows (16 pt in from each side) the
-    /// container leaves are swept in: an iPhone SE and an iPhone 17 Pro.
-    nonisolated static let containerDocumentWidths: [CGFloat] = [320, 402]
+    /// container leaves are swept in: the iPhone widths, 320 (SE, first
+    /// generation; Slide Over), 375, 390, 393, 402, 414, 430 and 440 pt
+    /// (code review F-R4).
+    nonisolated static let containerDocumentWidths: [CGFloat] = [320, 375, 390, 393, 402, 414, 430, 440]
+    /// The text sizes the container leaves are swept at: xSmall to
+    /// xxLarge, every size the container size rule
+    /// (`containerSizeKeepsRenderer`) keeps on TextKit 2. Swept from
+    /// xxxLarge to AX5 (code review F-R4, F-Q1), panel bodies 183 to 271 pt
+    /// wide broke long words apart at AX4 and AX5, so from xxxLarge every
+    /// container keeps its body on SwiftUI. `ADF_SWEEP_CONTAINER_SIZES=<name,…>`
+    /// (`DynamicTypeSize` case names) replaces the sizes; a size the rule
+    /// keeps on SwiftUI is then measured and its misses printed
+    /// (`TK2_CONTAINER_SWEEP_RULE`), not asserted: the rule's evidence,
+    /// reproducible. List text is swept below the accessibility sizes only
+    /// (`nestedListSizeKeepsRenderer`).
+    nonisolated static var containerSizes: [DynamicTypeSize] {
+        let names = ProcessInfo.processInfo.environment["ADF_SWEEP_CONTAINER_SIZES"]?.split(separator: ",").map(String.init) ?? []
+        let sizes = names.compactMap { name in DynamicTypeSize.allCases.first { "\($0)" == name } }
+        return sizes.isEmpty ? [.xSmall, .small, .medium, .large, .xLarge, .xxLarge] : sizes
+    }
+    /// A fine grid of child widths around the one width D3 was measured at
+    /// in a body (a 271.667 pt panel body at AX5, `probes/results.md` §D3):
+    /// 268 to 276 pt in steps of a third of a point, for every distinct
+    /// container prose leaf whatever its container, at Large, AX4 and AX5
+    /// (or the sizes `ADF_SWEEP_FINE_SIZES=<name,…>` names) where the sizes
+    /// include them (`ADF_SWEEP_CONTAINER_SIZES`): Large by default. The
+    /// steps are sums a few ulps off the pixel grid, as a panel's child
+    /// width is: D3's cause (a row re-proposed the next pixel it reported,
+    /// `TextKit2RowView.layoutResult(forProposedWidth:)`), which put quote
+    /// and column leaves a line low at Large here too.
+    nonisolated static let d3FineWidths: [CGFloat] = (0...24).map { 268 + CGFloat($0) / 3 }
+    nonisolated static var d3FineSizes: [DynamicTypeSize] {
+        let names = ProcessInfo.processInfo.environment["ADF_SWEEP_FINE_SIZES"]?.split(separator: ",").map(String.init) ?? []
+        let sizes = names.compactMap { name in DynamicTypeSize.allCases.first { "\($0)" == name } }
+        return sizes.isEmpty ? [.large, .accessibility4, .accessibility5] : sizes
+    }
+
+    /// The first and last text baselines and height of `view` laid out at
+    /// `width` as a baseline-aligned parent reads them (`TK2Parity.guides`).
+    @MainActor
+    static func guides(_ view: some View, width: CGFloat) -> (first: CGFloat, last: CGFloat, height: CGFloat) {
+        let box = TK2Parity.GuideBox()
+        let root = VStack(alignment: .leading, spacing: 0) {
+            view.alignmentGuide(.leading) { dimensions in
+                let first = dimensions[.firstTextBaseline]
+                let last = dimensions[.lastTextBaseline]
+                let height = dimensions.height
+                MainActor.assumeIsolated {
+                    box.first = first
+                    box.last = last
+                    box.height = height
+                }
+                return dimensions[.leading]
+            }
+        }
+        .frame(width: width, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .ignoresSafeArea()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 4_000))
+        let host = UIHostingController(rootView: root)
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.isHidden = false
+        window.layoutIfNeeded()
+        host.view.layoutIfNeeded()
+        window.isHidden = true
+        window.rootViewController = nil
+        return (box.first, box.last, box.height)
+    }
+
+    /// The list leader as `ListRowView` hosts it, on one arm (`leaderHeight`).
+    @MainActor
+    static func leader(_ segments: [InlineSegment], arm: ADFTextRenderer, size: DynamicTypeSize) -> some View {
+        TextEngineLeaf(segments: segments, style: ListRowView.leaderStyle(theme: TK2Parity.theme), ownerID: nil) {
+            SegmentedTextView(segments: segments).textSelection(.enabled)
+        }
+        .environment(\.adfTextRenderer, arm)
+        .environment(\.adfTheme, TK2Parity.theme)
+        .dynamicTypeSize(size)
+    }
+
+    /// One leaf's guides on both arms at `width` and `size`: a paragraph or
+    /// heading as `RichTextBlockView`, a leader (`style` `nil`) as the list
+    /// row hosts it.
+    @MainActor
+    static func leafGuides(
+        _ segments: [InlineSegment], style: TextBlockStyle?, name: String, size: DynamicTypeSize, width: CGFloat
+    ) -> (swiftUI: (first: CGFloat, last: CGFloat, height: CGFloat), textKit2: (first: CGFloat, last: CGFloat, height: CGFloat)) {
+        if let style {
+            let fixture = TK2Parity.Fixture(name: name, segments: segments, style: style)
+            let env = TK2Parity.Environment(size: size)
+            return (TK2Parity.guides(fixture, arm: .swiftUI, env: env, width: width), TK2Parity.guides(fixture, arm: .textKit2, env: env, width: width))
+        }
+        return (guides(leader(segments, arm: .swiftUI, size: size), width: width), guides(leader(segments, arm: .textKit2, size: size), width: width))
+    }
 
     /// One container a leaf sits in, outermost first: what it takes from
     /// the width it is given (`PanelBlockView`: padding on both sides, the
@@ -231,12 +325,18 @@ struct TextKit2FixtureSweepTests {
     /// at the width its containers actually give it (the row width less
     /// each container's inset, the panel's icon measured at that size, and
     /// for list text its row's inset; a list leader hosted as the list row
-    /// hosts it) on two document widths, each distinct (text, style, width)
-    /// once; a width under 1 pt stays on SwiftUI (rule D, the under-1-pt
-    /// guard) and is not measured. Before iOS 26 container text is gated:
-    /// every leaf must fall back as `osGatedContainer` (list text as
-    /// `osGatedList`), which the sweep asserts instead of measuring.
-    @Test("every eligible container leaf of the demo documents measures as Text does at its effective child width")
+    /// hosts it), comparing the height and the first and last baselines
+    /// within 0.01 pt (code review F-R4: D3's signature is a baseline shift
+    /// at an equal height, which a height alone cannot see; PR 1's
+    /// one-pixel last-baseline residual is recorded apart). Document widths
+    /// `containerDocumentWidths`, sizes `containerSizes`, and the fine grid
+    /// `d3FineWidths` at `d3FineSizes`; each distinct (text, style, width,
+    /// size) once over all documents. A width under 1 pt stays on SwiftUI
+    /// (rule D, the under-1-pt guard) and is not measured. Before iOS 26
+    /// container text is gated: every leaf must fall back as
+    /// `osGatedContainer` (list text as `osGatedList`), which the sweep
+    /// asserts instead of measuring.
+    @Test("every eligible container leaf of the demo documents measures and sits as Text does at its effective child width (height, first and last baseline)")
     func everyEligibleContainerLeaf() async throws {
         struct Key: Hashable {
             let segments: [InlineSegment]
@@ -244,9 +344,50 @@ struct TextKit2FixtureSweepTests {
             let width: CGFloat
             let size: DynamicTypeSize
         }
+        let clock = ContinuousClock()
+        let start = clock.now
         var checked = 0
+        var residual1 = 0
         var worst: (delta: CGFloat, description: String) = (0, "")
         var widthsSeen: Set<CGFloat> = []
+        var measured: Set<Key> = []
+        var failures: [String] = []
+        var ruleMisses = 0
+        let onePixel = 1 / TK2Parity.nativeScale
+        func measure(_ entry: (segments: [InlineSegment], style: TextBlockStyle?, chain: [Inset]), owner: String, document: String, width: CGFloat, size: DynamicTypeSize) {
+            guard width >= TextKit2Scope.minimumTextWidth else { return }
+            guard measured.insert(Key(segments: entry.segments, style: entry.style, width: width, size: size)).inserted else { return }
+            widthsSeen.insert(width)
+            // Each measurement's windows and hosts released, and their layers
+            // committed, as it ends: tens of thousands left to the end of the
+            // loop made one autorelease pool drain (each host removing its
+            // notification observers) and then one Core Animation commit
+            // run past 10 minutes each.
+            let g = autoreleasepool { Self.leafGuides(entry.segments, style: entry.style, name: owner, size: size, width: width) }
+            CATransaction.flush()
+            let dHeight = abs(g.swiftUI.height - g.textKit2.height)
+            let dFirst = abs(g.swiftUI.first - g.textKit2.first)
+            var dLast = abs(g.swiftUI.last - g.textKit2.last)
+            if dLast > Self.tolerance, abs(g.swiftUI.last - g.textKit2.last - onePixel) <= Self.tolerance {
+                residual1 += 1
+                dLast = 0
+            }
+            let delta = max(dHeight, dFirst, dLast)
+            let label = "\(document) \(owner) in \(entry.chain) \(size) W=\(String(format: "%.3f", width)): h=\(g.swiftUI.height)/\(g.textKit2.height) first=\(g.swiftUI.first)/\(g.textKit2.first) last=\(g.swiftUI.last)/\(g.textKit2.last)"
+            checked += 1
+            if delta > worst.delta { worst = (delta, label) }
+            guard delta > Self.tolerance else { return }
+            let signature = dHeight <= Self.tolerance && dFirst > Self.tolerance ? "d3Signature " : ""
+            if TextKit2Scope.containerSizeKeepsRenderer(size) {
+                failures.append(label)
+                print("TK2_CONTAINER_SWEEP_MISS \(signature)\(label)")
+            } else {
+                // On SwiftUI in production (the container size rule):
+                // recorded as the rule's evidence.
+                ruleMisses += 1
+                print("TK2_CONTAINER_SWEEP_RULE \(signature)\(label)")
+            }
+        }
         for document in Self.containerDocuments {
             let doc = try await ADFParser().parse(try Self.fixtureData(document))
             let blocks = DocumentPreparer(theme: TK2Parity.theme).prepare(doc)
@@ -259,7 +400,7 @@ struct TextKit2FixtureSweepTests {
             #expect(leaves.count == pin.leaves, "\(document): \(leaves.count) container leaves")
             var eligible = 0
             var gated = 0
-            var measured: Set<Key> = []
+            let before = measured.count
             for leaf in leaves {
                 switch leaf.verdict {
                 case .fallback(.osGatedContainer), .fallback(.osGatedList): gated += 1; continue
@@ -267,37 +408,31 @@ struct TextKit2FixtureSweepTests {
                 case .eligible: eligible += 1
                 }
                 let entry = try #require(chains[leaf.ownerID], "\(document) \(leaf.ownerID): no container chain")
-                for documentWidth in Self.containerDocumentWidths {
-                    for size in Self.sizes {
-                        let env = TK2Parity.Environment(size: size)
-                        let width = documentWidth - 4 * TK2Parity.theme.spacing - entry.chain.reduce(0) { $0 + $1.points(env) }
-                        guard width >= TextKit2Scope.minimumTextWidth else { continue }
-                        guard measured.insert(Key(segments: entry.segments, style: entry.style, width: width, size: size)).inserted else { continue }
-                        widthsSeen.insert(width)
-                        let h: (swiftUI: CGFloat, textKit2: CGFloat)
-                        if let style = entry.style {
-                            h = TK2Parity.heights(TK2Parity.Fixture(name: leaf.ownerID, segments: entry.segments, style: style), size: size, width: width)
-                        } else {
-                            h = (Self.leaderHeight(entry.segments, arm: .swiftUI, size: size, width: width),
-                                 Self.leaderHeight(entry.segments, arm: .textKit2, size: size, width: width))
-                        }
-                        let delta = abs(h.swiftUI - h.textKit2)
-                        let label = "\(document) \(leaf.ownerID) in \(entry.chain) \(size) W=\(width): swiftUI=\(h.swiftUI) textKit2=\(h.textKit2)"
-                        checked += 1
-                        if delta > worst.delta { worst = (delta, label) }
-                        #expect(delta <= Self.tolerance, "\(label)")
+                let isList = leaf.position != .containerProse
+                for size in Self.containerSizes {
+                    // A nested list stays on SwiftUI at the accessibility sizes.
+                    if isList, !TextKit2Scope.nestedListSizeKeepsRenderer(size) { continue }
+                    let env = TK2Parity.Environment(size: size)
+                    let inset = entry.chain.reduce(0) { $0 + $1.points(env) }
+                    for documentWidth in Self.containerDocumentWidths {
+                        measure(entry, owner: leaf.ownerID, document: document, width: documentWidth - 4 * TK2Parity.theme.spacing - inset, size: size)
                     }
+                }
+                guard !isList else { continue }
+                for size in Self.d3FineSizes where Self.containerSizes.contains(size) {
+                    for width in Self.d3FineWidths { measure(entry, owner: leaf.ownerID, document: document, width: width, size: size) }
                 }
             }
             if TextKit2Eligibility.containerTextMatchesText {
                 #expect(eligible == pin.eligible && gated == 0, "\(document): \(eligible) eligible container leaves")
-                #expect(!measured.isEmpty, "\(document): no container leaf measured")
             } else {
                 #expect(eligible == 0 && gated == pin.eligible, "\(document): before iOS 26 \(gated) gated, \(eligible) eligible")
             }
-            print("TK2 container sweep \(document): \(leaves.count) container leaves, \(eligible) eligible, \(gated) gated, \(measured.count) distinct measured")
+            print("TK2 container sweep \(document): \(leaves.count) container leaves, \(eligible) eligible, \(gated) gated, \(measured.count - before) new distinct measured")
         }
-        print("TK2 container sweep: \(checked) measurements at \(widthsSeen.count) child widths (\(widthsSeen.sorted().map { String(format: "%.2f", $0) }.joined(separator: ","))), worst |Δ| = \(worst.delta) \(worst.description)")
+        if TextKit2Eligibility.containerTextMatchesText { #expect(checked > 0, "no container leaf measured") }
+        print("TK2 container sweep: \(checked) measurements at \(widthsSeen.count) child widths, \(failures.count) misses, \(ruleMisses) under the size rule, residual1 \(residual1), worst |Δ| = \(worst.delta) \(worst.description); elapsed \(clock.now - start)")
+        #expect(failures.isEmpty, "\(failures.count) container leaves miss Text's height or baselines: \(failures.prefix(6))")
     }
 
     // MARK: Code roots

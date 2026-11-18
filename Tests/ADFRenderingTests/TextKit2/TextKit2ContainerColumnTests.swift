@@ -134,28 +134,20 @@ enum TK2ContainerColumns {
     /// document margins around it, with the renderer and context the
     /// column's boundary gives it.
     @MainActor
-    static func leafControl(_ children: [RenderBlock], width: CGFloat, env: TK2Parity.Environment) throws -> (dHeight: CGFloat, dFirst: CGFloat, dLast: CGFloat, differing: Int, pixelFailures: Int) {
-        var result: (dHeight: CGFloat, dFirst: CGFloat, dLast: CGFloat, differing: Int, pixelFailures: Int) = (0, 0, 0, 0, 0)
+    static func leafControl(_ children: [RenderBlock], width: CGFloat, env: TK2Parity.Environment) throws -> P.LeafControl {
+        var result = P.LeafControl()
         let margin = P.spacing * 2
         for child in children {
-            let (a, b) = try P.pair(width: width + 2 * margin, pixels: true) { arm in
+            let (a, b) = try P.pair(width: width + 2 * margin, pixels: true, dark: env.dark) { arm in
                 let renderer = TextKit2Scope.childRenderer(
                     for: child.kind, in: .column(sideBySide: false), inherited: arm,
-                    allowed: TextKit2Scope.containerChildKinds, layoutDirection: env.direction
+                    allowed: TextKit2Scope.containerChildKinds, layoutDirection: env.direction, dynamicTypeSize: env.size
                 )
                 return P.environment(
                     BlockView(block: child).padding(.horizontal, margin), arm: renderer, env: env, rowWidth: width, allowed: nil
                 ).environment(\.adfTextContainerContext, .container)
             }
-            var verdict = P.geometry(a.guides, b.guides)
-            result.dHeight += verdict.dHeight
-            result.dFirst = max(result.dFirst, verdict.dFirst)
-            result.dLast = max(result.dLast, verdict.lastResidual ? 0 : verdict.dLast)
-            if let x = a.bitmap, let y = b.bitmap {
-                P.pixels(&verdict, x, y, crops: [P.Crop(name: "leaf", columns: 0..<x.width)], background: (255, 255, 255))
-            }
-            result.differing += verdict.differing
-            if !verdict.pixelFailures.isEmpty { result.pixelFailures += 1 }
+            result.add(a, b, dark: env.dark)
         }
         return result
     }
@@ -199,7 +191,7 @@ extension TextKit2ContainerParityTests {
             print("CONTAINER_PARITY_SHAPE test=\(test) container=columns shape=\(section.name) sideBySide=\(sideBySide) expected=\(expectedLTR.sorted()) prepared=\(P.shapeDescription(block))")
             // The boundary's family rule, for every column child.
             for child in columns.flatMap(\.blocks) {
-                let gate = TextKit2Scope.containerGate(for: child.kind, in: .column(sideBySide: sideBySide), layoutDirection: .leftToRight)
+                let gate = TextKit2Scope.containerGate(for: child.kind, in: .column(sideBySide: sideBySide), layoutDirection: .leftToRight, dynamicTypeSize: .large)
                 let family = TextKit2ContainerScopeTests.family(child.kind)
                 let want: TextKit2Scope.ContainerGate? = sideBySide && !TextKit2ContainerScopeTests.sideBySideFamilies.contains(family) ? .horizontalColumn : nil
                 if gate != want { failures.append("\(section.name) \(child.id): containerGate \(String(describing: gate)), expected \(String(describing: want))") }
@@ -228,33 +220,41 @@ extension TextKit2ContainerParityTests {
                 continue
             }
 
-            // Stacked: every environment, compact width (and at the
-            // accessibility sizes also a regular width, which stacks too).
-            // Side by side: a regular width below the accessibility sizes.
-            var cases: [(env: TK2Parity.Environment, sizeClass: UserInterfaceSizeClass)] = []
-            for env in P.environments() {
+            // Stacked: every case (`TK2ContainerProbe.cases()`), compact
+            // width (and at the accessibility sizes also a regular width,
+            // which stacks too). Side by side: a regular width below the
+            // accessibility sizes.
+            var cases: [(env: TK2Parity.Environment, sizeClass: UserInterfaceSizeClass, documentWidth: CGFloat)] = []
+            for (env, documentWidth) in P.cases() {
                 if sideBySide {
-                    if !env.size.isAccessibilitySize { cases.append((env, .regular)) }
+                    if !env.size.isAccessibilitySize { cases.append((env, .regular, documentWidth)) }
                 } else {
-                    cases.append((env, .compact))
-                    if env.size.isAccessibilitySize { cases.append((env, .regular)) }
+                    cases.append((env, .compact, documentWidth))
+                    if env.size.isAccessibilitySize { cases.append((env, .regular, documentWidth)) }
                 }
             }
             if sideBySide, !P.fullMatrix, !P.familyMatrix {
-                cases.append((TK2Parity.Environment(size: .xxxLarge), .regular))
+                for documentWidth in P.documentWidths { cases.append((TK2Parity.Environment(size: .xxxLarge), .regular, documentWidth)) }
             }
-            for (env, sizeClass) in cases {
-                for documentWidth in P.documentWidths {
+            for (env, sizeClass, documentWidth) in cases {
+                do {
                     let rowWidth = P.rowWidth(documentWidth: documentWidth)
                     let rtl = env.direction == .rightToLeft
-                    // Right to left no list text (rule C) and no code (the
-                    // code gate's direction rule), nor list text where a
-                    // stacked column (the row's bound) leaves a row no text
-                    // column (rule D).
+                    // Right to left nothing below the section (the
+                    // container direction rule, lead dispositions F-Q6); at
+                    // the accessibility sizes no list text (the nested-list
+                    // size rule); nor
+                    // list text where a stacked column (the row's bound)
+                    // leaves a row no text column (rule D).
                     let narrow = sideBySide ? [] : TK2ContainerLists.narrowListText(in: [block], bound: rowWidth, size: env.size)
-                    let expected = (rtl ? expectedLTR.subtracting(listText).subtracting(code) : expectedLTR).subtracting(narrow)
+                    var expected = expectedLTR.subtracting(narrow)
+                    if rtl { expected = [] }
+                    // From xxxLarge nothing either (the container size
+                    // rule, code review F-R4 and F-Q1).
+                    if !TextKit2Scope.containerSizeKeepsRenderer(env.size) { expected = [] }
+                    if !TextKit2Scope.nestedListSizeKeepsRenderer(env.size) { expected = expected.subtracting(listText) }
                     let pixels = P.comparesPixels(env, documentWidth: documentWidth)
-                    let (a, b) = try P.pair(width: rowWidth, pixels: pixels) { arm in
+                    let (a, b) = try P.pair(width: rowWidth, pixels: pixels, dark: env.dark) { arm in
                         P.environment(BlockView(block: block), arm: TK2ContainerBody.rowRenderer(block, arm), env: env, rowWidth: rowWidth,
                                       sizeClass: sizeClass, allowed: nil)
                     }
@@ -272,22 +272,17 @@ extension TextKit2ContainerParityTests {
                             ? Columns.columnCrops(columns, rowWidth: rowWidth, scale: ba.scale, rtl: rtl)
                             : [P.Crop(name: "stacked", columns: 0..<ba.width)]
                         let background = sideBySide && section.name.contains("panel")
-                            ? P.sample(ba, x: rtl ? rowWidth - P.spacing * 0.75 : P.spacing * 0.75, y: P.spacing * 2.5) : (255, 255, 255)
-                        P.pixels(&verdict, ba, bb, crops: crops, background: background)
+                            ? P.sample(ba, x: rtl ? rowWidth - P.spacing * 0.75 : P.spacing * 0.75, y: P.spacing * 2.5) : P.background(env)
+                        P.pixels(&verdict, ba, bb, crops: crops, background: background, rows: b.rows, dark: env.dark)
                     }
                     if !verdict.pass {
                         // The column's blocks alone at its width.
-                        var control: (dHeight: CGFloat, dFirst: CGFloat, dLast: CGFloat, differing: Int, pixelFailures: Int) = (0, 0, 0, 0, 0)
+                        var control = P.LeafControl()
                         let widths = sideBySide
                             ? TextKit2ContainerParityTests.columnWidths(columns, totalWidth: rowWidth, spacing: P.spacing * 2)
                             : Array(repeating: rowWidth, count: columns.count)
                         for (index, column) in columns.enumerated() {
-                            let c = try Columns.leafControl(column.blocks, width: widths[index], env: env)
-                            control.dHeight += c.dHeight
-                            control.dFirst = max(control.dFirst, c.dFirst)
-                            control.dLast = max(control.dLast, c.dLast)
-                            control.differing += c.differing
-                            control.pixelFailures += c.pixelFailures
+                            control.merge(try Columns.leafControl(column.blocks, width: widths[index], env: env))
                         }
                         verdict.leaf = control
                     }
@@ -303,7 +298,7 @@ extension TextKit2ContainerParityTests {
                         print(P.line(fields, verdict, a, b).replacingOccurrences(of: "CONTAINER_PROBE ", with: "CONTAINER_PARITY ") + " accepted=\(accepted)")
                     }
                     if !accepted {
-                        failures.append("\(fields): engine=\(verdict.engine) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")")
+                        failures.append("\(fields): engine=\(verdict.engine) (textKit2 owners \(b.owners.sorted()), expected \(expected.sorted()), swiftUI rows \(a.rows.count)) dH=\(P.format(verdict.dHeight)) dFirst=\(P.format(verdict.dFirst)) dLast=\(P.format(verdict.dLast)) cause=\(verdict.cause) px=\(verdict.pixelFailures.first ?? "-")\(verdict.geometryPass && !verdict.pixelFailures.isEmpty ? " residualMismatch={\(verdict.residualMismatch ?? "-")}" : "")")
                         if let ba = a.bitmap, let bb = b.bitmap { P.dump(key, fields, ba, bb) }
                     }
                     let unexpected = b.owners.intersection(everyOwner).subtracting(expected)
@@ -513,7 +508,7 @@ extension TextKit2ContainerScopeTests {
             }
             for owner in owners {
                 let block = try #require(prepared.flatMap(\.blocks).first { $0.id == owner }, "\(owner)")
-                #expect(TextKit2Scope.containerGate(for: block.kind, in: .column(sideBySide: true), layoutDirection: .leftToRight) == .horizontalColumn,
+                #expect(TextKit2Scope.containerGate(for: block.kind, in: .column(sideBySide: true), layoutDirection: .leftToRight, dynamicTypeSize: .large) == .horizontalColumn,
                         "\(label) \(owner): the side-by-side family rule")
             }
             // The width rule behind the family rule.

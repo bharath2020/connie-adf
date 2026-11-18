@@ -143,13 +143,30 @@ struct TextKit2ContainerScopeTests {
     /// `horizontalColumnKeepsRenderer`.
     static let sideBySideFamilies: Set<TextKit2BlockKind> = []
 
-    /// The boundary's view-time rule for a child of `family` in `parent`,
-    /// as the probes decided it: a side-by-side column keeps every family
-    /// but `sideBySideFamilies` out; no panel direction is kept out.
-    static func expectedGate(_ family: TextKit2BlockKind, in parent: TextKit2ContainerParent) -> TextKit2Scope.ContainerGate? {
+    /// The boundary's view-time rule for a child of `family` in `parent`
+    /// at `size` laid out in `direction`, as the probes and the parity runs
+    /// decided it: right to left every container keeps every family out
+    /// (lead dispositions F-Q6: a quote's paragraph in a stacked column
+    /// and a panel's quote at AX5 drew apart from the blocks alone); a
+    /// side-by-side column keeps every family but `sideBySideFamilies` out;
+    /// a list at an accessibility size stays out of every container (the
+    /// AX4 nested-list case, lead dispositions M1); from xxxLarge every
+    /// family stays out of every container (code review F-R4 and F-Q1: the
+    /// container-leaf sweep's AX4 and AX5 line breaks in panel bodies).
+    static func expectedGate(
+        _ family: TextKit2BlockKind, in parent: TextKit2ContainerParent, size: DynamicTypeSize = .large,
+        direction: LayoutDirection = .leftToRight
+    ) -> TextKit2Scope.ContainerGate? {
+        if direction == .rightToLeft { return .containerDirection }
         if parent == .column(sideBySide: true), !sideBySideFamilies.contains(family) { return .horizontalColumn }
+        if family == .listRows, size >= .accessibility1 { return .nestedListSize }
+        if size >= .xxxLarge { return .containerSize }
         return nil
     }
+
+    /// Large and xLarge (below the container size rule), xxxLarge (its
+    /// first size) and two accessibility sizes, for the truth tables.
+    static let gateSizes: [DynamicTypeSize] = [.large, .xLarge, .xxxLarge, .accessibility1, .accessibility5]
 
     /// The panel shape rule as the probes decided it (`probes/results.md`
     /// §1) and the step 3 parity run added (a code block beside prose),
@@ -158,13 +175,31 @@ struct TextKit2ContainerScopeTests {
     /// superscript, subscript or small-text run (a `.footnote` or
     /// `.subheadline` font spec) unless it is the whole body.
     static func expectedPanelKeeps(_ children: [RenderBlock]) -> Bool {
-        var small = false
+        // A heading among the direct children; the rest over the body's
+        // blocks at any depth, an expand anywhere keeping it (F-R8).
         for child in children {
-            switch child.kind {
+            if case .richText(_, let style) = child.kind, style.isHeading { return false }
+        }
+        var flat: [RenderBlock] = []
+        var holdsExpand = false
+        func flatten(_ blocks: [RenderBlock]) {
+            for block in blocks {
+                switch block.kind {
+                case .quote(let nested), .panel(_, let nested), .extensionPlaceholder(_, let nested): flatten(nested)
+                case .layoutColumns(let columns): flatten(columns.flatMap(\.blocks))
+                case .expand: holdsExpand = true
+                default: flat.append(block)
+                }
+            }
+        }
+        flatten(children)
+        if holdsExpand { return false }
+        var small = false
+        for block in flat {
+            switch block.kind {
             case .listRows: return false
             case .codeBlock: small = true
-            case .richText(let segments, let style):
-                if style.isHeading { return false }
+            case .richText(let segments, _):
                 for case .text(let text) in segments {
                     for run in text.runs {
                         if let style = run.adfFontSpec?.textStyle, style == .footnote || style == .subheadline { small = true }
@@ -173,7 +208,7 @@ struct TextKit2ContainerScopeTests {
             default: break
             }
         }
-        return children.count == 1 || !small
+        return max(children.count, flat.count) == 1 || !small
     }
 
     @Test("childRenderer is exhaustive: every kind, parent, inherited renderer, allow-list stage and direction")
@@ -209,29 +244,36 @@ struct TextKit2ContainerScopeTests {
                 for inherited in ADFTextRenderer.allCases {
                     for (stage, allowed) in Self.stages {
                         for direction in [LayoutDirection.leftToRight, .rightToLeft] {
-                            let renderer = TextKit2Scope.childRenderer(
-                                for: sample.kind, in: parent, inherited: inherited, allowed: allowed, layoutDirection: direction
-                            )
-                            // The view-time boundary rules: a side-by-side
-                            // column keeps every family out
-                            // (`containerGateTruthTable`).
-                            let expected: ADFTextRenderer = inherited == .textKit2 && allowed.contains(family)
-                                && Self.expectedWholeBlock(sample.kind) && Self.expectedGate(family, in: parent) == nil ? .textKit2 : .swiftUI
-                            #expect(renderer == expected, "\(sample.id) \(family) in \(parent), inherited \(inherited), \(stage), \(direction)")
-                            checked += 1
+                            for size in [DynamicTypeSize.large, .accessibility3] {
+                                let renderer = TextKit2Scope.childRenderer(
+                                    for: sample.kind, in: parent, inherited: inherited, allowed: allowed, layoutDirection: direction,
+                                    dynamicTypeSize: size
+                                )
+                                // The view-time boundary rules: right to left
+                                // nothing, a side-by-side column keeps every
+                                // family out, and a list stays out at an
+                                // accessibility size (`containerGateTruthTable`).
+                                let expected: ADFTextRenderer = inherited == .textKit2 && allowed.contains(family)
+                                    && Self.expectedWholeBlock(sample.kind)
+                                    && Self.expectedGate(family, in: parent, size: size, direction: direction) == nil
+                                    ? .textKit2 : .swiftUI
+                                #expect(renderer == expected, "\(sample.id) \(family) in \(parent), inherited \(inherited), \(stage), \(direction), \(size)")
+                                checked += 1
+                            }
                         }
                     }
                 }
             }
         }
-        #expect(checked == samples.count * Self.parents.count * 2 * Self.stages.count * 2)
+        #expect(checked == samples.count * Self.parents.count * 2 * Self.stages.count * 2 * 2)
 
         // The excluded kinds never get TextKit 2, whatever the list says.
         #expect(TextKit2Scope.containerExcludedKinds == [.tableSlice, .custom, .divider, .mediaStrip, .card, .unknown])
         for sample in samples where TextKit2Scope.containerExcludedKinds.contains(Self.family(sample.kind)) {
             for parent in Self.parents {
                 let renderer = TextKit2Scope.childRenderer(
-                    for: sample.kind, in: parent, inherited: .textKit2, allowed: Set(TextKit2BlockKind.allCases), layoutDirection: .leftToRight
+                    for: sample.kind, in: parent, inherited: .textKit2, allowed: Set(TextKit2BlockKind.allCases), layoutDirection: .leftToRight,
+                    dynamicTypeSize: .large
                 )
                 #expect(renderer == .swiftUI, "\(sample.id) in \(parent)")
             }
@@ -283,7 +325,7 @@ struct TextKit2ContainerScopeTests {
                     // A container row keeps the choice exactly when a
                     // boundary would pass it to the same block.
                     let nested = TextKit2Scope.childRenderer(
-                        for: sample.kind, in: .quote, inherited: .textKit2, allowed: allowed, layoutDirection: .leftToRight
+                        for: sample.kind, in: .quote, inherited: .textKit2, allowed: allowed, layoutDirection: .leftToRight, dynamicTypeSize: .large
                     ) == .textKit2
                     #expect(inherits == nested, "\(sample.id) \(family) at \(stage)")
                     #expect(inherits == (allowed.contains(family) && Self.expectedWholeBlock(sample.kind)), "\(sample.id) \(family) at \(stage)")
@@ -294,10 +336,10 @@ struct TextKit2ContainerScopeTests {
         }
     }
 
-    @Test("containerGate: the width rules for wrapping leaves, none for code; side-by-side columns keep every family out (the off-grid probe), no other boundary rule fires")
+    @Test("containerGate: the width rules for wrapping leaves, none for code; right to left every container keeps every family out; side-by-side columns keep every family out (the off-grid probe); a list below a boundary stays out at the accessibility sizes; from xxxLarge every container keeps every family out; no other boundary rule fires")
     @MainActor
     func containerGateTruthTable() {
-        #expect(Set(TextKit2Scope.ContainerGate.allCases) == [.narrowColumn, .unprovenNestedWidth, .panelDirection, .horizontalColumn])
+        #expect(Set(TextKit2Scope.ContainerGate.allCases) == [.narrowColumn, .unprovenNestedWidth, .containerDirection, .horizontalColumn, .nestedListSize, .containerSize])
 
         // The leaf's width rules: (bound, inset) → the wrapping verdict.
         let wrapping: [(TextKit2WidthBound, CGFloat, TextKit2Scope.ContainerGate?)] = [
@@ -318,13 +360,13 @@ struct TextKit2ContainerScopeTests {
             #expect((expected == nil) == TextKit2Scope.textFits(bound, inset: inset), "textFits \(bound) inset \(inset)")
         }
 
-        // The boundary's rules, as their probes decided them: no panel
-        // direction is kept out (the panel shape probes); in a side-by-side
-        // column no family keeps the renderer (the off-grid column probe:
-        // `sideBySideFamilies`); stacked columns and the other parents keep
-        // nothing out.
-        #expect(TextKit2Scope.panelDirectionKeepsRenderer(.leftToRight))
-        #expect(TextKit2Scope.panelDirectionKeepsRenderer(.rightToLeft))
+        // The boundary's rules, as their probes and parity runs decided
+        // them: right to left no container keeps the renderer (lead
+        // dispositions F-Q6); in a side-by-side column no family keeps it
+        // (the off-grid column probe: `sideBySideFamilies`); stacked
+        // columns and the other parents keep nothing out left to right.
+        #expect(TextKit2Scope.containerDirectionKeepsRenderer(.leftToRight))
+        #expect(!TextKit2Scope.containerDirectionKeepsRenderer(.rightToLeft))
         for kind in TextKit2BlockKind.allCases {
             #expect(TextKit2Scope.horizontalColumnKeepsRenderer(kind) == Self.sideBySideFamilies.contains(kind), "\(kind)")
         }
@@ -336,10 +378,23 @@ struct TextKit2ContainerScopeTests {
         for kind in kinds {
             for parent in Self.parents {
                 for direction in [LayoutDirection.leftToRight, .rightToLeft] {
-                    let expected = Self.expectedGate(Self.family(kind), in: parent)
-                    #expect(TextKit2Scope.containerGate(for: kind, in: parent, layoutDirection: direction) == expected, "\(kind) in \(parent) \(direction)")
+                    for size in Self.gateSizes {
+                        let expected = Self.expectedGate(Self.family(kind), in: parent, size: size, direction: direction)
+                        #expect(TextKit2Scope.containerGate(for: kind, in: parent, layoutDirection: direction, dynamicTypeSize: size) == expected,
+                                "\(kind) in \(parent) \(direction) \(size)")
+                    }
                 }
             }
+        }
+        // The nested-list size rule (lead dispositions M1): every
+        // accessibility size, and none below it.
+        for size in DynamicTypeSize.allCases {
+            #expect(TextKit2Scope.nestedListSizeKeepsRenderer(size) == !size.isAccessibilitySize, "\(size)")
+        }
+        // The container size rule (code review F-R4, F-Q1): below xxxLarge
+        // only.
+        for size in DynamicTypeSize.allCases {
+            #expect(TextKit2Scope.containerSizeKeepsRenderer(size) == [.xSmall, .small, .medium, .large, .xLarge, .xxLarge].contains(size), "\(size)")
         }
     }
 
@@ -382,6 +437,17 @@ struct TextKit2ContainerScopeTests {
             ("taskBeside", [paragraph("Before the tasks."), task], false),
             ("codeBeside", [paragraph("Before the code."), codeBlock], false),
             ("codeFirst", [codeBlock, paragraph("After the code.")], false),
+            // Code review F-R8: the same blocks one level down, in a quote
+            // (ADF's schema puts no quote in a panel; the parser accepts
+            // it, containers-parity 0.33 and 0.73).
+            ("listInNestedQuote", [paragraph("Before the quote."), "{\"type\":\"blockquote\",\"content\":[\(list)]}"], false),
+            ("listInQuoteAlone", ["{\"type\":\"blockquote\",\"content\":[\(list)]}"], false),
+            ("codeInNestedQuote", [paragraph("Before the quote."), "{\"type\":\"blockquote\",\"content\":[\(codeBlock)]}"], false),
+            ("codeBesideInQuote", ["{\"type\":\"blockquote\",\"content\":[\(paragraph("Before the code.")),\(codeBlock)]}"], false),
+            ("codeAloneInQuote", ["{\"type\":\"blockquote\",\"content\":[\(codeBlock)]}"], true),
+            ("subsupInNestedQuote", [paragraph("Before the quote."), "{\"type\":\"blockquote\",\"content\":[\(subsup)]}"], false),
+            ("headingInNestedQuote", [paragraph("Before the quote."), "{\"type\":\"blockquote\",\"content\":[\(heading),\(paragraph("After."))]}"], true),
+            ("expandBeside", [paragraph("Before the expand."), "{\"type\":\"nestedExpand\",\"attrs\":{\"title\":\"E\"},\"content\":[\(paragraph("Inside."))]}"], false),
         ]
     }()
 
@@ -412,7 +478,8 @@ struct TextKit2ContainerScopeTests {
             #expect(TextKit2Scope.inheritsRenderer(panel.kind) == shape.keeps, "\(shape.name): top-level row")
             for parent in [TextKit2ContainerParent.quote, .extensionBody, .panel] {
                 let nested = TextKit2Scope.childRenderer(
-                    for: panel.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight
+                    for: panel.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight,
+                    dynamicTypeSize: .large
                 )
                 #expect(nested == (shape.keeps ? .textKit2 : .swiftUI), "\(shape.name) in \(parent)")
             }
@@ -551,6 +618,93 @@ extension TextKit2ContainerScopeTests {
         TextKit2Eligibility.containerTextMatchesText ? owners : []
     }
 
+    /// Code review F-R9: the three view-time triggers of the panel's
+    /// `.unproven` width bound (`PanelBlockView.childWidthBound`: a font
+    /// the icon inherits, an image scale other than medium, a symbol
+    /// outside `boundedIconSymbols`), each set on one panel of a tree that
+    /// holds a second, untouched panel: the touched panel's paragraph draws
+    /// no TextKit 2 row (`unprovenNestedWidth`), the control's does (from
+    /// iOS 26), and with no trigger both do.
+    @Test("unprovenPanelWidthStaysSwiftUI: a panel under an environment font, a large image scale or an icon outside the bounded symbols keeps its paragraph on SwiftUI; an untouched panel beside it migrates")
+    @MainActor
+    func unprovenPanelWidthStaysSwiftUI() async throws {
+        typealias P = TK2ContainerProbe
+        let blocks = try await P.prepared([
+            Self.panelJSON([Self.paragraph("Subject panel prose.")]),
+            Self.panelJSON([Self.paragraph("Control panel prose.")], type: "note"),
+        ])
+        let subject = blocks[0], control = blocks[1]
+        guard case .panel(let palette, let children) = subject.kind, children.count == 1 else { throw TestFailure("not a panel") }
+        let symbol = "circle.hexagongrid.fill"
+        #expect(!PanelBlockView.boundedIconSymbols.contains(symbol))
+        #expect(PanelBlockView.boundedIconSymbols.contains(palette.iconSystemName))
+        let customSymbol = RenderBlock(id: subject.id, kind: .panel(PanelPalette(background: palette.background, accent: palette.accent, iconSystemName: symbol), children))
+        let subjectText = children[0].id
+        guard case .panel(_, let controlChildren) = control.kind, let controlText = controlChildren.first?.id else { throw TestFailure("not a panel") }
+        let rowWidth = P.rowWidth(documentWidth: 375)
+        let env = TK2Parity.Environment()
+        let cases: [(name: String, view: AnyView, drawn: Set<String>)] = [
+            ("none", AnyView(BlockView(block: subject)), [subjectText, controlText]),
+            ("font", AnyView(BlockView(block: subject).font(.title)), [controlText]),
+            ("imageScale", AnyView(BlockView(block: subject).imageScale(.large)), [controlText]),
+            ("symbol", AnyView(BlockView(block: customSymbol)), [controlText]),
+        ]
+        for (name, view, drawn) in cases {
+            let host = P.Host(width: rowWidth)
+            defer { host.close() }
+            host.show(P.environment(
+                VStack(alignment: .leading, spacing: 0) {
+                    view
+                    BlockView(block: control)
+                },
+                arm: .textKit2, env: env, rowWidth: rowWidth, allowed: nil
+            ))
+            for _ in 0..<5 {
+                host.layout()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let owners = Set(host.rows.compactMap(\.ownerID))
+            #expect(owners == Self.passing(drawn), "\(name): \(owners.sorted())")
+        }
+    }
+
+    /// Code review F-R8: the panel shape rule reads the panel's whole body
+    /// (`panelKeepsRenderer`), so a list, a code block or a superscript
+    /// paragraph one level down, in a quote beside a paragraph, keeps the
+    /// panel's body on SwiftUI as it does directly in the panel; the same
+    /// panel with plain prose in the quote is the control.
+    @Test("nestedPanelShapesStaySwiftUI: a panel holding a paragraph beside a quote of a list, of code or of a superscript paragraph keeps its whole body on SwiftUI, with every kind allowed too; a quote of plain prose migrates")
+    @MainActor
+    func nestedPanelShapesStaySwiftUI() async throws {
+        let sup = "{\"type\":\"subsup\",\"attrs\":{\"type\":\"sup\"}}"
+        let list = "{\"type\":\"bulletList\",\"content\":[\(Self.item(Self.paragraph("A quoted item.")))]}"
+        let codeBlock = "{\"type\":\"codeBlock\",\"content\":[\(Self.text("let x = 1"))]}"
+        let superscript = "{\"type\":\"paragraph\",\"content\":[\(Self.text("E = mc")),\(Self.text("2", sup))]}"
+        let quote = { (body: String) in "{\"type\":\"blockquote\",\"content\":[\(body)]}" }
+        let content = [
+            Self.panelJSON([Self.paragraph("Panel prose before a quoted list."), quote(list)]),
+            Self.panelJSON([Self.paragraph("Panel prose before quoted code."), quote(codeBlock)]),
+            Self.panelJSON([Self.paragraph("Panel prose before a quoted superscript."), quote(superscript)]),
+            Self.panelJSON([Self.paragraph("Panel prose before quoted prose."), quote(Self.paragraph("Quoted prose."))]),
+        ]
+        let blocks = try await TK2ContainerProbe.prepared(content)
+        var excluded: Set<String> = []
+        for block in blocks.prefix(3) {
+            guard case .panel(_, let children) = block.kind else { throw TestFailure("\(block.id): not a panel") }
+            #expect(!TextKit2Scope.panelKeepsRenderer(children) && !Self.expectedPanelKeeps(children), "\(block.id)")
+            excluded.formUnion(TK2ContainerBody.allTextOwners([block]))
+        }
+        guard case .panel(_, let controlChildren) = blocks[3].kind else { throw TestFailure("not a panel") }
+        #expect(TextKit2Scope.panelKeepsRenderer(controlChildren) && Self.expectedPanelKeeps(controlChildren))
+        let control = TK2ContainerBody.allTextOwners([blocks[3]])
+        #expect(excluded.count == 6 && control.count == 2, "excluded \(excluded.sorted()), control \(control.sorted())")
+        for allowed in [nil, Set(TextKit2BlockKind.allCases)] {
+            let owners = try await Self.hostedOwners(content, allowed: allowed)
+            #expect(owners.all.isDisjoint(with: excluded), "\(String(describing: allowed)): \(owners.all.intersection(excluded).sorted()) drew on TextKit 2")
+            #expect(owners.container == Self.passing(control), "\(String(describing: allowed)): \(owners.container.sorted())")
+        }
+    }
+
     @Test("containerUnderRejectedListRow: a quote and a panel in a list item that resets the renderer, and in a list that fails rule B, stay on SwiftUI even with every kind allowed")
     @MainActor
     func containerUnderRejectedListRow() async throws {
@@ -623,20 +777,29 @@ extension TextKit2ContainerScopeTests {
     @MainActor
     func excludedPanelShapesDrawNoRow() async throws {
         let excluded = Self.panelShapes.filter { !$0.keeps }
-        #expect(excluded.map(\.name) == ["headingPara", "headingAlone", "subsupBeside", "subsupBesideQuote", "nestedList", "listAlone", "taskBeside", "codeBeside", "codeFirst"])
-        var content: [String] = []
-        for shape in excluded { content.append(Self.panelJSON(shape.body)) }
-        // The same shapes inside a quote, after a paragraph of the quote's own.
-        for shape in excluded {
-            content.append("{\"type\":\"blockquote\",\"content\":[\(Self.paragraph("Quote prose.")),\(Self.panelJSON(shape.body))]}")
+        #expect(excluded.map(\.name) == [
+            "headingPara", "headingAlone", "subsupBeside", "subsupBesideQuote", "nestedList", "listAlone", "taskBeside", "codeBeside", "codeFirst",
+            "listInNestedQuote", "listInQuoteAlone", "codeInNestedQuote", "codeBesideInQuote", "subsupInNestedQuote", "expandBeside",
+        ])
+        // Five shapes per document, so every row fits the hosting window
+        // (the lazy stack never shows rows below it).
+        for start in stride(from: 0, to: excluded.count, by: 5) {
+            let batch = excluded[start..<min(start + 5, excluded.count)]
+            var content: [String] = []
+            for shape in batch { content.append(Self.panelJSON(shape.body)) }
+            // The same shapes inside a quote, after a paragraph of the quote's own.
+            for shape in batch {
+                content.append("{\"type\":\"blockquote\",\"content\":[\(Self.paragraph("Quote prose.")),\(Self.panelJSON(shape.body))]}")
+            }
+            // A panel that keeps the renderer: the control.
+            content.append(Self.panelJSON([Self.paragraph("A one-paragraph panel.")]))
+            let owners = try await Self.hostedOwners(content)
+            let n = batch.count
+            var expected: Set<String> = ["0.\(2 * n).0"]
+            for index in n..<(2 * n) { expected.insert("0.\(index).0") }
+            let names = batch.map(\.name)
+            #expect(owners.all == Self.passing(expected), "\(names): missing \(Self.passing(expected).subtracting(owners.all).sorted()), unexpected \(owners.all.subtracting(Self.passing(expected)).sorted())")
         }
-        // A panel that keeps the renderer: the control.
-        content.append(Self.panelJSON([Self.paragraph("A one-paragraph panel.")]))
-        let owners = try await Self.hostedOwners(content)
-        let n = excluded.count
-        var expected: Set<String> = ["0.\(2 * n).0"]
-        for index in n..<(2 * n) { expected.insert("0.\(index).0") }
-        #expect(owners.all == Self.passing(expected), "missing \(Self.passing(expected).subtracting(owners.all).sorted()), unexpected \(owners.all.subtracting(Self.passing(expected)).sorted())")
     }
 }
 #endif
