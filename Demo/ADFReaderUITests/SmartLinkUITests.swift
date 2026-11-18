@@ -58,6 +58,26 @@ import XCTest
 ///
 /// `testVideoTour…`: a paced tour for the proof videos (plain → dimmed →
 /// icon and title while scrolling); asserts only that the tour ran.
+///
+/// Resolution modes (design §8, `-smartLinkResolution`), each on both
+/// renderers. XCUITest gestures block, so the probe cannot be read during a
+/// drag; the coordinator's counters record what happened during it
+/// (`scrollCalls`: calls started while scrolling; `deferred`: visible
+/// lookups held back by a scroll).
+/// - `testWhileScrollingLooksUpDuringAHeldDrag…` (mode 1, the default, a
+///   control for mode 2): during a drag whose finger then rests 3 s on the
+///   screen, the links that came on screen are looked up mid-scroll.
+/// - `testAfterScrollingWaitsForRest…` (mode 2): the same held drag and a
+///   fling start no lookup while scrolling (deceleration included), then at
+///   rest every link on screen is looked up and titled, and nothing else
+///   (no nearby lookup).
+/// - `testAfterScrollingWithNearby…` (mode 3): at the top nothing is
+///   prefetched (the nearest other link is 13 positions below the intro,
+///   beyond the 12 of "nearby"); in the sections, nearby batches of at most
+///   3, never farther than 12 positions; a short drag onto prefetched links
+///   shows their titles at once with no new visible lookup; a drag that
+///   starts with a batch in flight cancels it and starts nothing while
+///   scrolling.
 @MainActor
 final class SmartLinkUITests: XCTestCase {
     /// One of the five smart links on the first screen: its paragraph's lead
@@ -470,6 +490,282 @@ final class SmartLinkUITests: XCTestCase {
         attach(reader.app, "swiftui-resolved-link-tapped")
     }
 
+    // MARK: - Resolution modes (design §8)
+
+    /// Each lookup's duration in the mode tests: long enough that a batch is
+    /// still in flight when a drag starts, short enough that nearby batches
+    /// finish in well under a minute.
+    static let modeDelay = 2.0
+    /// The nearby limits the design commits to (calls #47, #49).
+    static let batchLimit = 3
+    static let nearbyDistance = 12
+
+    func testWhileScrollingLooksUpDuringAHeldDragSwiftUI() throws {
+        try whileScrollingLooksUpDuringAHeldDrag(textKit2: false)
+    }
+
+    func testWhileScrollingLooksUpDuringAHeldDragTextKit2() throws {
+        try whileScrollingLooksUpDuringAHeldDrag(textKit2: true)
+    }
+
+    /// Mode 1 (the default, no flag): the control for mode 2's held drag.
+    /// The finger rests 3 s after moving 500 pt into the sections, longer
+    /// than the 150 ms dwell, so the links that came on screen are looked
+    /// up while the document is still scrolling.
+    private func whileScrollingLooksUpDuringAHeldDrag(textKit2: Bool) throws {
+        continueAfterFailure = true
+        let arm = textKit2 ? "textkit2" : "swiftui"
+        let reader = launch(textKit2: textKit2, delay: Self.modeDelay, failureRate: 0)
+        let top = waitForProbe(reader, "\(arm) mode 1: intro at rest", timeout: 30, settle: 1) {
+            $0["resolved"] == Self.intro.count && $0["inFlight"] == 0
+        }
+        XCTAssertTrue(top.met, "the intro links did not resolve: \(top.stats)")
+        XCTAssertTrue(probeLine(reader).contains("res=whileScrolling "), "not the default mode: \(probeLine(reader))")
+        intoTheSections(reader)
+        let before = probe(reader, "\(arm) mode 1: before the held drag")
+        heldDrag(reader, by: 500, hold: 3)
+        let after = Stats(probe: probeLine(reader))
+        note("\(arm) mode 1 held drag: before \(before) after \(after)")
+        XCTAssertGreaterThan(after["scrollCalls"], before["scrollCalls"],
+                             "mode 1 started no lookup during a 3 s held drag: \(before) → \(after)")
+        // The lift can leave the scroll view settling for a moment.
+        let rest = waitForProbe(reader, "\(arm) mode 1: at rest after the held drag", timeout: 10) { $0["scrolling"] == 0 }
+        XCTAssertGreaterThan(rest.stats["scrollEnds"], before["scrollEnds"], "no scroll phase was reported: \(rest.stats)")
+        XCTAssertEqual(after["deferred"], 0, "mode 1 held a lookup back: \(after)")
+        XCTAssertEqual(after["pfCalls"], 0, "mode 1 prefetched: \(after)")
+        attach(reader.app, "\(arm)-mode1-held-drag")
+    }
+
+    func testAfterScrollingWaitsForRestSwiftUI() throws {
+        try afterScrollingWaitsForRest(textKit2: false)
+    }
+
+    func testAfterScrollingWaitsForRestTextKit2() throws {
+        try afterScrollingWaitsForRest(textKit2: true)
+    }
+
+    /// Mode 2 (`-smartLinkResolution afterScrolling`). At launch nothing
+    /// has scrolled, so the intro resolves. Then a held drag (500 pt, finger
+    /// down 3 s) and a fling: no lookup starts while scrolling, deceleration
+    /// included, and the links that came on screen meanwhile were held back.
+    /// At rest every link on screen is looked up (none waits, each shows its
+    /// title) and nothing off screen is (no nearby lookup).
+    private func afterScrollingWaitsForRest(textKit2: Bool) throws {
+        continueAfterFailure = true
+        let arm = textKit2 ? "textkit2" : "swiftui"
+        let reader = launch(textKit2: textKit2, delay: Self.modeDelay, failureRate: 0, resolution: "afterScrolling")
+        let top = waitForProbe(reader, "\(arm) mode 2: intro at rest", timeout: 30, settle: 1) {
+            $0["resolved"] == Self.intro.count && $0["inFlight"] == 0
+        }
+        XCTAssertTrue(top.met, "the intro links did not resolve at rest: \(top.stats)")
+        XCTAssertTrue(probeLine(reader).contains("res=afterScrolling "), "not mode 2: \(probeLine(reader))")
+        XCTAssertEqual(top.stats["calls"], Self.intro.count, "\(top.stats)")
+
+        intoTheSections(reader)
+        let before = probe(reader, "\(arm) mode 2: before the held drag")
+        heldDrag(reader, by: 500, hold: 3)
+        let held = Stats(probe: probeLine(reader))
+        note("\(arm) mode 2 held drag: before \(before) after \(held)")
+        XCTAssertEqual(held["scrollCalls"], 0, "a lookup started during the held drag: \(held)")
+        XCTAssertGreaterThan(held["deferred"], before["deferred"],
+                             "no link came on screen during the held drag (nothing was held back): \(before) → \(held)")
+        // The lift can leave the scroll view settling for a moment.
+        let rest = waitForProbe(reader, "\(arm) mode 2: at rest after the held drag", timeout: 10) { $0["scrolling"] == 0 }
+        XCTAssertGreaterThan(rest.stats["scrollEnds"], before["scrollEnds"], "no scroll phase was reported: \(rest.stats)")
+
+        // A fling: the swipe returns while the content still decelerates.
+        // While the probe says scrolling, the calls must not move.
+        let flingStart = Stats(probe: probeLine(reader))
+        let scroll = reader.app.scrollViews.firstMatch
+        scroll.swipeUp(velocity: .fast)
+        var whileDecelerating: [Stats] = []
+        for _ in 0 ..< 15 {
+            let now = Stats(probe: probeLine(reader))
+            guard now["scrolling"] == 1 else { break }
+            whileDecelerating.append(now)
+            reader.pause(0.15)
+        }
+        note("\(arm) mode 2 fling: \(whileDecelerating.count) reads while scrolling; start \(flingStart)")
+        if let first = whileDecelerating.first, let last = whileDecelerating.last {
+            XCTAssertEqual(last["calls"], first["calls"], "calls grew while the fling decelerated: \(first) → \(last)")
+        }
+
+        let settled = waitForProbe(reader, "\(arm) mode 2: settled", timeout: 40, settle: 1.5) {
+            $0["scrolling"] == 0 && $0["inFlight"] == 0 && $0["waiting"] == 0
+        }
+        XCTAssertTrue(settled.met, "lookups never settled at rest: \(settled.stats)")
+        let d = settled.stats
+        XCTAssertEqual(d["scrollCalls"], 0, "a lookup started while scrolling: \(d)")
+        XCTAssertGreaterThan(d["calls"], held["calls"], "nothing was looked up at rest: \(held) → \(d)")
+        XCTAssertEqual(d["pfCalls"], 0, "mode 2 looked up an off-screen link: \(d)")
+        XCTAssertEqual(d["pfBatches"], 0, "\(d)")
+        XCTAssertEqual(d["calls"], d["resolved"] + d["failed"] + d["cancelled"] + d["inFlight"], "the counters do not add up: \(d)")
+        XCTAssertEqual(d["mockCalls"], d["calls"], "the mock saw other calls: \(d)")
+        XCTAssertLessThan(d["calls"], Self.uniqueURLs, "\(d)")
+        let unresolved = onScreenUnresolved(reader)
+        XCTAssertTrue(unresolved.isEmpty, "links on screen still show their URL (or host) at rest: \(unresolved)")
+        attach(reader.app, "\(arm)-mode2-settled")
+    }
+
+    func testAfterScrollingWithNearbySwiftUI() throws {
+        try afterScrollingWithNearby(textKit2: false)
+    }
+
+    func testAfterScrollingWithNearbyTextKit2() throws {
+        try afterScrollingWithNearby(textKit2: true)
+    }
+
+    /// Mode 3 (`-smartLinkResolution afterScrollingWithNearby`).
+    private func afterScrollingWithNearby(textKit2: Bool) throws {
+        continueAfterFailure = true
+        let arm = textKit2 ? "textkit2" : "swiftui"
+        let reader = launch(textKit2: textKit2, delay: Self.modeDelay, failureRate: 0,
+                            resolution: "afterScrollingWithNearby")
+
+        // A. At the top: the intro (blocks 0.2–0.6, positions 2–6) resolves.
+        // The next smart link is S01's opening paragraph (block 0.19), 13
+        // positions below the last intro link: beyond nearby (12), so
+        // nothing is prefetched — not even after a long wait.
+        let top = waitForProbe(reader, "\(arm) mode 3: intro at rest", timeout: 30, settle: 3) {
+            $0["resolved"] == Self.intro.count && $0["inFlight"] == 0
+        }
+        XCTAssertTrue(top.met, "the intro links did not resolve: \(top.stats)")
+        XCTAssertTrue(probeLine(reader).contains("res=afterScrollingWithNearby "), "not mode 3: \(probeLine(reader))")
+        XCTAssertEqual(top.stats["B"], Self.batchLimit, "\(top.stats)")
+        XCTAssertEqual(top.stats["D"], Self.nearbyDistance, "\(top.stats)")
+        XCTAssertEqual(top.stats["pfCalls"], 0, "a link beyond nearby was prefetched at the top: \(top.stats)")
+        XCTAssertEqual(top.stats["calls"], Self.intro.count, "\(top.stats)")
+
+        // B. In the sections, at rest: the visible links, then nearby
+        // batches until nothing within 12 positions is left.
+        intoTheSections(reader)
+        let rest = waitForNearbyToFinish(reader, "\(arm) mode 3: nearby done", timeout: 120)
+        let b = rest.stats
+        XCTAssertTrue(rest.met, "nearby batches never finished: \(b)")
+        XCTAssertGreaterThan(b["pfBatches"], 0, "nothing was prefetched in the sections: \(b)")
+        XCTAssertGreaterThan(b["pfCalls"], 0, "\(b)")
+        XCTAssertLessThanOrEqual(b["pfMaxBatch"], Self.batchLimit, "a batch held more than 3 keys: \(b)")
+        XCTAssertGreaterThanOrEqual(b["pfMaxBatch"], 1, "\(b)")
+        XCTAssertLessThanOrEqual(b["pfPeak"], Self.batchLimit, "more than one batch ran at once: \(b)")
+        XCTAssertLessThanOrEqual(b["pfFar"], Self.nearbyDistance, "a link beyond 12 positions was prefetched: \(b)")
+        XCTAssertLessThanOrEqual(b["pfCalls"], b["pfBatches"] * Self.batchLimit, "\(b)")
+        XCTAssertEqual(b["scrollCalls"], 0, "a lookup started while scrolling: \(b)")
+        XCTAssertEqual(b["calls"], b["resolved"] + b["failed"] + b["cancelled"] + b["inFlight"], "\(b)")
+        XCTAssertEqual(b["mockCalls"], b["calls"], "\(b)")
+        attach(reader.app, "\(arm)-mode3-nearby-done")
+
+        // C. A short drag (about 3–5 positions) onto links prefetched in B:
+        // they show their titles at once (a lookup takes 2 s), counted as
+        // nearby hits, and no visible lookup starts for them.
+        reader.drag(by: 260)
+        let landed = Stats(probe: probeLine(reader))
+        let unresolved = onScreenUnresolved(reader)
+        let hit = probe(reader, "\(arm) mode 3: after the short drag")
+        note("\(arm) mode 3 short drag: before \(b) landed \(landed) unresolved \(unresolved)")
+        XCTAssertGreaterThan(landed["pfHits"], b["pfHits"], "no prefetched link came on screen: \(b) → \(landed)")
+        XCTAssertTrue(unresolved.isEmpty, "a link that came on screen did not show its title at once: \(unresolved)")
+        let visibleCalls = { (stats: Stats) in stats["calls"] - stats["pfCalls"] }
+        XCTAssertEqual(visibleCalls(hit), visibleCalls(b),
+                       "a link that came on screen was looked up again instead of showing its nearby title: \(b) → \(hit)")
+        attach(reader.app, "\(arm)-mode3-prefetched-on-screen")
+
+        // D. Scrolling stops prefetching: a new rest further down, wait for a
+        // batch in flight, then a held drag. The batch is cancelled and
+        // nothing starts while scrolling.
+        reader.drag(by: 600)
+        let inFlight = waitForProbe(reader, "\(arm) mode 3: a batch in flight", timeout: 15) { $0["pfInFlight"] > 0 }
+        XCTAssertTrue(inFlight.met, "no nearby batch started at the new rest: \(inFlight.stats)")
+        heldDrag(reader, by: 400, hold: 1.5)
+        let stopped = waitForProbe(reader, "\(arm) mode 3: batch cancelled", timeout: 8) {
+            $0["pfCancelled"] > inFlight.stats["pfCancelled"]
+        }
+        XCTAssertTrue(stopped.met, "scrolling did not cancel the nearby batch in flight: \(inFlight.stats) → \(stopped.stats)")
+        XCTAssertEqual(stopped.stats["scrollCalls"], 0, "a lookup started while scrolling: \(stopped.stats)")
+        let end = waitForNearbyToFinish(reader, "\(arm) mode 3: final rest", timeout: 120).stats
+        XCTAssertEqual(end["scrollCalls"], 0, "\(end)")
+        XCTAssertLessThanOrEqual(end["pfMaxBatch"], Self.batchLimit, "\(end)")
+        XCTAssertLessThanOrEqual(end["pfPeak"], Self.batchLimit, "\(end)")
+        XCTAssertLessThanOrEqual(end["pfFar"], Self.nearbyDistance, "\(end)")
+        XCTAssertEqual(end["calls"], end["resolved"] + end["failed"] + end["cancelled"] + end["inFlight"], "\(end)")
+        XCTAssertEqual(end["mockCalls"], end["calls"], "\(end)")
+        XCTAssertEqual(end["mockCancelled"], end["cancelled"], "\(end)")
+        XCTAssertLessThan(end["calls"], Self.uniqueURLs, "\(end)")
+    }
+
+    /// Three slow 600 pt drags from the top, each followed by a short rest:
+    /// past the intro and the plain-text gap into the first sections (about
+    /// S01–S03), well before the negatives after S10.
+    private func intoTheSections(_ reader: ReaderDriver) {
+        for _ in 0 ..< 3 {
+            reader.drag(by: 600)
+            reader.pause(0.5)
+        }
+    }
+
+    /// A slow drag of `points` (content up for > 0) whose finger then stays
+    /// down for `hold` seconds: the document keeps scrolling (interacting)
+    /// the whole time, with no fling at the end.
+    private func heldDrag(_ reader: ReaderDriver, by points: CGFloat, hold: TimeInterval) {
+        let area = reader.viewport.insetBy(dx: 0, dy: 30)
+        let length = min(abs(points), area.height)
+        let startY = points > 0 ? area.maxY : area.minY
+        let origin = reader.app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: area.midX, dy: startY))
+        let end = origin.withOffset(CGVector(dx: area.midX, dy: points > 0 ? startY - length : startY + length))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: hold)
+    }
+
+    /// The probe's line as it is now (one read).
+    private func probeLine(_ reader: ReaderDriver) -> String {
+        let element = reader.app.staticTexts[Self.probeID]
+        return element.exists ? element.label : ""
+    }
+
+    /// Polls until the document is at rest with nothing in flight and no
+    /// link on screen waiting, and the nearby batch count has not moved for
+    /// 2.5 s (a batch follows the previous one within 150 ms).
+    private func waitForNearbyToFinish(_ reader: ReaderDriver, _ name: String,
+                                       timeout: TimeInterval) -> (met: Bool, stats: Stats)
+    {
+        let deadline = Date().addingTimeInterval(timeout)
+        var stats = Stats(probe: probeLine(reader))
+        while Date() < deadline {
+            stats = Stats(probe: probeLine(reader))
+            if stats["scrolling"] == 0, stats["inFlight"] == 0, stats["waiting"] == 0 {
+                reader.pause(2.5)
+                let again = probe(reader, name)
+                if again["inFlight"] == 0, again["pfBatches"] == stats["pfBatches"], again["waiting"] == 0 {
+                    return (true, again)
+                }
+                stats = again
+            }
+            reader.pause(0.3)
+        }
+        note("PROBE \(name): \(stats) (did not finish)")
+        return (false, stats)
+    }
+
+    /// Labels of the elements wholly on screen that still show a smart
+    /// link's URL or an inline card's host (the fixture's tenants `acme` and
+    /// `globex`; the lookalike hosts that must stay plain, such as
+    /// `acme.atlassian.net.example.org`, do not count).
+    private func onScreenUnresolved(_ reader: ReaderDriver) -> [String] {
+        let viewport = reader.viewport
+        let query = reader.app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "atlassian.net"))
+        var found: [String] = []
+        for element in query.allElementsBoundByIndex where element.exists {
+            let frame = element.frame
+            guard frame.height > 0, frame.minY >= viewport.minY, frame.maxY <= viewport.maxY else { continue }
+            let label = element.label
+            if label.range(of: #"(?:acme|globex)\.atlassian\.net(?!\.[A-Za-z])"#,
+                           options: [.regularExpression, .caseInsensitive]) != nil {
+                found.append(label)
+            }
+        }
+        return found
+    }
+
     /// `-interactionProbe`'s URL count and last URL (About This Build).
     private func readOpenedURLs(_ reader: ReaderDriver) -> (opens: Int, last: String) {
         reader.openAbout()
@@ -487,11 +783,13 @@ final class SmartLinkUITests: XCTestCase {
         return (Int(opens.label) ?? -1, last.exists ? last.label : "")
     }
 
-    /// Launches smart-links with the probe on.
-    private func launch(textKit2: Bool, delay: Double, failureRate: Double) -> ReaderDriver {
+    /// Launches smart-links with the probe on (and a resolution mode, when
+    /// given; none means the default, While Scrolling).
+    private func launch(textKit2: Bool, delay: Double, failureRate: Double, resolution: String? = nil) -> ReaderDriver {
         var arguments = ["-fixture", "smart-links", "-rendererReset", "-rendererStats", "-smartLinkProbe",
                          "-smartLinkDelay", String(delay), "-smartLinkFailureRate", String(failureRate)]
         if textKit2 { arguments.append("-textkit2") }
+        if let resolution { arguments += ["-smartLinkResolution", resolution] }
         let reader = ReaderDriver(launching: arguments)
         reader.waitForRenderer(textKit2 ? "TextKit 2" : "SwiftUI")
         return reader
