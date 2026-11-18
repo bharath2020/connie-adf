@@ -46,6 +46,18 @@ public final class ADFDocumentModel {
     /// across documents). The resolver comes from `ADFDocumentView`.
     let smartLinks = SmartLinkCoordinator()
 
+    /// The text leaves that mark themselves while `ADFDocumentView`
+    /// identifies its renderer register here (`RendererIdentityRegistry`,
+    /// not observable); the report is published from it.
+    let rendererIdentity = RendererIdentityRegistry()
+
+    /// What the renderer reports drawing while `ADFDocumentView` identifies
+    /// it (`identifiesRenderer: true`): the engine that drew each text leaf
+    /// on screen, and how many each drew. Observable on its own; nothing in
+    /// the document reads it, so a host view observing it (a badge)
+    /// invalidates no row. Empty while identification is off.
+    public var rendererReport: ADFRendererReport { rendererIdentity.report }
+
     /// Whether this document's inline cards were prepared as smart-link runs
     /// (they show their host until resolved) rather than chips: a resolver
     /// was installed when the document's blocks began preparing (`load`).

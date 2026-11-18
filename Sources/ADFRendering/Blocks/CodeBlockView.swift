@@ -33,6 +33,10 @@ struct CodeBlockView: View {
 
     @Environment(\.adfTheme) private var theme
     @Environment(\.adfDocumentSearch) private var search
+    /// While the document identifies its renderer, the SwiftUI code text
+    /// marks itself (`View.swiftUIEngineMark`); a TextKit 2 code row marks
+    /// itself in the row.
+    @Environment(\.adfRendererIdentity) private var rendererIdentity
     @State private var flashDimmed = false
 
     var body: some View {
@@ -60,7 +64,7 @@ struct CodeBlockView: View {
                 TextEngineLeaf(text: code, style: Self.codeStyle(theme: theme), ownerID: ownerID) {
                     Text(displayedCode)
                         .textSelection(.enabled)
-                        .modifier(EngineTintMark())
+                        .swiftUIEngineMark(rendererIdentity, ownerID: ownerID)
                 }
                 .environment(\.adfTextOwnerKind, .code)
                 .padding(theme.spacing * 1.5)

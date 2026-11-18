@@ -38,6 +38,10 @@ struct SegmentedTextView: View {
     @Environment(\.adfDocumentSearch) private var search
     @Environment(\.adfSmartLinks) private var smartLinks
     @Environment(\.adfTheme) private var theme
+    /// The document's identity registry while it identifies its renderer
+    /// (`ADFDocumentView(identifiesRenderer:)`); `nil`, the default, adds
+    /// nothing to the leaf.
+    @Environment(\.adfRendererIdentity) private var rendererIdentity
     /// Flash off-phase: while true the current match paints with the subtle
     /// color, so alternating it blinks the accent (§ arrival flash).
     @State private var flashDimmed = false
@@ -72,7 +76,7 @@ struct SegmentedTextView: View {
             }
         }
         .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
-        .modifier(EngineTintMark())
+        .swiftUIEngineMark(rendererIdentity, ownerID: ownerID)
     }
 
     /// One `Text` for the leaf's merged text: the attributed string as is,
