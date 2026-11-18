@@ -357,6 +357,60 @@ run vp-one-line-none "$BASH" "$PCOPY/visual-parity.sh" --udid FAKE-UDID-0001 --o
 expect_has "… and --no-code-captures drops it with its position" "$WORK/vp-one-line-none.out" \
     "captures:     88 configurations x arms (A A2 B C)"
 
+# =========================================================== fixtures-check ==
+# F-R23: a gate runs make-fixtures --check. fixtures-check.sh on this
+# checkout, on copies with one changed byte, and before a capture.
+
+FIXCHECK="$SCRIPTS/fixtures-check.sh"
+REPO_ROOT="$(cd "$SCRIPTS/.." && pwd)"
+run fx-pass "$BASH" "$FIXCHECK"
+expect_eq "fixtures-check passes on this checkout" "$STATUS" "0"
+expect_has "… the generator regenerates and matches every generated fixture" "$WORK/fx-pass.out" \
+    "fixtures-check: generator: check: all 17 generated fixtures match Fixtures/ byte for byte"
+expect_has "… and every manifest digest matches" "$WORK/fx-pass.out" \
+    "fixtures-check: manifest: all 20 digests in Fixtures/SHA256SUMS match"
+# fx_copy <name>: a tree with this checkout's generator and fixtures.
+fx_copy() {
+    mkdir -p "$WORK/$1/Tools"
+    cp "$REPO_ROOT/Tools/make-fixtures.swift" "$WORK/$1/Tools/"
+    cp -R "$REPO_ROOT/Fixtures" "$WORK/$1/Fixtures"
+}
+fx_copy fx-gen
+printf ' ' >>"$WORK/fx-gen/Fixtures/captions-parity.json"
+run fx-gen "$BASH" "$FIXCHECK" --repo "$WORK/fx-gen"
+expect_eq "a generated fixture with one byte added fails (exit 1)" "$STATUS" "1"
+expect_has "… the generator step fails" "$WORK/fx-gen.out" "fixtures-check: generator: FAIL"
+expect_has "… and the manifest names the file" "$WORK/fx-gen.out" "captions-parity.json: FAILED"
+fx_copy fx-hand
+printf ' ' >>"$WORK/fx-hand/Fixtures/kitchen-sink.json"
+run fx-hand "$BASH" "$FIXCHECK" --repo "$WORK/fx-hand"
+expect_eq "a hand-authored fixture with one byte added fails (exit 1): the generator does not make it" "$STATUS" "1"
+expect_has "… the generator step still passes" "$WORK/fx-hand.out" "fixtures-check: generator: check: all 17"
+expect_has "… the manifest names the file" "$WORK/fx-hand.out" "kitchen-sink.json: FAILED"
+fx_copy fx-extra
+printf '{}' >"$WORK/fx-extra/Fixtures/unlisted.json"
+run fx-extra "$BASH" "$FIXCHECK" --repo "$WORK/fx-extra"
+expect_eq "a fixture missing from SHA256SUMS fails (exit 1)" "$STATUS" "1"
+expect_has "… named" "$WORK/fx-extra.out" "fixtures-check: manifest: FAIL (not listed in SHA256SUMS: unlisted.json)"
+run fx-usage "$BASH" "$FIXCHECK" --repo "$WORK/no-such-tree"
+expect_eq "a tree without the generator is a usage error (exit 2)" "$STATUS" "2"
+# visual-parity runs it, then compares the apps' fixtures, before any
+# simulator command: an app bundling another captions-parity is refused.
+mkdir -p "$WORK/fx-apps/ref.app" "$WORK/fx-apps/cand.app"
+printf '#!/bin/sh\n' >"$WORK/fx-apps/ref.app/ADFReader"
+cp "$WORK/fx-apps/ref.app/ADFReader" "$WORK/fx-apps/cand.app/ADFReader"
+chmod +x "$WORK/fx-apps/ref.app/ADFReader" "$WORK/fx-apps/cand.app/ADFReader"
+cp "$REPO_ROOT/Fixtures/captions-parity.json" "$WORK/fx-apps/ref.app/"
+cp "$WORK/fx-gen/Fixtures/captions-parity.json" "$WORK/fx-apps/cand.app/"
+run fx-parity "$BASH" "$PARITY" --udid FAKE-UDID-0001 --out "$WORK/fx-parity" --ref-app "$WORK/fx-apps/ref.app" \
+    --app "$WORK/fx-apps/cand.app" --fixture captions-parity@0.30 --appearances light --size-steps 0
+expect_eq "visual-parity refuses a candidate app whose fixture differs from the checkout's (exit 2)" "$STATUS" "2"
+expect_has "… naming the file" "$WORK/fx-parity.out" "cand.app/captions-parity.json (sha256 "
+expect_lacks "… before any simulator command" "$WORK/fx-parity.out" "FAKE-UDID-0001"
+parity fx-parity-dry --fixture captions-parity@0.30
+expect_has "a dry run names the fixture check" "$WORK/fx-parity-dry.out" \
+    "fixtures:     $SCRIPTS/fixtures-check.sh, then each captured fixture's JSON in every arm's .app == Fixtures/<fixture>.json (captions-parity)"
+
 # ================================================================ e2e-video ==
 
 e2e() { E2E_VIDEO_SOURCED=1 "$BASH" -c '. "$0"; "$@"' "$E2E" "$@"; }
@@ -488,9 +542,27 @@ expect_eq "--only testK1 selects testK1… (never testK10a: an upper-case letter
     "$(kgate resolve_test testK1)" "testK1SwitchRoundTripsAtContainerLandmarks"
 expect_eq "--only testK10a selects testK10a…" "$(kgate resolve_test testK10a)" "testK10aFlingThrashSoakContainersSwiftUI"
 kgate resolve_test testK10 >/dev/null 2>&1
-expect_eq "--only testK10 is ambiguous (refused)" "$?" "1"
-expect_eq "… with both candidates as the hint" "$(kgate tests_starting_with testK10)" \
+expect_eq "--only testK10 matches no test (a lower-case letter follows it in testK10a/b: refused)" "$?" "1"
+expect_eq "… with both prefixed names as the hint" "$(kgate tests_starting_with testK10)" \
     "testK10aFlingThrashSoakContainersSwiftUI testK10bFlingThrashSoakContainersTextKit2"
+# A real ambiguity: two names that are the short name followed by an
+# upper-case letter (a copy whose CONTAINER_TESTS holds a second testK2…).
+GCOPY2="$WORK/gate-copy-ambiguous"
+mkdir -p "$GCOPY2/lib"
+cp "$SCRIPTS/lib/sim.sh" "$GCOPY2/lib/sim.sh"
+K_AMBIGUOUS="testK2OpenExpandRoundTripAcrossSwitch testK2OtherNameForTheAmbiguityCase"
+sed "s/^CONTAINER_TESTS=.*/CONTAINER_TESTS=\"$K_AMBIGUOUS\"/" "$GATE" >"$GCOPY2/lifecycle-gate.sh"
+agate() { LIFECYCLE_GATE_SOURCED=1 "$BASH" -c '. "$0"; "$@"' "$GCOPY2/lifecycle-gate.sh" "$@"; }
+expect_eq "with two testK2<Upper>… names, each full name still selects itself" \
+    "$(agate resolve_test testK2OtherNameForTheAmbiguityCase) $(agate resolve_test testK2Open)" \
+    "testK2OtherNameForTheAmbiguityCase testK2OpenExpandRoundTripAcrossSwitch"
+agate resolve_test testK2 >/dev/null 2>&1
+expect_eq "… and --only testK2 is ambiguous: two names match (refused)" "$?" "1"
+run lg-k-ambiguous "$BASH" "$GCOPY2/lifecycle-gate.sh" --udid FAKE-UDID-0001 --out "$WORK/lg-k-ambiguous" --dry-run \
+    --only testK2
+expect_eq "… a dry run with it exits 2 (usage error)" "$STATUS" "2"
+expect_has "… naming both candidates" "$WORK/lg-k-ambiguous.out" \
+    "unknown test 'testK2' (did you mean: testK2OpenExpandRoundTripAcrossSwitch testK2OtherNameForTheAmbiguityCase)"
 run lg-k "$BASH" "$GCOPY/lifecycle-gate.sh" --udid FAKE-UDID-0001 --out "$WORK/lg-k" --dry-run --only testK1 --only testK10b
 expect_has "a dry run selects K tests by short name" "$WORK/lg-k.out" \
     "tests:        testK1SwitchRoundTripsAtContainerLandmarks testK10bFlingThrashSoakContainersTextKit2"

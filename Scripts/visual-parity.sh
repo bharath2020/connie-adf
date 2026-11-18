@@ -122,6 +122,14 @@
 #   CONTAINER_CAPTURES_DEFAULT below; its fixture@position joins the
 #   default plan by itself when no --fixture is given.
 #
+# FIXTURES  before the first capture (never on --dry-run or --skip-capture)
+#   Scripts/fixtures-check.sh must pass on this checkout (make-fixtures
+#   --check and Fixtures/SHA256SUMS), and every captured fixture's JSON in
+#   each arm's .app (--ref-app; --app when arm B or C runs) must equal the
+#   checkout's Fixtures/<fixture>.json byte for byte: a pair of builds that
+#   render different documents proves nothing. Either failure is an input
+#   error (exit 2); env.txt records the digests.
+#
 # CAPTURE PROCEDURE (identical for every arm)
 #   terminate + uninstall + install the arm's .app (no persisted renderer key
 #   or text size leaks), verify the installed binary sha256 equals the .app's,
@@ -831,6 +839,37 @@ build_pairs() {
     done
 }
 
+# plan_fixtures: the fixture names the plan captures, one per line, in order.
+plan_fixtures() {
+    local entry cfg fixture pos appearance step seen=" "
+    for entry in "${PLAN[@]}"; do
+        IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
+        case "$seen" in *" $fixture "*) ;; *) seen="$seen$fixture "; printf '%s\n' "$fixture" ;; esac
+    done
+}
+
+# check_fixtures: FIXTURES (usage text). Dies on a mismatch; prints the
+# digests for env.txt.
+check_fixtures() {
+    local out fixture app digest want apps=("$REF_APP") names="ref app"
+    if has_arm B || has_arm C; then apps+=("$APP"); names="ref app, app"; fi
+    out="$("$BASH" "$SCRIPT_DIR/fixtures-check.sh" --repo "$ROOT" 2>&1)" || {
+        printf '%s\n' "$out" >&2
+        die "the checkout's fixtures differ from Tools/make-fixtures.swift or Fixtures/SHA256SUMS (Scripts/fixtures-check.sh)"
+    }
+    printf '%s\n' "$out" | sed 's/^fixtures-check: /fixtures_check=/'
+    while IFS= read -r fixture; do
+        [[ -f "$ROOT/Fixtures/$fixture.json" ]] || die "fixture '$fixture' is not in $ROOT/Fixtures"
+        want="$(shasum -a 256 "$ROOT/Fixtures/$fixture.json" | awk '{print $1}')"
+        for app in "${apps[@]}"; do
+            [[ -f "$app/$fixture.json" ]] || die "$app has no $fixture.json"
+            digest="$(shasum -a 256 "$app/$fixture.json" | awk '{print $1}')"
+            [[ "$digest" == "$want" ]] || die "$app/$fixture.json (sha256 $digest) differs from Fixtures/$fixture.json ($want)"
+        done
+        printf 'fixture=%s sha256=%s (checkout, %s)\n' "$fixture" "$want" "$names"
+    done < <(plan_fixtures)
+}
+
 if [[ $DRY_RUN -eq 1 ]]; then
     echo "visual-parity dry run (no simulator is touched)"
     echo "device:       ${UDID:-(none: --skip-capture)}"
@@ -851,6 +890,10 @@ if [[ $DRY_RUN -eq 1 ]]; then
                 fi
             done
         done
+    fi
+    if [[ $SKIP_CAPTURE -eq 0 ]]; then
+        echo "fixtures:     $SCRIPT_DIR/fixtures-check.sh, then each captured fixture's JSON in every arm's .app" \
+            "== Fixtures/<fixture>.json ($(plan_fixtures | tr '\n' ' ' | sed 's/ $//'))"
     fi
     echo "code captures (configuration: [kind:]class; owners; landing block):"
     declared=0
@@ -1104,6 +1147,8 @@ capture() {
 
 CAPTURE_FAILURES=0
 if [[ $SKIP_CAPTURE -eq 0 ]]; then
+    log "fixtures: $SCRIPT_DIR/fixtures-check.sh and each captured fixture in the apps"
+    FIXTURE_DIGESTS="$(check_fixtures)" || exit 2
     trap cleanup EXIT
     trap 'exit 130' INT TERM
     prepare_device
@@ -1127,6 +1172,7 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
         echo "renderer_stats_required=$RENDERER_STATS"
         echo "visual_diff_args=${DIFF_ARGS[*]}"
         echo "checkout=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo ?) dirty_paths=$(git -C "$ROOT" status --porcelain 2>/dev/null | grep -c . || true)"
+        printf '%s\n' "$FIXTURE_DIGESTS"
     } >"$OUT/env.txt"
     tsv capture arm fixture position appearance size_step content_size app app_sha256 installed_sha256 \
         argv udid device runtime locale ready_line renderer_stats png_sha256 captured_utc status \
