@@ -62,10 +62,21 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             guard (textKit1 != nil) != isTextKit1Backed else { return }
             isTextKit1Backed = textKit1 != nil
             TextKit2Diagnostics.shared.row(textKit1Backed: isTextKit1Backed)
+            if engineTint { applyEngineTint() }
         }
     }
     /// Whether the row's TextKit 1 stack lays out and draws its text.
     private(set) var isTextKit1Backed = false
+    /// `View.adfEngineTint` (diagnostics), set by the representable: the
+    /// row fills its bounds with its engine's colour (`ADFEngineTint`:
+    /// `.textKit2`, or `.textKit1Backed` while its TextKit 1 stack draws).
+    /// Off, the background stays clear; an unchanged value does nothing.
+    var engineTint = false {
+        didSet {
+            guard engineTint != oldValue else { return }
+            applyEngineTint()
+        }
+    }
     /// Whose text the row draws, set by the representable. The row counts
     /// itself by it (`TextKit2Diagnostics.liveListRowCount`,
     /// `liveCodeRowCount`, `codeNativeDrawCount`, and for code the
@@ -131,6 +142,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Never animated, like the clear background set at creation.
+    private func applyEngineTint() {
+        let fill: UIColor = engineTint
+            ? (isTextKit1Backed ? ADFEngineTint.textKit1Backed : ADFEngineTint.textKit2).fillUIColor
+            : .clear
+        UIView.performWithoutAnimation { backgroundColor = fill }
+    }
 
     deinit {
         let backed = isTextKit1Backed

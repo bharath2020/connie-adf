@@ -161,6 +161,9 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
             colorScheme: context.environment.colorScheme,
             ownerID: ownerID
         )
+        // After `apply`: the fill depends on whether the text made the row
+        // TextKit 1-backed.
+        view.engineTint = context.environment.adfEngineTint
         let action = context.environment.openURL
         view.openURL = { url in action(url) }
     }

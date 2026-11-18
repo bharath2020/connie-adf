@@ -72,6 +72,7 @@ struct SegmentedTextView: View {
             }
         }
         .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
+        .modifier(EngineTintMark())
     }
 
     /// One `Text` for the leaf's merged text: the attributed string as is,

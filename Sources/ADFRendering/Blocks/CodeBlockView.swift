@@ -60,6 +60,7 @@ struct CodeBlockView: View {
                 TextEngineLeaf(text: code, style: Self.codeStyle(theme: theme), ownerID: ownerID) {
                     Text(displayedCode)
                         .textSelection(.enabled)
+                        .modifier(EngineTintMark())
                 }
                 .environment(\.adfTextOwnerKind, .code)
                 .padding(theme.spacing * 1.5)
