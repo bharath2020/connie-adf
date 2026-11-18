@@ -60,8 +60,11 @@ final class ContainerRendererUITests: XCTestCase {
     /// leaves: under TextKit 2 each is drawn by its own `tk2-row:<owner>`
     /// with its own text, under SwiftUI none is; the bodied sync block's
     /// paragraph (a root block, 0.43.0) is a TextKit 2 row under TextKit 2
-    /// (PR 1's root scope, now too).
+    /// (PR 1's root scope, now too). The multi-block panel 0.11 holds
+    /// headings, so its whole body stays on SwiftUI in both arms (call C18,
+    /// `panelKeepsRenderer`): its leaves are checked for no TextKit 2 row.
     func testPanelQuoteExtensionTextDrawsOnTextKit2() throws {
+        let keptOnSwiftUI = Set([KP.panelH2, KP.panelP1, KP.panelP2, KP.panelP3].map(\.owner))
         let groups: [(section: String, leaves: [ContainerLeaf])] = [
             (KP.s1, [ContainerLeaf("KP-PANEL-INFO", "0.1.0"), KP.panelH2, KP.panelP1, KP.panelP2, KP.panelP3]),
             (KP.s3, [KP.quoteOuter, KP.quoteInner, KP.quoteInnermost, KP.quoteOuterAfter]),
@@ -76,7 +79,12 @@ final class ContainerRendererUITests: XCTestCase {
                     XCTAssertTrue(show(driver, section: group.section, through: group.leaves.last ?? KP.end),
                                   "\(group.section): the leaves never came into view")
                     for leaf in group.leaves {
-                        driver.expectEngine(leaf, textKit2: textKit2, Self.arm(textKit2))
+                        let kept = keptOnSwiftUI.contains(leaf.owner)
+                        if kept {
+                            XCTAssertTrue(driver.element(leaf).exists, "\(Self.arm(textKit2)): \(leaf) is not in the tree")
+                        }
+                        driver.expectEngine(leaf, textKit2: textKit2 && !kept,
+                                            Self.arm(textKit2) + (kept ? " (panel 0.11 stays SwiftUI, C18)" : ""))
                     }
                     containerUIAttach(driver.app, "engine-\(textKit2 ? "tk2" : "swiftui")-\(group.leaves[0].owner)")
                 }
@@ -121,36 +129,47 @@ final class ContainerRendererUITests: XCTestCase {
         try checkLinks(KP.links.filter { $0.section == KP.s2 })
     }
 
-    /// A search matching inside a panel (KP-PANEL-MULTI-P2, 0.11.2): while
-    /// it is active that owner draws on SwiftUI and its neighbours stay
-    /// TextKit 2 rows; clearing returns it. After step 3.
+    /// A search matching inside a panel (KP-PANEL-TIP, 0.3.0, between the
+    /// note and warning panels' paragraphs 0.2.0 and 0.4.0): while it is
+    /// active that owner draws on SwiftUI (its text on screen, no TextKit 2
+    /// row) and both neighbours, each brought into view, stay TextKit 2
+    /// rows; clearing returns it. (Not the multi-block panel 0.11: it holds
+    /// headings, so its whole body stays on SwiftUI, call C18's
+    /// `panelKeepsRenderer`.) After step 3.
     func testPanelSearchFallsBackPerOwnerAndReturns() throws {
+        let match = ContainerLeaf("KP-PANEL-TIP", "0.3.0")
+        let neighbours = [(ContainerLeaf("KP-PANEL-NOTE", "0.2.0"), CGFloat(-200)),
+                          (ContainerLeaf("KP-PANEL-WARNING", "0.4.0"), CGFloat(200))]
         let driver = launch(textKit2: true)
-        XCTAssertTrue(show(driver, section: KP.s1, through: KP.panelP3), "the multi-block panel never came into view")
-        XCTAssertTrue(driver.isTextKit2(KP.panelP2), "\(KP.panelP2) is not a TextKit 2 row before the search")
-        let counter = driver.search(KP.panelP2.sentinel)
+        XCTAssertTrue(show(driver, section: KP.s1, through: neighbours[1].0), "the palette panels never came into view")
+        XCTAssertTrue(driver.isTextKit2(match), "\(match) is not a TextKit 2 row before the search")
+        let counter = driver.search(match.sentinel)
         XCTAssertTrue(counter.hasPrefix("1 /"), "counter \(counter)")
-        XCTAssertTrue(driver.isSwiftUI(KP.panelP2), "the highlighted owner is still a TextKit 2 row")
-        for neighbour in [KP.panelP1, KP.panelP3] where driver.isPartlyShown(driver.element(neighbour)) {
-            XCTAssertTrue(driver.isTextKit2(neighbour), "\(neighbour) left TextKit 2 (the fallback is per owner)")
-        }
+        if let problem = driver.searchFallbackProblem(match) { XCTFail("the highlighted owner: \(problem)") }
         containerUIAttach(driver.app, "panel-search-active")
+        for (neighbour, step) in neighbours {
+            if let problem = driver.searchNeighbourProblem(neighbour, step: step) { XCTFail(problem) }
+        }
+        _ = driver.scroll(by: -200, until: driver.element(match), maxDrags: 6)
         driver.clearSearch()
-        XCTAssertTrue(driver.isTextKit2(KP.panelP2), "\(KP.panelP2) did not return to TextKit 2 after clearing")
+        XCTAssertTrue(driver.isTextKit2(match), "\(match) did not return to TextKit 2 after clearing")
     }
 
     /// SwiftUI keeps prose selection inside a panel (a long press shows an
     /// edit menu with Copy); the TextKit 2 row has none yet, pinned by a
-    /// strict expected failure (an unexpected pass flips it). After step 3.
+    /// strict expected failure (an unexpected pass flips it). The info
+    /// panel's paragraph (0.1.0): the multi-block panel 0.11 stays SwiftUI
+    /// in both arms (call C18). After step 3.
     func testPanelSelectionSwiftUIOnly() throws {
+        let prose = ContainerLeaf("KP-PANEL-INFO", "0.1.0")
         var menus: [Bool: Bool] = [:]
         for textKit2 in [false, true] {
             let driver = launch(textKit2: textKit2)
-            XCTAssertTrue(show(driver, section: KP.s1, through: KP.panelP2), "the panel never came into view")
-            driver.expectEngine(KP.panelP1, textKit2: textKit2, "before the long press")
+            XCTAssertTrue(show(driver, section: KP.s1, through: prose), "the panel never came into view")
+            driver.expectEngine(prose, textKit2: textKit2, "before the long press")
             let copies = driver.app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Copy"))
             let baseline = copies.count
-            let frame = driver.element(KP.panelP1).frame
+            let frame = driver.element(prose).frame
             driver.app.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: frame.minX + 40, dy: frame.minY + 10)).press(forDuration: 1.2)
             let deadline = Date().addingTimeInterval(3)
@@ -428,11 +447,16 @@ final class ContainerRendererUITests: XCTestCase {
     /// block in a panel (0.78.1) are never TextKit 2 rows: a panel holding
     /// a code block beside another block keeps its whole body on SwiftUI
     /// (`panelKeepsRenderer`), and the canvas gate would keep the second
-    /// there anyway.
+    /// there anyway. On TextKit 2 the code row must sit under a scroll-view
+    /// node of the accessibility tree below the document's own, so the
+    /// census classes it code from the tree, not from its geometry
+    /// fallback (review F-Q4; recorded, and printed as
+    /// `CONTAINER_CODE_CLASSIFICATION`).
     func testNestedCodePansAndCopiesExactBytes() throws {
         let agent = try? HostAgent.fromEnvironment()
         let code = KP.codeQuote
         var mismatches: [String] = []
+        var classification: [String: Any] = [:]
         for textKit2 in [false, true] {
             let arm = Self.arm(textKit2)
             let driver = launch(textKit2: textKit2)
@@ -441,6 +465,23 @@ final class ContainerRendererUITests: XCTestCase {
             XCTAssertTrue(driver.isSwiftUI(KP.codePanel, timeout: 5), "\(arm): the code beside a paragraph in a panel is a TextKit 2 row")
             XCTAssertTrue(driver.scroll(by: 250, until: driver.element(code), maxDrags: 12), "\(code) never came into view")
             driver.expectEngine(code, textKit2: textKit2, arm)
+            if textKit2 {
+                let snapshot = try reader.documentSnapshot()
+                let by = snapshot.codeOwnersByTree.contains(code.owner) ? "tree"
+                    : snapshot.codeOwnersByGeometry.contains(code.owner) ? "geometry" : "none"
+                let rowClass = snapshot.census.classes[code.owner]?.rawValue ?? "none"
+                classification = [
+                    "owner": code.owner, "classified_by": by, "census_class": rowClass,
+                    "nested_scroll_views": snapshot.nestedScrollViews,
+                    "code_owners_by_tree": snapshot.codeOwnersByTree.sorted(),
+                    "code_owners_by_geometry": snapshot.codeOwnersByGeometry.sorted(),
+                ]
+                print("CONTAINER_CODE_CLASSIFICATION owner=\(code.owner) by=\(by) class=\(rowClass) "
+                    + "nested_scroll_views=\(snapshot.nestedScrollViews) "
+                    + "by_geometry=\(snapshot.codeOwnersByGeometry.sorted().joined(separator: ","))")
+                XCTAssertEqual(by, "tree", "\(arm): \(code.owner)'s TextKit 2 row is not under a nested scroll-view node")
+                XCTAssertEqual(rowClass, "code", "\(arm): the census classes \(code.owner) \(rowClass)")
+            }
             let text = driver.element(code)
             let rest = text.frame
             let start = try XCTUnwrap(reader.panStart(onCodeText: rest), "\(arm): no pan start on \(code)")
@@ -479,7 +520,8 @@ final class ContainerRendererUITests: XCTestCase {
                 + "Scripts/lifecycle-gate.sh --only ContainerRendererUITests/testNestedCodePansAndCopiesExactBytes.")
         }
         try agent.record("Container nested code Copy puts the exact code on the pasteboard (containers-parity 0.72.0)",
-                         pass: mismatches.isEmpty, ["owner": code.owner, "mismatches": mismatches])
+                         pass: mismatches.isEmpty, ["owner": code.owner, "mismatches": mismatches,
+                                                    "textkit2_code_row_classification": classification])
         XCTAssertTrue(mismatches.isEmpty, mismatches.joined(separator: "; "))
     }
 
@@ -562,8 +604,9 @@ final class ContainerRendererUITests: XCTestCase {
     }
 
     /// A search matching CAP-03's caption only: under TextKit 2 its owner
-    /// (0.3.0) draws on SwiftUI while the search is active, CAP-04 (0.4.0)
-    /// stays a TextKit 2 row, and clearing returns it. After step 8.
+    /// (0.3.0) draws on SwiftUI while the search is active (its text on
+    /// screen, no TextKit 2 row), CAP-04 (0.4.0), brought into view, stays
+    /// a TextKit 2 row, and clearing returns it. After step 8.
     func testCaptionSearchFallsBackAndReturns() throws {
         typealias CAP = CaptionsParity
         let driver = launch(CAP.fixture, textKit2: true)
@@ -571,11 +614,10 @@ final class ContainerRendererUITests: XCTestCase {
         XCTAssertTrue(driver.isTextKit2(CAP.plain), "\(CAP.plain) is not a TextKit 2 row before the search")
         let counter = driver.search("plain caption under")
         XCTAssertTrue(counter.hasPrefix("1 /"), "counter \(counter)")
-        XCTAssertTrue(driver.isSwiftUI(CAP.plain), "the highlighted caption is still a TextKit 2 row")
-        if driver.isPartlyShown(driver.element(CAP.marks)) {
-            XCTAssertTrue(driver.isTextKit2(CAP.marks), "\(CAP.marks) left TextKit 2 (the fallback is per owner)")
-        }
+        if let problem = driver.searchFallbackProblem(CAP.plain) { XCTFail("the highlighted caption: \(problem)") }
         containerUIAttach(driver.app, "caption-search-active")
+        if let problem = driver.searchNeighbourProblem(CAP.marks, step: 200) { XCTFail(problem) }
+        _ = driver.scroll(by: -200, until: driver.element(CAP.plain), maxDrags: 6)
         driver.clearSearch()
         XCTAssertTrue(driver.isTextKit2(CAP.plain), "\(CAP.plain) did not return to TextKit 2 after clearing")
     }
