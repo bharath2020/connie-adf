@@ -74,9 +74,12 @@ import ADFPreparation
 /// `eligibleCaptionLeaves`/`fallbackCaptionLeaves` captions;
 /// `eligibleNestedCode`/`fallbackNestedCode` code in containers, with
 /// `nestedCodeAdmitted`/`nestedCodeGated` measured as `codeAdmitted`/
-/// `codeGated` are; `unpreparedExpands` the expands in scope whose bodies,
-/// prepared only when opened, the count could not enter. Every container
-/// key is 0 while no container family is enabled. The
+/// `codeGated` are, in the same walk
+/// (`ADFTextRenderer.textKit2CodeAdmissionIncludingNested`);
+/// `unpreparedExpands` the expands in scope whose bodies, prepared only
+/// when opened, the count could not enter. Every container key is 0 while
+/// no container family is enabled; `tk2OffWindow` is not a container key:
+/// it counts every live row kind outside a window. The
 /// bracketed keys appear only under
 /// `-rebuildControlPicks` (`RebuildControl`). Parsed by
 /// `Scripts/perf_trial.py` (one line at READY, one after `SCROLL_METRICS`).
@@ -282,7 +285,7 @@ enum RendererStats {
         let stats = ADFTextRenderer.textKit2Stats
         let coverage = ADFTextRenderer.textKit2Coverage(of: blocks)
         let environment = environment ?? launchEnvironment()
-        let code = ADFTextRenderer.textKit2CodeAdmission(
+        let code = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
             of: blocks, dynamicTypeSize: environment.dynamicTypeSize, legibilityWeight: environment.legibilityWeight,
             displayScale: environment.displayScale, layoutDirection: environment.layoutDirection
         )

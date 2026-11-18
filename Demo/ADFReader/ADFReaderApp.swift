@@ -83,12 +83,13 @@ import UIKit
 ///   The first six are live and cumulative row counters: rows drawing
 ///   text below a container's boundary that is not code, their native
 ///   and TextKit 1-backed draws, caption rows and their native draws, and
-///   row views alive outside any window. The next nine are static
-///   coverage of that text (container leaves, captions, nested code,
-///   expands whose unprepared bodies were not counted), apart from every
-///   key above; the last two measure nested code as `codeAdmitted` /
-///   `codeGated` measure top-level code. All read 0 while no container
-///   family is enabled (see `RendererStats`).
+///   row views of every kind alive outside any window. The next nine are
+///   static coverage of that text (container leaves, captions, nested
+///   code, expands whose unprepared bodies were not counted), apart from
+///   every key above; the last two measure nested code as `codeAdmitted` /
+///   `codeGated` measure top-level code. All but `tk2OffWindow` read 0
+///   while no container family is enabled; `tk2OffWindow` counts root,
+///   list and code rows too (see `RendererStats`).
 /// - `-switchDuringLoad` flips the renderer to TextKit 2 when the first
 ///   streamed chunk arrives (the document is still loading) the way the
 ///   toolbar does, marked as automation's like `-textkit2` (the next launch
