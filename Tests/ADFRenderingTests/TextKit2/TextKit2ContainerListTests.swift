@@ -215,14 +215,15 @@ extension TextKit2ContainerScopeTests {
     }
 
     /// Every text owner under a list row (its leader, its trailing text
-    /// and everything inside its trailing containers).
+    /// and code, and everything inside its trailing containers;
+    /// `TK2ContainerBody.allTextOwners` counts code blocks from step 7).
     static func descendants(of row: PreparedListRow) -> Set<String> {
         var owners: Set<String> = row.segments.isEmpty ? [] : [row.id]
         owners.formUnion(TK2ContainerBody.allTextOwners(row.trailingBlocks))
         return owners
     }
 
-    @Test("rejectedListRowKeepsDescendantsSwiftUI: in a quote, a list row rule A rejects (a code block and a quote in the item) keeps its leader, its paragraph and the quote inside it on SwiftUI; a list rule B rejects keeps every row there; the sibling rows and the quote's prose migrate")
+    @Test("rejectedListRowKeepsDescendantsSwiftUI: in a quote, a list row rule A rejects (a code block and a quote in the item) keeps its leader, its code block and the quote inside it on SwiftUI; a list rule B rejects keeps every row there; the sibling rows and the quote's prose migrate")
     @MainActor
     func rejectedListRowKeepsDescendantsSwiftUI() async throws {
         let p = { (text: String) in TK2ContainerProbe.paragraph(TK2ContainerProbe.t(text)) }
@@ -254,7 +255,10 @@ extension TextKit2ContainerScopeTests {
             #expect(!TextKit2Scope.listKeepsRenderer(ruleB))
             var rejected = Self.descendants(of: ruleA[1])
             for row in ruleB { rejected.formUnion(Self.descendants(of: row)) }
-            #expect(rejected.count == 5, "\(rejected.sorted())")
+            // The rule-A row's leader, code block and inner quote's
+            // paragraph; the rule-B rows' leaders and the panel's paragraph
+            // (the closed expand's body is not prepared).
+            #expect(rejected.count == 6, "\(rejected.sorted())")
             let drawn = Set(rows.keys)
             #expect(drawn.isDisjoint(with: rejected), "\(String(describing: allowed)): \(drawn.intersection(rejected).sorted()) drew on TextKit 2")
             let expected: Set<String> = [children[0].id, ruleA[0].id, ruleA[2].id]
