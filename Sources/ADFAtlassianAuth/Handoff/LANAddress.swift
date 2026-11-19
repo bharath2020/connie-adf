@@ -1,8 +1,8 @@
-#if os(macOS)
 import Darwin
 import Foundation
 
-/// The Mac's local-network IPv4 address, for the pairing link.
+/// This device's local-network IPv4 addresses: the Mac's for the pairing
+/// link, the phone's for a "Mac connects to phone" handoff.
 public enum LANAddress {
     public struct Interface: Sendable, Equatable {
         public let name: String
@@ -42,4 +42,3 @@ public enum LANAddress {
         return result
     }
 }
-#endif
