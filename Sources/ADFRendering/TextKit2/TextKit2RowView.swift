@@ -749,7 +749,12 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// container as wide as the `Text`'s frame, its first baseline on a
     /// device pixel — this does the same, identical to the pixel
     /// (`TextKit2PixelParityTests`). The same stack lays the text out
-    /// (`textKit1Result`) and hit-tests its links.
+    /// (`textKit1Result`) and hit-tests its links. The container is the
+    /// bounds' width, never the placed layout's (`drawn`): a row placed a
+    /// fraction of a pixel wider than it was measured (the pixel it
+    /// reported, `layoutResult(forProposedWidth:)`) can draw a line fewer
+    /// than its height holds, and so does `Text`, pixel for pixel
+    /// (delta review R1; `TextKit2OffGridWidthTests.linkedOffGridWidth`).
     private func drawTextKit1(_ stack: TextKit1Stack, in context: CGContext, scale: CGFloat) {
         stack.setWidth(bounds.width)
         let glyphs = stack.manager.glyphRange(for: stack.container)

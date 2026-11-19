@@ -138,6 +138,76 @@ struct TextKit2OffGridWidthTests {
         }
     }
 
+    /// Delta review R1: text with a link is laid out and drawn by the
+    /// row's TextKit 1 stack. Re-proposed the pixel it reported, the row
+    /// keeps the layout (and the height) it reported, and the stack draws
+    /// at the row's bounds, a fraction of a pixel wider, where a word more
+    /// fits a line: a line or two fewer than the height holds. Measured,
+    /// `Text` does exactly that (it draws linked text with TextKit 1 in a
+    /// container as wide as its frame): its ink ends one or two line
+    /// pitches above the last baseline it reports, and the row matches it
+    /// pixel for pixel. Laying the stack out at the kept layout's width
+    /// (the review's fix) draws the reported lines and differs from `Text`
+    /// by 13,057 to 122,183 pixels at these widths (tk2fix log
+    /// t-r3-r1fix-experiment); leaving linked rows out of the row fix
+    /// reports a shorter height than `Text`. So a linked paragraph is
+    /// hosted at widths an ulp past a pixel where its row reports the next
+    /// pixel and a fresh layout there has another line count: both arms'
+    /// guides match, and the rendered pixels pass PR 1's pixel rule (the
+    /// same first and last ink rows and per-row ink counts, at most 0.2 %
+    /// differing pixels). Guides alone cannot see the drawing.
+    @Test("a linked (TextKit 1-backed) paragraph re-proposed the pixel it reported keeps its reported height and draws as Text draws it, pixel for pixel")
+    func linkedOffGridWidth() async throws {
+        let medium = "Ten tired otters cheer while a careful heron stares at the outer rim of the sunlit marsh in late autumn"
+        let fixture = try await TK2Parity.fixture("linked-off-grid", content: [
+            TK2Parity.adfText("A linked phrase", marks: "{\"type\":\"link\",\"attrs\":{\"href\":\"https://example.com\"}}"),
+            TK2Parity.adfText(" then " + medium + " and " + medium + " and " + medium),
+        ].joined(separator: ","))
+        let scale = TK2Parity.nativeScale
+        let tolerance = TextKit2FixtureSweepTests.tolerance
+        var compared = 0
+        for size in [DynamicTypeSize.large, .xxLarge] {
+            let env = TK2Parity.Environment(size: size)
+            let inputs = try TK2Parity.inputs(fixture, env: env)
+            var found = 0
+            for pixels in Int(200 * scale)...Int(350 * scale) where found < 3 {
+                let proposed = (CGFloat(pixels) / scale).nextUp
+                let reported = TextKit2RowView.proposalCeil(proposed, scale: scale)
+                guard reported > proposed else { continue }
+                let row = TextKit2RowView()
+                row.apply(inputs)
+                #expect(row.isTextKit1Backed)
+                let first = row.layoutResult(forProposedWidth: proposed)
+                guard first.size.width == reported else { continue }
+                let fresh = TextKit2RowView()
+                fresh.apply(inputs)
+                guard fresh.layoutResult(forProposedWidth: reported).lineCount != first.lineCount else { continue }
+                found += 1
+                let width = proposed + fixture.indentation
+                let swiftUI = TK2Parity.guides(fixture, arm: .swiftUI, env: env, width: width)
+                let textKit2 = Self.textKit2Hosted(fixture, env: env, width: width)
+                CATransaction.flush()
+                let label = "linked \(size) W=\(width) on \(scale)x: swiftUI=\(swiftUI) textKit2=\(textKit2.guides) rows=\(textKit2.rows) lines=\(first.lineCount) fresh=\(fresh.layoutResult(forProposedWidth: reported).lineCount)"
+                #expect(textKit2.kept > 0, "\(label): the row was not re-proposed the pixel it reported")
+                #expect(abs(swiftUI.height - textKit2.guides.height) <= tolerance, "\(label): height")
+                #expect(abs(swiftUI.first - textKit2.guides.first) <= tolerance, "\(label): first baseline")
+                #expect(abs(swiftUI.last - textKit2.guides.last) <= tolerance, "\(label): last baseline")
+                let height = max(swiftUI.height + 40, 200)
+                let a = try TK2Parity.render(fixture, arm: .swiftUI, env: env, width: width, height: height)
+                let b = try TK2Parity.render(fixture, arm: .textKit2, env: env, width: width, height: height)
+                let pixelRule = TK2Caption.pixelFailures(a, b, dark: false)
+                #expect(pixelRule.failures.isEmpty, "\(label): \(pixelRule.failures)")
+                // Where the text ends against the last baseline both arms
+                // report (pixel rows): a line fewer drawn ends a line up.
+                let inkEnd = (TK2Parity.inkProfile(a, dark: false).lastInkRow ?? -1, TK2Parity.inkProfile(b, dark: false).lastInkRow ?? -1)
+                print("TK2_OFF_GRID_LINKED \(label) kept=\(textKit2.kept) differing=\(pixelRule.differing)/\(pixelRule.total) failures=\(pixelRule.failures.count) lastInkRow=\(inkEnd.0)/\(inkEnd.1) lastBaselineRow=\(Int((swiftUI.last * scale).rounded()))")
+                compared += 1
+            }
+        }
+        // Not vacuous on 3x: some width's reported pixel fits a word more.
+        if scale == 3 { #expect(compared > 0, "no linked width reported a pixel at which a fresh layout has another line count") }
+    }
+
     /// The row fix's one case never arises on PR 1's corpus: every
     /// eligible top-level paragraph and heading of the root sweep's
     /// documents (`TextKit2FixtureSweepTests.documents`), laid out at each
