@@ -186,7 +186,9 @@ nodes (marked TODO).
   make one list call and one `tenant_info` call; `.external` is unsupported;
   redaction. Run `swift test --filter AtlassianMediaFetcherTests`.
 - **Live check** (opt-in, real site), `LiveAtlassianMediaTests.swift`: skipped
-  unless `ADF_LIVE_TOKEN` is set. It fetches the page body
+  unless `ADF_LIVE_SITE` is set and adf-auth has saved an account for that
+  site; it loads that credential at run time through `KeychainCredentialStore`
+  (`CredentialStore.load(site:)`), so macOS may ask to allow keychain access. It fetches the page body
   (`GET {gw}/wiki/api/v2/pages/{id}?body-format=atlas_doc_format`;
   `body.atlas_doc_format.value` is a JSON string holding the ADF), parses it
   with `ADFParser`, collects every `.file` media node (whole tree, including
@@ -195,15 +197,16 @@ nodes (marked TODO).
   types.
 
   ```sh
-  # once: prompts for the token, nothing on screen or in history
-  security add-generic-password -s adf-live-test -a <your-atlassian-email> -U -w
-  # each run (defaults: ADF_LIVE_SITE=mycompany.atlassian.net, ADF_LIVE_PAGE=229377)
+  # once: create the token from the prefilled link with all six scopes;
+  # adf-auth saves it in the login Keychain ("ADFReader – mycompany.atlassian.net")
+  adf-auth login --site mycompany --no-open
+  # each run (defaults: ADF_LIVE_SITE=mycompany, ADF_LIVE_PAGE=229377)
   Scripts/live-atlassian-fetch.sh
   ```
 
-  The script reads the email from `$ADF_LIVE_EMAIL` or the Keychain item's
-  account and the token with `security … -w` into a variable (never echoed),
-  exits 0 with "no token stored in Keychain item adf-live-test — skipping" when
-  the item is missing, and runs `swift test --filter LiveAtlassianMediaTests`
-  from the repo root. The token must have been created with the six current
+  The script checks that the adf-auth Keychain item exists (attributes only,
+  never the secret), exits 0 with "no adf-auth account saved for … — skipping"
+  when it is missing, and runs `swift test --filter LiveAtlassianMediaTests`
+  from the repo root. The test itself reads the credential; neither prints the
+  token or the email. The token must have been created with the six current
   scopes.

@@ -6,26 +6,23 @@ import ADFModel
 import ADFAtlassianMedia
 
 /// Opt-in check against a real Confluence page. Skipped unless
-/// `ADF_LIVE_TOKEN` is set; run it with `Scripts/live-atlassian-fetch.sh`,
-/// which reads the token from the Keychain.
+/// `ADF_LIVE_SITE` is set AND the standard adf-auth Keychain item for that
+/// site exists (`adf-auth login --site <site>` saves it). Run it with
+/// `Scripts/live-atlassian-fetch.sh`.
 ///
-/// Environment: `ADF_LIVE_EMAIL`, `ADF_LIVE_TOKEN`, `ADF_LIVE_SITE`
-/// (default `mycompany.atlassian.net`), `ADF_LIVE_PAGE` (default `229377`).
+/// The credential is read at run time through `KeychainCredentialStore`
+/// (`CredentialStore.load(site:)`); macOS may ask to allow keychain access.
+/// Environment: `ADF_LIVE_SITE` (e.g. `mycompany`), `ADF_LIVE_PAGE`
+/// (default `229377`).
 ///
 /// Prints counts, sizes and media types only — never the token, the email
 /// or an Authorization header.
-@Suite("Live Atlassian media fetch", .enabled(if: LiveEnvironment.isEnabled), .timeLimit(.minutes(5)))
+@Suite("Live Atlassian media fetch", .enabled(if: LiveEnvironment.credential != nil), .timeLimit(.minutes(5)))
 struct LiveAtlassianMediaTests {
     @Test("every file media node on the page downloads as a decodable image")
     func fetchPageMedia() async throws {
-        let env = try LiveEnvironment.load()
-        let credential = AtlassianCredential(
-            site: try AtlassianSite(parsing: env.site),
-            email: env.email,
-            token: env.token,
-            cloudId: nil,
-            expiresAt: nil
-        )
+        let credential = try #require(LiveEnvironment.credential)
+        let env = LiveEnvironment.current
         let fetcher = AtlassianMediaFetcher(credential: credential)
         let cloudId = try await fetcher.resolvedCloudId()
 
@@ -63,35 +60,27 @@ struct LiveAtlassianMediaTests {
     }
 }
 
-/// The live-test settings, read from the environment.
-struct LiveEnvironment {
-    let email: String
-    let token: String
-    let site: String
+/// The live-test settings, read from the environment, and the saved
+/// adf-auth credential for that site.
+struct LiveEnvironment: Sendable {
+    let site: String?
     let pageId: String
 
-    static var isEnabled: Bool {
-        !(ProcessInfo.processInfo.environment["ADF_LIVE_TOKEN"] ?? "").isEmpty
-    }
-
-    struct MissingEmail: Error, CustomStringConvertible {
-        var description: String { "ADF_LIVE_EMAIL is not set." }
-    }
-
-    static func load() throws -> LiveEnvironment {
+    static let current: LiveEnvironment = {
         let environment = ProcessInfo.processInfo.environment
         func value(_ name: String) -> String? {
             guard let raw = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
             return raw
         }
-        guard let email = value("ADF_LIVE_EMAIL") else { throw MissingEmail() }
-        return LiveEnvironment(
-            email: email,
-            token: value("ADF_LIVE_TOKEN") ?? "",
-            site: value("ADF_LIVE_SITE") ?? "mycompany.atlassian.net",
-            pageId: value("ADF_LIVE_PAGE") ?? "229377"
-        )
-    }
+        return LiveEnvironment(site: value("ADF_LIVE_SITE"), pageId: value("ADF_LIVE_PAGE") ?? "229377")
+    }()
+
+    /// Loaded once. `nil` (suite skipped) when `ADF_LIVE_SITE` is unset or
+    /// unparsable, or when no adf-auth credential is saved for that site.
+    static let credential: AtlassianCredential? = {
+        guard let raw = current.site, let site = try? AtlassianSite(parsing: raw) else { return nil }
+        return (try? KeychainCredentialStore().load(site: site)) ?? nil
+    }()
 }
 
 /// Test-only page body fetch (the library has no need for it):
