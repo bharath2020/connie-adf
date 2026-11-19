@@ -12,7 +12,8 @@
 #   <base>, <candidate>  any git ref, or WORKTREE: the working tree this
 #                 script lives in, uncommitted and untracked (not ignored)
 #                 files included. Candidate defaults to WORKTREE. Calibration
-#                 ref defaults to main.
+#                 ref defaults to main. Refs must contain TextKit 2 PR 2's
+#                 routing (TextKit2Scope.inheritsRenderer; a76736f on).
 #
 #   --tier render|parse|all   render: the simulator suite
 #                 (Tests/ADFRenderingTests/Perf/PerfProbeTests.swift); parse:
@@ -35,7 +36,9 @@
 #   --release     build Release with ENABLE_TESTABILITY=YES (default Debug).
 #   --root <dir>  exported trees, derived data and SwiftPM scratch, reused
 #                 between runs (default $PERF_PROBE_ROOT, else
-#                 $TMPDIR/connie-adf-perf-probe). Safe to delete when idle.
+#                 $TMPDIR/connie-adf-perf-probe). One run at a time holds it
+#                 (<root>/lock); another run waits within --busy-wait.
+#                 Safe to delete when idle.
 #   --out <dir>   this run's results (default <root>/runs/<stamp>-<pid>).
 #   --budgets <file>          default Scripts/perf-probe-budgets.json.
 #   --strict-counts           a changed count fails the run.
@@ -47,9 +50,15 @@
 #                 replaces --budgets with it. --margin-pct P (default 2).
 #   --allow-busy  run while another lane's perf run is active (it corrupts
 #                 their frame figures; ours barely move). Default: wait up
-#                 to --busy-wait s (default 1800) for
+#                 to --busy-wait s in total (default 1800) for
 #                 pgrep -f "$PERF_PROBE_BUSY_PATTERN" (default
 #                 'perf-gate.sh|perf_trial.py') to clear, then exit 2.
+#                 perf_trial.py run by this checkout's
+#                 perf-scroll-counters.sh (this lane's T1) does not count.
+#   --skip-when-busy          when the wait (another lane's perf run, or
+#                 another T0 run holding --root) runs out, print a SKIPPED
+#                 note and exit 0 instead of 2: the push gate's mode
+#                 (.no-mistakes.yaml, with --busy-wait 300).
 #   --grace S     let xcodebuild finalise its result bundle at most S s
 #                 after the test-run line before stopping it (default 300).
 #   --keep-sim    leave the simulator booted (and a created one in place).
@@ -62,11 +71,10 @@
 #   1. Resolves each ref to a git tree (WORKTREE: `git add -A` into a
 #      temporary index + write-tree; the real index is untouched), exports it
 #      with `git archive | tar -x` (no git worktree) and overlays, from this
-#      checkout: both Perf/ test folders, fixtures the ref lacks, and for a
-#      ref without TextKit2Scope.inheritsRenderer (TK2 PR 1) the legacy
-#      routing shim (Scripts/perf-probe-compat/). The result is mirrored
-#      into <root>/src/<slot> rewriting only changed files, so per-slot
-#      builds (<root>/dd/<slot>-<config>, <root>/spm/<slot>) stay incremental.
+#      checkout: both Perf/ test folders and fixtures the ref lacks. The
+#      result is mirrored into <root>/src/<slot> rewriting only changed
+#      files, so per-slot builds (<root>/dd/<slot>-<config>, <root>/spm/<slot>)
+#      stay incremental.
 #   2. xcodebuild build-for-testing (scheme ADFKit-Package) per slot;
 #      `swift build --build-tests` per slot for the parse tier.
 #   3. Boots the simulator, runs one throwaway pass (warm-up rule), then
@@ -89,7 +97,8 @@
 #
 # OUTPUTS  <out>/{base,cand}.{render,parse}.<pass>.jsonl, warmup.jsonl,
 #          report.md, summary.json, logs/, xcresult/.
-# EXIT     0 PASS/WARN/CHANGED; 1 FAIL; 2 usage, build, test or host error.
+# EXIT     0 PASS/WARN/CHANGED (or SKIPPED with --skip-when-busy); 1 FAIL;
+#          2 usage, build, test or host error.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -97,7 +106,6 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/sim.sh
 source "$SCRIPT_DIR/lib/sim.sh"
 HELPER="$SCRIPT_DIR/perf_probe.py"
-LEGACY_COMPAT="$SCRIPT_DIR/perf-probe-compat/PerfProbeCompat.legacy.swift.in"
 CAPTAIN_UDID="FCBB16A4-94A8-406A-8F17-D9A189754F82"
 SCHEME="ADFKit-Package"
 RENDER_TEST="ADFRenderingTests/PerfProbeTests"
@@ -109,7 +117,7 @@ die() { log "error: $*"; exit 2; }
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; }
 
 UDID=""; TIER="all"; OUT=""; ROOT="${PERF_PROBE_ROOT:-${TMPDIR:-/tmp}/connie-adf-perf-probe}"
-REPS=5; PASSES=1; WARMUP=1; ALLOW_BUSY=0; BUSY_WAIT=1800
+REPS=5; PASSES=1; WARMUP=1; ALLOW_BUSY=0; BUSY_WAIT=1800; SKIP_WHEN_BUSY=0
 BUDGETS="$SCRIPT_DIR/perf-probe-budgets.json"; CALIBRATE=0; WRITE_BUDGETS=0; MARGIN=2
 STRICT=0; CONFIG="Debug"; KEEP_SIM=0; DRY=0; DEVICE_TYPE="iPhone 17 Pro"; FIXTURES=""; GRACE=300
 TEST_LIMIT=1200; EXPORT_ONLY=0; BUILD_ONLY=0; RUNTIME=""
@@ -132,6 +140,7 @@ while [[ $# -gt 0 ]]; do
         --margin-pct) MARGIN="${2:-}"; shift 2 ;;
         --allow-busy) ALLOW_BUSY=1; shift ;;
         --busy-wait) BUSY_WAIT="${2:-}"; shift 2 ;;
+        --skip-when-busy) SKIP_WHEN_BUSY=1; shift ;;
         --grace) GRACE="${2:-}"; shift 2 ;;
         --device-type) DEVICE_TYPE="${2:-}"; shift 2 ;;
         --runtime) RUNTIME="${2:-}"; shift 2 ;;
@@ -193,10 +202,11 @@ resolve() {
     local ref="$1" slot="$2" commit index
     if [[ "$ref" == "WORKTREE" ]]; then
         mkdir -p "$ROOT/tmp"
-        index="$ROOT/tmp/index.$slot"
+        index="$ROOT/tmp/index.$slot.$$"
         cp "$(git -C "$REPO" rev-parse --path-format=absolute --git-path index)" "$index"
         GIT_INDEX_FILE="$index" git -C "$REPO" add -A
         TREE="$(GIT_INDEX_FILE="$index" git -C "$REPO" write-tree)"
+        rm -f "$index"
         commit="$(git -C "$REPO" rev-parse --short=9 HEAD)"
         if [[ "$TREE" == "$(git -C "$REPO" rev-parse 'HEAD^{tree}')" ]]; then
             LABEL="WORKTREE@$commit (clean)"
@@ -226,16 +236,11 @@ export_slot() {
             OVERLAID="$OVERLAID ${name##*/}"
         fi
     done
-    ROUTING="TextKit2Scope.inheritsRenderer"
-    if ! grep -rqs "static func inheritsRenderer" "$stage/Sources/ADFRendering"; then
-        cp "$LEGACY_COMPAT" "$stage/Tests/ADFRenderingTests/Perf/PerfProbeCompat.swift"
-        ROUTING="legacy (richText only)"
-    fi
     python3 -I "$HELPER" sync "$stage" "$ROOT/src/$slot" --keep .swiftpm --keep .build >&2
     case "$stage" in
         "$ROOT"/stage/*) rm -rf "$stage" ;;
     esac
-    log "$slot: overlay fixtures:${OVERLAID:- none}; routing: $ROUTING"
+    log "$slot: overlay fixtures:${OVERLAID:- none}"
 }
 
 # ------------------------------------------------------------ processes --
@@ -249,8 +254,24 @@ stop_child() {
     wait "$1" 2>/dev/null || true
 }
 
-# Matching command lines, less this script and any process that merely
-# mentions the pattern while waiting on it (a shell running pgrep/until).
+# This checkout's T1 (perf-scroll-counters.sh) runs $SCRIPT_DIR/perf_trial.py
+# as its child: this lane's own work run, not another lane's frame run. An
+# ancestor counts only when it executes the script, not when its command
+# text merely mentions it.
+T1_PROGRAM='^([^ ]*/)?((env|bash|sh|zsh)( +-[^ ]+)* +)?([^ ]*/)?perf-scroll-counters\.sh( |$)'
+own_t1_child() {
+    local pid="$1" command
+    case "$(ps -o command= -p "$pid" 2>/dev/null)" in *"$SCRIPT_DIR/perf_trial.py"*) ;; *) return 1 ;; esac
+    while pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"; [[ -n "$pid" && "$pid" -gt 1 ]]; do
+        command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+        [[ ! "$command" =~ $T1_PROGRAM ]] || return 0
+    done
+    return 1
+}
+
+# Matching command lines, less this script, this lane's T1 children and any
+# process that merely mentions the pattern while waiting on it (a shell
+# running pgrep/until).
 busy_pids() {
     local pid command
     for pid in $(pgrep -f "${PERF_PROBE_BUSY_PATTERN:-perf-gate.sh|perf_trial.py}" 2>/dev/null || true); do
@@ -258,18 +279,57 @@ busy_pids() {
         command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
         [[ -n "$command" ]] || continue
         case "$command" in *pgrep*) continue ;; esac
+        own_t1_child "$pid" && continue
         printf '%s ' "$pid"
     done
 }
+
+# One budget (--busy-wait) for every wait of the run: the scratch-root lock
+# and each quiet-host check.
+WAITED=0
+give_up_busy() {
+    if [[ $SKIP_WHEN_BUSY -eq 1 ]]; then
+        log "T0 SKIPPED: $1 after ${WAITED}s"
+        printf 'T0 work probe SKIPPED: %s after %ss.\nRun it by hand when the host is free: Scripts/perf-probe.sh %s %s\n' \
+            "$1" "$WAITED" "$BASE_REF" "${CAND_REF:-}"
+        exit 0
+    fi
+    die "$1 after ${WAITED}s; $2"
+}
+busy_sleep() {
+    log "waiting before $1: $2, ${WAITED}/${BUSY_WAIT}s"
+    sleep "$3"
+    WAITED=$((WAITED + $3))
+}
 wait_quiet() {
     [[ $ALLOW_BUSY -eq 0 ]] || return 0
-    local waited=0 pids
+    local pids
     while pids="$(busy_pids)"; [[ -n "${pids// /}" ]]; do
-        [[ $waited -lt $BUSY_WAIT ]] || die "another lane's perf run is still active after ${waited}s (pids $pids); rerun later or pass --allow-busy"
-        log "waiting before $1: another lane's perf run is active (pids $pids), ${waited}/${BUSY_WAIT}s"
-        sleep 30
-        waited=$((waited + 30))
+        [[ $WAITED -lt $BUSY_WAIT ]] || give_up_busy "another lane's perf run is still active (pids $pids)" \
+            "rerun later or pass --allow-busy"
+        busy_sleep "$1" "another lane's perf run is active (pids $pids)" 30
     done
+}
+
+# <root>/lock: one run per scratch root (exported trees, derived data and
+# SwiftPM scratch are shared between runs). A lock whose holder exited is
+# taken over.
+LOCK=""
+take_lock() {
+    local holder
+    while ! mkdir "$ROOT/lock" 2>/dev/null; do
+        holder="$(cat "$ROOT/lock/pid" 2>/dev/null || true)"
+        if [[ -n "$holder" ]] && ! ps -o command= -p "$holder" 2>/dev/null | grep -q 'perf-probe\.sh'; then
+            log "taking over the lock of exited run $holder"
+            rm -rf "$ROOT/lock"
+            continue
+        fi
+        [[ $WAITED -lt $BUSY_WAIT ]] || give_up_busy "another T0 run (pid ${holder:-?}) still holds $ROOT" \
+            "rerun later or pass a different --root"
+        busy_sleep "the export" "another T0 run (pid ${holder:-?}) holds $ROOT" 10
+    done
+    LOCK="$ROOT/lock"
+    echo "$$" >"$LOCK/pid"
 }
 
 # run_logged <log> <limit-s> <dir> <command...>: runs the command in <dir>
@@ -308,6 +368,7 @@ cleanup() {
     local status=$?
     trap - EXIT
     [[ -z "$CHILD_PID" ]] || stop_child "$CHILD_PID"
+    [[ -z "$LOCK" ]] || rm -rf "$LOCK"
     if [[ -n "$UDID" && $KEEP_SIM -eq 0 ]]; then
         if [[ $CREATED -eq 1 ]]; then
             log "deleting simulator $UDID (created by this run)"
@@ -421,6 +482,7 @@ mkdir -p "$OUT/logs" "$OUT/xcresult" "$ROOT/src" "$ROOT/stage"
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 RUN_T0=$SECONDS
+take_lock
 
 phase "export"
 export_slot base "$BASE_TREE"

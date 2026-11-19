@@ -48,7 +48,10 @@ RULES (thresholds from the budgets file; defaults in DEFAULT_BUDGETS)
                    product counter) is listed, never CHANGED. A counter
                    whose reps disagreed (counts_unstable) is listed apart.
     ratio          render tier, candidate TextKit 2 ÷ SwiftUI instructions
-                   per fixture <= ratio_budgets[fixture] (FAIL above);
+                   per fixture <= ratio_budgets[fixture]. Over it: FAIL when
+                   the base is within it, or when the candidate ratio is
+                   more than ratio_rise_fail_pct (2) above the base ratio;
+                   otherwise WARN (the base is over too: recalibrate).
                    null budget = uncalibrated, reported only.
     layouts/row    TextKit 2 arm: tk2.layoutCount ÷ tk2_rows, budget
                    tk2_layouts_per_row_max (1.0). Reported as a signal
@@ -80,6 +83,7 @@ DEFAULT_BUDGETS = {
     "instruction_noise_pct": {},
     "noise_warn_factor": 1.0,
     "noise_fail_factor": 2.0,
+    "ratio_rise_fail_pct": 2.0,
 }
 
 RANK = {"PASS": 0, "WARN": 1, "CHANGED": 2, "FAIL": 3}
@@ -300,6 +304,10 @@ def compare(args):
             verdict = "uncalibrated"
         elif cr > limit:
             verdict = "FAIL"
+            if br is not None and br > limit and cr <= br * (1 + budgets["ratio_rise_fail_pct"] / 100.0):
+                verdict = "WARN"
+                notes.append(f"- `{fixture}` TK2 ÷ SwiftUI ratio: base also over the budget ({br:.3f} → {cr:.3f}, "
+                             f"budget {limit:.3f}); recalibrate (--calibrate 10 main --write-budgets).")
         blpr = layouts_per_row(base.get(("render", fixture, "textKit2")))
         clpr = layouts_per_row(cand.get(("render", fixture, "textKit2")))
         signal = ""
@@ -307,8 +315,8 @@ def compare(args):
             signal = f"> {budgets['tk2_layouts_per_row_max']:g} (issue 10)"
             if budgets.get("enforce_layouts_per_row"):
                 verdict = "FAIL"
-        if verdict == "FAIL":
-            worst = "FAIL"
+        if verdict in RANK:
+            worst = max(worst, verdict, key=RANK.get)
         ratio_rows.append({
             "fixture": fixture, "base_ratio": br, "cand_ratio": cr, "budget": limit, "verdict": verdict,
             "base_layouts_per_row": blpr, "cand_layouts_per_row": clpr, "signal": signal,

@@ -16,20 +16,13 @@ SUBCOMMANDS
         (`git ls-files -co --exclude-standard`) into <dest>, which must be
         empty or missing: the candidate `.` (uncommitted changes included).
 
-    overlay --dest <export> --source <dir> --fixture-source <dir>
-            --fixtures "<names>" --record <json>
-        Makes an exported ref measurable by T1. When <dest> lacks
-        Demo/ADFReader/ScrollCounters.swift (a ref older than T1), copies
-        that file, Demo/ADFReader/AutoScroller.swift and
-        Sources/ADFRendering/RowLifecycleDiagnostics.swift from <source>,
-        and adds the two ADFRowLifecycle calls to DocumentRow's
-        onAppear/onDisappear in Sources/ADFRendering/ADFDocumentView.swift.
-        Refuses (exit 2) when the ref predates RendererStats (TextKit 2
-        PR 1, 86abd56), when its AutoScroller.swift is not the pre-T1 file
-        the overlay replaces (PRE_T1_AUTOSCROLLER_BLOBS), or when an anchor
-        does not match exactly once. Also copies each requested fixture the
-        ref lacks from <fixture-source> (data only) and notes fixtures whose
-        bytes differ. Writes what it did to <record>.
+    overlay --dest <export> --fixture-source <dir> --fixtures "<names>"
+            --record <json>
+        Refuses (exit 2) an exported ref without the T1 instrumentation
+        (Demo/ADFReader/ScrollCounters.swift): T1 needs refs that contain
+        it. Copies each requested fixture the ref lacks from
+        <fixture-source> (data only) and notes fixtures whose bytes differ.
+        Writes what it did to <record>.
 
     compare --csv <trials.csv> --budget <json> --out <md> [--speed <pt/s>]
             [--base-label <s>] [--candidate-label <s>] [--phases <tsv>]
@@ -152,23 +145,6 @@ def cmd_export_worktree(args: argparse.Namespace) -> int:
 # ----------------------------------------------------------------- overlay
 
 SCROLL_COUNTERS = "Demo/ADFReader/ScrollCounters.swift"
-AUTOSCROLLER = "Demo/ADFReader/AutoScroller.swift"
-RENDERER_STATS = "Demo/ADFReader/RendererStats.swift"
-ROW_LIFECYCLE = "Sources/ADFRendering/RowLifecycleDiagnostics.swift"
-DOCUMENT_VIEW = "Sources/ADFRendering/ADFDocumentView.swift"
-# Git blob ids of the AutoScroller.swift the overlay may replace wholesale:
-# the file as it stood from 86abd56 (TextKit 2 PR 1) until T1. Its
-# BlockHeightEstimator switch covers every RenderBlock kind of those refs,
-# so the T1 copy (same estimator, plus the ScrollCounters hooks) builds there.
-PRE_T1_AUTOSCROLLER_BLOBS = {"315ae25f245b5d3bbef7c1a4f39168a0ef935526"}
-APPEAR_ANCHOR = re.compile(r"\.onAppear \{ isInRenderRegion = true \}")
-DISAPPEAR_ANCHOR = re.compile(r"(\.onDisappear \{\s*isInRenderRegion = false)")
-
-
-def git_blob_id(path: str) -> str:
-    with open(path, "rb") as handle:
-        data = handle.read()
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def sha256(path: str) -> str:
@@ -177,8 +153,8 @@ def sha256(path: str) -> str:
 
 
 def cmd_overlay(args: argparse.Namespace) -> int:
-    dest, source = os.path.abspath(args.dest), os.path.abspath(args.source)
-    record: dict = {"dest": dest, "source": source, "instrumentation": "native", "files": [], "fixtures": {}}
+    dest = os.path.abspath(args.dest)
+    record: dict = {"dest": dest, "fixtures": {}}
 
     def refuse(why: str) -> int:
         record["error"] = why
@@ -187,35 +163,8 @@ def cmd_overlay(args: argparse.Namespace) -> int:
         return 2
 
     if not os.path.exists(os.path.join(dest, SCROLL_COUNTERS)):
-        if not os.path.exists(os.path.join(dest, RENDERER_STATS)):
-            return refuse(f"{dest} predates {RENDERER_STATS} (TextKit 2 PR 1, 86abd56): "
-                          "no -rendererReset/-textkit2/-rendererStats; T1 cannot measure it")
-        for rel in (SCROLL_COUNTERS, AUTOSCROLLER, ROW_LIFECYCLE):
-            if not os.path.exists(os.path.join(source, rel)):
-                return refuse(f"overlay source {source} lacks {rel}")
-        blob = git_blob_id(os.path.join(dest, AUTOSCROLLER))
-        if blob not in PRE_T1_AUTOSCROLLER_BLOBS:
-            return refuse(f"{AUTOSCROLLER} in {dest} (blob {blob}) is not the pre-T1 file the overlay "
-                          "replaces; extend PRE_T1_AUTOSCROLLER_BLOBS after checking it is compatible")
-        doc_path = os.path.join(dest, DOCUMENT_VIEW)
-        with open(doc_path, encoding="utf-8") as handle:
-            doc = handle.read()
-        if "ADFRowLifecycle" not in doc:
-            appear, disappear = APPEAR_ANCHOR.findall(doc), DISAPPEAR_ANCHOR.findall(doc)
-            if len(appear) != 1 or len(disappear) != 1:
-                return refuse(f"{DOCUMENT_VIEW}: DocumentRow anchors matched {len(appear)}/{len(disappear)} "
-                              "times (need exactly 1 each)")
-            doc = APPEAR_ANCHOR.sub(".onAppear { isInRenderRegion = true; ADFRowLifecycle.rowAppeared() }", doc)
-            doc = DISAPPEAR_ANCHOR.sub(r"\1; ADFRowLifecycle.rowDisappeared()", doc)
-            with open(doc_path, "w", encoding="utf-8") as handle:
-                handle.write(doc)
-            record["files"].append({"path": DOCUMENT_VIEW, "action": "patched DocumentRow onAppear/onDisappear"})
-        for rel in (SCROLL_COUNTERS, AUTOSCROLLER, ROW_LIFECYCLE):
-            target = os.path.join(dest, rel)
-            action = "replaced" if os.path.exists(target) else "added"
-            shutil.copy2(os.path.join(source, rel), target)
-            record["files"].append({"path": rel, "action": action, "sha256": sha256(target)})
-        record["instrumentation"] = "overlay"
+        return refuse(f"{dest} lacks {SCROLL_COUNTERS}: the ref predates the T1 instrumentation; "
+                      "T1 needs base and candidate refs that contain it")
 
     for name in args.fixtures.split():
         rel = f"Fixtures/{name}.json"
@@ -232,8 +181,7 @@ def cmd_overlay(args: argparse.Namespace) -> int:
                 entry["differs_from_fixture_source"] = sha256(theirs)
             record["fixtures"][name] = entry
     write_record(args.record, record)
-    summary = ", ".join(f"{f['path']} {f['action']}" for f in record["files"]) or "none"
-    print(f"overlay: instrumentation={record['instrumentation']} files: {summary}; fixtures: "
+    print("overlay: fixtures: "
           + ", ".join(f"{k}={v['action']}{' (DIFFERS)' if 'differs_from_fixture_source' in v else ''}"
                       for k, v in record["fixtures"].items()))
     return 0
@@ -429,7 +377,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             lines.append(f"- {item}: {len(cells)} cell(s) ({', '.join(cells)})")
         lines.append("")
     if args.overlay:
-        lines += ["## Instrumentation and fixtures per arm", ""]
+        lines += ["## Fixtures per arm", ""]
     for path in args.overlay or []:
         try:
             with open(path, encoding="utf-8") as handle:
@@ -437,12 +385,10 @@ def cmd_compare(args: argparse.Namespace) -> int:
         except (OSError, ValueError):
             continue
         name = os.path.basename(path)
-        files = ", ".join(f"{f['path']} ({f['action']})" for f in record.get("files", [])) or "none"
         fixtures = ", ".join(f"{k} {v['action']}" + (" — DIFFERS from the candidate's copy"
                                                      if "differs_from_fixture_source" in v else "")
                              for k, v in record.get("fixtures", {}).items())
-        lines.append(f"- `{name}`: instrumentation {record.get('instrumentation')}; files: {files}; "
-                     f"fixtures: {fixtures}")
+        lines.append(f"- `{name}`: {fixtures}")
     if args.overlay:
         lines.append("")
     if args.phases and os.path.exists(args.phases):
@@ -512,7 +458,6 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("overlay")
     p.add_argument("--dest", required=True)
-    p.add_argument("--source", required=True)
     p.add_argument("--fixture-source", required=True)
     p.add_argument("--fixtures", required=True)
     p.add_argument("--record", required=True)

@@ -14,10 +14,10 @@ import ADFPreparation
 /// Each slice is prepared once and hosted in a non-lazy `VStack` (every row
 /// materialises) inside a `UIHostingController` in a 390 pt `UIWindow`:
 /// first layout, one layer render (every row draws), then 5 × 30 ms settle.
-/// Each block gets the renderer the document view would give it at this
-/// commit (`PerfProbeCompat.rowRenderer`, the product's routing), so before
-/// a block kind moved to TextKit 2 its TextKit 2 arm stays on SwiftUI, as
-/// the app did. Both renderers run in the same process, interleaved, after
+/// Each block gets the renderer the document view would give it
+/// (`TextKit2Scope.inheritsRenderer`, the product's routing), so a block
+/// kind not yet on TextKit 2 stays on SwiftUI in the TextKit 2 arm, as in
+/// the app. Both renderers run in the same process, interleaved, after
 /// `PERF_PROBE_WARMUPS` unmeasured reps each.
 ///
 /// Per rep: `ADFTextRenderer.textKit2Stats` deltas (every Int field, read by
@@ -225,8 +225,8 @@ struct PerfProbeDocument: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(blocks) { block in
                 BlockView(block: block)
-                    .environment(\.adfTextRenderer, PerfProbeCompat.rowRenderer(for: block.kind, renderer))
-                    .modifier(PerfProbeCompat.ListWidth(width: columnWidth))
+                    .environment(\.adfTextRenderer, TextKit2Scope.inheritsRenderer(block.kind) ? renderer : .swiftUI)
+                    .environment(\.adfTextWidthBound, columnWidth > 0 ? .atLeast(columnWidth) : .pending)
                     .padding(.vertical, block.kind.defaultVerticalPadding)
                     .blockBreakout(block.breakout, margin: theme.spacing * 2)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -521,7 +521,6 @@ enum PerfProbeReport {
             "env": [
                 "os": osVersion,
                 "config": configuration,
-                "routing": PerfProbeCompat.routing,
                 "window": "\(Int(PerfProbeHost.windowSize.width))x\(Int(PerfProbeHost.windowSize.height))",
                 "device": ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? "?",
             ] as [String: Any],

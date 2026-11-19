@@ -21,15 +21,11 @@
 #      perf_trial.py, lifecycle-gate.sh, another perf-scroll-counters.sh;
 #      this run's own children excluded): --wait-others <s> waits for them,
 #      --force runs anyway.
-#   2. Exports both refs under <out>/src/. A ref older than T1 (no
-#      Demo/ADFReader/ScrollCounters.swift) gets the T1 instrumentation
-#      copied in: ScrollCounters.swift, AutoScroller.swift and
-#      Sources/ADFRendering/RowLifecycleDiagnostics.swift from the candidate
-#      (or the working tree), plus the two ADFRowLifecycle calls in
-#      DocumentRow (perf_scroll_counters.py overlay; refs from 86abd56, TextKit
-#      2 PR 1, on). A fixture the base lacks is copied from the candidate
-#      (data only); a fixture whose bytes differ is reported. Both are
-#      recorded in <out>/overlay-*.json and the report.
+#   2. Exports both refs under <out>/src/. Both must carry the T1
+#      instrumentation (Demo/ADFReader/ScrollCounters.swift); an older ref is
+#      refused. A fixture the base lacks is copied from the candidate (data
+#      only); a fixture whose bytes differ is reported. Both are recorded in
+#      <out>/overlay-*.json and the report.
 #   3. Builds each arm: xcodegen, then xcodebuild Release (--configuration),
 #      generic iOS Simulator, arm64, unsigned, its own derived data. Or takes
 #      a prebuilt .app (--base-app / --candidate-app; it must already carry
@@ -269,12 +265,10 @@ if [ -z "$CAND_APP" ] || [ -z "$BASE_APP" ]; then
     export_ref "$CAND_SHA" "$SRC_CAND"
     [ -n "$BASE_APP" ] || export_ref "$BASE_SHA" "$SRC_BASE"
     phase "overlay"
-    # The candidate first: if it predates T1 too, it takes the working tree's
-    # instrumentation, and the base then takes exactly the candidate's.
-    python3 -I "$HELPER_PY" overlay --dest "$SRC_CAND" --source "$REPO" --fixture-source "$REPO" \
+    python3 -I "$HELPER_PY" overlay --dest "$SRC_CAND" --fixture-source "$REPO" \
         --fixtures "$FIXTURES" --record "$OUT/overlay-candidate.json" >&2 || refuse "candidate overlay (above)"
     if [ -z "$BASE_APP" ]; then
-        python3 -I "$HELPER_PY" overlay --dest "$SRC_BASE" --source "$SRC_CAND" --fixture-source "$SRC_CAND" \
+        python3 -I "$HELPER_PY" overlay --dest "$SRC_BASE" --fixture-source "$SRC_CAND" \
             --fixtures "$FIXTURES" --record "$OUT/overlay-base.json" >&2 || refuse "base overlay (above)"
     fi
 fi

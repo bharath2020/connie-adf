@@ -4,10 +4,11 @@
 # no-mistakes test step on every push (docs/Perf-Tiers.md). It compares the
 # pushed HEAD against its merge-base with main: renderer work counts must
 # match, and instructions/mallocs fail at >= +5 % (warn at +2-5 %). It needs
-# no quiet host; it creates and deletes its own simulator and waits while
-# another lane's perf-gate.sh / perf_trial.py run is in progress.
+# no quiet host; it creates and deletes its own simulator. While another
+# lane's perf-gate.sh / perf_trial.py run (or another T0 run) is in progress
+# it waits at most 5 min, then skips with a SKIPPED note and exits 0.
 commands:
-  test: 'Scripts/perf-probe.sh --tier all "$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main)" HEAD'
+  test: 'Scripts/perf-probe.sh --tier all --busy-wait 300 --skip-when-busy "$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main)" HEAD'
 
 test:
   instructions: |
@@ -17,6 +18,9 @@ test:
     delete). Never use another lane's simulator or "ADF Play (captain)".
     Put the T0 markdown table (the report.md path printed at the end of the
     probe run) in the test evidence so the PR body shows it. A count marked
-    CHANGED needs a one-line explanation; a FAIL blocks the push. T1
+    CHANGED needs a one-line explanation; a FAIL blocks the push. A
+    "T0 work probe SKIPPED" note (busy host) does not block it: say so in
+    the test evidence and the PR body, with the printed command to run T0
+    by hand later. T1
     (Scripts/perf-scroll-counters.sh) and T2 (Scripts/perf-gate.sh) are not
     run here; docs/Perf-Tiers.md says when they are needed.

@@ -45,8 +45,7 @@ import UIKit
 ///   rows, CPU instructions retired during the scroll and during the idle
 ///   window, and idle row churn / TextKit 2 layouts (a livelock spins).
 ///   Without it the scroll behaves exactly as before. These three are
-///   parsed by `ScrollCounters` itself, not `LaunchOptions`, so the T1
-///   script can copy that file onto refs that predate it; the line's
+///   parsed by `ScrollCounters` itself, not `LaunchOptions`; the line's
 ///   format is documented there.
 /// - `-searchQuery <text>` runs a settled find-in-page query after loading.
 /// - `-searchUpdates <n>` measures `n` replacements while that query is active.

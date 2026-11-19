@@ -47,15 +47,18 @@ a busy host they vary up to 77 % for the same instruction count.
 
 Product counters used by the probe live in `ADFTextKit2Stats`
 (`Sources/ADFRendering/TextKit2/TextKit2Diagnostics.swift`):
-`sizeThatFitsCount`, `infiniteWidthProposalCount`,
-`unspecifiedWidthProposalCount` and `applyCount`, next to the existing
-layout, draw and live-row counts.
+`sizeThatFitsCount`, `infiniteWidthProposalCount` and `applyCount`, next
+to the existing layout, draw and live-row counts.
 
 `Scripts/perf-probe.sh <base> [<candidate>]` exports each ref with
 `git archive` (the candidate defaults to the working tree), overlays the
 probe suite and any fixture a ref lacks, builds incrementally per ref, runs
 one throwaway pass after simulator boot, then compares and writes a
-markdown table. Rules (`Scripts/perf-probe-budgets.json`):
+markdown table. Both refs must contain TextKit 2 PR 2's renderer routing
+(`TextKit2Scope.inheritsRenderer`, any ref from a76736f on); the suite calls
+it directly, so an older ref fails to build. One run at a time uses the
+scratch root (`<root>/lock`); a second run waits for it. Rules
+(`Scripts/perf-probe-budgets.json`):
 
 - **Counts** must match the base exactly. A change is `CHANGED`: explain it
   in the PR (an intended layout or view-tree change) or treat it as a
@@ -69,12 +72,24 @@ markdown table. Rules (`Scripts/perf-probe-budgets.json`):
   calibrated from 10 main passes (max × 1.02; `--calibrate 10 main
   --write-budgets`, about 8 min). Current budgets: list-dense 1.216,
   stress-1k 1.291, kitchen-sink 1.128, code 1.188, giant-table 1.027,
-  containers 1.026. Recalibrate when main's renderer work changes on
-  purpose (for example when issue 10 is fixed, list-dense drops).
+  containers 1.026. A candidate over its budget fails when the base is
+  within it, or when the candidate ratio is more than 2 %
+  (`ratio_rise_fail_pct`) above the base ratio. When the base is over the
+  budget too (a runtime or Xcode update, or a change already on main), it
+  is a WARN that asks for recalibration. Recalibrate when main's renderer
+  work changes on purpose (for example when issue 10 is fixed, list-dense
+  drops).
 - **TK2 layouts per TK2 row** is reported; values above 1 are the issue 10
   double layout.
 
 Exit codes: 0 PASS/WARN/CHANGED, 1 FAIL, 2 usage or infrastructure error.
+
+In the push gate (`.no-mistakes.yaml`, `--busy-wait 300 --skip-when-busy`)
+a busy host never fails or blocks the push for long: when another lane's
+`perf-gate.sh` / `perf_trial.py` run, or another T0 run, is still active
+after 5 minutes in total, T0 prints `T0 work probe SKIPPED` with the
+command to run it by hand later, and exits 0. Run by hand, the defaults
+stay: wait up to 30 minutes (`--busy-wait`), then exit 2.
 
 Measured on this Mac (busy host; Debug, 5 reps, warm-up pass on):
 
@@ -83,6 +98,10 @@ Measured on this Mac (busy host; Debug, 5 reps, warm-up pass on):
 | main vs main | PASS, largest Δ 1.17 % | 114 s (119 s before calibration) |
 | main vs this branch's working tree | PASS, largest Δ 0.69 %; only the four new counters differ (candidate only) | 112 s |
 | 86abd56 (pr1) vs a76736f (pr2, issue 10) | **FAIL**: list-dense TK2 +24.2 %, stress-1k TK2 +18.6 %, kitchen-sink TK2 +5.4 % instructions; mallocs +34 % / +28 % / +6 %; 2.0 TK2 layouts per row | 140 s (30 s of it waiting on another perf process) |
+
+The issue 10 row is recorded evidence: it was measured with a pre-PR 2
+routing shim that has since been removed, so the probe can no longer
+build 86abd56.
 
 A render pass takes 35-40 s on a warm simulator below host load 15, and
 70-145 s at load 30-110; the parse tier takes about 12 s. Counts never
@@ -106,7 +125,10 @@ does almost nothing there. `RENDERER_STATS` is unchanged, and
 `Scripts/perf-scroll-counters.sh <base> <candidate|.>` builds both arms,
 runs one throwaway launch, then 1 trial per fixture × renderer per arm
 (no warm-up discard, no 300 s settle, no host-load wait), and compares
-against `Scripts/perf-scroll-counters.json`.
+against `Scripts/perf-scroll-counters.json`. Both refs must contain the T1
+instrumentation added with this change
+(`Demo/ADFReader/ScrollCounters.swift`); an older ref is refused (exit 2).
+A fixture the base lacks is copied from the candidate.
 
 Defaults: fixtures kitchen-sink, list-dense and stress-1k, both renderers,
 6,000 pt/s (list-dense scrolls in about 24 s instead of 116 s), 5 s idle.
@@ -147,6 +169,12 @@ detect that work changed.
 - Use one simulator of your own (`--udid`, or let the script create and
   delete one). Never use another lane's simulator or the captain's
   "ADF Play (captain)" simulator.
-- T0 and T1 wait while another lane's `perf-gate.sh` / `perf_trial.py`
-  run is in progress (`--allow-busy` / `--force` overrides). A quiet T2
-  run on the Mac must not overlap your builds.
+- T0 waits while another lane's `perf-gate.sh` / `perf_trial.py` run is in
+  progress (`--busy-wait`, default 1800 s, then exit 2; in the push gate
+  300 s, then skip; `--allow-busy` overrides). `perf_trial.py` run by this
+  checkout's own T1 does not count.
+- T1 refuses to start (exit 2) while another `perf-gate.sh`,
+  `perf_trial.py`, `lifecycle-gate.sh` or `perf-scroll-counters.sh` run is
+  in progress, unless given `--wait-others <s>` (wait up to that long) or
+  `--force` (run anyway).
+- A quiet T2 run on the Mac must not overlap your builds.

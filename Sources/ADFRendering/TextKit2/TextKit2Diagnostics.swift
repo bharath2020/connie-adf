@@ -87,10 +87,6 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
     /// Of `sizeThatFitsCount`: queries proposing an infinite width (a
     /// container's maximum-size probe).
     public var infiniteWidthProposalCount: Int
-    /// Of `sizeThatFitsCount`: queries proposing no width (a container's
-    /// natural-size probe, such as a list row's `HStack` sizing its text
-    /// column), each answered by a natural-width layout.
-    public var unspecifiedWidthProposalCount: Int
     /// `TextKit2RowView.apply` calls since launch (every representable
     /// update and sizing query applies its inputs; most are a no-op
     /// compare).
@@ -103,12 +99,10 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
         liveCodeRowCount: Int = 0, codeNativeDrawCount: Int = 0,
         liveContainerRowCount: Int = 0, containerNativeDrawCount: Int = 0, containerTextKit1DrawCount: Int = 0,
         liveCaptionRowCount: Int = 0, captionNativeDrawCount: Int = 0, liveOffWindowRowCount: Int = 0,
-        sizeThatFitsCount: Int = 0, infiniteWidthProposalCount: Int = 0,
-        unspecifiedWidthProposalCount: Int = 0, applyCount: Int = 0
+        sizeThatFitsCount: Int = 0, infiniteWidthProposalCount: Int = 0, applyCount: Int = 0
     ) {
         self.sizeThatFitsCount = sizeThatFitsCount
         self.infiniteWidthProposalCount = infiniteWidthProposalCount
-        self.unspecifiedWidthProposalCount = unspecifiedWidthProposalCount
         self.applyCount = applyCount
         self.liveRowCount = liveRowCount
         self.layoutCount = layoutCount
@@ -788,7 +782,6 @@ final class TextKit2Diagnostics {
     private(set) var liveOffWindowRowCount = 0
     private(set) var sizeThatFitsCount = 0
     private(set) var infiniteWidthProposalCount = 0
-    private(set) var unspecifiedWidthProposalCount = 0
     private(set) var applyCount = 0
     /// One owner's live rows in one per-owner proof (`codeRows`,
     /// `containerRows`, `captionRows`).
@@ -827,7 +820,7 @@ final class TextKit2Diagnostics {
             liveCaptionRowCount: liveCaptionRowCount, captionNativeDrawCount: captionNativeDrawCount,
             liveOffWindowRowCount: liveOffWindowRowCount,
             sizeThatFitsCount: sizeThatFitsCount, infiniteWidthProposalCount: infiniteWidthProposalCount,
-            unspecifiedWidthProposalCount: unspecifiedWidthProposalCount, applyCount: applyCount
+            applyCount: applyCount
         )
     }
 
@@ -969,11 +962,7 @@ final class TextKit2Diagnostics {
     /// proposed).
     func didSizeThatFits(proposedWidth: CGFloat?) {
         sizeThatFitsCount += 1
-        if let proposedWidth {
-            if proposedWidth == .infinity { infiniteWidthProposalCount += 1 }
-        } else {
-            unspecifiedWidthProposalCount += 1
-        }
+        if proposedWidth == .infinity { infiniteWidthProposalCount += 1 }
     }
 
     /// A row was handed its inputs (`TextKit2RowView.apply`).

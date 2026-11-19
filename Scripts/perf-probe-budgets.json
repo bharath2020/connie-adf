@@ -118,5 +118,6 @@
       "passes": 10
     }
   },
+  "ratio_rise_fail_pct": 2.0,
   "tk2_layouts_per_row_max": 1.0
 }

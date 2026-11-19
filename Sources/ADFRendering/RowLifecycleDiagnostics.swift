@@ -13,9 +13,6 @@
 ///
 /// Two plain integer increments on the main actor per row lifecycle event:
 /// no state, no observation, nothing a view reads (ADR §8, §16, §20).
-/// Self-contained on purpose: the T1 script copies this file onto refs that
-/// predate it, with the two `DocumentRow` call sites, so a base arm built
-/// from an older ref reports the same counters.
 @_spi(ADFDiagnostics)
 @MainActor
 public enum ADFRowLifecycle {

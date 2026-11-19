@@ -52,14 +52,10 @@ import UIKit
 ///   instructions, row churn and TextKit 2 layouts must stay near zero.
 /// - `scrollTk2SizeThatFits` / `scrollTk2InfiniteWidth` / `idleTk2SizeThatFits`:
 ///   TextKit 2 row size queries (all, and those proposing an infinite width)
-///   during the scroll and the idle window, from `ADFTextKit2Stats` where
-///   the build has those counters, else `-`.
+///   during the scroll and the idle window, from `ADFTextKit2Stats`.
 ///
 /// A value that cannot be read prints as `-` (`Scripts/perf_trial.py` leaves
-/// its column empty). Self-contained apart from `ADFRowLifecycle` and
-/// `ADFTextRenderer.textKit2Stats` (TextKit 2 PR 1 and later): the T1
-/// script copies this file, `AutoScroller.swift` and the library's
-/// `RowLifecycleDiagnostics.swift` onto refs that predate them.
+/// its column empty).
 @MainActor
 enum ScrollCounters {
     struct Options {
@@ -132,30 +128,20 @@ enum ScrollCounters {
         var appearances: Int
         var disappearances: Int
         var textKit2Layouts: Int
-        /// `ADFTextKit2Stats.sizeThatFitsCount` / `infiniteWidthProposalCount`
-        /// where the build has them (nil before the T0 probe's counters).
-        var textKit2SizeThatFits: Int?
-        var textKit2InfiniteWidth: Int?
+        var textKit2SizeThatFits: Int
+        var textKit2InfiniteWidth: Int
         var instant: ContinuousClock.Instant
     }
 
     private static func snapshot() -> Snapshot {
         let stats = ADFTextRenderer.textKit2Stats
-        // Read by label so this file still builds against refs whose stats
-        // lack the fields (the T1 script copies it onto older refs).
-        let optional = Dictionary(
-            Mirror(reflecting: stats).children.compactMap { child in
-                child.label.flatMap { label in (child.value as? Int).map { (label, $0) } }
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
         return Snapshot(
             usage: usage(),
             appearances: ADFRowLifecycle.appearances,
             disappearances: ADFRowLifecycle.disappearances,
             textKit2Layouts: stats.layoutCount,
-            textKit2SizeThatFits: optional["sizeThatFitsCount"],
-            textKit2InfiniteWidth: optional["infiniteWidthProposalCount"],
+            textKit2SizeThatFits: stats.sizeThatFitsCount,
+            textKit2InfiniteWidth: stats.infiniteWidthProposalCount,
             instant: .now
         )
     }
