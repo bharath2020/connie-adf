@@ -396,6 +396,20 @@ struct TextKit2ContainerCoverageTests {
             let expected = [0, 1, 0, nested]
             #endif
             #expect([admission.admittedCodeRoots, admission.gatedCodeRoots, admission.nestedCodeAdmitted, admission.nestedCodeGated] == expected)
+            // Delta review R7: where the container size rule or the
+            // direction rule keeps container bodies on SwiftUI, nested
+            // code is gated, never admitted; the root pair does not move
+            // with the direction rule.
+            let kept = DynamicTypeSize.allCases.filter { !TextKit2Scope.containerSizeKeepsRenderer($0) }
+            #expect(!kept.isEmpty)
+            for (size, direction) in kept.map({ ($0, LayoutDirection.leftToRight) }) + [(.large, .rightToLeft)] {
+                let gated = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
+                    of: blocks, allowed: allowed, dynamicTypeSize: size, legibilityWeight: nil, displayScale: 3,
+                    layoutDirection: direction
+                )
+                #expect(gated.nestedCodeAdmitted == 0 && gated.nestedCodeGated == nested, "\(size) \(direction): \(gated)")
+                #expect(gated.admittedCodeRoots + gated.gatedCodeRoots == 1, "\(size) \(direction): \(gated)")
+            }
         }
     }
 

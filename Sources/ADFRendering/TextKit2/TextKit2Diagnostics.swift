@@ -430,6 +430,12 @@ extension ADFTextRenderer {
     /// `nestedCodeAdmitted` and `nestedCodeGated`, which sum to
     /// `ADFTextKit2Coverage.eligibleNestedCode` and never join the root
     /// counts (the root pair is `textKit2CodeAdmission`'s, unchanged).
+    /// Nested code is admitted only where its container passes the
+    /// renderer at this size and direction
+    /// (`TextKit2Scope.containerSizeKeepsRenderer`,
+    /// `containerDirectionKeepsRenderer`) and the code gate admits it;
+    /// elsewhere it counts as gated (delta review R7). The walk itself is
+    /// the stacked one: a side-by-side column's family rule is not applied.
     @MainActor
     public static func textKit2CodeAdmissionIncludingNested(
         of blocks: [RenderBlock],
@@ -459,6 +465,8 @@ extension ADFTextRenderer {
         var gated = 0
         var nestedAdmitted = 0
         var nestedGated = 0
+        let containersPass = TextKit2Scope.containerSizeKeepsRenderer(dynamicTypeSize)
+            && TextKit2Scope.containerDirectionKeepsRenderer(layoutDirection)
         TextKit2Scope.forEachLeaf(in: blocks, allowed: allowed) { leaf in
             let nested: Bool
             switch leaf.position {
@@ -477,7 +485,7 @@ extension ADFTextRenderer {
             _ = text
             let isAdmitted = false
             #endif
-            switch (nested, isAdmitted) {
+            switch (nested, isAdmitted && (!nested || containersPass)) {
             case (false, true): admitted += 1
             case (false, false): gated += 1
             case (true, true): nestedAdmitted += 1
