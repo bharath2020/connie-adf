@@ -444,9 +444,13 @@ private struct DocumentRow: View {
             let ratio = new.approximateBodyPointSize / old.approximateBodyPointSize
             heights.rescale(by: block.kind.typeSizeRescaleFactor(bodyPointRatio: ratio))
         }
-        .onAppear { isInRenderRegion = true }
+        .onAppear {
+            isInRenderRegion = true
+            ADFRowLifecycle.rowAppeared()
+        }
         .onDisappear {
             isInRenderRegion = false
+            ADFRowLifecycle.rowDisappeared()
             // Render-region exit implies viewport exit; also covers removal
             // paths where the visibility callback never fires a final false.
             visibility.setVisible(item.id, false)

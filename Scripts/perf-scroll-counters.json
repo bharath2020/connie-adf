@@ -1,0 +1,47 @@
+{
+  "_comment": "T1 scroll-counter budget (Scripts/perf-scroll-counters.sh, compared by Scripts/perf_scroll_counters.py compare). counts: trials.csv columns that must stay within count_tolerance_pct of the base arm (per column: count_tolerance_pct_by_column), or within count_abs_slack (per column, else default) when that is larger. Idle budgets apply to the candidate (a base over budget too is reported as a WARN); idle instructions are per second of the measured idle window. scroll_instructions only warns: in the app they move with how many frames the host let it render. Calibration: see calibration.",
+  "calibrated": true,
+  "calibration": "2026-11-19, adf-perf2-probe (iPhone 17 Pro, iOS 26.3.1), 6,000 pt/s, Release; 48 trials (3 A/A runs with one binary in both arms, plus main vs the T1 working tree; 8 per fixture x renderer) on a busy shared host (1-min load 4-27). Counts identical in every trial except: row_appears/row_disappears +-1 row (kitchen-sink and stress-1k); tk2_layouts/draws/conversions +-1 on stress-1k textkit2 (< 0.1 %); scroll_tk2_size_that_fits / scroll_tk2_infinite_width up to 2.1 % (list-dense textkit2: SwiftUI re-proposals follow frame timing). Idle: max 2.68 M instr/s (median 0.74 M); idle row churn, TK2 layouts and TK2 size queries 0 in every trial. Budget 8 M/s = 3x the observed max. Replays: a per-frame layout-feedback loop armed after the scroll idles at 30-32 M instr/s (FAIL); the same loop from launch saturates the main thread and never finishes the scroll (timeout = FAIL). Scroll instructions spread up to 7.2 % on kitchen-sink (a 0.5 s scroll), < 1.1 % on list-dense and stress-1k.",
+  "count_tolerance_pct": 1.0,
+  "count_tolerance_pct_by_column": {
+    "scroll_tk2_size_that_fits": 5.0,
+    "scroll_tk2_infinite_width": 5.0
+  },
+  "count_abs_slack": {
+    "default": 0,
+    "row_appears": 1,
+    "row_disappears": 1,
+    "tk2_live": 2,
+    "tk2_list_live": 2,
+    "tk2_code_live": 2,
+    "counters_tk2_live": 2,
+    "tk2_off_window": 2,
+    "rows_in_region": 2
+  },
+  "counts": [
+    "scroll_legs",
+    "row_appears",
+    "row_disappears",
+    "rows_in_region",
+    "tk2_live",
+    "tk2_layouts",
+    "tk2_draws",
+    "tk2_native_draws",
+    "tk1_backed_draws",
+    "tk2_conversions",
+    "tk2_list_live",
+    "tk2_code_live",
+    "tk2_code_draws",
+    "tk2_off_window",
+    "scroll_tk2_size_that_fits",
+    "scroll_tk2_infinite_width"
+  ],
+  "idle_instructions_per_second_max": 8000000,
+  "idle_row_churn_max": 0,
+  "idle_tk2_layouts_max": 0,
+  "scroll_instructions_warn_pct": 5.0,
+  "scroll_instructions_warn_pct_by_fixture": {
+    "kitchen-sink": 10.0
+  },
+  "scroll_instructions_fail_pct": null
+}
