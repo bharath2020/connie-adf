@@ -28,8 +28,10 @@ import ADFPreparation
 /// only once it is open and prepared), and in side-by-side layout columns
 /// to none (`horizontalColumnKeepsRenderer`). A list below a boundary keeps
 /// PR 2's row rules unchanged (A to D and the list gate, rule D against the
-/// container's width bound) and stays on SwiftUI at the accessibility text
-/// sizes (`nestedListSizeKeepsRenderer`). A code block reached that way is
+/// container's width bound) and stays on SwiftUI from xxxLarge with every
+/// other container child (`containerSizeKeepsRenderer`; at the
+/// accessibility text sizes it reports `nestedListSizeKeepsRenderer`). A
+/// code block reached that way is
 /// the whole code block, as at the top level: the code rules and the code gate still
 /// decide its text. A media block's only text is its caption
 /// (`MediaBlockView.caption`, `captionsUseTextKit2`,

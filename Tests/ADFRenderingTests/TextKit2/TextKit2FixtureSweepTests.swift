@@ -172,12 +172,13 @@ struct TextKit2FixtureSweepTests {
     /// generation; Slide Over), 375, 390, 393, 402, 414, 430 and 440 pt
     /// (code review F-R4).
     nonisolated static let containerDocumentWidths: [CGFloat] = [320, 375, 390, 393, 402, 414, 430, 440]
-    /// The text sizes the container leaves are swept at: xSmall to AX3,
-    /// every size the container size rule (`containerSizeKeepsRenderer`)
-    /// keeps on TextKit 2. Swept at AX4 and AX5 (code review F-R4, F-Q1),
-    /// panel bodies 183 to 271 pt wide and quote bodies near 268 pt broke
-    /// long words apart, so from AX4 every container keeps its body on
-    /// SwiftUI. `ADF_SWEEP_CONTAINER_SIZES=<name,…>`
+    /// The text sizes the container leaves are swept at: xSmall to
+    /// xxLarge, every size the container size rule
+    /// (`containerSizeKeepsRenderer`) keeps on TextKit 2. From xxxLarge
+    /// every container keeps its body on SwiftUI (lead call C55: a
+    /// measured corpus limit, one line-break miss at xxxLarge in a panel's
+    /// nested quote; the sweep's own AX4 and AX5 misses came mostly from
+    /// the 2,000 pt test host). `ADF_SWEEP_CONTAINER_SIZES=<name,…>`
     /// (`DynamicTypeSize` case names) replaces the sizes; a size the rule
     /// keeps on SwiftUI is then measured and its misses printed
     /// (`TK2_CONTAINER_SWEEP_RULE`), not asserted: the rule's evidence,

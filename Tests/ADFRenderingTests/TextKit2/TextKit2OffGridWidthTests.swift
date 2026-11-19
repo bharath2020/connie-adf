@@ -231,7 +231,10 @@ struct TextKit2OffGridWidthTests {
     /// reports 515.625 (off the pixel grid) and the row 515.167, with or
     /// without the row fix on captions. Recorded as a known issue where
     /// the caption draws on TextKit 2 (from iOS 26), so a change either
-    /// way fails; every other case is hard.
+    /// way fails; every other case is hard. Not reached while the
+    /// container size rule's cut-off is xxxLarge (lead call C55: the test
+    /// runs the sizes the rule keeps, and AX1 is past it); the pin applies
+    /// again when the cut-off moves past AX1.
     nonisolated static let captionLastBaselineResidual: [CGFloat: Set<String>] = [3: ["accessibility1 288.0"]]
 
     @Test("a caption in a panel at an off-grid child width sits and draws as SwiftUI's does")

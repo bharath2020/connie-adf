@@ -233,8 +233,8 @@ extension TextKit2ContainerParityTests {
                     let narrow = E.narrowListText([block], open: shape.open, bound: width, size: env.size)
                     var expected = expectedLTR.subtracting(narrow)
                     if env.direction == .rightToLeft { expected = [] }
-                    // From AX4 nothing either (the container size
-                    // rule, code review F-R4 and F-Q1).
+                    // From xxxLarge nothing either (the container size
+                    // rule, lead call C55).
                     if !TextKit2Scope.containerSizeKeepsRenderer(env.size) { expected = [] }
                     if !TextKit2Scope.nestedListSizeKeepsRenderer(env.size) { expected = expected.subtracting(listText) }
                     let pixels = P.comparesPixels(env, documentWidth: documentWidth)
@@ -276,7 +276,7 @@ extension TextKit2ContainerParityTests {
         #expect(failures.isEmpty, "\(failures.count) failing cases: \(failures.prefix(6))")
     }
 
-    @Test("expandBody: open-expand body prose, list text (step 6) and code (step 7) match SwiftUI through the production path; the body stays on SwiftUI right to left and from AX4")
+    @Test("expandBody: open-expand body prose, list text (step 6) and code (step 7) match SwiftUI through the production path; the body stays on SwiftUI right to left and from xxxLarge")
     func expandBody() async throws {
         try await expandMatrix("expandBody", shapes: E.bodyShapes)
     }

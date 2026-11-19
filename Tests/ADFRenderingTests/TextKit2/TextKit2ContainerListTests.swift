@@ -163,7 +163,8 @@ extension TextKit2ContainerParityTests {
     /// body and a stacked column did too. Lists below a container now stay
     /// on SwiftUI at every accessibility size (`nestedListSizeKeepsRenderer`,
     /// lead dispositions M1, reversing C35), so the matrix expects no list
-    /// text there and asserts every case.
+    /// text there and asserts every case. From xxxLarge the container size
+    /// rule keeps the whole body there (lead call C55).
     @Test("nestedListInExpandBody: list text in an open expand's body matches SwiftUI through the production path")
     func nestedListInExpandBody() async throws {
         #expect(TextKit2Scope.containerChildKinds.contains(.expand), "expand bodies are in the production allow list (step 5)")
@@ -303,11 +304,13 @@ extension TextKit2ContainerScopeTests {
     /// expand body and a stacked column alike, and in the list alone. Lists
     /// below a container therefore stay on SwiftUI at every accessibility
     /// size (`nestedListSize`), while a top-level list keeps PR 2's rules
-    /// (on TextKit 2 from iOS 26); the prose beside them migrates up to
-    /// AX3. From AX4 that prose stays on SwiftUI too (the container size
-    /// rule, code review F-R4 and F-Q1). Below the accessibility sizes the
-    /// nested lists and the prose migrate.
-    @Test("nestedListAtAccessibilitySizeStaysSwiftUI: at AX1 and AX3 no list in a quote, an extension body, an open expand's body or a stacked column draws on TextKit 2 while the prose beside it does (the nested-list size rule); at AX4 and AX5 nothing below a container does (the container size rule); a top-level list migrates; at Large and xxxLarge the nested lists and the prose beside them migrate")
+    /// (on TextKit 2 from iOS 26). From xxxLarge the prose beside them
+    /// stays on SwiftUI too (the container size rule, lead call C55: a
+    /// measured corpus limit), so at the accessibility sizes the
+    /// nested-list rule is the reported reason only and nothing below a
+    /// container migrates. Below xxxLarge the nested lists and the prose
+    /// migrate.
+    @Test("nestedListAtAccessibilitySizeStaysSwiftUI: at xxxLarge, AX1, AX3 and AX5 nothing in a quote, an extension body, an open expand's body or a stacked column draws on TextKit 2, list or prose (the container size rule; at the accessibility sizes a list reports the nested-list size rule); a top-level list migrates; at Large and xxLarge the nested lists and the prose beside them migrate")
     @MainActor
     func nestedListAtAccessibilitySizeStaysSwiftUI() async throws {
         let p = { (text: String) in TK2ContainerProbe.paragraph(TK2ContainerProbe.t(text)) }
@@ -334,10 +337,13 @@ extension TextKit2ContainerScopeTests {
         let prose = TK2ContainerColumns.allTextOwners(Array(blocks.dropFirst())).subtracting(nested)
         #expect(prose.count == 5, "\(prose.sorted())")
         let topText = TextKit2Eligibility.listsMatchText ? top : []
-        for size in [DynamicTypeSize.large, .xxxLarge, .accessibility1, .accessibility3, .accessibility4, .accessibility5] {
+        for size in [DynamicTypeSize.large, .xxLarge, .xxxLarge, .accessibility1, .accessibility3, .accessibility5] {
             let accessible = size.isAccessibilitySize
             #expect(TextKit2Scope.nestedListSizeKeepsRenderer(size) == !accessible, "\(size)")
-            #expect(TextKit2Scope.containerSizeKeepsRenderer(size) == (size < .accessibility4), "\(size)")
+            #expect(TextKit2Scope.containerSizeKeepsRenderer(size) == (size < .xxxLarge), "\(size)")
+            // The reason each list row's boundary reports.
+            let reason = TextKit2Scope.containerGate(for: .listRows([]), in: .quote, layoutDirection: .leftToRight, dynamicTypeSize: size)
+            #expect(reason == (accessible ? .nestedListSize : size < .xxxLarge ? nil : .containerSize), "\(size)")
             let below = accessible ? prose : prose.union(nested)
             let expected = topText.union(TextKit2Scope.containerSizeKeepsRenderer(size) ? Self.passing(below) : [])
             let (_, rows) = try await Self.hostedListRows(content, size: size, waitFor: expected)

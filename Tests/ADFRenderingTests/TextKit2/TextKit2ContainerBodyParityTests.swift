@@ -390,8 +390,8 @@ extension TextKit2ContainerParityTests {
                     )
                     var expected = expected.subtracting(narrow)
                     if env.direction == .rightToLeft { expected = [] }
-                    // From AX4 nothing either (the container size
-                    // rule, code review F-R4 and F-Q1).
+                    // From xxxLarge nothing either (the container size
+                    // rule, lead call C55).
                     if !TextKit2Scope.containerSizeKeepsRenderer(env.size) { expected = [] }
                     if !TextKit2Scope.nestedListSizeKeepsRenderer(env.size) { expected = expected.subtracting(listText) }
                     let (a, b) = try await host(width, env, pixels: pixels, rows: !expected.isEmpty)
