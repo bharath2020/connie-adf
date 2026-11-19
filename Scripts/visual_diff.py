@@ -255,10 +255,13 @@ CONTAINER AND CAPTION CAPTURES (--code-capture NAME KIND:CLASS ..., PR 4)
       O3 (C, positive) every tk2 owner has a TextKit 2 row in the window
          that is not a code row (owner kind root or list: the container
          proof counts no code row) and is shown, with candidate ink inside
-         its on-screen frame (inner pixels, scorable); and where the
-         bracket reports a shown row's draws, they are > 0 before the
+         its on-screen frame (inner pixels, scorable); and the bracket
+         reports each shown row's draws as a number > 0 before the
          screenshot (G3's draw check: the TK2_*_ROWS line is read at the
-         landing, and a row remade since then has drawn nothing yet);
+         landing, and a row remade since then has drawn nothing yet). A
+         live tk2 owner's row always reports a number, so draws - is
+         INVALID: a reporter regression cannot switch the check off
+         (review D-R8);
       O4 (C) an on-screen row of an owner the kind's line lists but the
          declaration does not name: INVALID on a fallback capture,
          information on a positive one (never coverage);
@@ -1319,6 +1322,10 @@ def evaluate_owner_geometry(rule: CodeRule, lines: list[str], landed_at: int, im
                                     "counts no code row)")
                 elif not shown:
                     problems.append(f"owner {owner}: its row is clipped off screen (or hidden) at the screenshot")
+                elif any(r.draws is None for r in shown):
+                    problems.append(f"owner {owner}: its shown row reports no draws at the screenshot (draws - in "
+                                    "the geometry: a build whose reporter does not print a live container or "
+                                    "caption row's draws proves nothing)")
                 elif any(r.draws == 0 for r in shown):
                     problems.append(f"owner {owner}: its shown row has not drawn natively at the screenshot "
                                     "(draws 0 in the geometry)")

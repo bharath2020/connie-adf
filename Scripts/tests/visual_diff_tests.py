@@ -795,9 +795,11 @@ def container_page(name: str, *, text_dx: int = 0, text_dy: int = 0, lines: tupl
 
 
 # Owner 0.4.0's container row over the panel text (x 40-240, y 100-137) and
-# caption owner 0.6.0's row over the caption line (x 40-220, y 310-319), at 1x.
-ROW_040 = "0.4.0|root|36,96,264,141|36,96,264,141|-"
-ROW_060 = "0.6.0|root|36,306,264,323|36,306,264,323|-"
+# caption owner 0.6.0's row over the caption line (x 40-220, y 310-319), at 1x,
+# each with its owner's native draws at the screenshot (a live container or
+# caption row always reports them: D-R8).
+ROW_040 = "0.4.0|root|36,96,264,141|36,96,264,141|4"
+ROW_060 = "0.6.0|root|36,306,264,323|36,306,264,323|2"
 
 
 def owner_log(name: str, *, renderer: str = "textkit2", container: tuple[int, int] | None = (1, 4),
@@ -872,8 +874,8 @@ expect("... and its crop says the row's drawing is not on screen",
 
 # F-R24: two tk2 owners of one kind, only one failing. 0.4.0's row holds
 # the panel's first line (y 100-109), 0.4.1's the second and third.
-ROW_040_TOP = "0.4.0|root|36,96,264,112|36,96,264,112|-"
-ROW_041 = "0.4.1|list|36,112,264,141|36,112,264,141|-"
+ROW_040_TOP = "0.4.0|root|36,96,264,112|36,96,264,112|4"
+ROW_041 = "0.4.1|list|36,112,264,141|36,112,264,141|3"
 two_pos = "0.4.0=tk2,0.4.1=tk2;land=0.3"
 two_geo = geometry(ROW_040_TOP + ";" + ROW_041, visible="0.3,0.4")
 code, pair = owner_case("o-two", "container:positive", two_pos,
@@ -899,7 +901,8 @@ expect("... names 0.4.1", "owner 0.4.1: its row is clipped off screen" in notes_
 # F-Q5: the capture-geometry bracket reports a container or caption row's
 # draws at the screenshot (a number on a root or list row); O3 then needs
 # them > 0, as G3 does for a code row. A row remade after the TK2_*_ROWS
-# line has drawn nothing yet. "-" (an older build) is not checked.
+# line has drawn nothing yet. D-R8: "-" on a tk2 owner's shown row is
+# INVALID (a reporter regression must not switch the check off).
 ROW_040_DRAWN = ROW_040[:-1] + "4"
 code, pair = owner_case("o-geo-draws", "container:positive", container_pos,
                         owner_log("own-geo-draws", geo=geometry(ROW_040_DRAWN, visible="0.3,0.4")))
@@ -925,6 +928,27 @@ code, pair = owner_case("c-geo-draws-0", "caption:positive", "0.6.0=tk2;land=0.3
                                   container_rows="-", geo=geometry(ROW_060[:-1] + "0", visible="0.3,0.4,0.5,0.6")))
 check("F-Q5: a caption row reporting 0 draws at the screenshot -> INVALID", (code, pair["verdict"]), 1, "INVALID")
 expect("... names it", "owner 0.6.0: its shown row has not drawn natively at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("o-geo-draws-none", "container:positive", container_pos,
+                        owner_log("own-geo-draws-none", geo=geometry(ROW_040[:-1] + "-", visible="0.3,0.4")))
+check("D-R8: a tk2 container owner's shown row reporting draws - -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0: its shown row reports no draws at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("c-geo-draws-none", "caption:positive", "0.6.0=tk2;land=0.3",
+                        owner_log("cap-geo-draws-none", caption=(1, 2), caption_rows="0.6.0:2", container=(0, 0),
+                                  container_rows="-", geo=geometry(ROW_060[:-1] + "-", visible="0.3,0.4,0.5,0.6")))
+check("D-R8: a tk2 caption owner's shown row reporting draws - -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.6.0: its shown row reports no draws at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("o-two-one-none", "container:positive", two_pos,
+                        owner_log("own-two-one-none", container=(2, 7), container_rows="0.4.0:4,0.4.1:3",
+                                  geo=geometry(ROW_040_TOP + ";" + ROW_041[:-1] + "-", visible="0.3,0.4")))
+check("D-R8: two tk2 owners, only 0.4.1's row reporting draws - -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names 0.4.1 only", ("owner 0.4.1: its shown row reports no draws" in notes_of(pair),
+                                "owner 0.4.0: its shown row reports no draws" in notes_of(pair)), (True, False))
+code, pair = owner_case("o-geo-draws-none-other", "container:positive", container_pos,
+                        owner_log("own-geo-draws-none-other", container=(2, 4), container_rows="0.4.0:4,0.4.9:0",
+                                  geo=geometry(ROW_040 + ";0.4.9|root|36,150,264,160|36,150,264,160|-",
+                                               visible="0.3,0.4")))
+check("D-R8: draws - on an undeclared owner's row stays information on a positive capture -> PASS",
+      (code, pair["verdict"]), 0, "PASS")
 
 # Engine proof (the kind's keys and per-owner line).
 code, pair = owner_case("o-no-keys", "container:positive", container_pos, owner_log("own-no-keys", container=None))
@@ -977,7 +1001,7 @@ code, pair = owner_case("o-no-row", "container:positive", container_pos,
                         owner_log("own-no-row", geo=geometry("-", visible="0.3,0.4")))
 check("no TextKit 2 row for the owner in the window -> INVALID", (code, pair["verdict"]), 1, "INVALID")
 code, pair = owner_case("o-blank", "container:positive", container_pos,
-                        owner_log("own-blank", geo=geometry("0.4.0|root|36,330,264,380|36,330,264,380|-",
+                        owner_log("own-blank", geo=geometry("0.4.0|root|36,330,264,380|36,330,264,380|4",
                                                             visible="0.3,0.4")))
 check("the owner's row is shown over no text in either image -> INVALID", (code, pair["verdict"]), 1, "INVALID")
 expect("... says so", "no text ink inside owner 0.4.0's on-screen frame in either image" in notes_of(pair), True)
@@ -1057,7 +1081,7 @@ check("engine none on a tolerant pair -> INVALID (no engine proof)", (code, pair
 
 # The same image described at 2x: the crop follows the geometry's scale.
 code, pair = owner_case("o-2x", "container:positive", container_pos,
-                        owner_log("own-2x", geo=geometry("0.4.0|root|18,48,132,70.5|18,48,132,70.5|-", scale=2,
+                        owner_log("own-2x", geo=geometry("0.4.0|root|18,48,132,70.5|18,48,132,70.5|4", scale=2,
                                                          screen=(150, 200), visible="0.3,0.4")))
 check("2x geometry (150x200 pt) of the same image -> PASS", (code, pair["verdict"]), 0, "PASS")
 expect("... the crop is in image pixels", (pair.get("owner_details") or [{}])[0].get("box"), "36,96,264,141")
@@ -1104,7 +1128,7 @@ expect("... naming the kind", "caption engine proof: owner 0.6.1 has no live Tex
 def mixed_log(name: str, container_keys: bool) -> str:
     """proof_log's code capture plus a container owner 0.11.0 (the page text
     line at y 30-40) on screen, with (or without) the container keys."""
-    path = proof_log(name, geo=geometry(ROW_012 + ";0.11.0|root|20,30,220,40|20,30,220,40|-"))
+    path = proof_log(name, geo=geometry(ROW_012 + ";0.11.0|root|20,30,220,40|20,30,220,40|3"))
     lines_ = open(path, newline="").read().split("\r\n")
     landed_at = next(i for i, line in enumerate(lines_) if line.startswith("SCROLL_LANDED"))
     if container_keys:
