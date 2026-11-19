@@ -561,10 +561,14 @@ enum TK2ContainerProbe {
         ///   bounds (`TextKit2RowView`; the block alone shows it too);
         /// - for each owner with differing pixels, the same owner hosted
         ///   alone differs too, in the same pixel rows of its row (one row
-        ///   either way, for a fractional placement), by about as many
-        ///   pixels (within `residualCountSlack`), and its overhang pixels
+        ///   either way, for a fractional placement), by exactly as many
+        ///   pixels (`residualCountSlack`), and its overhang pixels
         ///   differing alone at the same places relative to its row (one
-        ///   pixel either way).
+        ///   pixel either way);
+        /// - no owner differs by more than `residualOwnerCap` pixels: a
+        ///   residual is a few antialiased glyph edges, so a defect that
+        ///   its leaf reproduces alone at the same width (a re-wrapped
+        ///   line) is still rejected (delta review R2).
         /// A second defect beside a residual (another owner, other rows of
         /// the same owner, more pixels in them, past the row's edge, or
         /// chrome) fails (`TextKit2ContainerResidualTests`).
@@ -585,6 +589,9 @@ enum TK2ContainerProbe {
             if residual.owners.isEmpty { return "no differing pixel to attribute" }
             for owner in residual.owners.keys.sorted() {
                 let here = residual.owners[owner]!
+                if here.count > TK2ContainerProbe.residualOwnerCap {
+                    return "\(owner): \(here.count) px differ, past the per-owner cap of \(TK2ContainerProbe.residualOwnerCap)"
+                }
                 guard let alone = leaf.residual.owners[owner], alone.count > 0 else {
                     return "\(owner): \(here.count) px differ in the container, none alone"
                 }
@@ -594,12 +601,12 @@ enum TK2ContainerProbe {
                 if !outside.isEmpty {
                     return "\(owner): rows \(outside.sorted().prefix(4)) of its row differ in the container, not alone"
                 }
-                if abs(here.count - alone.count) > TK2ContainerProbe.residualCountSlack(alone.count) {
-                    return "\(owner): \(here.count) px differ in the container, \(alone.count) alone"
-                }
                 let unmatched = (residual.overhang[owner] ?? []).filter { !leaf.residual.differs(owner, at: $0) }
                 if !unmatched.isEmpty {
                     return "\(owner): \(unmatched.count) px past its row's edges differ in the container, not alone"
+                }
+                if abs(here.count - alone.count) > TK2ContainerProbe.residualCountSlack {
+                    return "\(owner): \(here.count) px differ in the container, \(alone.count) alone"
                 }
             }
             return nil
@@ -775,11 +782,22 @@ enum TK2ContainerProbe {
     static let residualSlack: CGFloat = 2
 
     /// How many more or fewer differing pixels an owner may show in its
-    /// container than alone: none in the step 3 to step 6 matrices (the
-    /// leaf-drawing cases matched the leaf control's count exactly at 3x
-    /// and 2x, `fixP/notes.md`), so only the drawing of a row at another
-    /// fractional position: 10 %, at least 4 pixels.
-    static func residualCountSlack(_ alone: Int) -> Int { max(4, alone / 10) }
+    /// container than alone: none. Every accepted leaf-drawing case
+    /// matched its leaf control's count exactly (428 accepted cases in the
+    /// family and default matrices at 3x and 2x, largest difference 0:
+    /// fixP logs t-f1, t-w9, t-w10, t-w12, t-w15, t-w17, t-s1; delta
+    /// review R2).
+    static let residualCountSlack = 0
+
+    /// The most pixels one owner's residual may differ by. Measured over
+    /// the same 428 accepted cases: at most 170 px for an owner at the
+    /// sizes containers keep TextKit 2 (an AX3 paragraph in an extension
+    /// body, 320 pt), and 359 px at AX5 before the size rule (a panel
+    /// paragraph, t-f1). 512 is the next power of two above every
+    /// measured residual; a defect of thousands of pixels (a re-wrapped
+    /// line is 13,000 and up) fails whether or not its leaf reproduces it
+    /// alone (`TextKit2ContainerResidualTests`).
+    static let residualOwnerCap = 512
 
     /// The residual of `a` against `b` by TextKit 2 owner: `rows` are the
     /// TextKit 2 arm's rows (window frames; the bitmaps start at the

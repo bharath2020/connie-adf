@@ -12,7 +12,8 @@ import ADFPreparation
 // when the residual accounts for every differing pixel, owner by owner
 // (`Verdict.residualMismatch`): no chrome failure, no differing pixel
 // outside the TextKit 2 rows, and for each owner the same owner alone
-// differing in the same pixel rows of its row by about as many pixels.
+// differing in the same pixel rows of its row by exactly as many pixels,
+// and no owner differing by more than the per-owner cap (delta review R2).
 //
 // A quote of two paragraphs is hosted through the production path, and
 // each paragraph alone as the leaf control hosts it, at an environment
@@ -181,7 +182,10 @@ struct TextKit2ContainerResidualTests {
             ("anotherOwner", Self.residualPixels(secondFrame, scale: scale).x, Self.residualPixels(secondFrame, scale: scale).y, "\(second):"),
             ("otherRowsOfTheOwner", inQuote.x, lastRows..<(lastRows + 3), "\(first): rows"),
             ("morePixelsInTheSameRows", inQuote.x.upperBound..<(inQuote.x.upperBound + 20), inQuote.y, "\(first): 90 px differ in the container, 30 alone"),
-            // Within the count slack, left of the row: not alone.
+            // One pixel more in the same rows: the count is exact
+            // (delta review R2).
+            ("onePixelMore", inQuote.x.upperBound..<(inQuote.x.upperBound + 1), inQuote.y.lowerBound..<(inQuote.y.lowerBound + 1), "\(first): 31 px differ in the container, 30 alone"),
+            // Left of the row: not alone.
             ("pastTheRowsEdge", left(quoteFrame, by: 4), inQuote.y.lowerBound..<(inQuote.y.lowerBound + 1), "\(first): 2 px past its row's edges"),
         ]
         for negative in negatives {
@@ -192,6 +196,34 @@ struct TextKit2ContainerResidualTests {
             #expect(!verdict.pass, "\(negative.name): the second defect fails the pixel rule")
             #expect(verdict.cause != "leafDrawing", "\(negative.name): accepted as the leaf's residual")
             #expect(mismatch?.contains(negative.expect) == true, "\(negative.name): \(mismatch ?? "-"), expected \(negative.expect)")
+        }
+
+        // Delta review R2: a residual of thousands of pixels is rejected
+        // even when its owner alone shows it in the same rows, pixel for
+        // pixel (a defect driven by the width, which reproduces alone at
+        // that width); the same shape under the cap is accepted.
+        for (name, width, accepted) in [("thousandsOfPixels", 400, false), ("underTheCap", 80, true)] {
+            func block(_ frame: CGRect) -> (x: Range<Int>, y: Range<Int>) {
+                let top = Int((frame.minY * scale).rounded()) + 4
+                let x0 = Int(((frame.minX + 12) * scale).rounded())
+                return (x0..<(x0 + width), top..<(top + 6))
+            }
+            let here = block(firstFrame), there = block(aloneFrame)
+            #expect(here.x.upperBound < Int(firstFrame.maxX * scale), "\(name): the block fits the row")
+            var aloneArms = aloneB
+            aloneArms[0] = Self.stamp(aloneB[0], x: there.x, y: there.y)
+            let verdict = try Self.verdict(c, container: Self.stamp(containerB, x: here.x, y: here.y), alone: aloneArms)
+            let mismatch = verdict.residualMismatch
+            let count = verdict.residual?.owners[first]?.count ?? 0
+            print("CONTAINER_RESIDUAL_CAP case=\(name) cause=\(verdict.cause) mismatch={\(mismatch ?? "-")} residual=\(verdict.residual?.summary ?? "-") leafResidual=\(verdict.leaf?.residual.summary ?? "-")")
+            #expect(count == width * 6 && verdict.leaf?.residual.owners[first]?.count == count, "\(name): the owner alone shows the same \(width * 6) px")
+            #expect(!verdict.pass)
+            if accepted {
+                #expect(count <= P.residualOwnerCap && mismatch == nil && verdict.cause == "leafDrawing", "\(name): \(verdict.cause) \(mismatch ?? "-")")
+            } else {
+                #expect(count > 2_000 && verdict.cause != "leafDrawing", "\(name): accepted as the leaf's residual")
+                #expect(mismatch?.contains("past the per-owner cap") == true, "\(name): \(mismatch ?? "-")")
+            }
         }
 
         // A real defect beside the residual: the TextKit 2 arm hosted with
