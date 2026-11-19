@@ -949,6 +949,11 @@ code, pair = owner_case("o-geo-draws-none-other", "container:positive", containe
                                                visible="0.3,0.4")))
 check("D-R8: draws - on an undeclared owner's row stays information on a positive capture -> PASS",
       (code, pair["verdict"]), 0, "PASS")
+code, pair = owner_case("o-geo-draws-absent", "container:positive", container_pos,
+                        owner_log("own-geo-draws-absent", geo=geometry(ROW_040.rpartition("|")[0], visible="0.3,0.4")))
+check("Astra R4: a tk2 owner's row with no draws column at all (a legacy capture) -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... the geometry is malformed", "bad row '0.4.0|root|" in notes_of(pair), True)
 
 # Engine proof (the kind's keys and per-owner line).
 code, pair = owner_case("o-no-keys", "container:positive", container_pos, owner_log("own-no-keys", container=None))
