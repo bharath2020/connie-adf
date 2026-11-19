@@ -235,8 +235,7 @@ The QR direction still uses a plain-HTTP fetch of a box sealed with the QR key;
 `push --to` is the X25519 path.
 
 **Out of scope (follow-ups).** A cloud relay for networks where neither side can
-reach the other; updating the Homebrew formula / release for the new `push --to`;
-a TestFlight build with the iOS screen.
+reach the other.
 
 ## 5. GraphQL only
 
