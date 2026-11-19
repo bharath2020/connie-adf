@@ -32,7 +32,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scans ADF Beam QR codes to import documents, and the pairing code adf-auth shows on your Mac to add your Atlassian account.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ADFReader fetches your Atlassian sign-in from the adf-auth command on your Mac over your local network, once, when you scan its pairing code.</string>
+	<string>ADFReader uses your local network only to receive your Atlassian sign-in from the adf-auth command on your Mac, once — when you scan its pairing code, or while the "Mac connects to phone" screen waits for your Mac to connect.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

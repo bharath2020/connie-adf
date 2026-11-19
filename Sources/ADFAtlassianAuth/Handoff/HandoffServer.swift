@@ -541,12 +541,4 @@ public final class HandoffServer: Sendable {
         return response
     }
 }
-
-extension Duration {
-    /// Seconds as a `TimeInterval`, for Dispatch deadlines.
-    var timeInterval: TimeInterval {
-        let parts = components
-        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
-    }
-}
 #endif
