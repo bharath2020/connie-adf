@@ -172,6 +172,49 @@ empty = os.path.join(work, "empty.jsonl")
 open(empty, "w").close()
 expect("no recorded check is a failure", agent.main(["report", "--results", empty, "--out", report]), 1)
 
+# ---- K3 column crossing (review D-R5) ------------------------------------------
+K3 = "K3 width and type-size changes in containers (containers-parity 0.46)"
+
+
+def k3_results(name: str, crossed: tuple[bool, bool], passed: bool = True) -> str:
+    """A results file holding one K3 record whose swiftui and textkit2
+    arms have crossed_boundary `crossed`."""
+    path = os.path.join(work, name + ".jsonl")
+    arms = [{"arm": arm, "crossed_boundary": value} for arm, value in zip(("swiftui", "textkit2"), crossed)]
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"check": K3, "pass": passed, "arms": arms}) + "\n")
+    return path
+
+
+def crossing_report(results: str, *crossing: str) -> tuple[int, str]:
+    argv = ["report", "--results", results, "--out", report]
+    for path in crossing:
+        argv += ["--crossing-results", path]
+    status = agent.main(argv)
+    rows = [line for line in open(report, encoding="utf-8").read().splitlines() if line.startswith("| K3 column")]
+    return status, rows[0] if rows else ""
+
+
+phone = k3_results("k3-phone", (False, False))
+ipad = k3_results("k3-ipad", (True, True))
+status, row = crossing_report(phone)
+expect("D-R5: a phone K3 (passed, not crossable) alone fails the report", (status, "| **FAIL** |" in row), (1, True))
+expect("... the row says how to supply the crossing", "--k3-crossing" in row, True)
+status, row = crossing_report(phone, ipad)
+expect("D-R5: ... and passes with an iPad run's crossing K3 as --crossing-results", (status, "| PASS |" in row), (0, True))
+expect("... naming that file", f"source={ipad}" in row, True)
+status, row = crossing_report(ipad)
+expect("D-R5: a run whose own K3 crossed (an iPad destination) passes on its own", (status, "source=this run" in row),
+       (0, True))
+status, row = crossing_report(phone, k3_results("k3-ipad-failed", (True, True), passed=False))
+expect("D-R5: a crossing K3 that failed is no evidence", (status, "| **FAIL** |" in row), (1, True))
+status, row = crossing_report(phone, k3_results("k3-ipad-one-arm", (True, False)))
+expect("D-R5: a K3 that crossed on one arm only is no evidence", (status, "| **FAIL** |" in row), (1, True))
+status, row = crossing_report(phone, os.path.join(work, "no-such-run.jsonl"))
+expect("D-R5: a missing crossing file is no evidence", (status, "| **FAIL** |" in row), (1, True))
+status, row = crossing_report(copied, phone)
+expect("D-R5: a run without K3 gets no crossing row", (status, row), (0, ""))
+
 # ---- one request over the file channel ----------------------------------------
 channel = os.path.join(work, "channel-serve")
 os.makedirs(channel, exist_ok=True)

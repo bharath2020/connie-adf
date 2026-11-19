@@ -12,7 +12,7 @@
 #   Scripts/lifecycle-gate.sh --udid <UDID> --out <dir>
 #       [--derived-data <dir>] [--skip-build] [--only <test>]...
 #       [--suite-timeout 22600] [--xcodebuild-grace 120] [--keep-booted]
-#       [--allow-other-booted] [--dry-run]
+#       [--allow-other-booted] [--k3-crossing <dir>]... [--dry-run]
 #
 #   --udid          required; never creates devices; refuses when another
 #                   simulator is booted; shuts down only a device it booted.
@@ -22,6 +22,15 @@
 #                   provisional — a gate verdict needs a quiet host.
 #   --out           output dir (lifecycle.md, results.jsonl, agent.log,
 #                   xcodebuild.log, lifecycle.xcresult, channel/).
+#   --k3-crossing   an earlier run's --out on a regular-width destination
+#                   (the iPad), of the same build (the sha256 its
+#                   lifecycle.md records must equal this build's, else exit
+#                   2 before the device is touched). A run that runs K3
+#                   fails (report row "K3 column boundary crossed", review
+#                   D-R5) unless its own K3 or one of these runs' K3 passed
+#                   with crossed_boundary true on both arms: a phone stacks
+#                   the columns at every size, so its K3 records the
+#                   boundary as not crossable.
 #   --derived-data  isolated derived data (default <out>/DerivedData). A fresh
 #                   build refuses a dir that already holds an .xctestrun;
 #                   --skip-build reuses one (recorded in lifecycle.md).
@@ -85,9 +94,11 @@
 #                   outer and nested expand of containers-parity away and
 #                   back across a switch, both directions, plus a panned
 #                   code child; ~8 min),
-#                   testK3WidthAndTypeSizeChangesInContainers (K3: rotation
-#                   and Text Size 0 → 3 → 0 at the columns of
-#                   containers-parity, per arm; ~10 min),
+#                   testK3WidthAndTypeSizeChangesInContainers (K3: rotation,
+#                   Text Size 0 → 3 → 0 and the size rule's cut-off leg
+#                   0 → accessibility3 → accessibility4 → 0 at the columns
+#                   of containers-parity, per arm; the column crossing
+#                   needs a regular width: --k3-crossing; ~10 min),
 #                   testK4SwitchDuringLoadAndSearchInContainers (K4: a
 #                   switch during the streaming load, task state, a search
 #                   in a nested expand and in a caption; ~4 min),
@@ -156,7 +167,7 @@ CONTAINER_TESTS="testK1SwitchRoundTripsAtContainerLandmarks testK2OpenExpandRoun
 ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense $CODE_TESTS${CONTAINER_TESTS:+ $CONTAINER_TESTS}"
 
 UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=22600; GRACE=120
-KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0
+KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0; K3_CROSSING=""
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 log() { printf '[lifecycle-gate %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
@@ -206,6 +217,12 @@ tests_starting_with() {
     printf '%s\n' "$out"
 }
 
+# recorded_build_sha <run dir>: the app sha256 an earlier run's
+# lifecycle.md records on its build line (nothing when there is none).
+recorded_build_sha() {
+    sed -n 's/^- build: .* sha256=\([0-9a-f]\{64\}\)$/\1/p' "$1/lifecycle.md" 2>/dev/null | head -n 1
+}
+
 # missing_tests <UI-test bundle binary> <selected test>...: the selected
 # tests whose method name the binary does not hold (the selector XCTest
 # discovers a test by), one per line.
@@ -233,6 +250,8 @@ while [[ $# -gt 0 ]]; do
         --xcodebuild-grace) GRACE="$2"; shift 2 ;;
         --keep-booted) KEEP_BOOTED=1; shift ;;
         --allow-other-booted) ALLOW_OTHERS=1; shift ;;
+        --k3-crossing) [[ -d "$2" && "$2" != *[[:space:]]* ]] || die "--k3-crossing needs a run directory without spaces: '$2'"
+            K3_CROSSING="${K3_CROSSING:+$K3_CROSSING }$(cd "$2" && pwd)"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
@@ -248,6 +267,12 @@ for t in ${ONLY:-$ALL_TESTS}; do
         die "unknown test '$t'${hint:+ (did you mean: $hint)} (see --help)"
     }
     case " $TESTS " in *" $resolved "*) ;; *) TESTS="${TESTS:+$TESTS }$resolved" ;; esac
+done
+# The report's K3 crossing evidence (D-R5): never empty (bash 3.2, set -u).
+REPORT_EXTRA=(--meta "k3_crossing=${K3_CROSSING:-none}")
+for dir in $K3_CROSSING; do
+    [[ -s "$dir/results.jsonl" ]] || die "--k3-crossing $dir holds no results.jsonl (give an earlier run's --out)"
+    REPORT_EXTRA+=(--crossing-results "$dir/results.jsonl")
 done
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
@@ -274,7 +299,8 @@ if [[ $DRY_RUN -eq 1 ]]; then
     else echo "build:        ( cd $DEMO_DIR && $XCODEGEN generate ) && ${BUILD_CMD[*]}"; fi
     echo "agent:        python3 -I -u $AGENT_PY serve --udid $UDID --channel $CHANNEL --results $RESULTS --log $AGENT_LOG"
     echo "test:         TEST_RUNNER_ADF_LIFECYCLE_DIR=$CHANNEL xcodebuild test-without-building -xctestrun <exact> -destination 'platform=iOS Simulator,id=$UDID' ${ONLY_ARGS[*]} -resultBundlePath $RESULT_BUNDLE"
-    echo "report:       python3 -I $AGENT_PY report --results $RESULTS --out $OUT/lifecycle.md"
+    echo "k3 crossing:  ${K3_CROSSING:-none (only a K3 of this run that crosses can pass its crossing row)}"
+    echo "report:       python3 -I $AGENT_PY report --results $RESULTS --out $OUT/lifecycle.md ${REPORT_EXTRA[*]}"
     echo "suite timeout: ${SUITE_TIMEOUT}s"
     if [[ -f "$UITEST_BINARY" ]]; then
         MISSING="$(bundle_missing)"
@@ -337,6 +363,10 @@ MISSING="$(bundle_missing)"
 [[ -z "$MISSING" ]] || die "the UI-test bundle has no $MISSING; was it built from a checkout without those tests, or are they named differently (see CODE_TESTS)?"
 XCTESTRUN="$(select_xctestrun "$DERIVED_DATA")" || die "cannot pick the xctestrun"
 BUILD_SHA="$(shasum -a 256 "$APP/ADFReader" | awk '{print $1}')"
+for dir in $K3_CROSSING; do
+    crossing_sha="$(recorded_build_sha "$dir")"
+    [[ "$crossing_sha" == "$BUILD_SHA" ]] || die "--k3-crossing $dir ran build sha256=${crossing_sha:-unknown}; this build is $BUILD_SHA"
+done
 
 # ------------------------------------------------------------------ device
 OTHERS="$(sim_other_booted "$UDID" | tr '\n' ' ' | sed 's/ *$//')"
@@ -408,7 +438,7 @@ python3 -I "$AGENT_PY" report --results "$RESULTS" --out "$OUT/lifecycle.md" \
     --meta "device=$UDID $(sim_device_field "$UDID" name) $(sim_device_field "$UDID" runtime)" \
     --meta "tests=$TESTS" --meta "xcresult=$RESULT_BUNDLE" --meta "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --meta "other_booted_simulators=${OTHERS:-none}$([[ -n "$OTHERS" ]] && echo ' (shared host: CPU/soak/footprint figures provisional)')" \
-    || REPORT_STATUS=$?
+    "${REPORT_EXTRA[@]}" || REPORT_STATUS=$?
 [[ $REPORT_STATUS -eq 0 ]] || problems=$((problems + 1))
 log "report: $OUT/lifecycle.md"
 if (( problems > 0 )); then

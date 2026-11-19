@@ -57,6 +57,18 @@ REQUESTS ({"kind": ..., params})
 SUBCOMMANDS
     serve --udid U --channel DIR --results FILE [--log FILE]
     report --results FILE --out lifecycle.md [--meta k=v]...
+           [--crossing-results FILE]...
+
+K3 COLUMN CROSSING (review D-R5)
+    K3 gates the side-by-side/stacked column boundary only where the
+    columns sit side by side at Text Size 0 (a regular width: the iPad); a
+    phone stacks them at every size and records `crossed_boundary` false.
+    So when --results holds a K3 record, the report adds the row
+    "K3 column boundary crossed" and fails unless some passing K3 record
+    whose two arms (swiftui, textkit2) both have crossed_boundary true is
+    in --results (this run was on a regular width) or in a
+    --crossing-results file (lifecycle-gate.sh --k3-crossing: an earlier
+    run of the same build on a regular-width destination).
 """
 
 from __future__ import annotations
@@ -265,11 +277,49 @@ def figure(value) -> str:
     return str(value).replace("|", "\\|")
 
 
+K3_CHECK = "K3 width and type-size changes in containers"
+K3_CROSSING_CHECK = "K3 column boundary crossed (D-R5: a K3 run on a regular width)"
+
+
+def read_results(path: str) -> list[dict]:
+    """The records of a results file (JSON lines); [] when it is absent."""
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        return [json.loads(l) for l in fh if l.strip()]
+
+
+def k3_crossed(entry: dict) -> bool:
+    """A passing K3 record whose two arms both crossed the column boundary
+    both ways (side by side -> stacked -> side by side)."""
+    arms = entry.get("arms") if isinstance(entry.get("arms"), list) else []
+    return (str(entry.get("check", "")).startswith(K3_CHECK) and entry.get("pass") is True
+            and sorted(str(arm.get("arm")) for arm in arms if isinstance(arm, dict)) == ["swiftui", "textkit2"]
+            and all(arm.get("crossed_boundary") is True for arm in arms))
+
+
+def k3_crossing_row(entries: list[dict], crossing: dict[str, list[dict]]) -> dict | None:
+    """The D-R5 row for a run whose results hold a K3 record (None
+    otherwise): it passes when this run's K3 crossed, or a crossing file's."""
+    if not any(str(e.get("check", "")).startswith(K3_CHECK) for e in entries):
+        return None
+    if any(k3_crossed(e) for e in entries):
+        return {"check": K3_CROSSING_CHECK, "pass": True, "source": "this run"}
+    for path, others in crossing.items():
+        if any(k3_crossed(e) for e in others):
+            return {"check": K3_CROSSING_CHECK, "pass": True, "source": path}
+    return {"check": K3_CROSSING_CHECK, "pass": False,
+            "source": ", ".join(crossing) or "no --crossing-results",
+            "why": "no passing K3 record crossed the column boundary on both arms (a compact width stacks the "
+                   "columns at every size): run K3 on a regular-width destination and pass that run with "
+                   "lifecycle-gate.sh --k3-crossing <its --out>"}
+
+
 def report(args: argparse.Namespace) -> int:
-    entries = []
-    if os.path.exists(args.results):
-        with open(args.results, encoding="utf-8") as fh:
-            entries = [json.loads(l) for l in fh if l.strip()]
+    entries = read_results(args.results)
+    row = k3_crossing_row(entries, {path: read_results(path) for path in args.crossing_results or []})
+    if row is not None:
+        entries.append(row)
     meta = dict(m.split("=", 1) for m in (args.meta or []) if "=" in m)
     lines = ["# Lifecycle checks (plan §3, items 2–6; PR 2 lists: Astra §6, Fable F14/F16; "
              "PR 3 code: plan §6, C1–C6)", ""]
@@ -307,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--results", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--meta", action="append")
+    p.add_argument("--crossing-results", action="append",
+                   help="results.jsonl of an earlier run of the same build (K3 column crossing, D-R5)")
     p.set_defaults(func=report)
     args = parser.parse_args(argv)
     return args.func(args)

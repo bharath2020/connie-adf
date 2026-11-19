@@ -682,6 +682,29 @@ expect_eq "the same PR 2 build still runs its own tests" "$STATUS" "0"
 lifecycle lg-stale-copy --skip-build --derived-data "$WORK/dd-pr2" --only CodeRendererUITests/testCopyPutsExactCodeOnPasteboard
 expect_eq "another class's test missing from the bundle fails the check" "$STATUS" "2"
 
+# D-R5: K3's column crossing comes from a regular-width run of the same
+# build (--k3-crossing <its --out>); lifecycle_agent_tests.py proves the
+# report row, these the wiring.
+K3_SHA="0e9e91fbada39c7199c25ac8421d2fe8273fc7430102d3d7e6dd3317db453500"
+mkdir -p "$WORK/k3-ipad" "$WORK/k3-empty"
+printf '{"check": "K3 width and type-size changes in containers (containers-parity 0.46)", "pass": true}\n' \
+    >"$WORK/k3-ipad/results.jsonl"
+printf '# Lifecycle checks\n\n- git_head: abc\n- build: reused /dd/fixU2 sha256=%s\n- device: X\n' "$K3_SHA" \
+    >"$WORK/k3-ipad/lifecycle.md"
+expect_eq "D-R5: the build sha256 an earlier run recorded" "$(gate recorded_build_sha "$WORK/k3-ipad")" "$K3_SHA"
+expect_eq "... nothing for a run without lifecycle.md" "$(gate recorded_build_sha "$WORK/k3-empty")" ""
+expect_has "D-R5: without --k3-crossing the plan says only this run's K3 can cross" "$WORK/lg-default.out" \
+    "k3 crossing:  none"
+expect_has "... and the report records it" "$WORK/lg-default.out" "--meta k3_crossing=none"
+lifecycle lg-k3-crossing --only testK3 --k3-crossing "$WORK/k3-ipad"
+expect_eq "D-R5: --k3-crossing with an earlier run's --out is accepted" "$STATUS" "0"
+expect_has "... the report reads its results" "$WORK/lg-k3-crossing.out" \
+    "--meta k3_crossing=$WORK/k3-ipad --crossing-results $WORK/k3-ipad/results.jsonl"
+lifecycle lg-k3-crossing-empty --only testK3 --k3-crossing "$WORK/k3-empty"
+expect_eq "D-R5: a --k3-crossing dir without results.jsonl is a usage error" "$STATUS" "2"
+lifecycle lg-k3-crossing-missing --only testK3 --k3-crossing "$WORK/k3-nope"
+expect_eq "D-R5: a --k3-crossing dir that does not exist is a usage error" "$STATUS" "2"
+
 # ====================================================== UI test sources ==
 
 UITESTS="$SCRIPTS/../Demo/ADFReaderUITests"

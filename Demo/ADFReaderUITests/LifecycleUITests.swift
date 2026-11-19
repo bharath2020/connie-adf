@@ -3192,7 +3192,10 @@ extension LifecycleUITests {
     /// the boundary leg back at most its own starting count + the same
     /// allowance (the rows the stacked columns made are released; the counts
     /// at the leg's sizes are recorded). CPU settles ≤ 2 % within 5 s after
-    /// each change. Passes after step 4.
+    /// each change. Passes after step 4. A run with K3 passes
+    /// `lifecycle-gate.sh` only beside a K3 record with `crossed_boundary`
+    /// true on both arms, its own or a regular-width run's
+    /// (`--k3-crossing`, review D-R5).
     func testK3WidthAndTypeSizeChangesInContainers() throws {
         let agent = try HostAgent.fromEnvironment()
         typealias KP = ContainersParity
