@@ -227,9 +227,12 @@ struct SmartLinkResolutionTests {
         coordinator.attach(leaf: "p31", keys: [Self.key("n31")])
         Self.show(coordinator, "p30", [Self.key("n30")])
         // The visible key first, then batch 1: distance 1 below (the
-        // default direction), distance 1 above, distance 2 below.
-        try await smartLinkEventually("batch 1") { resolver.waitingURLs.count == 4 }
-        #expect(Self.names(resolver.waitingURLs) == ["n30", "n31", "n29", "n32"])
+        // default direction), distance 1 above, distance 2 below — its
+        // third key waits for a slot while the visible call runs.
+        try await smartLinkEventually("the visible call") { resolver.waitingURLs.contains(Self.key("n30").url) }
+        resolver.answer(Self.key("n30").url, .success(Self.page))
+        try await smartLinkEventually("batch 1") { Self.names(resolver.waitingURLs) == ["n31", "n29", "n32"] }
+        #expect(Self.names(resolver.calls) == ["n30", "n31", "n29", "n32"])
         #expect(coordinator.prefetchBatchKeys == [Self.key("n31"), Self.key("n29"), Self.key("n32")])
         // A nearby lookup publishes no stage: no off-screen leaf redraws.
         #expect(coordinator.stage(for: Self.key("n31")) == .plain)
@@ -267,6 +270,38 @@ struct SmartLinkResolutionTests {
         #expect(stats.scrollingCalls == 0)
     }
 
+    @Test("afterScrollingWithNearby: nearby calls leave one slot free for a link that comes on screen at rest")
+    func nearbyCallsReserveASlot() async throws {
+        let resolver = ScriptedSmartLinkResolver()
+        let (coordinator, document) = await Self.coordinator(
+            resolver, mode: .afterScrollingWithNearby, blocks: Self.paragraphs(60)
+        )
+        defer { withExtendedLifetime(document) {} }
+        Self.show(coordinator, "p20", [Self.key("n20")])
+        Self.show(coordinator, "p21", [Self.key("n21")])
+        // Two visible calls run: one slot is left for nearby calls, one stays free.
+        try await smartLinkEventually("batch 1 planned") { coordinator.prefetchBatchKeys.count == 3 }
+        try await smartLinkEventually("one nearby call") { resolver.waitingURLs.count == 3 }
+        await Self.settle()
+        #expect(resolver.waitingURLs.count == 3, "a nearby call took the free slot: \(Self.names(resolver.waitingURLs))")
+        #expect(coordinator.stats.prefetchInFlight == 1)
+
+        // A link pulled on screen at rest starts at once, in the free slot.
+        Self.show(coordinator, "p40", [Self.key("n40")])
+        try await smartLinkEventually("the new visible call") { resolver.waitingURLs.contains(Self.key("n40").url) }
+        #expect(coordinator.stats.inFlight == 4)
+
+        // Visible calls ending let the queued nearby keys run, never all four slots.
+        resolver.answer(Self.key("n20").url, .success(Self.page))
+        await Self.settle()
+        #expect(coordinator.stats.prefetchInFlight == 1, "\(coordinator.stats)")
+        resolver.answer(Self.key("n21").url, .success(Self.page))
+        resolver.answer(Self.key("n40").url, .success(Self.page))
+        try await smartLinkEventually("the rest of batch 1") { coordinator.stats.prefetchInFlight == 3 }
+        #expect(coordinator.stats.inFlight == 3)
+        #expect(coordinator.stats.peakPrefetchInFlight == 3)
+    }
+
     @Test("afterScrollingWithNearby: a prefetched link coming on screen shows its title with no lookup, even mid-scroll")
     func prefetchedLinkShowsWithoutLookup() async throws {
         let resolver = ScriptedSmartLinkResolver(answerEverything: { _ in .success(Self.page) })
@@ -297,8 +332,9 @@ struct SmartLinkResolutionTests {
             resolver, mode: .afterScrollingWithNearby, blocks: Self.paragraphs(40)
         )
         Self.show(coordinator, "p20", [Self.key("n20")])
-        try await smartLinkEventually("batch 1") { coordinator.stats.prefetchInFlight == 3 }
+        try await smartLinkEventually("the visible call") { resolver.waitingURLs.contains(Self.key("n20").url) }
         resolver.answer(Self.key("n20").url, .success(Self.page))
+        try await smartLinkEventually("batch 1") { coordinator.stats.prefetchInFlight == 3 }
         let batch = coordinator.prefetchBatchKeys
 
         coordinator.scrollPhaseChanged(scrolling: true, offset: 1_000)
@@ -318,6 +354,8 @@ struct SmartLinkResolutionTests {
         document.smartLinkTopRowIndex = 9
         Self.show(coordinator, "p10", [Self.key("n10")])
         coordinator.scrollPhaseChanged(scrolling: false, offset: 400)
+        try await smartLinkEventually("the visible call") { resolver.waitingURLs.contains(Self.key("n10").url) }
+        resolver.answer(Self.key("n10").url, .success(Self.page))
         // Up was the last direction: at equal distance, above first.
         try await smartLinkEventually("a new batch at rest") { coordinator.stats.prefetchBatches == 2 }
         // The batch's calls reach the resolver on a background executor.
@@ -373,7 +411,10 @@ struct SmartLinkResolutionTests {
         )
         defer { withExtendedLifetime(document) {} }
         Self.show(coordinator, "p0", [Self.key("n0")])
+        try await smartLinkEventually("the visible call") { resolver.waitingURLs.contains(Self.key("n0").url) }
+        resolver.answer(Self.key("n0").url, .success(Self.page))
         try await smartLinkEventually("batch 1") { coordinator.prefetchBatchKeys == [Self.key("n1"), Self.key("n2"), Self.key("n3")] }
+        try await smartLinkEventually("batch 1 running") { coordinator.stats.prefetchInFlight == 3 }
         Self.show(coordinator, "p1", [Self.key("n1")])
         #expect(coordinator.stage(for: Self.key("n1")) == .resolving)
         #expect(coordinator.prefetchBatchKeys == [Self.key("n2"), Self.key("n3")])
@@ -406,16 +447,24 @@ struct SmartLinkResolutionTests {
         await Self.settle()
         #expect(resolver.calls.isEmpty && coordinator.stats.prefetchBatches == 0, "a batch started before the visible key")
         sleeper.wakeAll()
-        try await smartLinkEventually("visible, then a batch") { resolver.calls.count == 4 }
+        try await smartLinkEventually("visible, then a batch") { resolver.calls.count == 3 }
         #expect(resolver.calls.first == Self.key("n10").url)
-        // All four slots busy: a newly visible key queues ahead of nothing
-        // (nearby keys are all running), then starts first when one frees.
+        // The batch's third key waits: the last slot stays free.
+        #expect(coordinator.queuedKeys == [Self.key("n12")])
+        // A newly visible key takes the free slot at once.
         Self.show(coordinator, "p25", [Self.key("n25")])
         try await smartLinkEventually("its dwell") { sleeper.count == 1 }
         sleeper.wakeAll()
-        try await smartLinkEventually("queued") { coordinator.queuedKeys == [Self.key("n25")] }
+        try await smartLinkEventually("in the free slot") { resolver.waitingURLs.contains(Self.key("n25").url) }
+        // All four slots busy: the next visible key queues ahead of the
+        // nearby one, then starts first when a slot frees.
+        Self.show(coordinator, "p26", [Self.key("n26")])
+        try await smartLinkEventually("its dwell") { sleeper.count == 1 }
+        sleeper.wakeAll()
+        try await smartLinkEventually("queued") { coordinator.queuedKeys == [Self.key("n26"), Self.key("n12")] }
         resolver.answer(Self.key("n11").url, .success(Self.page))
-        try await smartLinkEventually("the freed slot went to the visible key") { resolver.waitingURLs.contains(Self.key("n25").url) }
+        try await smartLinkEventually("the freed slot went to the visible key") { resolver.waitingURLs.contains(Self.key("n26").url) }
+        #expect(coordinator.queuedKeys == [Self.key("n12")])
     }
 
     @Test("afterScrollingWithNearby: with no link on screen, the row at the top of the screen anchors the plan")
@@ -449,6 +498,7 @@ struct SmartLinkResolutionTests {
         // Stored at once, applied a turn later.
         #expect(coordinator.stats.resolution == .whileScrolling)
         try await smartLinkEventually("started mid-scroll") { resolver.waitingURLs == [Self.key("n10").url] }
+        resolver.answer(Self.key("n10").url, .success(Self.page))
         coordinator.scrollPhaseChanged(scrolling: false, offset: 100)
 
         coordinator.resolution = .afterScrollingWithNearby

@@ -57,9 +57,13 @@ struct ReaderView: View {
     @Environment(\.dynamicTypeSize) private var systemTypeSize
 
     private let mediaProvider = PlaceholderMediaProvider()
-    /// Shared by every reader this launch; `nil` under `-smartLinks off`
-    /// (see `MockSmartLinkResolver.shared`).
-    private let smartLinkResolver = MockSmartLinkResolver.shared
+    /// Shared by every fixture reader this launch; `nil` under
+    /// `-smartLinks off` (see `MockSmartLinkResolver.shared`) and for
+    /// `.remotePage` documents, whose links stay exactly as authored.
+    private var smartLinkResolver: MockSmartLinkResolver? {
+        guard case .fixture = source else { return nil }
+        return MockSmartLinkResolver.shared
+    }
     private let taskStore = TaskStateStore()
     private let fontSizeStore = FontSizeStore()
 

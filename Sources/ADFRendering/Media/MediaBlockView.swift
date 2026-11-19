@@ -18,6 +18,7 @@ struct MediaBlockView: View {
     @Environment(\.adfTheme) private var theme
     @Environment(\.adfMediaProvider) private var provider
     @Environment(\.openURL) private var openURL
+    @Environment(\.adfSmartLinks) private var smartLinks
 
     @State private var loadedImage: Image?
     @State private var loadFailed = false
@@ -33,7 +34,7 @@ struct MediaBlockView: View {
                 SegmentedTextView(segments: caption, ownerID: media.id, smartLinkKeys: media.captionSmartLinkKeys)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .smartLinkAttachment(ownerID: media.id, keys: media.captionSmartLinkKeys)
+                    .smartLinkAttachment(ownerID: media.id, keys: smartLinks == nil ? [] : media.captionSmartLinkKeys)
             }
         }
         .frame(maxWidth: .infinity, alignment: frameAlignment)

@@ -917,7 +917,7 @@ final class SmartLinkCoordinator {
             counters.deferred += 1
             return
         }
-        if running < max(timing.maxConcurrent, 1) {
+        if hasFreeSlot(prefetch: false) {
             start(key, id: id)
         } else {
             enqueue(key)
@@ -938,11 +938,18 @@ final class SmartLinkCoordinator {
 
     private func startQueued() {
         guard !holdsLookups else { return }
-        while running < max(timing.maxConcurrent, 1), !queue.isEmpty {
-            let key = queue.removeFirst()
+        while let key = queue.first, hasFreeSlot(prefetch: lookups[key]?.prefetch == true) {
+            queue.removeFirst()
             guard let lookup = lookups[key], case .queued = lookup.phase else { continue }
             start(key, id: lookup.id)
         }
+    }
+
+    /// Whether a call may start now: a nearby call leaves one of the
+    /// `maxConcurrent` slots free for a link that comes on screen at rest.
+    private func hasFreeSlot(prefetch: Bool) -> Bool {
+        let slots = max(timing.maxConcurrent, 1)
+        return running < (prefetch ? max(slots - 1, 1) : slots)
     }
 
     private func start(_ key: SmartLinkKey, id: Int) {
@@ -1058,6 +1065,7 @@ final class SmartLinkCoordinator {
             queue.removeAll { $0 == key }
             enqueue(key)
             leaveBatch(key)
+            startQueued()
         case .running:
             lookup.prefetch = false
             lookups[key] = lookup
@@ -1135,7 +1143,7 @@ final class SmartLinkCoordinator {
             let id = nextLookupID
             lookups[key] = Lookup(id: id, generation: generation, phase: .queued, prefetch: true)
             prefetchBatch.insert(key)
-            if running < max(timing.maxConcurrent, 1) {
+            if hasFreeSlot(prefetch: true) {
                 start(key, id: id)
             } else {
                 queue.append(key)
