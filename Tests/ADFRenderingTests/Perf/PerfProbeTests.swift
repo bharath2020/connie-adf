@@ -47,7 +47,8 @@ struct PerfProbeTests {
         var emitted = 0
         for slice in PerfProbeSlice.all where config.includes(slice.name) {
             let source = try PerfProbeFixtures.data(slice.fixture)
-            let blocks = try await slice.blocks(from: source)
+            let sliced = try slice.document(from: source)
+            let blocks = try await PerfProbeSlice.blocks(from: sliced)
             try #require(!blocks.isEmpty, "\(slice.name): the slice prepared no blocks")
 
             for _ in 0..<config.warmups {
@@ -70,7 +71,7 @@ struct PerfProbeTests {
 
             for (index, renderer) in renderers.enumerated() {
                 let line = PerfProbeReport.line(
-                    slice: slice, source: source, blocks: blocks.count, renderer: renderer,
+                    slice: slice, source: source, sliced: sliced, blocks: blocks.count, renderer: renderer,
                     reps: reps[index], mallocReps: mallocReps[index], config: config
                 )
                 PerfProbeOutput.emit(line, to: config.outPath)
@@ -163,14 +164,19 @@ struct PerfProbeSlice: Sendable {
         }
     }
 
-    /// The slice's document, parsed and prepared with the default theme.
-    func blocks(from source: Data) async throws -> [RenderBlock] {
+    /// The slice's ADF document as sorted-key JSON, so the same slice is the
+    /// same bytes in every process whatever the rest of the fixture holds.
+    func document(from source: Data) throws -> Data {
         guard var document = try JSONSerialization.jsonObject(with: source) as? [String: Any],
               let content = document["content"] as? [Any] else {
             throw SliceError(description: "\(fixture): not an ADF document with root content")
         }
         document["content"] = roots(content)
-        let sliced = try JSONSerialization.data(withJSONObject: document)
+        return try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+    }
+
+    /// A slice document, parsed and prepared with the default theme.
+    static func blocks(from sliced: Data) async throws -> [RenderBlock] {
         let parsed = try await ADFParser().parse(sliced)
         return DocumentPreparer(theme: .default).prepare(parsed)
     }
@@ -493,7 +499,7 @@ enum PerfProbeReport {
 
     @MainActor
     static func line(
-        slice: PerfProbeSlice, source: Data, blocks: Int, renderer: ADFTextRenderer,
+        slice: PerfProbeSlice, source: Data, sliced: Data, blocks: Int, renderer: ADFTextRenderer,
         reps: [PerfProbeRep], mallocReps: [PerfProbeRep], config: PerfProbeConfig
     ) -> [String: Any] {
         var counts: [String: Int] = [:]
@@ -511,7 +517,7 @@ enum PerfProbeReport {
             "source": "\(slice.fixture).json",
             "slice": slice.detail,
             "fixture_bytes": source.count,
-            "fixture_fnv64": PerfProbeFixtures.fnv64(source),
+            "fixture_fnv64": PerfProbeFixtures.fnv64(sliced),
             "blocks": blocks,
             "renderer": renderer == .textKit2 ? "textKit2" : "swiftUI",
             "reps": reps.count,

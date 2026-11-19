@@ -61,7 +61,8 @@ RULES (thresholds from the budgets file; defaults in DEFAULT_BUDGETS)
     layouts/row    TextKit 2 arm: tk2.layoutCount ÷ tk2_rows, budget
                    tk2_layouts_per_row_max (1.0). Reported as a signal
                    (issue 10); a FAIL only with enforce_layouts_per_row.
-    fixture        a fixture whose bytes differ between sides is flagged
+    fixture        a fixture whose measured bytes (render: the slice; parse:
+                   the whole file) differ between sides is flagged
                    FIXTURE-DIFFERS: its counts and instructions are not
                    comparable, so its row is at most CHANGED and its ratio
                    at most WARN.

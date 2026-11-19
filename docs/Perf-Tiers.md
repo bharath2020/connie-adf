@@ -63,8 +63,10 @@ scratch root (`<root>/lock`); a second run waits for it. Rules
 - **Counts** must match the base exactly. A change is `CHANGED`: explain it
   in the PR (an intended layout or view-tree change) or treat it as a
   regression.
-- **Changed fixture**: when a fixture's bytes differ between base and
-  candidate (`FIXTURE-DIFFERS`), the two sides measure different documents.
+- **Changed fixture**: when the measured bytes differ between base and
+  candidate (`FIXTURE-DIFFERS`; render tier: the slice, parse tier: the whole
+  file), the two sides measure different documents. An edit outside a
+  render slice leaves that slice comparable.
   Its rows are at most `CHANGED` and its ratio at most WARN, never FAIL.
 - **Instructions and mallocs**: WARN at +2-5 %, FAIL at ≥ +5 % vs the
   same-session base. A line whose calibrated cross-process noise is higher
