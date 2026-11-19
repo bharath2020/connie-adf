@@ -226,7 +226,11 @@
 #              step that enables a family declares its own; a declared
 #              position not in the fixture defaults above is captured too).
 #              --no-code-captures drops every default declaration, of every
-#              kind. Step 3 (panels, quotes, extension bodies):
+#              kind. From xxxLarge (capture step 3) every container keeps
+#              its text on SwiftUI (TextKit2Scope.containerSizeKeepsRenderer,
+#              size < .xxxLarge, call C55): a position whose owners are
+#              positive at step 0 is a fallback at step 3 (but @0.54,
+#              below). Step 3 (panels, quotes, extension bodies):
 #              containers-parity (87 prepared blocks)
 #                @0      block 0, KP-S1: panels 0.1-0.6 (one paragraph each)
 #                @0.1321 block 11: panels 0.11 and 0.12 (headings), whose
@@ -254,6 +258,7 @@
 #                        stacked 25/75 section 0.68
 #              Step 7 (nested code; CP-S6 in code-parity stays fallback):
 #                @0.8218 block 71, KP-S10: the quote's code 0.72.0
+#                        (step 3: a code fallback)
 #              Step 8 (captions): captions-parity (25 prepared blocks)
 #                @0.14   block 3: CAP-03 plain, CAP-04 marks (SwiftUI:
 #                        inline code's run background)
@@ -262,7 +267,9 @@
 #                @0.38   block 9: CAP-09 atoms (SwiftUI), CAP-10 wrapping
 #                @0.46   block 11: CAP-11 mixed scripts and emoji
 #                @0.54   block 13: CAP-12 in a panel, CAP-13 in a column
-#                        (stacked on a phone: TextKit 2 from step 4)
+#                        (stacked on a phone: TextKit 2 from step 4); step 0
+#                        only (at step 3 the TextKit 2 caption 0.11.0 is
+#                        under the bar)
 #                @0.70, @0.78, @0.86  blocks 17, 19, 21: one caption per
 #                        media layout
 #   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
@@ -462,6 +469,13 @@ CODE_CAPTURES_DEFAULT=(
 # and owner table, as for the code captures above. The position is
 # captured by default (DEFAULT_FIXTURE_SPECS needs no edit).
 CONTAINER_CAPTURES_DEFAULT=(
+    # From xxxLarge (step 3) every container keeps its body on SwiftUI
+    # (TextKit2Scope.containerSizeKeepsRenderer, size < .xxxLarge: call C55,
+    # the pre-committed rule of review D-R4): a container position is a
+    # positive capture at step 0 and a fallback at step 3, naming there the
+    # owners whose top-level block is fully on screen (visibleRows at step
+    # 3, measured on the SwiftUI arm; fixU vis-3, a build whose containers
+    # were SwiftUI at xxxLarge).
     # Step 3, panels, quotes and extension bodies (containers-parity, 87
     # prepared blocks; owners from the fixture's owner table). Landings and
     # owner frames measured on an iPhone 17 Pro (iOS 26.3) at -fontSizeStep
@@ -470,7 +484,8 @@ CONTAINER_CAPTURES_DEFAULT=(
     # draws through TextKit 1: 0 native draws, never proof).
     # KP-S1: the palette panels, one paragraph each (0.7.0 and 0.8.0 run
     # into the bottom band).
-    "containers-parity@0=container:positive;0.1.0=tk2,0.2.0=tk2,0.3.0=tk2,0.4.0=tk2,0.5.0=tk2,0.6.0=tk2;land=0.0"
+    "containers-parity@0#s0=container:positive;0.1.0=tk2,0.2.0=tk2,0.3.0=tk2,0.4.0=tk2,0.5.0=tk2,0.6.0=tk2;land=0.0"
+    "containers-parity@0#s3=container:fallback;0.1.0=swiftui,0.2.0=swiftui,0.3.0=swiftui,0.4.0=swiftui,0.5.0=swiftui,0.6.0=swiftui;land=0.0"
     # Panels 0.11 (H2 and H5 among three paragraphs) and 0.12 (H1) hold
     # headings, so their bodies stay on SwiftUI. Landing on 0.11 keeps
     # panel 0.8 (TextKit 2) off screen; at 0.10 it sits under the top band
@@ -478,14 +493,17 @@ CONTAINER_CAPTURES_DEFAULT=(
     "containers-parity@0.1321=container:fallback;0.11.0=swiftui,0.11.1=swiftui,0.11.2=swiftui,0.11.4=swiftui,0.12.0=swiftui;land=0.11"
     # KP-S3: a one-paragraph quote, a quote with a heading between two
     # paragraphs, and quotes three deep.
-    "containers-parity@0.3045=container:positive;0.27.0=tk2,0.28.0=tk2,0.28.1=tk2,0.28.2=tk2,0.29.0=tk2,0.29.1.0=tk2,0.29.1.1.0=tk2,0.29.2=tk2;land=0.26"
+    "containers-parity@0.3045#s0=container:positive;0.27.0=tk2,0.28.0=tk2,0.28.1=tk2,0.28.2=tk2,0.29.0=tk2,0.29.1.0=tk2,0.29.1.1.0=tk2,0.29.2=tk2;land=0.26"
+    "containers-parity@0.3045#s3=container:fallback;0.27.0=swiftui,0.28.0=swiftui,0.28.1=swiftui,0.28.2=swiftui,0.29.0=swiftui,0.29.1.0=swiftui,0.29.1.1.0=swiftui,0.29.2=swiftui;land=0.26"
     # KP-S4: panel in quote, quote in panel, panel in an extension body,
     # quote in an extension body (0.36, quote > panel > quote, runs into
     # the bottom band at step 3).
-    "containers-parity@0.362=container:positive;0.32.0=tk2,0.32.1.0=tk2,0.33.0=tk2,0.33.1.0=tk2,0.34.0=tk2,0.34.1.0=tk2,0.35.0.0=tk2;land=0.31"
+    "containers-parity@0.362#s0=container:positive;0.32.0=tk2,0.32.1.0=tk2,0.33.0=tk2,0.33.1.0=tk2,0.34.0=tk2,0.34.1.0=tk2,0.35.0.0=tk2;land=0.31"
+    "containers-parity@0.362#s3=container:fallback;0.32.0=swiftui,0.32.1.0=swiftui,0.33.0=swiftui,0.33.1.0=swiftui,0.34.0=swiftui,0.34.1.0=swiftui,0.35.0.0=swiftui;land=0.31"
     # KP-S5: an extension body with a heading between two paragraphs (the
     # bodied sync block's paragraph 0.43.0 below it is root text).
-    "containers-parity@0.4425=container:positive;0.39.0=tk2,0.39.1=tk2,0.39.2=tk2;land=0.38"
+    "containers-parity@0.4425#s0=container:positive;0.39.0=tk2,0.39.1=tk2,0.39.2=tk2;land=0.38"
+    "containers-parity@0.4425#s3=container:fallback;0.39.0=swiftui,0.39.1=swiftui,0.39.2=swiftui;land=0.38"
     # KP-S10: panel 0.71's paragraph sits beside a code block, so the panel
     # stays on SwiftUI (the quote, panel and extension below it hold only
     # code: code rows from step 7, never container rows). Landed on the
@@ -502,14 +520,15 @@ CONTAINER_CAPTURES_DEFAULT=(
     # stops on another screen size unless masks are passed).
     # KP-S6: the 25/75 columns (a heading in the 75 % column) and the
     # 33/67 columns (the linked paragraph 0.47.1.1 is not named).
-    "containers-parity@0.5229=container:positive;0.46.0.0=tk2,0.46.0.1=tk2,0.46.1.0=tk2,0.46.1.1=tk2,0.46.1.2=tk2,0.47.0.0=tk2,0.47.1.0=tk2;land=0.45"
+    "containers-parity@0.5229#s0=container:positive;0.46.0.0=tk2,0.46.0.1=tk2,0.46.1.0=tk2,0.46.1.1=tk2,0.46.1.2=tk2,0.47.0.0=tk2,0.47.1.0=tk2;land=0.45"
+    "containers-parity@0.5229#s3=container:fallback;0.46.0.0=swiftui,0.46.0.1=swiftui,0.46.1.0=swiftui,0.46.1.1=swiftui,0.46.1.2=swiftui,0.47.0.0=swiftui,0.47.1.0=swiftui;land=0.45"
     # KP-S7: the zero-percent column (its code block stays SwiftUI), the
     # negative-percent column, the level-6 indented paragraph in the 25 %
     # column (drawn from x = 160 pt) and, at step 0, the all-non-positive
     # control 0.55; at step 3 it is below the screen and 0.54.1.0 runs into
     # the bottom band.
     "containers-parity@0.5919#s0=container:positive;0.52.0.0=tk2,0.52.1.0=tk2,0.53.0.0=tk2,0.53.1.0=tk2,0.54.0.0=tk2,0.54.1.0=tk2,0.55.0.0=tk2,0.55.1.0=tk2;land=0.51"
-    "containers-parity@0.5919#s3=container:positive;0.52.0.0=tk2,0.52.1.0=tk2,0.53.0.0=tk2,0.53.1.0=tk2,0.54.0.0=tk2;land=0.51"
+    "containers-parity@0.5919#s3=container:fallback;0.52.0.0=swiftui,0.52.1.0=swiftui,0.53.0.0=swiftui,0.53.1.0=swiftui;land=0.51"
     # Step 5, expand bodies. KP-S8 at launch: expands 0.58 (a nested
     # expand inside) and 0.59 closed, and the 50/50 section 0.60 (a
     # closed nested expand in its first column). A closed body mounts no
@@ -517,7 +536,8 @@ CONTAINER_CAPTURES_DEFAULT=(
     # paragraphs 0.60.0.0 and 0.60.1.0 are TextKit 2 (step 4). Opened
     # bodies get no three-arm crop (plan §7.4, P15): the hosted
     # expandBody and nestedExpandBody suites are their proof.
-    "containers-parity@0.6609=container:positive;0.60.0.0=tk2,0.60.1.0=tk2,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57"
+    "containers-parity@0.6609#s0=container:positive;0.60.0.0=tk2,0.60.1.0=tk2,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57"
+    "containers-parity@0.6609#s3=container:fallback;0.60.0.0=swiftui,0.60.1.0=swiftui,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57"
     # Step 6, lists in containers (KP-S9). Landed on the section heading
     # 0.62: the panel 0.63 holds a list, so its whole body stays on
     # SwiftUI (0.63.0 named); in the quote 0.64 the ordered rows, the row
@@ -526,20 +546,22 @@ CONTAINER_CAPTURES_DEFAULT=(
     # Hebrew and Arabic rows (a left-to-right layout) are TextKit 2. At
     # step 3 only the ordered rows are above the bottom band.
     "containers-parity@0.7183#s0=container:positive;0.64.0.0=tk2,0.64.0.1=tk2,0.64.1.1=tk2,0.64.2.0=tk2,0.64.2.1=tk2,0.65.0.0=tk2,0.65.0.1=tk2,0.63.0=swiftui,0.64.1.0=swiftui;land=0.62"
-    "containers-parity@0.7183#s3=container:positive;0.64.0.0=tk2,0.64.0.1=tk2,0.63.0=swiftui;land=0.62"
+    "containers-parity@0.7183#s3=container:fallback;0.63.0=swiftui;land=0.62"
     # Landed on the expand 0.66 (closed: its lists are not prepared): the
     # extension 0.67's ordered rows and nested bullet, and the 25/75
     # section 0.68, stacked on a phone: the three-deep list of the 25 %
     # column and the ordered rows and decision of the 75 % column. At step
     # 3 the decision 0.68.1.1.0 runs into the bottom band.
     "containers-parity@0.7643#s0=container:positive;0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2,0.68.1.1.0=tk2;land=0.66"
-    "containers-parity@0.7643#s3=container:positive;0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2;land=0.66"
+    "containers-parity@0.7643#s3=container:fallback;0.67.0.0=swiftui,0.67.0.1=swiftui,0.67.0.1.1.0=swiftui;land=0.66"
     # Step 7, nested code (KP-S10, landed on the panel 0.71): the quote's
-    # code 0.72.0 is a TextKit 2 code row at both steps. The panel's
-    # quote's code 0.73.0.0 is a TextKit 2 code row too, but its box is
-    # not found as a scored code box (the panel's fill around it), so it is
+    # code 0.72.0 is a TextKit 2 code row at step 0 and stays on SwiftUI at
+    # step 3 (a container child at xxxLarge). The panel's quote's code
+    # 0.73.0.0 is a TextKit 2 code row at step 0 too, but its box is not
+    # found as a scored code box (the panel's fill around it), so it is
     # not named.
-    "containers-parity@0.8218=code:positive;0.72.0=tk2;land=0.71"
+    "containers-parity@0.8218#s0=code:positive;0.72.0=tk2;land=0.71"
+    "containers-parity@0.8218#s3=code:fallback;0.72.0=swiftui;land=0.71"
     # Captions (step 8): captions-parity, 25 prepared blocks (`Int(f x 25)`).
     # Each landing, owner and live caption row was checked on the enabled
     # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions
@@ -562,8 +584,13 @@ CONTAINER_CAPTURES_DEFAULT=(
     # CAP-12 in a panel (TextKit 2: panels and media are in the allow list
     # from steps 3 and 8) and CAP-13 in a column (stacked at phone width;
     # TextKit 2 since step 4 added layout columns; side by side, as on an
-    # iPad, it would stay SwiftUI).
-    "captions-parity@0.54=caption:positive;0.13.1.0=tk2,0.14.0.0.0=tk2;land=0.13"
+    # iPad, it would stay SwiftUI). Both are container children, so at
+    # step 3 (xxxLarge) both stay on SwiftUI; step 3 carries no caption
+    # declaration: there the top-level CAP-11 caption 0.11.0 (TextKit 2 at
+    # every size) is on screen under the bar, which a fallback capture
+    # refuses, and no owner below the top band is TextKit 2 for a positive
+    # one. Its pairs are scored on pixels alone.
+    "captions-parity@0.54#s0=caption:positive;0.13.1.0=tk2,0.14.0.0.0=tk2;land=0.13"
     # CAP-S3, one caption per layout: center, wrap-left; wrap-right,
     # align-start; align-end, wide, full-width. The document ends below
     # CAP-L-FULL-WIDTH: 0.86 is the last landing with at most one block

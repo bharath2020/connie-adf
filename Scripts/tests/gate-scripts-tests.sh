@@ -117,8 +117,8 @@ for cfg in kitchen-sink-p0.275 code-parity-p0 code-parity-p0.19 code-parity-p0.2
 done
 expect_has "the kitchen-sink code position is launched as -scrollToFraction 0.275" "$OUT.out" \
     "-fixture kitchen-sink -scrollToFraction 0.275 -fontSizeStep 3 -rendererReset -rendererStats -captureGeometryHook -textkit2"
-expect_eq "ten code positions x 4 x three pairs are declared (step 7's KP-S10 on containers-parity among them), beside eleven container positions' 126 (KP-S10's fallback at step 3 only) and eight caption positions' 96" \
-    "$(grep -cv -e '|container:' -e '|caption:' "$OUT.decl") $(grep -c -- '|container:' "$OUT.decl") $(grep -c -- '|caption:' "$OUT.decl") $(lines_of "$OUT.decl")" "120 126 96 342"
+expect_eq "ten code positions x 4 x three pairs are declared (step 7's KP-S10 on containers-parity among them), beside eleven container positions' 126 (KP-S10's fallback at step 3 only) and eight caption positions' 90 (CAP-12/13's at step 0 only)" \
+    "$(grep -cv -e '|container:' -e '|caption:' "$OUT.decl") $(grep -c -- '|container:' "$OUT.decl") $(grep -c -- '|caption:' "$OUT.decl") $(lines_of "$OUT.decl")" "120 126 90 336"
 expect_has "CAP-12 in a panel and CAP-13 in a column (stacked on a phone, step 4) are TextKit 2 captions" "$OUT.decl" \
     "captions-parity-p0.54-light-s0-AC|caption:positive|0.13.1.0=tk2,0.14.0.0.0=tk2;land=0.13|textkit2|"
 expect_has "M2: CAP-04 (inline code's band) is a swiftui owner beside CAP-03 in a positive caption capture" "$OUT.decl" \
@@ -143,8 +143,8 @@ expect_has "code-dense@0.5 is positive on block 301 (300, its header under the b
     "code-dense-p0.5-light-s3-AC|positive|0.301=tk2;land=0.300|textkit2|"
 expect_has "code-dense@0 is positive on blocks 1 and 2 (0, its header under the band, is the landing)" "$OUT.decl" \
     "code-dense-p0-dark-s0-AC|positive|0.1=tk2,0.2=tk2;land=0.0|textkit2|"
-expect_eq "positive and fallback configurations: 30 + 10" \
-    "$(grep -c -- '-AC|positive|' "$OUT.decl") $(grep -c -- '-AC|fallback|' "$OUT.decl")" "30 10"
+expect_eq "positive and fallback configurations: 28 + 12 (KP-S10's nested code is a fallback at step 3, the container size rule)" \
+    "$(grep -c -- '-AC|positive|' "$OUT.decl") $(grep -c -- '-AC|fallback|' "$OUT.decl")" "28 12"
 expect_lacks "a position without code is not declared" "$OUT.decl" "stress-5k-"
 expect_lacks "kitchen-sink@0 (code visible, nothing declared) stays undeclared" "$OUT.decl" "kitchen-sink-p0-"
 undeclared=0
@@ -158,8 +158,8 @@ expect_lacks "the scorer demands owner-level proof itself (no flag is passed)" "
 # The screenshot bracket: arms B and C of a declared configuration post the
 # capture-geometry hook before and after the screenshot; arm A never does.
 GEO="      geometry: notifyutil -p com.connie.adfreader.geometry before and after the screenshot"
-expect_eq "the dry run brackets the screenshot of every declared B and C arm, and only those (40 code, 40 other container and 32 caption configurations: KP-S10's container fallback shares its step-3 configurations with the step-7 code capture)" \
-    "$(grep -cxF -- "$GEO" "$OUT.out")" "224"
+expect_eq "the dry run brackets the screenshot of every declared B and C arm, and only those (40 code, 40 other container and 30 caption configurations: KP-S10's container fallback shares its step-3 configurations with the step-7 code capture; CAP-12/13's step 3 is undeclared)" \
+    "$(grep -cxF -- "$GEO" "$OUT.out")" "220"
 expect_eq "… right after the launch line of a declared configuration's arm C" \
     "$(grep -A2 -F -- "  code-parity-p0.515-light-s0-C  " "$OUT.out" | tail -n 1)" "$GEO"
 expect_eq "… and of its arm B" \
@@ -184,7 +184,7 @@ native = sum(1 for rule in rules.values() for _, engine in rule.owners if engine
 print(len(rules), sum(1 for rule in rules.values() if rule.cls == "positive"), native,
       rules["code-parity-p0.78-light-s0-AC"].land, rules["code-parity-p0.78-light-s0-AC"].owners[0][0])
 ' "$SCRIPTS/visual_diff.py" "$OUT.decl" "$OUT.pairs"
-expect_eq "visual_diff.py parses every emitted declaration" "$STATUS $(cat "$WORK/vp-parse.out")" "0 120 90 138 0.26 0.26"
+expect_eq "visual_diff.py parses every emitted declaration" "$STATUS $(cat "$WORK/vp-parse.out")" "0 120 84 132 0.26 0.26"
 
 parity vp-nostats --no-renderer-stats
 expect_eq "--no-renderer-stats with the default code captures is a usage error" "$STATUS" "2"
@@ -249,21 +249,27 @@ declarations vp-old-default
 expect_eq "PR 1's own positions run without any declaration" "$STATUS $(lines_of "$WORK/vp-old-default.decl")" "0 0"
 
 # ---- PR 4: container and caption kinds on the declaration ----
-expect_eq "steps 3 to 6 declare nine positive (four panel/quote/extension, two column, one closed-expand, two nested-list) and two fallback container captures (KP-S10's at step 3 only, from step 6) on containers-parity; step 8 eight positive caption captures on captions-parity, none elsewhere" \
+expect_eq "steps 3 to 6 declare nine container positions positive at step 0 and, at xxxLarge (the container size rule, C55), a fallback at step 3, beside two fallback-only ones (the heading panels; KP-S10's at step 3 only, from step 6) on containers-parity; step 8 eight caption positions positive, CAP-12/13's (in containers) at step 0 only" \
     "$(grep -c -- '^containers-parity-p.*|container:positive|' "$WORK/vp-default.decl") $(grep -c -- '^containers-parity-p.*|container:fallback|' "$WORK/vp-default.decl") $(grep -c -- '|container:' "$WORK/vp-default.decl") $(grep -c -- '^captions-parity-p.*|caption:positive|' "$WORK/vp-default.decl") $(grep -c -- '|caption:' "$WORK/vp-default.decl")" \
-    "108 18 126 96 96"
+    "54 72 126 90 90"
 expect_has "step 5's closed expands are a positive capture landed on KP-S8 (0.57): the stacked column paragraphs beside them are TextKit 2 (step 4)" "$WORK/vp-default.decl" \
-    "containers-parity-p0.6609-dark-s3-AC|container:positive|0.60.0.0=tk2,0.60.1.0=tk2,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57|textkit2|$WORK/vp-default/captures/containers-parity-p0.6609-dark-s3-C.log"
+    "containers-parity-p0.6609-dark-s0-AC|container:positive|0.60.0.0=tk2,0.60.1.0=tk2,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57|textkit2|$WORK/vp-default/captures/containers-parity-p0.6609-dark-s0-C.log"
+expect_has "… and a fallback at step 3 (from xxxLarge every container keeps SwiftUI: containerSizeKeepsRenderer)" "$WORK/vp-default.decl" \
+    "containers-parity-p0.6609-dark-s3-AC|container:fallback|0.60.0.0=swiftui,0.60.1.0=swiftui,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57|textkit2|$WORK/vp-default/captures/containers-parity-p0.6609-dark-s3-C.log"
 expect_has "the quote capture names the three-deep quote's owners and lands on KP-S3" "$WORK/vp-default.decl" \
-    "containers-parity-p0.3045-dark-s3-AC|container:positive|0.27.0=tk2,0.28.0=tk2,0.28.1=tk2,0.28.2=tk2,0.29.0=tk2,0.29.1.0=tk2,0.29.1.1.0=tk2,0.29.2=tk2;land=0.26|textkit2|$WORK/vp-default/captures/containers-parity-p0.3045-dark-s3-C.log"
+    "containers-parity-p0.3045-dark-s0-AC|container:positive|0.27.0=tk2,0.28.0=tk2,0.28.1=tk2,0.28.2=tk2,0.29.0=tk2,0.29.1.0=tk2,0.29.1.1.0=tk2,0.29.2=tk2;land=0.26|textkit2|$WORK/vp-default/captures/containers-parity-p0.3045-dark-s0-C.log"
 expect_has "the excluded panels (headings) are a fallback capture landed on 0.11" "$WORK/vp-default.decl" \
     "containers-parity-p0.1321-light-s0-AB|container:fallback|0.11.0=swiftui,0.11.1=swiftui,0.11.2=swiftui,0.11.4=swiftui,0.12.0=swiftui;land=0.11|swiftui|$WORK/vp-default/captures/containers-parity-p0.1321-light-s0-B.log"
 expect_has "the 25/75 and 33/67 column capture (step 4) names the stacked leaves, not the linked one, and lands on KP-S6" "$WORK/vp-default.decl" \
     "containers-parity-p0.5229-light-s0-AC|container:positive|0.46.0.0=tk2,0.46.0.1=tk2,0.46.1.0=tk2,0.46.1.1=tk2,0.46.1.2=tk2,0.47.0.0=tk2,0.47.1.0=tk2;land=0.45|textkit2|$WORK/vp-default/captures/containers-parity-p0.5229-light-s0-C.log"
 expect_has "the nested-list capture (step 6) names the quote's list rows, keeps the panel and the rule-A row SwiftUI, and lands on KP-S9" "$WORK/vp-default.decl" \
     "containers-parity-p0.7183-light-s0-AC|container:positive|0.64.0.0=tk2,0.64.0.1=tk2,0.64.1.1=tk2,0.64.2.0=tk2,0.64.2.1=tk2,0.65.0.0=tk2,0.65.0.1=tk2,0.63.0=swiftui,0.64.1.0=swiftui;land=0.62|textkit2|$WORK/vp-default/captures/containers-parity-p0.7183-light-s0-C.log"
-expect_has "… and at step 3 only the rows above the bottom band" "$WORK/vp-default.decl" \
-    "containers-parity-p0.7643-dark-s3-AB|container:positive|0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2;land=0.66|swiftui|$WORK/vp-default/captures/containers-parity-p0.7643-dark-s3-B.log"
+expect_has "… and at step 3 a fallback naming the rows whose block is fully on screen" "$WORK/vp-default.decl" \
+    "containers-parity-p0.7643-dark-s3-AB|container:fallback|0.67.0.0=swiftui,0.67.0.1=swiftui,0.67.0.1.1.0=swiftui;land=0.66|swiftui|$WORK/vp-default/captures/containers-parity-p0.7643-dark-s3-B.log"
+expect_has "step 7's nested code is a code fallback at step 3 (the container size rule)" "$WORK/vp-default.decl" \
+    "containers-parity-p0.8218-dark-s3-AC|fallback|0.72.0=swiftui;land=0.71|textkit2|$WORK/vp-default/captures/containers-parity-p0.8218-dark-s3-C.log"
+expect_lacks "CAP-12/13's position has no caption declaration at step 3: the top-level CAP-11 caption (TextKit 2) is on screen under the bar there" "$WORK/vp-default.decl" \
+    "captions-parity-p0.54-dark-s3-AC|caption:"
 expect_has "step 7: KP-S10's quote code 0.72.0 is a positive code capture, landed on the panel 0.71" "$WORK/vp-default.decl" \
     "containers-parity-p0.8218-light-s0-AC|positive|0.72.0=tk2;land=0.71|textkit2|$WORK/vp-default/captures/containers-parity-p0.8218-light-s0-C.log"
 expect_has "KP-S10's panel (prose beside code) is a container fallback at step 3" "$WORK/vp-default.decl" \
