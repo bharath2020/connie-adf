@@ -62,8 +62,9 @@ RULES (thresholds from the budgets file; defaults in DEFAULT_BUDGETS)
                    tk2_layouts_per_row_max (1.0). Reported as a signal
                    (issue 10); a FAIL only with enforce_layouts_per_row.
     fixture        a fixture whose bytes differ between sides is flagged
-                   FIXTURE-DIFFERS (its counts and instructions are not
-                   comparable).
+                   FIXTURE-DIFFERS: its counts and instructions are not
+                   comparable, so its row is at most CHANGED and its ratio
+                   at most WARN.
 
 EXIT  0 PASS / WARN / CHANGED; 1 FAIL (or CHANGED with --strict-counts);
       2 usage or input error.
@@ -238,6 +239,7 @@ def compare(args):
     cand = combine(load_lines(args.cand))
     rows, notes = [], []
     one_sided_names = set()
+    differing_fixtures = set()
     worst = "PASS"
     keys = list(base) + [k for k in cand if k not in base]
     for key in keys:
@@ -247,8 +249,10 @@ def compare(args):
             notes.append(f"- `{tier} {fixture} {renderer}`: only in {'candidate' if b is None else 'base'}; not compared.")
             continue
         flags, verdict = [], "PASS"
-        if b.get("fixture_fnv64") and c.get("fixture_fnv64") and b["fixture_fnv64"] != c["fixture_fnv64"]:
+        differs = bool(b.get("fixture_fnv64") and c.get("fixture_fnv64") and b["fixture_fnv64"] != c["fixture_fnv64"])
+        if differs:
             flags.append("FIXTURE-DIFFERS")
+            differing_fixtures.add(fixture)
         bi, ci = instr_median(b), instr_median(c)
         d_instr = pct(bi, ci)
         noise = (budgets.get("instruction_noise_pct") or {}).get(f"{tier}/{fixture}/{renderer}") or 0.0
@@ -291,6 +295,10 @@ def compare(args):
         if unstable:
             flags.append("unstable counts")
             notes.append(f"- `{tier} {fixture} {renderer}` counters that varied between reps or passes: " + ", ".join(unstable))
+        if differs and RANK[verdict] > RANK["CHANGED"]:
+            verdict = "CHANGED"
+            notes.append(f"- `{tier} {fixture} {renderer}`: the fixture bytes differ between base and candidate, so "
+                         "the instruction and malloc rise is not comparable; reported as CHANGED, not FAIL.")
         worst = max(worst, verdict, key=RANK.get)
         rows.append({
             "tier": tier, "fixture": fixture, "renderer": renderer, "verdict": verdict, "flags": flags,
@@ -325,6 +333,10 @@ def compare(args):
                 verdict = "WARN"
                 notes.append(f"- `{fixture}` TK2 ÷ SwiftUI ratio: base also over the budget ({br:.3f} → {cr:.3f}, "
                              f"budget {limit:.3f}); recalibrate (--calibrate 10 main --write-budgets).")
+            elif fixture in differing_fixtures:
+                verdict = "WARN"
+                notes.append(f"- `{fixture}` TK2 ÷ SwiftUI ratio over the budget ({cr:.3f} > {limit:.3f}) on a changed "
+                             "fixture; the budget was calibrated on the old bytes: recalibrate.")
         blpr = layouts_per_row(base.get(("render", fixture, "textKit2")))
         clpr = layouts_per_row(cand.get(("render", fixture, "textKit2")))
         signal = ""

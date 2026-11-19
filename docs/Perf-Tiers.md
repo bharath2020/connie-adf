@@ -63,6 +63,9 @@ scratch root (`<root>/lock`); a second run waits for it. Rules
 - **Counts** must match the base exactly. A change is `CHANGED`: explain it
   in the PR (an intended layout or view-tree change) or treat it as a
   regression.
+- **Changed fixture**: when a fixture's bytes differ between base and
+  candidate (`FIXTURE-DIFFERS`), the two sides measure different documents.
+  Its rows are at most `CHANGED` and its ratio at most WARN, never FAIL.
 - **Instructions and mallocs**: WARN at +2-5 %, FAIL at ≥ +5 % vs the
   same-session base. A line whose calibrated cross-process noise is higher
   gets max(2 %, noise) / max(5 %, 2 × noise); today only code-SwiftUI
@@ -175,7 +178,9 @@ detect that work changed.
   "ADF Play (captain)" simulator.
 - T0 waits while another lane's `perf-gate.sh` / `perf_trial.py` run is in
   progress (`--busy-wait`, default 1800 s, then exit 2; in the push gate
-  300 s, then skip; `--allow-busy` overrides). `perf_trial.py` run by this
+  300 s, then skip; `--allow-busy` overrides). Only a process that runs the
+  script counts; one whose command line merely mentions it (an editor,
+  `git log`, an agent's prompt) does not. `perf_trial.py` run by this
   checkout's own T1 does not count.
 - T1 refuses to start (exit 2) while another `perf-gate.sh`,
   `perf_trial.py`, `lifecycle-gate.sh` or `perf-scroll-counters.sh` run is

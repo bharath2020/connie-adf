@@ -75,23 +75,27 @@ def run_case(workdir: str, index: int, case: tuple) -> tuple[bool, str]:
     return got == want, f"got exit/verdict/ratio {got}, want {want}"
 
 
-# (name, base (median, min), candidate (median, min) instructions, exit, row verdict)
+# (name, base (median, min), candidate (median, min) instructions, exit, row verdict[, candidate fixture_fnv64])
 INSTRUCTION_CASES = [
     # Recorded on a loaded host (render code slice): two or three of five
     # reps did ~45 % extra main-thread work on both refs; the minimum is flat.
     ("noisy reps lift the candidate median, minimum flat", (1.5033e9, 1.4957e9), (1.6556e9, 1.5079e9), 0, "PASS"),
     ("the whole distribution rose", (1.50e9, 1.49e9), (1.60e9, 1.59e9), 1, "FAIL"),
+    ("the candidate edited the fixture: not comparable, not a FAIL", (1.50e9, 1.49e9), (1.60e9, 1.59e9), 0,
+     "CHANGED", "fedcba9876543210"),
 ]
 
 
 def run_instruction_case(workdir: str, index: int, case: tuple) -> tuple[bool, str]:
-    name, base, cand, want_exit, want_verdict = case
+    name, base, cand, want_exit, want_verdict, *cand_fnv = case
     folder = os.path.join(workdir, f"instr-{index}")
     os.makedirs(folder, exist_ok=True)
     paths = {side: os.path.join(folder, f"{side}.jsonl") for side in ("base", "cand")}
     for side, (med, low) in (("base", base), ("cand", cand)):
         record = json.loads(line("swiftUI", med))
         record["instructions"].update({"min": low, "max": med * 1.5, "cv_pct": 20.0})
+        if side == "cand" and cand_fnv:
+            record["fixture_fnv64"] = cand_fnv[0]
         with open(paths[side], "w", encoding="utf-8") as handle:
             handle.write("PERF_PROBE " + json.dumps(record) + "\n")
     summary = os.path.join(folder, "summary.json")

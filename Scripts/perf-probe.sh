@@ -52,8 +52,10 @@
 #   --allow-busy  run while another lane's perf run is active (it corrupts
 #                 their frame figures; ours barely move). Default: wait up
 #                 to --busy-wait s in total (default 1800) for
-#                 pgrep -f "$PERF_PROBE_BUSY_PATTERN" (default
-#                 'perf-gate.sh|perf_trial.py') to clear, then exit 2.
+#                 processes that run a script matching the regex
+#                 $PERF_PROBE_BUSY_PATTERN (default
+#                 'perf-gate\.sh|perf_trial\.py') to exit, then exit 2.
+#                 A process that only mentions the name does not count.
 #                 perf_trial.py run by this checkout's
 #                 perf-scroll-counters.sh (this lane's T1) does not count.
 #   --skip-when-busy          when the wait (another lane's perf run, or
@@ -255,11 +257,18 @@ stop_child() {
     wait "$1" 2>/dev/null || true
 }
 
+# A process runs a script when the script is its program, or the first
+# operand after interpreters and their flags (`bash perf-gate.sh …`,
+# `…/Python -I -u …/perf_trial.py …`). A process whose command text merely
+# mentions the name (an editor, `git log -- …`, an agent carrying a prompt
+# in argv) does not.
+runs_script_re() {
+    printf '^(([^ ]*/)?(env|bash|sh|zsh|python[0-9.]*|Python)( +-[^ ]+)* +)*([^ ]*/)?(%s)( |$)' "$1"
+}
+
 # This checkout's T1 (perf-scroll-counters.sh) runs $SCRIPT_DIR/perf_trial.py
-# as its child: this lane's own work run, not another lane's frame run. An
-# ancestor counts only when it executes the script, not when its command
-# text merely mentions it.
-T1_PROGRAM='^([^ ]*/)?((env|bash|sh|zsh)( +-[^ ]+)* +)?([^ ]*/)?perf-scroll-counters\.sh( |$)'
+# as its child: this lane's own work run, not another lane's frame run.
+T1_PROGRAM="$(runs_script_re 'perf-scroll-counters\.sh')"
 own_t1_child() {
     local pid="$1" command
     case "$(ps -o command= -p "$pid" 2>/dev/null)" in *"$SCRIPT_DIR/perf_trial.py"*) ;; *) return 1 ;; esac
@@ -270,16 +279,16 @@ own_t1_child() {
     return 1
 }
 
-# Matching command lines, less this script, this lane's T1 children and any
-# process that merely mentions the pattern while waiting on it (a shell
-# running pgrep/until).
+# Processes that run a script matching the pattern, less this script and
+# this lane's T1 children.
+BUSY_PATTERN="${PERF_PROBE_BUSY_PATTERN:-perf-gate\.sh|perf_trial\.py}"
+BUSY_PROGRAM="$(runs_script_re "$BUSY_PATTERN")"
 busy_pids() {
     local pid command
-    for pid in $(pgrep -f "${PERF_PROBE_BUSY_PATTERN:-perf-gate.sh|perf_trial.py}" 2>/dev/null || true); do
+    for pid in $(pgrep -f "$BUSY_PATTERN" 2>/dev/null || true); do
         [[ "$pid" != "$$" ]] || continue
         command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
-        [[ -n "$command" ]] || continue
-        case "$command" in *pgrep*) continue ;; esac
+        [[ "$command" =~ $BUSY_PROGRAM ]] || continue
         own_t1_child "$pid" && continue
         printf '%s ' "$pid"
     done
