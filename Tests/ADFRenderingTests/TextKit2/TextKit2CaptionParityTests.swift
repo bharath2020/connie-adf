@@ -37,6 +37,14 @@ enum TK2Caption {
     static var theme: ADFTheme { TK2Parity.theme }
     nonisolated static let tolerance: CGFloat = 0.01
     nonisolated static let width: CGFloat = 370
+    /// The sizes drop rules 2 and 3 run at: Large and AX3, or the
+    /// `DynamicTypeSize` case names `ADF_CAPTION_SIZES=<name,…>` lists
+    /// (evidence runs: right to left and xxxLarge to AX5, lead call C47).
+    nonisolated static var sizes: [DynamicTypeSize] {
+        let names = ProcessInfo.processInfo.environment["ADF_CAPTION_SIZES"]?.split(separator: ",").map(String.init) ?? []
+        let sizes = names.compactMap { name in DynamicTypeSize.allCases.first { "\($0)" == name } }
+        return sizes.isEmpty ? [.large, .accessibility3] : sizes
+    }
 
     static func t(_ string: String, _ marks: String = "") -> String { TK2Parity.adfText(string, marks: marks) }
     static let strong = "{\"type\":\"strong\"}"
@@ -497,7 +505,7 @@ struct TextKit2CaptionParityTests {
     /// excused any failure, so it is gone). The fill marks (a highlight,
     /// inline code's band) stay on SwiftUI by the run-background rule
     /// (`captionRunBackground`), so their arms are both `Text`.
-    @Test("drop rule 2: the caption's secondary foreground draws as Text draws it", arguments: [DynamicTypeSize.large, .accessibility3], [false, true])
+    @Test("drop rule 2: the caption's secondary foreground draws as Text draws it", arguments: TK2Caption.sizes, [false, true])
     func secondaryForegroundPixels(size: DynamicTypeSize, dark: Bool) async throws {
         let env = TK2Parity.Environment(size: size, dark: dark)
         var failed = 0
@@ -561,7 +569,7 @@ struct TextKit2CaptionParityTests {
             for caption in C.frameCaptions {
                 for box in [(pixel: Int?.some(200), percent: Double?.none), (pixel: nil, percent: 66.66)] {
                     let media = try await C.media(caption.name, caption.content, layout: layout, pixelWidth: box.pixel, percent: box.percent)
-                    for size in [DynamicTypeSize.large, .accessibility3] {
+                    for size in C.sizes {
                         for direction in [LayoutDirection.leftToRight, .rightToLeft] {
                             let env = TK2Parity.Environment(size: size, direction: direction)
                             let boxName = box.pixel.map { "\($0)pt" } ?? "\(box.percent ?? 0)%"
