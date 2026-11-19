@@ -1,0 +1,122 @@
+{
+  "calibration": {
+    "date": "2026-11-18",
+    "margin_pct": 2.0,
+    "meta": [
+      "ref main@7301c300c",
+      "host load at end: 13.09",
+      "config Debug, reps 5, passes 10, warm-up 1, tier all",
+      "simulator: 1816D1A0-0985-4D85-A69B-61B521291C80 com.apple.CoreSimulator.SimRuntime.iOS-26-3",
+      "phases: export 0s build 4s boot 1s warm-up pass (discarded) 18s render tier 382s parse tier 48s; total 454s"
+    ],
+    "passes": 10
+  },
+  "enforce_layouts_per_row": false,
+  "instruction_noise_pct": {
+    "parse/code-dense/-": 0.393,
+    "parse/code-parity/-": 0.653,
+    "parse/code-tall/-": 0.145,
+    "parse/giant-table/-": 0.366,
+    "parse/kitchen-sink/-": 0.149,
+    "parse/list-dense/-": 0.324,
+    "parse/list-tall/-": 0.294,
+    "parse/lists-links/-": 0.307,
+    "parse/lists-parity/-": 0.288,
+    "parse/long-paragraph/-": 0.616,
+    "parse/media-gallery/-": 0.773,
+    "parse/stress-1k/-": 0.246,
+    "parse/stress-5k/-": 0.212,
+    "parse/text-dense/-": 0.211,
+    "parse/youtube-dense/-": 0.151,
+    "parse/youtube/-": 0.149,
+    "render/code/swiftUI": 2.261,
+    "render/code/textKit2": 1.542,
+    "render/containers/swiftUI": 1.673,
+    "render/containers/textKit2": 2.077,
+    "render/giant-table/swiftUI": 1.089,
+    "render/giant-table/textKit2": 0.913,
+    "render/kitchen-sink/swiftUI": 0.964,
+    "render/kitchen-sink/textKit2": 0.688,
+    "render/list-dense/swiftUI": 0.941,
+    "render/list-dense/textKit2": 0.728,
+    "render/stress-1k/swiftUI": 1.157,
+    "render/stress-1k/textKit2": 0.846
+  },
+  "instructions_fail_pct": 5.0,
+  "instructions_warn_pct": 2.0,
+  "malloc_noise_pct": {
+    "parse/code-dense/-": 0.0,
+    "parse/code-parity/-": 0.0,
+    "parse/code-tall/-": 0.0,
+    "parse/giant-table/-": 0.0,
+    "parse/kitchen-sink/-": 0.0,
+    "parse/list-dense/-": 0.0,
+    "parse/list-tall/-": 0.0,
+    "parse/lists-links/-": 0.0,
+    "parse/lists-parity/-": 0.0,
+    "parse/long-paragraph/-": 0.0,
+    "parse/media-gallery/-": 0.0,
+    "parse/stress-1k/-": 0.0,
+    "parse/stress-5k/-": 0.0,
+    "parse/text-dense/-": 0.0,
+    "parse/youtube-dense/-": 0.0,
+    "parse/youtube/-": 0.0,
+    "render/code/swiftUI": 0.004,
+    "render/code/textKit2": 0.003,
+    "render/containers/swiftUI": 2.097,
+    "render/containers/textKit2": 2.14,
+    "render/giant-table/swiftUI": 0.002,
+    "render/giant-table/textKit2": 0.002,
+    "render/kitchen-sink/swiftUI": 0.428,
+    "render/kitchen-sink/textKit2": 0.329,
+    "render/list-dense/swiftUI": 0.113,
+    "render/list-dense/textKit2": 0.03,
+    "render/stress-1k/swiftUI": 0.558,
+    "render/stress-1k/textKit2": 0.209
+  },
+  "mallocs_fail_pct": 5.0,
+  "mallocs_warn_pct": 2.0,
+  "noise_cv_pct": 1.0,
+  "noise_fail_factor": 2.0,
+  "noise_warn_factor": 1.0,
+  "note": "T0 work probe budgets (Scripts/perf-probe.sh, Scripts/perf_probe.py). ratio_budgets: per render fixture, the most the candidate's TextKit 2 instructions may be relative to its SwiftUI instructions; null = uncalibrated (reported, never a verdict). Calibrate from ~10 passes of main: Scripts/perf-probe.sh --calibrate 10 main [--write-budgets].",
+  "ratio_budgets": {
+    "code": {
+      "max": 1.188,
+      "observed_max": 1.1646,
+      "observed_median": 1.1596,
+      "passes": 10
+    },
+    "containers": {
+      "max": 1.026,
+      "observed_max": 1.0054,
+      "observed_median": 0.9976,
+      "passes": 10
+    },
+    "giant-table": {
+      "max": 1.027,
+      "observed_max": 1.0063,
+      "observed_median": 1.0035,
+      "passes": 10
+    },
+    "kitchen-sink": {
+      "max": 1.128,
+      "observed_max": 1.1057,
+      "observed_median": 1.1022,
+      "passes": 10
+    },
+    "list-dense": {
+      "max": 1.216,
+      "observed_max": 1.1916,
+      "observed_median": 1.187,
+      "passes": 10
+    },
+    "stress-1k": {
+      "max": 1.291,
+      "observed_max": 1.2652,
+      "observed_median": 1.2614,
+      "passes": 10
+    }
+  },
+  "tk2_layouts_per_row_max": 1.0
+}

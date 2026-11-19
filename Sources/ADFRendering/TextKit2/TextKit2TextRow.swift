@@ -191,6 +191,7 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: TextKit2RowView, context: Context) -> CGSize? {
+        TextKit2Diagnostics.shared.didSizeThatFits(proposedWidth: proposal.width)
         // Inputs can arrive here before `updateUIView` in the same pass.
         update(uiView, context: context)
         return uiView.measuredSize(forProposedWidth: proposal.width)

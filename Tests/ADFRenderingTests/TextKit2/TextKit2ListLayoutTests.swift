@@ -84,7 +84,13 @@ struct TextKit2ListLayoutTests {
         return (diagnostics.conversionCount - conversions, diagnostics.layoutCount - layouts)
     }
 
-    @Test("through the document view a list leaf lays out twice (natural probe, column width), a root paragraph once")
+    /// Budget: at most one TextKit 2 layout per row on first
+    /// materialisation. List leaves miss it today (the natural probe plus
+    /// the column width, two each): issue 10, a known issue until its fix
+    /// lands, when `withKnownIssue` reports the budget met and this
+    /// wrapper (and the `.infinity` width pin) must go. The ceiling of two
+    /// stays a hard expectation, so it cannot get worse meanwhile.
+    @Test("through the document view a row lays out at most once on first materialisation (list leaves: twice, issue 10)")
     func documentFirstMaterialisation() async throws {
         func materialise(_ json: String) async throws -> [String: Row] {
             let model = ADFDocumentModel()
@@ -110,10 +116,17 @@ struct TextKit2ListLayoutTests {
         // nesting level.
         let list = try await materialise(Self.listJSON)
         #expect(list.keys.sorted() == Self.listOwners)
+        var listRows: [Row] = []
         for owner in Self.listOwners {
             let row = try #require(list[owner])
-            #expect(row.layouts == 2, "\(owner)")
+            listRows.append(row)
+            #expect(row.layouts <= 2, "\(owner): worse than issue 10's double layout")
             #expect(row.widths == [.infinity, owner == "0.0.1.1.0" ? 286 : 322], "\(owner): \(row.widths)")
+        }
+        withKnownIssue("issue 10: a list leaf lays out twice (natural probe, column width) — https://github.com/bharath2020/connie-adf/issues/10") {
+            for row in listRows {
+                #expect(row.layouts <= 1, "\(row.owner): \(row.layouts) layouts on first materialisation, budget 1")
+            }
         }
         let paragraph = try await materialise(Self.paragraphJSON)
         #expect(paragraph.count == 1)
