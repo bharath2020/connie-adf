@@ -590,7 +590,10 @@ final class ContainerRendererUITests: XCTestCase {
             try lightbox(CAP.plainImage, arm)
             driver.expectEngine(CAP.plain, textKit2: textKit2, arm)
             try lightbox(CAP.linkedImage, arm)
+            // The caption itself (`element` skips the image): the image's
+            // scroll can leave it below the viewport.
             let caption = driver.element(CAP.linked)
+            XCTAssertTrue(driver.scroll(by: 250, until: caption, maxDrags: 6), "\(arm): the CAP-05 caption not in view")
             driver.expectEngine(CAP.linked, textKit2: textKit2, arm)
             let link = ContainerLink(leaf: CAP.linked, linkText: CAP.linkedText, url: CAP.linkedURL, section: CAP.s1)
             try tapLink(link, driver, in: caption, arm: arm)

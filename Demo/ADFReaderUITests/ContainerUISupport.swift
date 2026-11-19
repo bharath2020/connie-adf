@@ -395,9 +395,15 @@ struct ContainerDriver {
 
     // MARK: Leaves and engines
 
-    /// `leaf`'s text under either renderer.
+    /// `leaf`'s text under either renderer, never an image. An image's
+    /// label can share the prefix and come first in the tree:
+    /// captions-parity labels each media "CAP-nn image" above its caption
+    /// "CAP-nn …", so a bare prefix lookup resolved CAP-05's image and the
+    /// caption link tap opened the lightbox (candrun U1).
     func element(_ leaf: ContainerLeaf) -> XCUIElement {
-        reader.element(labelPrefix: leaf.prefix)
+        let image = NSNumber(value: XCUIElement.ElementType.image.rawValue)
+        return app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@ AND elementType != %@", leaf.prefix, image)).firstMatch
     }
 
     /// The TextKit 2 row whose owner is exactly `owner`.
