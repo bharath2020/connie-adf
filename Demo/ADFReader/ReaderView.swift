@@ -57,13 +57,12 @@ struct ReaderView: View {
     @Environment(\.dynamicTypeSize) private var systemTypeSize
 
     private let mediaProvider = PlaceholderMediaProvider()
-    /// Shared by every fixture reader this launch; `nil` under
-    /// `-smartLinks off` (see `MockSmartLinkResolver.shared`) and for
-    /// `.remotePage` documents, whose links stay exactly as authored.
-    private var smartLinkResolver: MockSmartLinkResolver? {
-        guard case .fixture = source else { return nil }
-        return MockSmartLinkResolver.shared
-    }
+    /// Shared by every reader this launch, remote pages included; `nil`
+    /// under `-smartLinks off` (see `MockSmartLinkResolver.shared`).
+    /// ADFReader is a sample app, so its titles are mock data on purpose:
+    /// `ADFDocumentView` does not know how titles are loaded, and a real app
+    /// installs its own resolver.
+    private let smartLinkResolver = MockSmartLinkResolver.shared
     private let taskStore = TaskStateStore()
     private let fontSizeStore = FontSizeStore()
 

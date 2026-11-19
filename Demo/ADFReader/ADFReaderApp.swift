@@ -118,12 +118,10 @@ import UIKit
 ///   to Atlassian Accounts (`AccountsView`), for UI tests and demo
 ///   recordings. Ignored with `-fixture` (the space list, which owns the
 ///   gear button, is not shown then).
-/// - Smart links: by default every fixture reader (opened by `-fixture`,
-///   from the space list's fixtures or from a beam) gets one shared
-///   `MockSmartLinkResolver` — titles derived from the URL, no network — so
-///   bare Atlassian links and inline cards turn into titled links once their
-///   rows are on screen. Remote Confluence pages get no resolver: their
-///   links stay exactly as authored.
+/// - Smart links: by default every reader (opened by `-fixture`, from the
+///   space list or from a beam) gets one shared `MockSmartLinkResolver` —
+///   titles derived from the URL, no network — so bare Atlassian links and
+///   inline cards turn into titled links once their rows are on screen.
 ///   About This Build shows the mock's calls, cancellations, lookups in
 ///   flight, resolved and failed counts since launch. The fixture made for
 ///   it is `-fixture smart-links`.
