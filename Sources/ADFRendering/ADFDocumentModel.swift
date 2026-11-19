@@ -39,6 +39,55 @@ public final class ADFDocumentModel {
     /// `clear`, streamed `matchCount`, highlight payload). One per model.
     public let search: ADFDocumentSearch
 
+    /// Smart-link resolution for this document: which links are on screen,
+    /// their lookups and their per-URL stages (`SmartLinkCoordinator`). Not
+    /// observable itself; owned here so a returning row draws its resolved
+    /// title on its first frame, and reset by `load` (block IDs repeat
+    /// across documents). The resolver comes from `ADFDocumentView`.
+    let smartLinks = SmartLinkCoordinator()
+
+    /// The text leaves that mark themselves while `ADFDocumentView`
+    /// identifies its renderer register here (`RendererIdentityRegistry`,
+    /// not observable); the report is published from it.
+    let rendererIdentity = RendererIdentityRegistry()
+
+    /// What the renderer reports drawing while `ADFDocumentView` identifies
+    /// it (`identifiesRenderer: true`): the engine that drew each text leaf
+    /// on screen, and how many each drew. Observable on its own; nothing in
+    /// the document reads it, so a host view observing it (a badge)
+    /// invalidates no row. Empty while identification is off.
+    public var rendererReport: ADFRendererReport { rendererIdentity.report }
+
+    /// Whether this document's inline cards were prepared as smart-link runs
+    /// (they show their host until resolved) rather than chips: a resolver
+    /// was installed when the document's blocks began preparing (`load`).
+    /// Every preparer and indexer for the document reads it (the search
+    /// index, expand bodies), so render and index agree.
+    @ObservationIgnored private(set) var inlineCardsAsSmartLinks = false
+
+    /// The smart-link counters of this model (resolver calls, cancellations,
+    /// calls in flight, resolved, failed, smart-link leaf redraws, and the
+    /// resolution mode's scroll and nearby counters), cumulative across its
+    /// loads except the ones read off the current state (`inFlight`,
+    /// `isScrolling`, `waiting`, `prefetchInFlight`). Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var smartLinkStats: ADFSmartLinkStats { smartLinks.stats }
+
+    /// `.afterScrollingWithNearby`'s limits: the keys one nearby batch may
+    /// hold, and how far (in document positions, a top-level row or a
+    /// top-level list row each) a nearby link may be from the links on
+    /// screen. Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var smartLinkNearbyLimits: (batch: Int, distance: Int) {
+        (smartLinks.timing.prefetchBatchSize, smartLinks.timing.nearbyDistance)
+    }
+
+    /// Smart-link-driven redraws per text owner id (`RenderBlock.id`,
+    /// list-row id, media id): which leaves a resolution redrew, so a test
+    /// can show that leaves without that link did not. Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var smartLinkLeafRefreshesByOwner: [String: Int] { smartLinks.leafRefreshesByOwner }
+
     /// The top-level rows SwiftUI now reports at least 95 % inside the
     /// viewport (the visibility feed search navigation reads,
     /// `VisibleRowRegistry`), or nil before iOS 18 / macOS 15, where no
@@ -98,13 +147,17 @@ public final class ADFDocumentModel {
         self.customRenderers = ADFCustomRendererRegistry(customRenderers)
         self.search = ADFDocumentSearch()
         self.search.model = self
+        smartLinks.document = self
     }
 
     /// The indexer every index build for this document must use — same theme,
     /// same plugins as the preparer, so expand bodies index exactly what the
     /// view renders.
     var searchIndexer: SearchIndexer {
-        SearchIndexer(theme: theme, customPreparers: customRenderers.preparers)
+        SearchIndexer(
+            theme: theme, customPreparers: customRenderers.preparers,
+            inlineCardsAsSmartLinks: inlineCardsAsSmartLinks
+        )
     }
 
     deinit {
@@ -130,10 +183,12 @@ public final class ADFDocumentModel {
         scrollTargetPlacement = .top
         expandedBlocks = []
         search.reset()
+        smartLinks.reset()
         phase = .parsing
 
         let parser = self.parser
-        let preparer = DocumentPreparer(theme: theme, customPreparers: customRenderers.preparers)
+        let theme = self.theme
+        let customPreparers = customRenderers.preparers
         // `self` stays weak for the whole stream: holding it strongly across
         // the loop would keep the model (and the detached preparer feeding
         // it) alive after the owner releases it. Each iteration re-checks;
@@ -149,8 +204,20 @@ public final class ADFDocumentModel {
                 }
                 return
             }
-            guard self != nil, !Task.isCancelled else { return }
-            self?.phase = .preparing
+            let preparer: DocumentPreparer
+            do {
+                // Scoped, so the model is not held across the stream below.
+                guard let model = self, !Task.isCancelled else { return }
+                model.phase = .preparing
+                // Read once parsing is done, so a view built right after
+                // `load` has handed its resolver over: without one, inline
+                // cards keep their chips exactly as before smart links.
+                model.inlineCardsAsSmartLinks = model.smartLinks.resolver != nil
+                preparer = DocumentPreparer(
+                    theme: theme, customPreparers: customPreparers,
+                    inlineCardsAsSmartLinks: model.inlineCardsAsSmartLinks
+                )
+            }
             for await chunk in preparer.prepareStream(document, chunkSize: 50) {
                 guard let self, !Task.isCancelled else { return }
                 self.append(chunk)
@@ -508,6 +575,15 @@ public final class ADFDocumentModel {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled heading" : trimmed
     }
+}
+
+/// What `.afterScrollingWithNearby` reads to find the links near the screen
+/// (`SmartLinkCoordinator`, design §8.5): read only from the coordinator's
+/// own tasks, never in a view's body, so it adds no observation.
+extension ADFDocumentModel: SmartLinkDocument {
+    var smartLinkBlocks: [RenderBlock] { blocks }
+    var smartLinkRevision: UInt64 { documentRevision }
+    var smartLinkTopRowIndex: Int? { anchors.topRow.flatMap { itemPositionByID[$0] } }
 }
 
 /// One lazy-stack section: an optional pinned header (a table's header

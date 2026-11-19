@@ -10,11 +10,21 @@ import SwiftUI
 /// many draw list text and how many draw a code block's code, and under
 /// `-rebuildControlPicks` the memory control's live rows, and under
 /// `-interactionProbe` the task dispatches and URL opens it recorded
-/// (`InteractionProbe`). The checksum lets a screen recording be
+/// (`InteractionProbe`), and last the open document's smart-link
+/// counters (`ADFDocumentModel.smartLinkStats`), the mock resolver's
+/// own counts (`MockSmartLinkResolver`) and the text-leaf body and TextKit 2
+/// conversion and layout totals, and last of all the smart-link resolution
+/// mode with its scroll and nearby counters. The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
     let renderer: ADFTextRenderer
+    /// The open reader's model, for its smart-link counters; read only in
+    /// the polling task (never in `body`), so the sheet observes nothing on
+    /// it. `nil` hides the per-document smart-link section.
+    var model: ADFDocumentModel? = nil
+    /// The reader's smart-link resolution mode (the menu's choice).
+    var smartLinkResolution: ADFSmartLinkResolution = .whileScrolling
 
     @Environment(\.dismiss) private var dismiss
     @State private var executableSHA256: String?
@@ -40,6 +50,22 @@ struct BuildInfoView: View {
     @State private var probeLastTask = InteractionProbe.lastTask
     @State private var probeURLOpens = InteractionProbe.urlOpens
     @State private var probeLastURL = InteractionProbe.lastURL
+    /// The library's smart-link counters for this document
+    /// (`model.smartLinkStats`) and how many text owners a smart link
+    /// redrew (`model.smartLinkLeafRefreshesByOwner.count`), polled like
+    /// the counters above; `nil` until the first read.
+    @State private var smartLinkStats: ADFSmartLinkStats?
+    @State private var smartLinkRefreshedOwners: Int?
+    /// The demo mock resolver's own counts (`MockSmartLinkResolver.shared`),
+    /// polled likewise.
+    @State private var smartLinkCounts: MockSmartLinkResolver.Counts?
+    /// Text-leaf body evaluations since launch
+    /// (`ADFTextRenderer.textLeafStats`) and the TextKit 2 conversion and
+    /// layout totals, polled likewise: the smart-link UI test's proof that
+    /// a resolution re-evaluated no other leaf and rebuilt no other row.
+    @State private var textLeafStats: ADFTextLeafStats?
+    @State private var textKit2Conversions: Int?
+    @State private var textKit2Layouts: Int?
 
     var body: some View {
         NavigationStack {
@@ -107,6 +133,20 @@ struct BuildInfoView: View {
                 if InteractionProbe.enabled {
                     interactionProbeSection
                 }
+                // Last, so they move none of the rows above (UI tests read
+                // them without scrolling, and the probe section's reader
+                // expects it below the code row; see the note above it).
+                if model != nil {
+                    smartLinkStatsSection
+                }
+                smartLinksSection
+                // Below the smart-link counters it is read with.
+                leafDiagnosticsSection
+                // Last of all, so it moves none of the rows above (UI tests
+                // read them top to bottom).
+                if model != nil {
+                    smartLinkResolutionSection
+                }
             }
             .navigationTitle("About This Build")
             .navigationBarTitleDisplayMode(.inline)
@@ -135,6 +175,14 @@ struct BuildInfoView: View {
                     probeLastTask = InteractionProbe.lastTask
                     probeURLOpens = InteractionProbe.urlOpens
                     probeLastURL = InteractionProbe.lastURL
+                    if let model {
+                        smartLinkStats = model.smartLinkStats
+                        smartLinkRefreshedOwners = model.smartLinkLeafRefreshesByOwner.count
+                    }
+                    smartLinkCounts = MockSmartLinkResolver.shared?.snapshot
+                    textLeafStats = ADFTextRenderer.textLeafStats
+                    textKit2Conversions = stats.conversionCount
+                    textKit2Layouts = stats.layoutCount
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }
@@ -172,6 +220,130 @@ struct BuildInfoView: View {
                     .truncationMode(.middle)
                     .accessibilityIdentifier("probe-url-last")
             }
+        }
+    }
+
+    /// The library's smart-link counters for the open document
+    /// (`ADFSmartLinkStats`: cumulative across its loads, except calls in
+    /// flight), plus how many text owners a smart-link stage change
+    /// redrew. Each value is its own element, `smartlink-stat-<field>`
+    /// (`resolverCalls`, `cancellations`, `inFlight`, `resolved`, `failed`,
+    /// `leafRefreshes`, `refreshedOwners`), for a UI test to read.
+    private var smartLinkStatsSection: some View {
+        Section("Smart Links (This Document)") {
+            countRow("Resolver Calls", smartLinkStats?.resolverCalls, id: "smartlink-stat-resolverCalls")
+            countRow("Cancellations", smartLinkStats?.cancellations, id: "smartlink-stat-cancellations")
+            countRow("In Flight", smartLinkStats?.inFlight, id: "smartlink-stat-inFlight")
+            countRow("Resolved", smartLinkStats?.resolved, id: "smartlink-stat-resolved")
+            countRow("Failed", smartLinkStats?.failed, id: "smartlink-stat-failed")
+            countRow("Leaf Refreshes", smartLinkStats?.leafRefreshes, id: "smartlink-stat-leafRefreshes")
+            countRow("Owners Refreshed", smartLinkRefreshedOwners, id: "smartlink-stat-refreshedOwners")
+        }
+    }
+
+    /// The resolution mode the reader passes (`ADFSmartLinkResolution`) and
+    /// the counters it drives (`ADFSmartLinkStats`, design §8): scroll ends,
+    /// calls started while scrolling (zero unless While Scrolling), visible
+    /// lookups held back by a scroll, links on screen still waiting, the
+    /// nearby batches (After Scrolling + Nearby), and, in every mode, the
+    /// titles held while scrolling until their paragraph was fully on screen
+    /// and the loading looks shown (design §10). Each value is its own
+    /// element: `smartlink-resolution` (the mode's raw value), then
+    /// `smartlink-mode-<field>`.
+    private var smartLinkResolutionSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                Text("Mode")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(verbatim: smartLinkResolution.displayName)
+                    .accessibilityIdentifier("smartlink-resolution-name")
+                Text(verbatim: smartLinkStats?.resolution.rawValue ?? "…")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("smartlink-resolution")
+            }
+            countRow("Scroll Ends", smartLinkStats?.scrollEnds, id: "smartlink-mode-scrollEnds")
+            countRow("Calls While Scrolling", smartLinkStats?.scrollingCalls, id: "smartlink-mode-scrollingCalls")
+            countRow("Held by Scrolling", smartLinkStats?.deferred, id: "smartlink-mode-deferred")
+            countRow("Waiting On Screen", smartLinkStats?.waiting, id: "smartlink-mode-waiting")
+            countRow("Nearby Batches", smartLinkStats?.prefetchBatches, id: "smartlink-mode-prefetchBatches")
+            countRow("Nearby Calls", smartLinkStats?.prefetchCalls, id: "smartlink-mode-prefetchCalls")
+            countRow("Nearby In Flight", smartLinkStats?.prefetchInFlight, id: "smartlink-mode-prefetchInFlight")
+            countRow("Nearby Cancelled", smartLinkStats?.prefetchCancellations, id: "smartlink-mode-prefetchCancellations")
+            countRow("Nearby Hits", smartLinkStats?.prefetchHits, id: "smartlink-mode-prefetchHits")
+            countRow("Largest Batch", smartLinkStats?.largestPrefetchBatch, id: "smartlink-mode-largestPrefetchBatch")
+            countRow("Farthest (Positions)", smartLinkStats?.farthestPrefetch, id: "smartlink-mode-farthestPrefetch")
+            countRow("Titles Held (Not Fully On Screen)", smartLinkStats?.titlesHeld, id: "smartlink-mode-titlesHeld")
+            countRow("Titles Held Now", smartLinkStats?.titlesHeldNow, id: "smartlink-mode-titlesHeldNow")
+            countRow("Loading Looks Shown", smartLinkStats?.resolvingShown, id: "smartlink-mode-resolvingShown")
+        } header: {
+            Text("Smart Link Resolution")
+        } footer: {
+            if let limits = model?.smartLinkNearbyLimits {
+                Text(verbatim: "Nearby: batches of ≤ \(limits.batch), within \(limits.distance) positions "
+                    + "(a top-level row, or a row of a top-level list), only at rest.")
+            }
+        }
+    }
+
+    /// The mock resolver's view of smart-link lookups since launch: every
+    /// call the library made, how many it cancelled (a row left the screen
+    /// before the delay ran out), how many are waiting now, and how many
+    /// answered with a title or threw. Each value is its own element
+    /// (`smartlink-calls`, `-cancelled`, `-in-flight`, `-resolved`,
+    /// `-failed`) for a UI test to read; `smartlink-off` under
+    /// `-smartLinks off`.
+    @ViewBuilder
+    private var smartLinksSection: some View {
+        if let resolver = MockSmartLinkResolver.shared {
+            Section {
+                countRow("Calls", smartLinkCounts?.calls, id: "smartlink-calls")
+                countRow("Cancelled", smartLinkCounts?.cancelled, id: "smartlink-cancelled")
+                countRow("In Flight", smartLinkCounts?.inFlight, id: "smartlink-in-flight")
+                countRow("Resolved", smartLinkCounts?.resolved, id: "smartlink-resolved")
+                countRow("Failed", smartLinkCounts?.failed, id: "smartlink-failed")
+            } header: {
+                Text("Smart Links (Mock Resolver)")
+            } footer: {
+                Text(verbatim: resolver.configuration.summary)
+            }
+        } else {
+            Section("Smart Links") {
+                Text("Off (-smartLinks off)")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("smartlink-off")
+            }
+        }
+    }
+
+    /// Process-wide work counters since launch: text-leaf body evaluations
+    /// (`ADFTextRenderer.textLeafStats`: SwiftUI `Text` leaves and engine
+    /// leaves) and TextKit 2 text conversions and layouts. Each value is its
+    /// own element (`leaf-stat-total`, `-segmented`, `-engine`,
+    /// `tk2-stat-conversions`, `tk2-stat-layouts`) for a UI test to read;
+    /// the smart-link test compares them across a resolution with the
+    /// leaf refreshes above.
+    private var leafDiagnosticsSection: some View {
+        Section("Text Leaves (Since Launch)") {
+            countRow("Leaf Bodies", textLeafStats?.total, id: "leaf-stat-total")
+            countRow("Of Which SwiftUI Text", textLeafStats?.segmentedTextBodies, id: "leaf-stat-segmented")
+            countRow("Of Which Engine Leaf", textLeafStats?.engineLeafBodies, id: "leaf-stat-engine")
+            countRow("TextKit 2 Conversions", textKit2Conversions, id: "tk2-stat-conversions")
+            countRow("TextKit 2 Layouts", textKit2Layouts, id: "tk2-stat-layouts")
+        }
+    }
+
+    /// A titled count; "…" until the first poll. The value is its own
+    /// element, identified by `id`.
+    private func countRow(_ title: String, _ value: Int?, id: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(verbatim: value.map(String.init) ?? "…")
+                .monospacedDigit()
+                .accessibilityIdentifier(id)
         }
     }
 

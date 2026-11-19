@@ -7,11 +7,24 @@ import ADFPreparation
 /// `Text(AttributedString)`. When atoms (mentions, statuses, dates, …) are
 /// present, a wrapping custom `Layout` interleaves word-level `Text` chunks
 /// with inline pill views.
+///
+/// Smart links (`smartLinkKeys`, the owner's prepared keys): the leaf reads
+/// the coordinator's entries for exactly those keys and draws the displayed
+/// text (`SmartLinkDisplay`) after search painting. Empty keys — nearly
+/// every owner — and a document without a resolver (no `adfSmartLinks`)
+/// read nothing and do nothing. While a link shows a stage
+/// other than its prepared text, the leaf speaks the spoken text and offers
+/// an "Open link …" action per link (`SmartLinkSpeech`, view-level, so the
+/// callers' `textSelection(.enabled)` keeps it; in an atom paragraph each
+/// word chunk holding a link does), word for word what a TextKit 2 row says.
 struct SegmentedTextView: View {
     let segments: [InlineSegment]
     /// ID search highlights are keyed by (`RenderBlock.id`, list-row id, or
     /// media id). `nil` opts out of search entirely (previews, chrome).
     var ownerID: String? = nil
+    /// The owner's smart links (`RenderBlock.smartLinkKeys`,
+    /// `PreparedListRow.smartLinkKeys`, `PreparedMedia.captionSmartLinkKeys`).
+    var smartLinkKeys: [SmartLinkKey] = []
 
     /// Gap between wrapped lines, scaled with Dynamic Type so line rhythm
     /// tracks the text size it separates.
@@ -24,19 +37,36 @@ struct SegmentedTextView: View {
     @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
 
     @Environment(\.adfDocumentSearch) private var search
+    @Environment(\.adfSmartLinks) private var smartLinks
     @Environment(\.adfTheme) private var theme
+    /// The document's identity registry while it identifies its renderer
+    /// (`ADFDocumentView(identifiesRenderer:)`); `nil`, the default, adds
+    /// nothing to the leaf.
+    @Environment(\.adfRendererIdentity) private var rendererIdentity
     /// Flash off-phase: while true the current match paints with the subtle
     /// color, so alternating it blinks the accent (§ arrival flash).
     @State private var flashDimmed = false
 
     var body: some View {
-        let displayed = displayedSegments
+        let _ = TextLeafDiagnostics.countSegmentedBody()
+        let _ = smartLinks?.noteLeafBody(ownerID, engine: false)
+        let stages = smartLinkStages
+        let displayed = displayedSegments(smartLinks: stages)
+        let composesSmartLinks = !stages.isEmpty
+        let merged = Self.mergedText(displayed)
         Group {
-            if let merged = Self.mergedText(displayed) {
+            if let merged, smartLinks == nil || smartLinkKeys.isEmpty {
                 Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
+            } else if let merged {
+                // A leaf with smart links (a constant for the leaf, so the
+                // branch never flips with a stage): VoiceOver hears the
+                // stage through `SmartLinkSpeech`, whose inputs alone change.
+                let text = Self.scalingBaselineOffsets(in: merged, by: typeScale)
+                Self.text(text, composesSmartLinks: composesSmartLinks)
+                    .modifier(SmartLinkSpeech(text: text, showsStage: composesSmartLinks))
             } else {
                 WrappingInlineLayout(lineSpacing: lineSpacing) {
-                    ForEach(Self.tokens(for: displayed)) { token in
+                    ForEach(Self.tokens(for: displayed, composesSmartLinks: composesSmartLinks)) { token in
                         InlineTokenView(
                             token: token,
                             typeScale: typeScale,
@@ -47,6 +77,35 @@ struct SegmentedTextView: View {
             }
         }
         .searchArrivalFlash(ownerID: ownerID, dimmed: $flashDimmed)
+        .swiftUIEngineMark(rendererIdentity, ownerID: ownerID)
+    }
+
+    /// One `Text` for the leaf's merged text: the attributed string as is,
+    /// or, when the owner shows a smart link, composed with its icon
+    /// (`SmartLinkDisplay.composedText`). Both are `Text`: no structural
+    /// branch. VoiceOver's text for it is the leaf's `SmartLinkSpeech`.
+    static func text(_ attributed: AttributedString, composesSmartLinks: Bool) -> Text {
+        composesSmartLinks ? SmartLinkDisplay.composedText(attributed) : Text(attributed)
+    }
+
+    // MARK: Smart links
+
+    /// The zero-work gate: an owner without smart links reads nothing.
+    /// Otherwise the entries for its own keys are read (its only
+    /// observation dependency on smart links), and only stages that change
+    /// the display come back.
+    private var smartLinkStages: [SmartLinkKey: SmartLinkStage] {
+        guard !smartLinkKeys.isEmpty, let smartLinks else { return [:] }
+        return smartLinks.displayStages(for: smartLinkKeys, owner: ownerID)
+    }
+
+    /// Search painting first, on the prepared segments its spans index;
+    /// then the smart-link substitution, so a match inside a link
+    /// highlights its whole title.
+    private func displayedSegments(smartLinks stages: [SmartLinkKey: SmartLinkStage]) -> [InlineSegment] {
+        let painted = displayedSegments
+        guard !stages.isEmpty else { return painted }
+        return SmartLinkDisplay.apply(stages, to: painted, theme: theme)
     }
 
     // MARK: Search highlighting
@@ -120,8 +179,11 @@ struct SegmentedTextView: View {
     /// Maps segments 1:1 to layout tokens. Word-level chunking already
     /// happened at preparation time (`InlineComposer.splitForWrappingLayout`),
     /// so no character scanning or attributed-string slicing runs here — a
-    /// standalone `"\n"` chunk becomes an explicit line break.
-    static func tokens(for segments: [InlineSegment]) -> [InlineToken] {
+    /// standalone `"\n"` chunk becomes an explicit line break. Only when the
+    /// owner shows a smart link (`composesSmartLinks`) are chunks looked
+    /// into: one holding a displayed link becomes a `smartLinkText` token
+    /// with its spoken text.
+    static func tokens(for segments: [InlineSegment], composesSmartLinks: Bool = false) -> [InlineToken] {
         var tokens: [InlineToken] = []
         tokens.reserveCapacity(segments.count)
         for segment in segments {
@@ -131,6 +193,9 @@ struct SegmentedTextView: View {
             case .text(let text):
                 if isLineBreak(text) {
                     tokens.append(InlineToken(id: tokens.count, kind: .lineBreak))
+                } else if composesSmartLinks, text.runs[SmartLinkShownAttribute.self].contains(where: { $0.0 != nil }) {
+                    let spoken = SmartLinkDisplay.accessibilityText(of: text)
+                    tokens.append(InlineToken(id: tokens.count, kind: .smartLinkText(text, spoken: spoken)))
                 } else {
                     tokens.append(InlineToken(id: tokens.count, kind: .text(text)))
                 }
@@ -147,10 +212,73 @@ struct SegmentedTextView: View {
     }
 }
 
+/// Text-leaf body evaluations since launch, process-wide (diagnostics: the
+/// demo's About sheet and the smart-link UI test's proof that a resolution
+/// re-evaluates no other leaf). Plain integers bumped at the top of each
+/// leaf's `body`: nothing observable, so counting adds no dependency and
+/// invalidates nothing.
+@MainActor
+enum TextLeafDiagnostics {
+    /// `SegmentedTextView.body`: every text leaf SwiftUI's `Text` draws.
+    private(set) static var segmentedBodies = 0
+    /// `TextEngineLeaf.body`: every paragraph, heading, list leader and code
+    /// text, before the engine choice (under TextKit 2 the row's text input
+    /// is made here).
+    private(set) static var engineBodies = 0
+
+    @discardableResult
+    static func countSegmentedBody() -> Int {
+        segmentedBodies &+= 1
+        return segmentedBodies
+    }
+
+    @discardableResult
+    static func countEngineBody() -> Int {
+        engineBodies &+= 1
+        return engineBodies
+    }
+}
+
+/// Text-leaf body evaluations since launch (`ADFTextRenderer.textLeafStats`),
+/// process-wide: under SwiftUI a text leaf re-evaluates `SegmentedTextView`
+/// (its engine leaf too only when its inputs changed), under TextKit 2 a
+/// row's text input is made in its engine leaf.
+@_spi(ADFDiagnostics)
+public struct ADFTextLeafStats: Sendable, Hashable {
+    /// `SegmentedTextView` body evaluations (SwiftUI-drawn text leaves).
+    public var segmentedTextBodies: Int
+    /// Engine-leaf body evaluations (paragraphs, headings, list leaders and
+    /// code text, on either renderer).
+    public var engineLeafBodies: Int
+    /// Both counts.
+    public var total: Int { segmentedTextBodies + engineLeafBodies }
+
+    public init(segmentedTextBodies: Int = 0, engineLeafBodies: Int = 0) {
+        self.segmentedTextBodies = segmentedTextBodies
+        self.engineLeafBodies = engineLeafBodies
+    }
+}
+
+extension ADFTextRenderer {
+    /// Text-leaf body evaluations since launch (see `ADFTextLeafStats`).
+    @_spi(ADFDiagnostics)
+    @MainActor
+    public static var textLeafStats: ADFTextLeafStats {
+        ADFTextLeafStats(
+            segmentedTextBodies: TextLeafDiagnostics.segmentedBodies,
+            engineLeafBodies: TextLeafDiagnostics.engineBodies
+        )
+    }
+}
+
 /// One unit placed by `WrappingInlineLayout`.
 struct InlineToken: Identifiable, Hashable {
     enum Kind: Hashable {
         case text(AttributedString)
+        /// A word chunk holding a displayed smart link, with the text
+        /// VoiceOver speaks for it: the link's whole spoken text on its
+        /// first chunk, nothing on a continuation chunk (hidden then).
+        case smartLinkText(AttributedString, spoken: String)
         case atom(InlineAtom, id: String)
         case lineBreak
     }
@@ -179,6 +307,11 @@ struct InlineTokenView: View {
         switch token.kind {
         case .text(let text):
             Text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale))
+        case .smartLinkText(let text, let spoken):
+            let scaled = SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale)
+            SmartLinkDisplay.composedText(scaled)
+                .modifier(SmartLinkSpeech(text: scaled, showsStage: true))
+                .accessibilityHidden(spoken.allSatisfy(\.isWhitespace))
         case .atom(let atom, _):
             AtomView(atom: atom)
                 .background {

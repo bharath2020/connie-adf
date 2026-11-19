@@ -110,6 +110,18 @@ extension AttributeScopes {
             package typealias Value = ADFCodeShape
             package static let name = "adf.codeShape"
         }
+
+        /// The smart link a run shows (see `SmartLinkRun`): set by the
+        /// composer on a qualifying bare link's text (its whitespace-trimmed
+        /// core) and on a qualifying inline card's URL text. Package-internal:
+        /// the renderer substitutes the displayed stage over exactly these
+        /// characters; a host neither reads nor writes it.
+        package let adfSmartLink: SmartLinkAttribute
+
+        package enum SmartLinkAttribute: AttributedStringKey, Sendable {
+            package typealias Value = SmartLinkRun
+            package static let name = "adf.smartLink"
+        }
     }
 
     public var adf: ADFAttributes.Type { ADFAttributes.self }

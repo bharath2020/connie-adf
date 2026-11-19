@@ -324,7 +324,7 @@ public protocol ADFMediaProvider: Sendable {
 
 - **Expand**: chevron header; on first expansion, body nodes are prepared off-main (spinner for the ~1 frame it takes), then cached. Animation via `animation(.snappy, value: isExpanded)`.
 - **LayoutSection**: `ViewThatFits`-style adaptive — columns side-by-side at regular width, stacked at compact/accessibility sizes.
-- **Cards** (`inlineCard`/`blockCard`/`embedCard`): a `SmartLinkResolver` protocol (host-injected, same pattern as media) resolves URL → title/icon/preview asynchronously; unresolved cards render the URL immediately, upgrading in place when metadata arrives.
+- **Cards** (`inlineCard`/`blockCard`/`embedCard`): a `SmartLinkResolver` protocol (host-injected, same pattern as media) resolves URL → title/icon/preview asynchronously; unresolved cards render the URL immediately, upgrading in place when metadata arrives. As built for inline cards and bare `*.atlassian.net` links, see `Architecture-Decisions.md` §22 (`ADFSmartLinkResolver`).
 
 ---
 

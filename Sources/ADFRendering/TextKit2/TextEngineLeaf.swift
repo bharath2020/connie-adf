@@ -58,6 +58,7 @@ struct TextEngineLeaf<Fallback: View>: View {
     }
 
     var body: some View {
+        let _ = TextLeafDiagnostics.countEngineBody()
         #if canImport(UIKit)
         if renderer == .textKit2, allowsTextKit2, let text = describableText {
             if ownerKind == .code {

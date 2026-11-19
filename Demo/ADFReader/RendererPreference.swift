@@ -1,4 +1,5 @@
 import Foundation
+import ADFRendering
 
 /// Automation-only record of `-switchDuringLoad`: how many top-level blocks
 /// had streamed in when the renderer flipped to TextKit 2, and how many the
@@ -51,6 +52,71 @@ enum RendererPreference {
     }
 
     /// A toolbar pick: the choice is the user's and persists.
+    static func userChose(_ defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: automationKey)
+    }
+}
+
+/// The persisted smart-link resolution mode (`ADFSmartLinkResolution`),
+/// shared by `ReaderView`'s `@AppStorage` menu choice and the
+/// `-smartLinkResolution <name>` launch argument. A missing or unknown value
+/// means `.whileScrolling`, the library's default.
+///
+/// It follows `RendererPreference` exactly: the flag writes its value to the
+/// persistent domain with an automation mark, the next launch without the
+/// flag removes a value automation wrote, a menu pick clears the mark and
+/// persists, and `-rendererReset` removes the value. The flag is not
+/// spelled like the key, so `NSArgumentDomain` never shadows it.
+enum SmartLinkResolutionPreference {
+    static let key = "adf.smartlinks.resolution"
+    static let automationKey = "adf.smartlinks.resolution.setByAutomation"
+
+    /// Runs from `ADFReaderApp.init`, before any view reads the key.
+    static func apply(_ options: LaunchOptions, to defaults: UserDefaults = .standard) {
+        let requested = options.smartLinkResolution.flatMap(ADFSmartLinkResolution.init(rawValue:))
+        if options.rendererReset || (requested == nil && defaults.bool(forKey: automationKey)) {
+            defaults.removeObject(forKey: key)
+            defaults.removeObject(forKey: automationKey)
+        }
+        if let requested {
+            defaults.set(requested.rawValue, forKey: key)
+            defaults.set(true, forKey: automationKey)
+        }
+    }
+
+    /// A menu pick: the choice is the user's and persists.
+    static func userChose(_ defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: automationKey)
+    }
+}
+
+/// The persisted "Identify Renderer" switch
+/// (`ADFDocumentView(identifiesRenderer:)`), shared by `ReaderView`'s
+/// `@AppStorage` menu toggle and the `-identifyRenderer` launch argument.
+/// A missing key means off.
+///
+/// It follows `RendererPreference` exactly: the flag writes `true` with an
+/// automation mark, the next launch without the flag removes a value
+/// automation wrote, a menu toggle clears the mark and persists, and
+/// `-rendererReset` removes the value. The flag is not spelled like the
+/// key, so `NSArgumentDomain` never shadows it.
+enum RendererIdentityPreference {
+    static let key = "adf.rendererIdentity.enabled"
+    static let automationKey = "adf.rendererIdentity.setByAutomation"
+
+    /// Runs from `ADFReaderApp.init`, before any view reads the key.
+    static func apply(_ options: LaunchOptions, to defaults: UserDefaults = .standard) {
+        if options.rendererReset || (!options.identifyRenderer && defaults.bool(forKey: automationKey)) {
+            defaults.removeObject(forKey: key)
+            defaults.removeObject(forKey: automationKey)
+        }
+        if options.identifyRenderer {
+            defaults.set(true, forKey: key)
+            defaults.set(true, forKey: automationKey)
+        }
+    }
+
+    /// A menu toggle: the choice is the user's and persists.
     static func userChose(_ defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: automationKey)
     }

@@ -16,6 +16,9 @@ struct RichTextBlockView: View {
     let segments: [InlineSegment]
     let style: TextBlockStyle
     var ownerID: String? = nil
+    /// The block's smart links (`RenderBlock.smartLinkKeys`): both arms draw
+    /// their displayed stage (`SmartLinkTextLeaf`, `SegmentedTextView`).
+    var smartLinkKeys: [SmartLinkKey] = []
 
     @Environment(\.adfTheme) private var theme
 
@@ -28,11 +31,13 @@ struct RichTextBlockView: View {
     }
 
     private var content: some View {
-        TextEngineLeaf(segments: segments, style: style, ownerID: ownerID) { swiftUIText }
+        SmartLinkTextLeaf(segments: segments, smartLinkKeys: smartLinkKeys, style: style, ownerID: ownerID) {
+            swiftUIText
+        }
     }
 
     private var swiftUIText: some View {
-        SegmentedTextView(segments: segments, ownerID: ownerID)
+        SegmentedTextView(segments: segments, ownerID: ownerID, smartLinkKeys: smartLinkKeys)
             .multilineTextAlignment(textAlignment)
             .textSelection(.enabled)
     }
