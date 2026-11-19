@@ -211,10 +211,32 @@ struct TextKit2FixtureSweepTests {
     /// print as `TK2_CONTAINER_SWEEP_LIST_FINE` and are not asserted.
     nonisolated static var fineGridLists: Bool { ProcessInfo.processInfo.environment["ADF_SWEEP_FINE_LISTS"] == "1" }
 
+    /// The TextKit 2 rows a hosted list leaf drew through, as the sweep
+    /// asserts them (Astra delta2 R6): each row's owner kind, and how many
+    /// times a row kept a reported layout
+    /// (`TextKit2RowView.keptReportedLayoutCount`: the row fix, which a
+    /// `.list` row never applies).
+    struct ListRowProbe: Equatable {
+        var ownerKinds: [TextKit2OwnerKind] = []
+        var kept = 0
+    }
+
+    @MainActor
+    static func rowViews(in view: UIView) -> [TextKit2RowView] {
+        (view as? TextKit2RowView).map { [$0] } ?? view.subviews.flatMap { rowViews(in: $0) }
+    }
+
     /// The first and last text baselines and height of `view` laid out at
     /// `width` as a baseline-aligned parent reads them (`TK2Parity.guides`).
     @MainActor
     static func guides(_ view: some View, width: CGFloat) -> (first: CGFloat, last: CGFloat, height: CGFloat) {
+        let (first, last, height, _) = probedGuides(view, width: width)
+        return (first, last, height)
+    }
+
+    /// `guides` and the TextKit 2 rows the view drew through.
+    @MainActor
+    static func probedGuides(_ view: some View, width: CGFloat) -> (first: CGFloat, last: CGFloat, height: CGFloat, rows: ListRowProbe) {
         let box = TK2Parity.GuideBox()
         let root = VStack(alignment: .leading, spacing: 0) {
             view.alignmentGuide(.leading) { dimensions in
@@ -239,17 +261,25 @@ struct TextKit2FixtureSweepTests {
         window.isHidden = false
         window.layoutIfNeeded()
         host.view.layoutIfNeeded()
+        var rows = ListRowProbe()
+        for row in rowViews(in: host.view) {
+            rows.ownerKinds.append(row.ownerKind)
+            rows.kept += row.keptReportedLayoutCount
+        }
         window.isHidden = true
         window.rootViewController = nil
-        return (box.first, box.last, box.height)
+        return (box.first, box.last, box.height, rows)
     }
 
-    /// The list leader as `ListRowView` hosts it, on one arm (`leaderHeight`).
+    /// The list leader as `ListRowView` hosts it under its list
+    /// (`ListBlockView` marks every row's text `.list`), on one arm
+    /// (`leaderHeight`).
     @MainActor
     static func leader(_ segments: [InlineSegment], arm: ADFTextRenderer, size: DynamicTypeSize) -> some View {
         TextEngineLeaf(segments: segments, style: ListRowView.leaderStyle(theme: TK2Parity.theme), ownerID: nil) {
             SegmentedTextView(segments: segments).textSelection(.enabled)
         }
+        .environment(\.adfTextOwnerKind, .list)
         .environment(\.adfTextRenderer, arm)
         .environment(\.adfTheme, TK2Parity.theme)
         .dynamicTypeSize(size)
@@ -257,17 +287,29 @@ struct TextKit2FixtureSweepTests {
 
     /// One leaf's guides on both arms at `width` and `size`: a paragraph or
     /// heading as `RichTextBlockView`, a leader (`style` `nil`) as the list
-    /// row hosts it.
+    /// row hosts it. List text (`ownerKind` `.list`: a leader, or a list
+    /// item's trailing paragraph or heading) is hosted under the list's
+    /// owner kind, as `ListBlockView` hosts it (Astra delta2 R6: as `.root`
+    /// the row fix could keep a layout that a production list row lays out
+    /// anew), and `rows` is the TextKit 2 arm's rows; container prose
+    /// stays `.root` and reports no rows.
     @MainActor
     static func leafGuides(
-        _ segments: [InlineSegment], style: TextBlockStyle?, name: String, size: DynamicTypeSize, width: CGFloat
-    ) -> (swiftUI: (first: CGFloat, last: CGFloat, height: CGFloat), textKit2: (first: CGFloat, last: CGFloat, height: CGFloat)) {
+        _ segments: [InlineSegment], style: TextBlockStyle?, ownerKind: TextKit2OwnerKind = .root, name: String, size: DynamicTypeSize,
+        width: CGFloat
+    ) -> (swiftUI: (first: CGFloat, last: CGFloat, height: CGFloat), textKit2: (first: CGFloat, last: CGFloat, height: CGFloat), rows: ListRowProbe?) {
         if let style {
             let fixture = TK2Parity.Fixture(name: name, segments: segments, style: style)
             let env = TK2Parity.Environment(size: size)
-            return (TK2Parity.guides(fixture, arm: .swiftUI, env: env, width: width), TK2Parity.guides(fixture, arm: .textKit2, env: env, width: width))
+            guard ownerKind == .list else {
+                return (TK2Parity.guides(fixture, arm: .swiftUI, env: env, width: width), TK2Parity.guides(fixture, arm: .textKit2, env: env, width: width), nil)
+            }
+            let a = guides(TK2Parity.hosted(fixture, arm: .swiftUI, env: env).environment(\.adfTextOwnerKind, .list), width: width)
+            let b = probedGuides(TK2Parity.hosted(fixture, arm: .textKit2, env: env).environment(\.adfTextOwnerKind, .list), width: width)
+            return (a, (b.first, b.last, b.height), b.rows)
         }
-        return (guides(leader(segments, arm: .swiftUI, size: size), width: width), guides(leader(segments, arm: .textKit2, size: size), width: width))
+        let b = probedGuides(leader(segments, arm: .textKit2, size: size), width: width)
+        return (guides(leader(segments, arm: .swiftUI, size: size), width: width), (b.first, b.last, b.height), b.rows)
     }
 
     /// One container a leaf sits in, outermost first: what it takes from
@@ -342,7 +384,12 @@ struct TextKit2FixtureSweepTests {
     /// container text is gated: every leaf must fall back as
     /// `osGatedContainer` (list text as `osGatedList`), which the sweep
     /// asserts instead of measuring.
-    @Test("every eligible container leaf of the demo documents measures and sits as Text does at its effective child width (height, first and last baseline)")
+    ///
+    /// List text is measured as list text (Astra delta2 R6): its row's
+    /// owner kind is `.list`, as under `ListBlockView`, so the row fix
+    /// never applies to it. Each list measurement asserts that the TextKit
+    /// 2 arm drew one row of that kind and that it kept no reported layout.
+    @Test("every eligible container leaf of the demo documents measures and sits as Text does at its effective child width (height, first and last baseline); list text is measured as .list rows, which keep no reported layout")
     func everyEligibleContainerLeaf() async throws {
         struct Key: Hashable {
             let segments: [InlineSegment]
@@ -361,7 +408,8 @@ struct TextKit2FixtureSweepTests {
         var ruleMisses = 0
         let onePixel = 1 / TK2Parity.nativeScale
         var listFine = (checked: 0, misses: 0, d3: 0)
-        func measure(_ entry: (segments: [InlineSegment], style: TextBlockStyle?, chain: [Inset]), owner: String, document: String, width: CGFloat, size: DynamicTypeSize, listFineGrid: Bool = false) {
+        var listRows = (measured: 0, wrongKind: [String](), kept: [String]())
+        func measure(_ entry: (segments: [InlineSegment], style: TextBlockStyle?, chain: [Inset]), owner: String, document: String, width: CGFloat, size: DynamicTypeSize, isList: Bool = false, listFineGrid: Bool = false) {
             guard width >= TextKit2Scope.minimumTextWidth else { return }
             guard measured.insert(Key(segments: entry.segments, style: entry.style, width: width, size: size)).inserted else { return }
             widthsSeen.insert(width)
@@ -370,8 +418,20 @@ struct TextKit2FixtureSweepTests {
             // loop made one autorelease pool drain (each host removing its
             // notification observers) and then one Core Animation commit
             // run past 10 minutes each.
-            let g = autoreleasepool { Self.leafGuides(entry.segments, style: entry.style, name: owner, size: size, width: width) }
+            let g = autoreleasepool {
+                Self.leafGuides(entry.segments, style: entry.style, ownerKind: isList ? .list : .root, name: owner, size: size, width: width)
+            }
             CATransaction.flush()
+            if isList {
+                // The probe measured a list row, as production hosts it:
+                // one row, `.list`, the row fix never applied.
+                let place = "\(document) \(owner) \(size) W=\(String(format: "%.3f", width))"
+                listRows.measured += 1
+                if g.rows?.ownerKinds != [.list] { listRows.wrongKind.append("\(place): \(g.rows.map { "\($0.ownerKinds)" } ?? "no probe")") }
+                if g.rows?.kept != 0 { listRows.kept.append("\(place): kept \(g.rows?.kept ?? -1)") }
+            } else {
+                #expect(g.rows == nil, "container prose is measured as .root, through TK2Parity.guides")
+            }
             let dHeight = abs(g.swiftUI.height - g.textKit2.height)
             let dFirst = abs(g.swiftUI.first - g.textKit2.first)
             var dLast = abs(g.swiftUI.last - g.textKit2.last)
@@ -431,13 +491,13 @@ struct TextKit2FixtureSweepTests {
                     let env = TK2Parity.Environment(size: size)
                     let inset = entry.chain.reduce(0) { $0 + $1.points(env) }
                     for documentWidth in Self.containerDocumentWidths {
-                        measure(entry, owner: leaf.ownerID, document: document, width: documentWidth - 4 * TK2Parity.theme.spacing - inset, size: size)
+                        measure(entry, owner: leaf.ownerID, document: document, width: documentWidth - 4 * TK2Parity.theme.spacing - inset, size: size, isList: isList)
                     }
                 }
                 if isList {
                     guard Self.fineGridLists else { continue }
                     for size in Self.d3FineSizes where Self.containerSizes.contains(size) && TextKit2Scope.nestedListSizeKeepsRenderer(size) {
-                        for width in Self.d3FineWidths { measure(entry, owner: leaf.ownerID, document: document, width: width, size: size, listFineGrid: true) }
+                        for width in Self.d3FineWidths { measure(entry, owner: leaf.ownerID, document: document, width: width, size: size, isList: true, listFineGrid: true) }
                     }
                     continue
                 }
@@ -456,6 +516,10 @@ struct TextKit2FixtureSweepTests {
         if Self.fineGridLists {
             print("TK2 container sweep list fine grid: \(listFine.checked) measurements, \(listFine.misses) misses, \(listFine.d3) with the d3 signature")
         }
+        print("TK2 container sweep list rows: \(listRows.measured) list measurements as .list rows, \(listRows.wrongKind.count) of another kind or count, \(listRows.kept.count) with a kept layout")
+        #expect(listRows.wrongKind.isEmpty, "\(listRows.wrongKind.count) list measurements did not draw one .list row: \(listRows.wrongKind.prefix(6))")
+        #expect(listRows.kept.isEmpty, "\(listRows.kept.count) list rows kept a reported layout: \(listRows.kept.prefix(6))")
+        if TextKit2Eligibility.containerTextMatchesText, TextKit2Eligibility.listsMatchText { #expect(listRows.measured > 0, "no list text measured") }
         print("TK2 container sweep: \(checked) measurements at \(widthsSeen.count) child widths, \(failures.count) misses, \(ruleMisses) under the size rule, residual1 \(residual1), worst |Δ| = \(worst.delta) \(worst.description); elapsed \(clock.now - start)")
         #expect(failures.isEmpty, "\(failures.count) container leaves miss Text's height or baselines: \(failures.prefix(6))")
     }

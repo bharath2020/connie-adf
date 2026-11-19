@@ -563,16 +563,19 @@ enum TK2ContainerProbe {
         /// - for each owner with differing pixels, the same owner hosted
         ///   alone differs too, in the same pixel rows of its row (one row
         ///   either way, for a fractional placement), by exactly as many
-        ///   pixels (`residualCountSlack`), and its overhang pixels
-        ///   differing alone at the same places relative to its row (one
-        ///   pixel either way);
+        ///   pixels (`residualCountSlack`), and every one of its differing
+        ///   pixels, overhang included, differing alone at the same place
+        ///   relative to its row (one pixel either way, horizontally too:
+        ///   review N4, Astra delta2 R3), so the same count in the same
+        ///   rows at other x positions is not the leaf's residual;
         /// - no owner differs by more than `residualOwnerCap` pixels: a
         ///   residual is a few antialiased glyph edges, so a defect that
         ///   its leaf reproduces alone at the same width (a re-wrapped
         ///   line) is still rejected (delta review R2).
         /// A second defect beside a residual (another owner, other rows of
         /// the same owner, more pixels in them, past the row's edge, or
-        /// chrome) fails (`TextKit2ContainerResidualTests`).
+        /// chrome) fails, and so does the residual displaced along its
+        /// rows (`TextKit2ContainerResidualTests`).
         var residualMismatch: String? {
             guard let leaf else { return "no leaf control" }
             if let chrome = chromeFailures.first {
@@ -608,6 +611,10 @@ enum TK2ContainerProbe {
                 }
                 if abs(here.count - alone.count) > TK2ContainerProbe.residualCountSlack {
                     return "\(owner): \(here.count) px differ in the container, \(alone.count) alone"
+                }
+                let displaced = (residual.offsets[owner] ?? []).filter { !leaf.residual.differs(owner, at: $0) }
+                if let first = displaced.min(by: { ($0.y, $0.x) < ($1.y, $1.x) }) {
+                    return "\(owner): \(displaced.count) px differ at other places of its row in the container than alone, first at \(first.x),\(first.y) of the row"
                 }
             }
             return nil

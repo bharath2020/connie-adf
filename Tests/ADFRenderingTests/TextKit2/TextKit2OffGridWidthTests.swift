@@ -223,20 +223,15 @@ struct TextKit2OffGridWidthTests {
     /// width, 6 where the row kept a reported layout; with captions left
     /// out of the row fix the 80 results are the same, so the fix neither
     /// helps nor harms a caption here and its scope stays the owner kind.
-    /// One case differs on both builds, in a guide only
-    /// (`captionLastBaselineResidual`).
-    /// Cases (`<size> <row width>`, by display scale) where the panel's
-    /// last baseline differs between the arms at an equal height and
-    /// identical pixels: at AX1 in a 320 pt document on 3x, SwiftUI's arm
-    /// reports 515.625 (off the pixel grid) and the row 515.167, with or
-    /// without the row fix on captions. Recorded as a known issue where
-    /// the caption draws on TextKit 2 (from iOS 26), so a change either
-    /// way fails; every other case is hard. Not reached while the
-    /// container size rule's cut-off is xxxLarge (lead call C55: the test
-    /// runs the sizes the rule keeps, and AX1 is past it); the pin applies
-    /// again when the cut-off moves past AX1.
-    nonisolated static let captionLastBaselineResidual: [CGFloat: Set<String>] = [3: ["accessibility1 288.0"]]
-
+    /// One case differed on both builds, in a guide only, while containers
+    /// kept TextKit 2 up to AX3: at AX1 in a 320 pt document on 3x the
+    /// panel's last baseline was 515.625 on SwiftUI's arm (off the pixel
+    /// grid) and 515.167 on the row's, at an equal height and identical
+    /// pixels. Its known-issue pin is removed (review N1): the test runs
+    /// the sizes the container size rule keeps, and with the cut-off at
+    /// xxxLarge (lead call C55) AX1 is not one, so the pin could never
+    /// record. Every case is hard; if the cut-off moves past AX1 the case
+    /// fails here and is decided then.
     @Test("a caption in a panel at an off-grid child width sits and draws as SwiftUI's does")
     func captionInPanelOffGridWidth() async throws {
         typealias C = TK2Caption
@@ -287,11 +282,7 @@ struct TextKit2OffGridWidthTests {
                 if abs(ga.height - gb.height) > C.tolerance { caseFailures.append("height swiftUI=\(ga.height) textKit2=\(gb.height)") }
                 if abs(ga.first - gb.first) > C.tolerance { caseFailures.append("first baseline swiftUI=\(ga.first) textKit2=\(gb.first)") }
                 let lastDiffers = abs(ga.last - gb.last) > C.tolerance && abs(ga.last - gb.last - onePixel) > C.tolerance
-                if draws, Self.captionLastBaselineResidual[scale, default: []].contains("\(size) \(width)") {
-                    withKnownIssue("a caption in a panel: the last baseline guide differs at an equal height and identical pixels (\(label): swiftUI=\(ga.last) textKit2=\(gb.last))") {
-                        #expect(!lastDiffers)
-                    }
-                } else if lastDiffers {
+                if lastDiffers {
                     caseFailures.append("last baseline swiftUI=\(ga.last) textKit2=\(gb.last)")
                 }
                 let height = (max(ga.height, gb.height) + 8).rounded(.up)

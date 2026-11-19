@@ -823,6 +823,66 @@ struct TextKit2CaptionParityTests {
             }
         }
     }
+
+    /// Review N6: a caption in a container is a container child, so the
+    /// container size rule keeps it on SwiftUI from xxxLarge (lead call
+    /// C55), like the container's prose. The visual gate scores that
+    /// capture (captions-parity's CAP-12 in a panel and CAP-13 in a
+    /// stacked column, at xxxLarge) on pixels alone, so the engine is
+    /// asserted here: under the production allow list, one caption row at
+    /// xxLarge (the last size the rule keeps), none at xxxLarge and AX3,
+    /// while the same media as a top-level row keeps its caption row at
+    /// every one of them.
+    @Test("a caption in a panel or a stacked column has no TextKit 2 row from xxxLarge (the container size rule); at xxLarge it has one, and a top-level caption keeps its row")
+    func captionInContainerStaysSwiftUIFromXXXLarge() async throws {
+        let media = C.mediaNode(C.t("A caption inside a container"))
+        let blocks = try await C.prepared([
+            "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(media)]}",
+            "{\"type\":\"layoutSection\",\"content\":[{\"type\":\"layoutColumn\",\"attrs\":{\"width\":50},\"content\":[\(media)]},"
+                + "{\"type\":\"layoutColumn\",\"attrs\":{\"width\":50},\"content\":[{\"type\":\"paragraph\",\"content\":[\(C.t("Beside it."))]}]}]}",
+            media,
+        ])
+        #expect(blocks.count == 3)
+        guard blocks.count == 3, case .panel(_, let panelChildren) = blocks[0].kind, case .layoutColumns(let columns) = blocks[1].kind,
+              let inPanel = panelChildren.first, let inColumn = columns.first?.blocks.first else {
+            Issue.record("not a panel, a layout section and a media block")
+            return
+        }
+        let allowed = TextKit2Scope.containerChildKinds
+        #expect(allowed.isSuperset(of: [.panel, .layoutColumns, .media]), "the production list reaches a caption in a panel and in a column")
+        let cases: [(name: String, block: RenderBlock, media: RenderBlock, container: Bool)] = [
+            ("panel (CAP-12)", blocks[0], inPanel, true), ("stacked column (CAP-13)", blocks[1], inColumn, true), ("top level", blocks[2], blocks[2], false),
+        ]
+        var drawnInContainers = 0
+        for (name, block, mediaBlock, container) in cases {
+            let caption = try C.media(mediaBlock, name: name)
+            let draws = TextKit2Scope.captionsUseTextKit2 && C.drawsRow(caption.caption)
+            for size in [DynamicTypeSize.xxLarge, .xxxLarge, .accessibility3] {
+                let host = C.Host(width: C.width)
+                defer { host.close() }
+                host.show(
+                    C.environment(C.documentRow(block, allowed: allowed), arm: .textKit2, env: TK2Parity.Environment(size: size))
+                        .environment(\.horizontalSizeClass, .compact)
+                )
+                try await host.settle()
+                let captionRows = host.rows.filter { $0.containerContext == .caption }
+                let kept = !container || TextKit2Scope.containerSizeKeepsRenderer(size)
+                // The rule's sizes, written out: the engine below must not
+                // follow the rule if the rule moves.
+                #expect(TextKit2Scope.containerSizeKeepsRenderer(size) == (size == .xxLarge), "\(size)")
+                #expect(captionRows.count == (draws && kept ? 1 : 0), "\(name) \(size): caption rows \(captionRows.map { $0.ownerID ?? "?" })")
+                if let row = captionRows.first { #expect(row.ownerID == caption.owner, "\(name) \(size)") }
+                if container, !kept {
+                    #expect(host.rows.isEmpty, "\(name) \(size): TextKit 2 rows below a container past the size rule: \(host.rows.map { $0.ownerID ?? "?" })")
+                }
+                if container, size == .xxLarge { drawnInContainers += captionRows.count }
+                print("TK2_CAPTION_IN_CONTAINER \(name) \(size): captionRows=\(captionRows.count) rows=\(host.rows.count) draws=\(draws)")
+            }
+        }
+        // Not vacuous from iOS 26: both containers drew their caption on
+        // TextKit 2 at xxLarge.
+        if TextKit2Scope.captionsUseTextKit2, C.captionsDrawOnThisOS { #expect(drawnInContainers == 2) }
+    }
 }
 
 extension TextKit2ContainerScopeTests {

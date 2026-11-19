@@ -26,7 +26,11 @@ import ADFPreparation
 // only, must be rejected: in the quote's bar (chrome), outside every row,
 // in the other paragraph's row, in other rows of the same paragraph, more
 // pixels in the same rows, or left of the row; and so must a real one, the
-// TextKit 2 arm hosted with another inherited foreground.
+// TextKit 2 arm hosted with another inherited foreground. The residual
+// itself displaced along its rows in the container (the same count in the
+// same rows at other x positions; review N4, Astra delta2 R3) must be
+// rejected too, while one pixel either way (a fractional placement) is
+// still the leaf's.
 
 @Suite("TextKit 2 container residual attribution (leafDrawing negative controls)", .serialized)
 @MainActor
@@ -110,7 +114,7 @@ struct TextKit2ContainerResidualTests {
         return (x0..<(x0 + width), top..<(top + 3))
     }
 
-    @Test("leafDrawing accepts a residual its owner shows alone in the same rows, and rejects a second defect beside it: chrome, outside every row, another owner, other rows of the owner, more pixels, a wrong foreground")
+    @Test("leafDrawing accepts a residual its owner shows alone in the same rows, and rejects a second defect beside it: chrome, outside every row, another owner, other rows of the owner, more pixels, a wrong foreground; and the residual displaced along its rows")
     func secondDefectBesideAResidualIsRejected() async throws {
         guard TextKit2Eligibility.containerTextMatchesText else {
             // Before iOS 26 no container text draws on TextKit 2: there is
@@ -196,6 +200,30 @@ struct TextKit2ContainerResidualTests {
             #expect(!verdict.pass, "\(negative.name): the second defect fails the pixel rule")
             #expect(verdict.cause != "leafDrawing", "\(negative.name): accepted as the leaf's residual")
             #expect(mismatch?.contains(negative.expect) == true, "\(negative.name): \(mismatch ?? "-"), expected \(negative.expect)")
+        }
+
+        // Review N4 (Astra delta2 R3): the residual alone as before, and in
+        // the quote the same block of pixels in the same pixel rows moved
+        // along them: the count and the rows match, the places do not. One
+        // pixel is a fractional placement and stays the leaf's residual;
+        // two pixels and more are rejected.
+        for (name, shift, accepted) in [("displacedOnePixel", 1, true), ("displacedOnePixelLeft", -1, true), ("displacedTwoPixels", 2, false),
+                                        ("displacedTwoPixelsLeft", -2, false), ("displaced", 40, false)] {
+            let x = (inQuote.x.lowerBound + shift)..<(inQuote.x.upperBound + shift)
+            #expect(x.lowerBound > Int(firstFrame.minX * scale) && x.upperBound < Int(firstFrame.maxX * scale), "\(name): the block stays in the row")
+            let verdict = try Self.verdict(c, container: Self.stamp(containerB, x: x, y: inQuote.y), alone: residualAlone)
+            let mismatch = verdict.residualMismatch
+            print("CONTAINER_RESIDUAL_DISPLACED case=\(name) shift=\(shift) cause=\(verdict.cause) mismatch={\(mismatch ?? "-")} residual=\(verdict.residual?.summary ?? "-") leafResidual=\(verdict.leaf?.residual.summary ?? "-")")
+            // The same count in the same rows: only the places differ.
+            #expect(verdict.residual?.owners[first]?.count == 30 && verdict.leaf?.residual.owners[first]?.count == 30, "\(name): 30 px here and alone")
+            #expect(verdict.residual?.owners[first]?.rows == verdict.leaf?.residual.owners[first]?.rows, "\(name): the same pixel rows of the row")
+            #expect(!verdict.pass && verdict.geometryPass, "\(name): the painted block fails the pixel rule")
+            if accepted {
+                #expect(mismatch == nil && verdict.cause == "leafDrawing", "\(name): \(verdict.cause) \(mismatch ?? "-")")
+            } else {
+                #expect(verdict.cause != "leafDrawing", "\(name): accepted as the leaf's residual")
+                #expect(mismatch?.contains("at other places of its row") == true, "\(name): \(mismatch ?? "-")")
+            }
         }
 
         // Delta review R2: a residual of thousands of pixels is rejected
