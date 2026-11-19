@@ -711,6 +711,87 @@ expect_eq "D-R5: a --k3-crossing dir without results.jsonl is a usage error" "$S
 lifecycle lg-k3-crossing-missing --only testK3 --k3-crossing "$WORK/k3-nope"
 expect_eq "D-R5: a --k3-crossing dir that does not exist is a usage error" "$STATUS" "2"
 
+# N2: under the size cut-off the iPad crossing flips no TextKit 2 row; a
+# Pro Max run's rotation crossing (stacked TextKit 2 -> side by side
+# SwiftUI -> stacked TextKit 2) is the second --k3-crossing. These run the
+# report command each dry run prints on a phone K3 record, so the gate's
+# own wiring is shown to pass with both runs and to fail without the Pro
+# Max record or with one whose column text did not flip.
+k3_record() {   # <dir> <arm json>...: <dir>/results.jsonl holds one passing K3 record with these arms
+    local dir="$1"
+    shift
+    mkdir -p "$dir"
+    local IFS=,
+    printf '{"check": "K3 width and type-size changes in containers (containers-parity 0.46)", "pass": true, "arms": [%s]}\n' \
+        "$*" >"$dir/results.jsonl"
+}
+k3_arm() {   # <arm> <regular_width> <crossed_boundary> <rotation_crossable> <crossed_rotation> <leaves> [<in-window> <at top> <off-window at top>]
+    printf '{"arm": "%s", "regular_width": %s, "crossed_boundary": %s, "rotation_crossable": %s, "crossed_rotation": %s, "rotation_textkit2_leaves": %s, "in_window_rows_rotation": %s, "release_at_top": %s, "release_off_window": %s}' \
+        "$1" "$2" "$3" "$4" "$5" "$6" "${7:-null}" "${8:-null}" "${9:-null}"
+}
+gate_report() {   # <name>: runs the report command dry run <name> printed; status in $STATUS
+    local line
+    line="$(sed -n 's/^report: *//p' "$WORK/$1.out")"
+    eval "set -- $line"
+    "$@" >"$WORK/$1.report.out" 2>&1
+    STATUS=$?
+}
+row_verdict() {   # <name> <row prefix>: PASS, FAIL or none, from dry run <name>'s lifecycle.md
+    local line
+    line="$(grep -F -- "| $2" "$WORK/$1/lifecycle.md" 2>/dev/null | head -n 1)"
+    case "$line" in
+        "") echo none ;;
+        *"| PASS |"*) echo PASS ;;
+        *) echo FAIL ;;
+    esac
+}
+k3_record "$WORK/n2-ipad" "$(k3_arm swiftui true true false false '[0, 0, 0]')" "$(k3_arm textkit2 true true false false '[0, 0, 0]')"
+k3_record "$WORK/n2-promax" "$(k3_arm swiftui false false true true '[0, 0, 0]')" \
+    "$(k3_arm textkit2 false false true true '[4, 0, 4]' '[40, 8, 40]' true 0)"
+k3_record "$WORK/n2-no-flip" "$(k3_arm swiftui false false true true '[0, 0, 0]')" \
+    "$(k3_arm textkit2 false false true true '[4, 4, 4]' '[40, 8, 40]' true 0)"
+# Call C60: the rows in a window come back exactly, and no off-window row is left at the document top.
+k3_record "$WORK/n2-in-window" "$(k3_arm swiftui false false true true '[0, 0, 0]')" \
+    "$(k3_arm textkit2 false false true true '[4, 0, 4]' '[40, 8, 47]' true 0)"
+k3_record "$WORK/n2-not-released" "$(k3_arm swiftui false false true true '[0, 0, 0]')" \
+    "$(k3_arm textkit2 false false true true '[4, 0, 4]' '[40, 8, 40]' true 5)"
+for name in lg-n2-both lg-n2-no-promax lg-n2-no-flip lg-n2-ipad-run lg-n2-in-window lg-n2-not-released; do
+    case "$name" in
+        lg-n2-ipad-run) k3_record "$WORK/$name" "$(k3_arm swiftui true true false false '[0, 0, 0]')" \
+            "$(k3_arm textkit2 true true false false '[0, 0, 0]')" ;;
+        *) k3_record "$WORK/$name" "$(k3_arm swiftui false false false false '[0, 0, 0]')" \
+            "$(k3_arm textkit2 false false false false '[4, 4, 4]')" ;;
+    esac
+done
+lifecycle lg-n2-both --only testK3 --k3-crossing "$WORK/n2-ipad" --k3-crossing "$WORK/n2-promax"
+expect_eq "N2: an iPad and a Pro Max --k3-crossing are accepted together" "$STATUS" "0"
+expect_has "... and the report reads both" "$WORK/lg-n2-both.out" \
+    "--crossing-results $WORK/n2-ipad/results.jsonl --crossing-results $WORK/n2-promax/results.jsonl"
+gate_report lg-n2-both
+expect_eq "N2: the gate's report passes a phone K3 beside the iPad and Pro Max runs" "$STATUS" "0"
+expect_eq "... its rotation row passes" "$(row_verdict lg-n2-both "K3 rotation")" "PASS"
+expect_eq "... and so does its column row" "$(row_verdict lg-n2-both "K3 column")" "PASS"
+lifecycle lg-n2-no-promax --only testK3 --k3-crossing "$WORK/n2-ipad"
+gate_report lg-n2-no-promax
+expect_eq "N2: without the Pro Max run the gate's report fails a phone K3" "$STATUS" "1"
+expect_eq "... on the rotation row (the record is missing)" "$(row_verdict lg-n2-no-promax "K3 rotation")" "FAIL"
+lifecycle lg-n2-no-flip --only testK3 --k3-crossing "$WORK/n2-ipad" --k3-crossing "$WORK/n2-no-flip"
+gate_report lg-n2-no-flip
+expect_eq "N2: a Pro Max run whose column text stayed TextKit 2 side by side fails the gate's report" "$STATUS" "1"
+expect_eq "... on the rotation row (no engine flip)" "$(row_verdict lg-n2-no-flip "K3 rotation")" "FAIL"
+lifecycle lg-n2-in-window --only testK3 --k3-crossing "$WORK/n2-ipad" --k3-crossing "$WORK/n2-in-window"
+gate_report lg-n2-in-window
+expect_eq "C60: a Pro Max run whose rows in a window did not come back fails the gate's report" "$STATUS" "1"
+expect_eq "... on the rotation row" "$(row_verdict lg-n2-in-window "K3 rotation")" "FAIL"
+lifecycle lg-n2-not-released --only testK3 --k3-crossing "$WORK/n2-ipad" --k3-crossing "$WORK/n2-not-released"
+gate_report lg-n2-not-released
+expect_eq "C60: a Pro Max run that left off-window rows at the document top fails the gate's report" "$STATUS" "1"
+expect_eq "... on the rotation row" "$(row_verdict lg-n2-not-released "K3 rotation")" "FAIL"
+lifecycle lg-n2-ipad-run --only testK3
+gate_report lg-n2-ipad-run
+expect_eq "N2: an iPad run (regular in both orientations, its own crossing) still passes alone" "$STATUS" "0"
+expect_eq "... with no rotation row" "$(row_verdict lg-n2-ipad-run "K3 rotation")" "none"
+
 # ====================================================== UI test sources ==
 
 UITESTS="$SCRIPTS/../Demo/ADFReaderUITests"
@@ -751,6 +832,14 @@ for selector in switch lists code containers; do
     expect_has "… and fails on a wrong digest with the text the negative control looks for" "$file" "$DIGEST_TEXT"
     expect_has "… and prints the digest it observed" "$file" 'OBSERVED_BUILD_SHA256=\('
     expect_has "… and reads the expected digest from the runner environment" "$file" '"ADF_EXPECTED_BUILD_SHA256"'
+done
+
+# Every K3 field the report's crossing rows read (D-R5, N2) is one K3
+# records, so a renamed key fails here, not silently in a candidate run.
+for key in regular_width crossed_boundary rotation_crossable crossed_rotation rotation_textkit2_leaves \
+    in_window_rows_rotation release_at_top release_off_window; do
+    expect_has "K3 records $key" "$UITESTS/LifecycleUITests.swift" "\"$key\":"
+    expect_has "... and the agent's crossing rows read it" "$SCRIPTS/lifecycle_agent.py" "arm.get(\"$key\")"
 done
 
 # Every request kind a UI test sends is one the agent answers.

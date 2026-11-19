@@ -23,7 +23,8 @@
 #   --out           output dir (lifecycle.md, results.jsonl, agent.log,
 #                   xcodebuild.log, lifecycle.xcresult, channel/).
 #   --k3-crossing   an earlier run's --out on an iPad (a regular-width
-#                   destination), of the same build (the sha256 its
+#                   destination) or on a Pro Max (a phone whose landscape
+#                   is regular width), of the same build (the sha256 its
 #                   lifecycle.md records must equal this build's, else exit
 #                   2 before the device is touched). A run that runs K3
 #                   fails (report row "K3 column boundary crossed", review
@@ -32,7 +33,18 @@
 #                   true on both arms. K3 takes regular_width from the
 #                   device, not from the layout drawn; a phone stacks the
 #                   columns at every size, so its K3 records the boundary as
-#                   not crossable.
+#                   not crossable. Under the size cut-off that iPad crossing
+#                   flips no TextKit 2 row, so a run whose K3 did not run on
+#                   an iPad also fails (report row "K3 rotation flips the
+#                   column engines", review N2) unless its own K3 or one of
+#                   these runs' K3 passed with rotation_crossable and
+#                   crossed_rotation true on both arms and the column text
+#                   TextKit 2 -> SwiftUI -> TextKit 2 on the textkit2 arm
+#                   (SwiftUI throughout on the swiftui arm): a Pro Max
+#                   rotating stacked -> side by side -> stacked. K3 takes
+#                   rotation_crossable from the device too. Order: the iPad
+#                   K3 run; the Pro Max K3 run with --k3-crossing <iPad>;
+#                   the phone suite with both.
 #   --derived-data  isolated derived data (default <out>/DerivedData). A fresh
 #                   build refuses a dir that already holds an .xctestrun;
 #                   --skip-build reuses one (recorded in lifecycle.md).
@@ -100,7 +112,8 @@
 #                   Text Size 0 → 3 → 0 and the size rule's cut-off leg
 #                   0 → xxLarge → xxxLarge → accessibility1 → 0 at the
 #                   columns of containers-parity, per arm; the column
-#                   crossing needs a regular width: --k3-crossing; ~10 min),
+#                   crossing needs a regular width and the rotation
+#                   crossing a Pro Max: --k3-crossing; ~10 min),
 #                   testK4SwitchDuringLoadAndSearchInContainers (K4: a
 #                   switch during the streaming load, task state, a search
 #                   in a nested expand and in a caption; ~4 min),
@@ -271,7 +284,9 @@ for t in ${ONLY:-$ALL_TESTS}; do
     case " $TESTS " in *" $resolved "*) ;; *) TESTS="${TESTS:+$TESTS }$resolved" ;; esac
 done
 # The report's K3 crossing evidence (D-R5): never empty (bash 3.2, set -u).
-REPORT_EXTRA=(--meta "k3_crossing=${K3_CROSSING:-none}")
+# The dirs comma-joined (no spaces), so the dry run's printed report
+# command stays one word per argument with two runs (an iPad, a Pro Max).
+REPORT_EXTRA=(--meta "k3_crossing=$(printf '%s' "${K3_CROSSING:-none}" | tr ' ' ',')")
 for dir in $K3_CROSSING; do
     [[ -s "$dir/results.jsonl" ]] || die "--k3-crossing $dir holds no results.jsonl (give an earlier run's --out)"
     REPORT_EXTRA+=(--crossing-results "$dir/results.jsonl")
@@ -301,7 +316,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
     else echo "build:        ( cd $DEMO_DIR && $XCODEGEN generate ) && ${BUILD_CMD[*]}"; fi
     echo "agent:        python3 -I -u $AGENT_PY serve --udid $UDID --channel $CHANNEL --results $RESULTS --log $AGENT_LOG"
     echo "test:         TEST_RUNNER_ADF_LIFECYCLE_DIR=$CHANNEL xcodebuild test-without-building -xctestrun <exact> -destination 'platform=iOS Simulator,id=$UDID' ${ONLY_ARGS[*]} -resultBundlePath $RESULT_BUNDLE"
-    echo "k3 crossing:  ${K3_CROSSING:-none (only a K3 of this run that crosses can pass its crossing row)}"
+    echo "k3 crossing:  ${K3_CROSSING:-none (only a K3 of this run that crosses can pass its crossing rows)}"
     echo "report:       python3 -I $AGENT_PY report --results $RESULTS --out $OUT/lifecycle.md ${REPORT_EXTRA[*]}"
     echo "suite timeout: ${SUITE_TIMEOUT}s"
     if [[ -f "$UITEST_BINARY" ]]; then

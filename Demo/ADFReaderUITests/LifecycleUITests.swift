@@ -3192,7 +3192,24 @@ extension LifecycleUITests {
     /// there the leg proves the layout crossing and the engines, not a
     /// TextKit 2 flip; a phone (compact width in portrait) must stack them
     /// at size 0, records the boundary as not crossable, and gates the
-    /// flip. Live
+    /// flip. The rotation crosses the column boundary in place, below the
+    /// cut-off, only on a phone whose landscape is regular width (a Pro
+    /// Max; `ContainerDriver.rotationCrossesDestination`, from the
+    /// destination, review N2): there it runs two round trips, each of
+    /// which must go stacked → side by side → stacked with the tracked
+    /// column leaves a TextKit 2 row draws > 0 → 0 → > 0 under the switch
+    /// (0 throughout on the SwiftUI arm). On the TextKit 2 arm (call C60,
+    /// no tolerance) the rows in a window (`tk2-live-rows` −
+    /// `tk2-offwindow-rows`) after each round trip equal those before it,
+    /// and at the end of the arm, scrolled away toward the end and then to
+    /// the document top, no off-window row is left (released); the live
+    /// and off-window counts
+    /// are recorded, not gated (crossing rotations fill the lazy stack's
+    /// cache of never-shown rows over several trips, a bounded plateau as
+    /// on main). A build without the off-window count fails those checks
+    /// as not applicable. On other destinations one round trip is recorded
+    /// (`rotation_crossable`, `crossed_rotation`, the leaf and row
+    /// counts), not gated. Live
     /// TextKit 2 rows: after Text Size 3 and back at most the count before
     /// + `unshownRowAllowance` (no mass re-materialisation, ADR §16); after
     /// the boundary leg back at most its own starting count + the same
@@ -3201,7 +3218,10 @@ extension LifecycleUITests {
     /// each change. Passes after step 4. A run with K3 passes
     /// `lifecycle-gate.sh` only beside a K3 record with `regular_width`
     /// and `crossed_boundary` true on both arms, its own or an iPad run's
-    /// (`--k3-crossing`, review D-R5, Astra delta R5).
+    /// (`--k3-crossing`, review D-R5, Astra delta R5), and, unless its own
+    /// K3 ran on an iPad, beside a K3 record with `rotation_crossable` and
+    /// `crossed_rotation` true and the engine flip on both arms, its own
+    /// or a Pro Max run's (`--k3-crossing`, review N2).
     func testK3WidthAndTypeSizeChangesInContainers() throws {
         let agent = try HostAgent.fromEnvironment()
         typealias KP = ContainersParity
@@ -3247,8 +3267,10 @@ extension LifecycleUITests {
             }
             /// Every tracked leaf in the tree has the engine of the layout
             /// and text size of the moment; the anchor must be in the tree
-            /// (`anchored`).
-            func engines(_ stage: String, anchored: Bool = true) throws {
+            /// (`anchored`). Returns how many tracked leaves in the tree a
+            /// TextKit 2 row of their own owner draws (observed, recorded).
+            @discardableResult
+            func engines(_ stage: String, anchored: Bool = true) throws -> Int {
                 let current = layout()
                 let snapshot = try reader.documentSnapshot()
                 let present = tracked.filter { leaf in snapshot.all.contains { $0.label.hasPrefix(leaf.prefix) } }
@@ -3258,10 +3280,12 @@ extension LifecycleUITests {
                 }
                 let expected = ContainerDriver.columnTextKit2(textKit2, sideBySide: current == "side-by-side", size: size)
                 let wrong = Self.kWrongEngine(snapshot, present, textKit2: expected)
+                let drawn = present.filter { Self.kOwner(snapshot, $0) == $0.owner }.count
                 armFailures += wrong.map { "\(stage) (\(current)): \($0)" }
                 stages.append(["stage": stage, "layout": current, "text_size": "\(size)",
-                               "expected_textkit2": expected,
+                               "expected_textkit2": expected, "textkit2_leaves": drawn,
                                "leaves_in_tree": present.map(\.sentinel), "wrong_engine": wrong])
+                return drawn
             }
             func live() -> Int {
                 textKit2 ? reader.liveTextKit2Rows(until: { _ in true }, settled: true) ?? -1 : 0
@@ -3272,23 +3296,57 @@ extension LifecycleUITests {
             reader.pause(5)
             let c1 = try aligned()
             let control = LabelShift(from: c0, to: c1, scale: scale)
-            try engines("control")
+            let drawnBefore = try engines("control")
 
+            /// The TextKit 2 arm's live and off-window TextKit 2 rows (About,
+            /// one visit; `tk2-live-rows`, `tk2-offwindow-rows`); nil where
+            /// the build's About lacks the field (off-window: before PR 4)
+            /// and on the SwiftUI arm, which has no TextKit 2 rows.
+            func rowCounts() -> (live: Int?, offWindow: Int?) {
+                guard textKit2 else { return (nil, nil) }
+                let counters = reader.liveRowCounters()
+                return (counters.total, counters.offWindow)
+            }
+            /// One rotation round trip from portrait: the layout, the
+            /// tracked leaves a TextKit 2 row draws and the row counts
+            /// rotated and back (re-aligned), both settles, and the
+            /// re-aligned tops.
+            func rotationTrip(_ suffix: String) throws
+                -> (rotated: String, back: String, drawn: [Int], rows: [(live: Int?, offWindow: Int?)], settles: [Double],
+                    tops: [String: CGFloat])
+            {
+                try agent.request("rotate")
+                reader.pause(2.5)
+                let rotated = layout()
+                attach(reader.app, "k3-\(arm)-rotated\(suffix)")
+                let rotatedSettle = try agent.cpuSettleSeconds()
+                kWaitForEngine(driver, tracked.filter { driver.element($0).exists }, textKit2: engine())
+                let drawnRotated = try engines("rotated\(suffix)", anchored: false)
+                let rowsRotated = rowCounts()
+                try agent.request("rotate")
+                reader.pause(2.5)
+                let backSettle = try agent.cpuSettleSeconds()
+                let tops = try aligned()
+                let rowsBack = rowCounts()
+                let back = layout()
+                let drawnBack = try engines("rotated back\(suffix)")
+                return (rotated, back, [drawnRotated, drawnBack], [rowsRotated, rowsBack],
+                        [rotatedSettle, backSettle].map { $0.seconds ?? .infinity }, tops)
+            }
+
+            // The rotation leg. On a phone whose landscape is regular width
+            // (a Pro Max) it crosses the column boundary in place: stacked
+            // TextKit 2 columns become side-by-side SwiftUI ones and back
+            // (review N2), so it is gated there (`rotationCrossable`), with a
+            // second round trip from the laid-out state the first one leaves.
+            let rotationCrossable = ContainerDriver.rotationCrossesDestination(window: reader.app.windows.firstMatch.frame)
             let layoutBefore = layout()
             let r0 = try aligned()
-            try agent.request("rotate")
-            reader.pause(2.5)
-            let layoutRotated = layout()
-            attach(reader.app, "k3-\(arm)-rotated")
-            let rotatedSettle = try agent.cpuSettleSeconds()
-            try engines("rotated", anchored: false)
-            try agent.request("rotate")
-            reader.pause(2.5)
-            let rotationSettle = try agent.cpuSettleSeconds()
-            let r1 = try aligned()
-            let rotation = LabelShift(from: r0, to: r1, scale: scale)
-            let layoutAfter = layout()
-            try engines("rotated back")
+            let rowsR0 = rowCounts()
+            let first = try rotationTrip("")
+            let rotation = LabelShift(from: r0, to: first.tops, scale: scale)
+            let layoutRotated = first.rotated, layoutAfter = first.back
+            let second = try rotationCrossable ? rotationTrip(" again") : nil
 
             let s0 = try aligned()
             let live0 = live()
@@ -3335,6 +3393,22 @@ extension LifecycleUITests {
             let liveB1 = live()
             let boundaryShift = LabelShift(from: b0, to: b1, scale: scale)
             try engines("boundary leg and back")
+            // Release (call C60): where the rotation crosses, at the end of
+            // the arm, after every leg, scroll away as rotleak measured it,
+            // 12 drags toward the end and then 24 to the document top, and
+            // read the TextKit 2 rows there. The lazy stack keeps the
+            // never-shown off-window rows the crossing rotations build (8 to
+            // 30 blocks below the viewport and some above) until it scrolls
+            // to them, so the sweep passes both ways; then off-window must
+            // be 0. A leaked row view would stay counted.
+            var release: (live: Int?, offWindow: Int?, atTop: Bool)?
+            if rotationCrossable, textKit2 {
+                kAway(reader, toward: 1)
+                kAway(reader)
+                kAway(reader)
+                let counts = rowCounts()
+                release = (counts.live, counts.offWindow, reader.element(labelPrefix: KP.s1).exists)
+            }
             reader.app.terminate()
 
             // Whether the boundary must be crossed comes from the destination
@@ -3344,7 +3418,7 @@ extension LifecycleUITests {
             let crossable = ContainerDriver.regularWidthDestination
             let expectedLayout = crossable ? "side-by-side" : "stacked"
             let crossed = layoutB0 == "side-by-side" && leg.last?.layout == "stacked" && layoutB1 == "side-by-side"
-            let settles = [rotatedSettle, rotationSettle, upSettle, downSettle].map { $0.seconds ?? .infinity }
+            let settles = first.settles + (second?.settles ?? []) + [upSettle, downSettle].map { $0.seconds ?? .infinity }
                 + leg.map { $0.settle ?? .infinity } + [axDownSettle.seconds ?? .infinity]
             let legLayouts = [layoutB0] + leg.map { $0.layout } + [layoutB1]
             let legLive = [liveB0] + leg.map { $0.live } + [liveB1]
@@ -3370,6 +3444,56 @@ extension LifecycleUITests {
             if crossable, !crossed {
                 armFailures.append("the boundary was not crossed both ways: \(legLayouts.joined(separator: " → "))")
             }
+            // The rotation crossing (review N2): each round trip stacked →
+            // side by side → stacked, the column text TextKit 2 → SwiftUI →
+            // TextKit 2 under the switch (SwiftUI throughout on the SwiftUI
+            // arm). Rows (call C60, TextKit 2 arm, no tolerance): the rows
+            // in a window (live − off-window) after each round trip equal
+            // those before it, and off-window is 0 at the document top
+            // (`release`). The live and off-window counts are recorded, not
+            // gated: crossing rotations fill the lazy stack's cache of
+            // never-shown off-window rows over several trips (rotleak: a
+            // bounded plateau, as on main, released by scrolling).
+            let rotationLayouts = [layoutBefore, first.rotated, first.back] + (second.map { [$0.rotated, $0.back] } ?? [])
+            let rotationDrawn = [drawnBefore] + first.drawn + (second?.drawn ?? [])
+            let rotationRows = [rowsR0] + first.rows + (second?.rows ?? [])
+            let rotationInWindow: [Int?] = rotationRows.map { row in
+                guard let live = row.live, let offWindow = row.offWindow else { return nil }
+                return live - offWindow
+            }
+            func listed(_ values: [Int?]) -> String { values.map { $0.map(String.init) ?? "nil" }.joined(separator: " → ") }
+            let crossedRotation = rotationLayouts.enumerated().allSatisfy {
+                $0.element == ($0.offset % 2 == 0 ? "stacked" : "side-by-side")
+            }
+            if rotationCrossable {
+                if !crossedRotation {
+                    armFailures.append("the rotation did not cross the column boundary (stacked → side-by-side → "
+                        + "stacked on a phone whose landscape is regular): \(rotationLayouts.joined(separator: " → "))")
+                }
+                let flipped = rotationDrawn.enumerated().allSatisfy {
+                    textKit2 ? ($0.offset % 2 == 0 ? $0.element > 0 : $0.element == 0) : $0.element == 0
+                }
+                if !flipped {
+                    armFailures.append("the column text did not follow the rotation (TextKit 2 leaves "
+                        + "\(rotationDrawn.map(String.init).joined(separator: " → ")), expected "
+                        + "\(textKit2 ? "> 0 when stacked, 0 side by side" : "0 throughout"))")
+                }
+                if textKit2, rotationInWindow.contains(where: { $0 == nil }) || release?.offWindow == nil {
+                    armFailures.append("no off-window count (`tk2-offwindow-rows`, a pre-PR 4 build?): the rows-in-a-window "
+                        + "and release checks are not applicable, so they do not pass")
+                } else if textKit2 {
+                    let stacked = rotationInWindow.enumerated().filter { $0.offset % 2 == 0 }.map(\.element)
+                    if Set(stacked).count != 1 {
+                        armFailures.append("rows in a window did not return after each rotation (live − off-window "
+                            + "\(listed(rotationInWindow)))")
+                    }
+                    if let release, !release.atTop || release.offWindow != 0 {
+                        armFailures.append("off-window rows not released at the document top: off-window "
+                            + "\(listed([release.offWindow])), live \(listed([release.live]))"
+                            + (release.atTop ? "" : " (the top was not reached)"))
+                    }
+                }
+            }
             if settles.contains(where: { $0 > Self.maxSettleSeconds }) { armFailures.append("CPU settle \(settles) s") }
             if textKit2, live3 > live0 + Self.unshownRowAllowance || liveBack > live0 + Self.unshownRowAllowance {
                 armFailures.append("live rows jumped across the size steps: \(live0) → \(live3) → \(liveBack)")
@@ -3393,6 +3517,18 @@ extension LifecycleUITests {
                 "boundary_leg_sizes": ["large"] + leg.map { "\($0.size)" } + ["large"],
                 "layout_boundary_leg": legLayouts,
                 "crossed_boundary_rotation": layoutBefore != layoutRotated,
+                "rotation_crossable": rotationCrossable, "crossed_rotation": crossedRotation,
+                "layout_rotation": rotationLayouts, "rotation_textkit2_leaves": rotationDrawn,
+                "live_rows_rotation": rotationRows.map { $0.live as Any? ?? NSNull() },
+                "off_window_rows_rotation": rotationRows.map { $0.offWindow as Any? ?? NSNull() },
+                "in_window_rows_rotation": rotationInWindow.map { $0 as Any? ?? NSNull() },
+                "release_at_top": release.map { $0.atTop as Any } ?? NSNull(),
+                "release_live_rows": release?.live as Any? ?? NSNull(),
+                "release_off_window": release?.offWindow as Any? ?? NSNull(),
+                "rotation_gate": rotationCrossable
+                    ? "gated: a phone whose landscape is regular width, stacked TextKit 2 → side by side SwiftUI → "
+                        + "stacked TextKit 2 (review N2)"
+                    : "not crossable here: the layout keeps its size class in both orientations, recorded",
                 "regular_width": crossable, "expected_layout_size_0": expectedLayout,
                 "crossed_boundary": crossed,
                 "boundary_gate": crossable ? "gated: an iPad destination, side by side at size 0 (regular width)"

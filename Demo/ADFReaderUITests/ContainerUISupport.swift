@@ -495,13 +495,31 @@ struct ContainerDriver {
     /// phone the width is compact and they stack.
     static var regularWidthDestination: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
+    /// The shortest side, in points, of a phone whose landscape is regular
+    /// width (Apple's size-class table: the Plus, Max and Air sizes, from
+    /// 414 pt; the 375–402 pt phones are compact in both orientations).
+    static let regularLandscapePhoneSide: CGFloat = 414
+
+    /// Whether rotating the destination crosses the columns' size-class
+    /// boundary: a phone whose landscape is regular width
+    /// (`regularLandscapePhoneSide`) is compact in portrait, so
+    /// `LayoutColumnsView` stacks the columns there and lays them side by
+    /// side in landscape below the accessibility sizes. From the
+    /// destination alone, its idiom and its screen's shorter side (the
+    /// full-screen app window's, in either orientation), never from the
+    /// layout drawn (review N2, as `regularWidthDestination`). An iPad is
+    /// regular in both orientations, so no rotation crosses there.
+    static func rotationCrossesDestination(window: CGRect) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .phone && min(window.width, window.height) >= regularLandscapePhoneSide
+    }
+
     /// Whether a column leaf is drawn by TextKit 2 in an arm at Text Size
     /// `size`: under the TextKit 2 switch only while its columns stack and
     /// the size is below the cut-off. Side by side no family keeps the
     /// renderer (PR 4 step 4: the off-grid column probe,
     /// `TextKit2Scope.horizontalColumnKeepsRenderer`), so the column text
     /// stays SwiftUI there in both arms; so does every container body from
-    /// `containerSizeCutoff.firstSwiftUI` (lead call C53).
+    /// `containerSizeCutoff.firstSwiftUI` (lead call C55).
     static func columnTextKit2(_ textKit2: Bool, sideBySide: Bool, size: TextSizeStep = .large) -> Bool {
         textKit2 && !sideBySide && size < containerSizeCutoff.firstSwiftUI
     }
