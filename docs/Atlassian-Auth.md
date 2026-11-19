@@ -50,8 +50,8 @@ before it reads a saved token. Signing with a stable identity stops that.
 | `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. It never prompts from a piped stdin: there `--site` and `--email` are required. |
 | `list` | Site, email, expiry, from the non-secret summary only. Suggests `rotate` at 14 days or fewer. |
 | `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. The QR is drawn only on a terminal; with stdout piped, `push` exits 2. |
-| `push --to <ipv4:port> [--code <code>] [--site <site>] [--timeout <seconds>]` | The phone listens, the Mac connects out (section 4, "Mac connects to phone"). For a Mac that blocks incoming connections. Without `--code` it prompts "Code shown on your phone: " (recommended: an argument is visible to other processes in `ps` and stays in shell history; the prompt needs a terminal). Prints the account (site + email) and the result. Timeout 5–300 s, default 30, for connect + send. Not with `--host`/`--port`. |
-| `rotate <site> [--expiry-days <n>] [--token-stdin] [--no-open]` | `login` with the saved email, offers `push`, then points to the token page to revoke the old token. |
+| `push --to <ipv4:port> [--site <site>] [--timeout <seconds>]` | The phone listens, the Mac connects out (section 4, "Mac connects to phone"). For a Mac that blocks incoming connections. Prompts "Code shown on your phone: " (needs a terminal; the code is never taken as an argument, so it stays out of `ps` and shell history). Prints the account (site + email) and the result. Timeout 5–300 s, default 30, for connect + send. Not with `--host`/`--port`. |
+| `rotate <site> [--expiry-days <n>] [--token-stdin] [--no-open]` | `login` with the saved email, offers `push` (the QR code, Mac listens), then points to the token page to revoke the old token. On a Mac that blocks incoming connections, answer no and run `push --to <ipv4:port>` afterwards: the new token is already saved. Rotate says so before the question and whenever the token wasn't sent. |
 | `remove <site> [--no-open]` | Deletes the Mac item, opens the token page to revoke it. The phone keeps its own copy. |
 | `probe-graphql --page <id> [--page <id> …] [--site <site>] [--raw]` | Runs `AdfProbePages`: title, space, emoji, link, and GraphQL errors verbatim. |
 
@@ -82,7 +82,8 @@ before it reads a saved token. Signing with a stable identity stops that.
   connections): the screen shows `adf-auth push --to <phone-ip>:<port>` and a code
   `XXXX-XXXX-XXXX-XXXX`, with a countdown and Cancel. It listens only while the
   screen is open (5 min, one credential), on Wi-Fi/wired/bridge addresses only
-  (never cellular or a VPN). Run the command on the Mac, type the code, then
+  (never cellular or a VPN), and keeps the screen awake meanwhile so Auto-Lock
+  doesn't stop it. Run the command on the Mac, type the code, then
   **Add** on "Add <site> as <email>?" as with a scan. A mistyped code sends
   nothing and the phone keeps waiting (it shows the failed attempt; only boxes
   that don't open count toward the limit, see section 4). Leaving

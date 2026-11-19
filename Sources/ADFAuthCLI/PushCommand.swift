@@ -13,7 +13,6 @@ enum PushCommand {
         OptionSpec("--port", value: "n"),
         OptionSpec("--timeout", value: "seconds"),
         OptionSpec("--to", value: "ipv4:port"),
-        OptionSpec("--code", value: "code"),
     ])
 
     static let defaultTimeout = 120
@@ -36,9 +35,6 @@ enum PushCommand {
         }
         if parsed.value("--to") != nil {
             return try await ToPhone.run(parsed)
-        }
-        if parsed.value("--code") != nil {
-            throw CLIError.usage("--code only goes with --to <ipv4:port> (the address the phone shows).", command: spec.name)
         }
         var options = Options()
         if let site = parsed.value("--site") { options.site = try Context.site(site, command: spec.name) }
@@ -172,7 +168,7 @@ enum PushCommand {
 
     // MARK: --to (the phone listens)
 
-    /// `push --to <ipv4:port> [--code <code>]`: connect out to ADFReader's
+    /// `push --to <ipv4:port>`: connect out to ADFReader's
     /// "Mac connects to phone" screen. For Macs that block incoming connections.
     @MainActor
     enum ToPhone {
@@ -190,15 +186,8 @@ enum PushCommand {
             } catch {
                 throw CLIError.usage("--to: \(error.message)", command: command)
             }
-            var code: PhonePairingCode?
-            if let text = parsed.value("--code") {
-                do {
-                    code = try PhonePairingCode(parsing: text)
-                } catch {
-                    throw CLIError.usage("--code: \(error.message)", command: command)
-                }
-            } else if !Terminal.stdinIsTerminal {
-                throw CLIError.usage("stdin is not a terminal, so adf-auth won't prompt for the code shown on your phone. Pass --code <code>.", command: command)
+            guard Terminal.stdinIsTerminal else {
+                throw CLIError.usage("stdin is not a terminal, so adf-auth can't prompt for the code shown on your phone. Run push --to in a terminal.", command: command)
             }
             let site = try parsed.value("--site").map { try Context.site($0, command: command) }
             let timeout = try ArgumentParser.integer(parsed, "--timeout", in: 5...maxTimeout, default: defaultTimeout, command: command)
@@ -209,7 +198,7 @@ enum PushCommand {
 
             Terminal.out("Account:   \(summary.site.host) (\(summary.email))")
             Terminal.out("Phone:     \(address)")
-            let pairingCode = try code ?? askForCode(command: command)
+            let pairingCode = try askForCode(command: command)
             Terminal.out("Connecting to the phone…")
             do {
                 try await PhoneHandoffSender.send(credential, to: address, code: pairingCode, timeout: .seconds(timeout))
@@ -220,12 +209,13 @@ enum PushCommand {
             return ExitCode.success
         }
 
-        /// Prompts until the code parses. The code is echoed (it is shown on
-        /// the phone anyway) but stays out of the shell history.
+        /// Prompts until the code parses: the only way to enter the code. It
+        /// is echoed (it is shown on the phone anyway) but stays out of `ps`
+        /// and the shell history.
         static func askForCode(command: String) throws(CLIError) -> PhonePairingCode {
             while true {
                 guard let line = Terminal.prompt("Code shown on your phone: ") else {
-                    throw .usage("no code given. Pass --code <code>.", command: command)
+                    throw .usage("no code given; type the code shown on your phone.", command: command)
                 }
                 do {
                     return try PhonePairingCode(parsing: line)

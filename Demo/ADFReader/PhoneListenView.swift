@@ -12,7 +12,9 @@ import UniformTypeIdentifiers
 ///
 /// The listener (`PhoneHandoffListener`, one-shot, 5 minutes) runs only
 /// while this screen is visible: leaving it, Cancel, or the app going to
-/// the background stops it. The code is shown, never logged.
+/// the background stops it. While it listens the screen stays awake, so
+/// Auto-Lock doesn't stop it while the user types on the Mac. The code is
+/// shown, never logged.
 struct PhoneListenView: View {
     private struct Listening: Equatable {
         /// `adf-auth push --to a.b.c.d:port`.
@@ -76,7 +78,14 @@ struct PhoneListenView: View {
         .navigationTitle("Mac connects to phone")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: attempt) { await listen() }
-        .onDisappear { stop(showing: nil) }
+        .onAppear { keepScreenAwake(isListening) }
+        .onDisappear {
+            stop(showing: nil)
+            keepScreenAwake(false)
+        }
+        .onChange(of: isListening) { _, listening in
+            keepScreenAwake(listening)
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background, isListening {
                 stop(showing: "Stopped listening while ADFReader was in the background. Nothing was saved. Tap Try Again for a new code.")
@@ -401,6 +410,10 @@ struct PhoneListenView: View {
     }
 
     // MARK: - Helpers
+
+    private func keepScreenAwake(_ awake: Bool) {
+        UIApplication.shared.isIdleTimerDisabled = awake
+    }
 
     /// The code on the pasteboard expires with the listener, so it doesn't
     /// linger after the handoff can no longer use it.

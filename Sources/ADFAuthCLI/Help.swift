@@ -84,8 +84,7 @@ enum Help {
     static let push = """
         Usage: adf-auth push [--site <site>] [--host <ipv4>] [--port <n>]
                              [--timeout <seconds>]
-               adf-auth push --to <ipv4:port> [--code <code>] [--site <site>]
-                             [--timeout <seconds>]
+               adf-auth push --to <ipv4:port> [--site <site>] [--timeout <seconds>]
 
         Sends a saved account to ADFReader on your phone over the local network,
         once. Two directions:
@@ -102,9 +101,9 @@ enum Help {
         --to (the phone listens). For a Mac that blocks incoming connections (for
         example a company-managed Mac). In ADFReader open Settings → Atlassian
         Accounts → Mac connects to phone; it shows the command with its address and
-        a one-time code (XXXX-XXXX-XXXX-XXXX). Run that command and type the code at
-        the prompt (recommended: --code works too, but then the code is visible to
-        other processes in ps and stays in your shell history). The phone first
+        a one-time code (XXXX-XXXX-XXXX-XXXX). Run that command in a terminal and
+        type the code at the prompt (it is never taken as an argument, so it stays
+        out of ps and your shell history). The phone first
         proves it knows the code; only then does the Mac send a copy sealed with a
         fresh X25519 key. The code itself never crosses the network. A wrong code
         sends nothing. Success is reported only after the phone's acknowledgement,
@@ -126,8 +125,6 @@ enum Help {
           --to <ipv4:port>      Connect to the phone at this address instead of showing a
                                 QR code (private-network addresses only; not with
                                 --host or --port)
-          --code <code>         The code the phone shows (asked when omitted; as an
-                                argument it shows in ps and shell history)
           -h, --help            Show this help
         """
 
@@ -138,6 +135,12 @@ enum Help {
         Replaces the token for a saved site: runs login with the saved email, offers
         to push the new token to your phone, then opens Atlassian's token page so
         you can revoke the old token.
+
+        The offered push shows a QR code (the Mac listens, like adf-auth push). On a
+        Mac that blocks incoming connections (for example a company-managed Mac),
+        answer no and run adf-auth push --to <ipv4:port> afterwards (ADFReader →
+        Settings → Atlassian Accounts → Mac connects to phone): the new token is
+        already saved.
 
         Options:
           --expiry-days <n>   The expiry you pick on Atlassian's page (1-365, default \(AtlassianTokenScopes.defaultExpiryDays))

@@ -182,8 +182,10 @@ enum RotateCommand {
         _ = try await LoginCommand.perform(options, command: spec.name)
         Terminal.out()
 
+        let toPhone = "adf-auth push --to <ipv4:port> --site \(site.host)"
         var pushed = false
         var status = ExitCode.success
+        Terminal.out("Sending now shows a QR code for Scan from Mac (this Mac listens). If this Mac blocks incoming connections (for example a company-managed Mac), answer n and run '\(toPhone)' afterwards (ADFReader → Mac connects to phone); the new token is already saved.")
         if Terminal.askYesNo("Send the new token to your phone now?") {
             var push = PushCommand.Options()
             push.site = site
@@ -193,8 +195,9 @@ enum RotateCommand {
             } catch let error as CLIError {
                 status = CLI.report(error)
             }
-        } else {
-            Terminal.out("Not sent. Run 'adf-auth push --site \(site.host)' when your phone is ready.")
+        }
+        if !pushed {
+            Terminal.out("Not sent. The new token is already saved: run 'adf-auth push --site \(site.host)' when your phone is ready, or '\(toPhone)' if this Mac blocks incoming connections.")
         }
 
         Terminal.out()
