@@ -15,8 +15,11 @@ public enum PhoneHandoffSender {
     /// Nothing that depends on the code is sent before the phone's tag T
     /// verifies; on a mismatch the connection is closed and
     /// ``PhoneHandoffError/wrongCode`` is thrown. Returns once the phone
-    /// reports that it opened and validated the credential (it then asks
-    /// the person to confirm before saving).
+    /// reports, with an acknowledgement authenticated by the session key,
+    /// that it opened and validated the credential (it then asks the person
+    /// to confirm before saving). A missing or forged acknowledgement throws
+    /// ``PhoneHandoffError/unconfirmed``; a phone handling too many
+    /// connections answers ``PhoneHandoffError/phoneBusy``.
     ///
     /// - Parameters:
     ///   - address: The phone's address. Parsing (``PhoneHandoffAddress/init(parsing:)``)
@@ -64,7 +67,14 @@ public enum PhoneHandoffSender {
             throw .noAnswer
         }
 
-        // 2. A || T
+        // 2. 0x00 || A || T, or 0x03 (busy).
+        switch await wire.receive(exactly: 1, timeout: stepLimit()) {
+        case .success(let data) where data.first == H.replyProceed: break
+        case .success(let data) where data.first == H.replyBusy: throw .phoneBusy
+        case .success: throw .protocolMismatch
+        case .failure(.closed): throw .protocolMismatch
+        case .failure: throw .noAnswer
+        }
         let reply: Data
         switch await wire.receive(exactly: H.publicKeyBytes + H.tagBytes, timeout: stepLimit()) {
         case .success(let data): reply = data
@@ -81,27 +91,27 @@ public enum PhoneHandoffSender {
         }
 
         // 4. len32 || box
-        let key: SymmetricKey
+        let keys: H.SessionKeys
         do {
-            key = try H.sessionKey(privateKey: privateKey, peerKey: phoneKey, code: code, phoneKey: phoneKey, macKey: macKey)
+            keys = try H.sessionKeys(privateKey: privateKey, peerKey: phoneKey, code: code, phoneKey: phoneKey, macKey: macKey)
         } catch {
             throw .protocolMismatch
         }
-        let box = try H.seal(credential, key: key, phoneKey: phoneKey, macKey: macKey)
+        let box = try H.seal(credential, key: keys.seal, phoneKey: phoneKey, macKey: macKey)
         if case .failure = await wire.send(H.lengthPrefix(box.count) + box, timeout: stepLimit()) {
-            throw .noAnswer
+            // Part or all of the box may have arrived.
+            throw .unconfirmed
         }
 
-        // 5. Status byte.
-        let status: Data
-        switch await wire.receive(exactly: 1, timeout: stepLimit()) {
-        case .success(let data): status = data
-        case .failure: throw .noAnswer
-        }
-        switch status.first {
+        // 5. s || M, authenticated with Ka. Anything else (no answer, a
+        // forged or truncated acknowledgement) leaves delivery unconfirmed.
+        guard case .success(let ack) = await wire.receive(exactly: H.ackBytes, timeout: stepLimit()),
+              let status = H.verifiedStatus(ofAck: ack, key: keys.ack, phoneKey: phoneKey, macKey: macKey)
+        else { throw .unconfirmed }
+        switch status {
         case H.statusReceived: return
         case H.statusRejected: throw .rejectedByPhone
-        default: throw .protocolMismatch
+        default: throw .unconfirmed
         }
     }
 }

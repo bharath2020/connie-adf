@@ -58,7 +58,8 @@ struct PhoneListenView: View {
     @State private var listener: PhoneHandoffListener?
 
     static let troubleshootingHint = """
-    Nothing connecting? Keep this screen open, put the iPhone and the Mac on the same Wi-Fi, \
+    Nothing connecting? Keep this screen open, put the iPhone and the Mac on the same Wi-Fi \
+    (this screen listens on Wi-Fi only, never on cellular or a VPN), \
     and check Settings > Privacy & Security > Local Network > ADFReader is on. \
     A company VPN that blocks local-network access on the Mac also prevents this; \
     then use Scan from Mac or Add Manually.
@@ -327,9 +328,18 @@ struct PhoneListenView: View {
         case .connected(let peer):
             listening.status = Status(text: "A Mac connected (\(peer))…", isProblem: false)
         case .attemptFailed(_, let reason, let failedAttempts):
-            let left = PhoneHandoffListener.defaultMaxFailedAttempts - failedAttempts
+            // Only a wrong-code attempt counts toward the limit.
+            let text: String
+            if reason.isCodeGuess {
+                let left = PhoneHandoffListener.defaultMaxFailedAttempts - failedAttempts
+                text = "\(reason.message) Still waiting (\(left) more wrong-code \(left == 1 ? "attempt" : "attempts") allowed)."
+            } else {
+                text = "\(reason.message) Still waiting."
+            }
+            listening.status = Status(text: text, isProblem: true)
+        case .busy(let peer):
             listening.status = Status(
-                text: "\(reason.message) Still waiting (\(left) more \(left == 1 ? "try" : "tries")).",
+                text: "Turned away \(peer): other connections were in progress. Still waiting; the Mac can try again in a few seconds.",
                 isProblem: true
             )
         }
@@ -344,7 +354,7 @@ struct PhoneListenView: View {
         case .timedOut:
             phase = .failure("Nothing connected before the code expired. Nothing was saved. Tap Try Again for a new code.")
         case .tooManyFailedAttempts(let count):
-            phase = .failure("Stopped listening after \(count) failed connection attempts. Nothing was saved. Tap Try Again for a new code.")
+            phase = .failure("Stopped listening after \(count) attempts with a wrong code. Nothing was saved. Tap Try Again for a new code.")
         default:
             phase = .failure(error.message)
         }

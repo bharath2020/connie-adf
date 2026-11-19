@@ -15,8 +15,8 @@ public enum PhoneHandoffError: Error, Sendable, Equatable {
     case timedOut
     /// ``PhoneHandoffListener/cancel()`` was called (or the waiting task was cancelled).
     case cancelled
-    /// This many connections failed (wrong code, garbage, timeouts), so the
-    /// listener stopped to be safe.
+    /// This many sealed credentials failed to open (online guesses of the
+    /// code), so the listener stopped to be safe.
     case tooManyFailedAttempts(Int)
 
     // MARK: Mac (sender)
@@ -30,8 +30,13 @@ public enum PhoneHandoffError: Error, Sendable, Equatable {
     case noAnswer
     /// The address answered, but not with the handoff protocol.
     case protocolMismatch
+    /// The phone is already handling other connections. Nothing was sent.
+    case phoneBusy
     /// The phone received the box but could not open or use it.
     case rejectedByPhone
+    /// The box was sent, but no authenticated "received" came back (none
+    /// at all, or one that doesn't verify), so delivery is unconfirmed.
+    case unconfirmed
     /// The saved credential failed validation before sending.
     case invalidCredential(String)
     case sealFailed(String)
@@ -45,7 +50,7 @@ public enum PhoneHandoffError: Error, Sendable, Equatable {
         case .cancelled:
             return "Stopped waiting for the Mac."
         case .tooManyFailedAttempts(let count):
-            return "Stopped listening after \(count) failed connection attempts. Open this screen again for a new code."
+            return "Stopped listening after \(count) attempts with a wrong code. Open this screen again for a new code."
         case .wrongCode:
             return "Wrong code, or that address isn't your phone. Nothing was sent. Check the code on the phone's screen and try again."
         case .connectionFailed(let detail):
@@ -53,9 +58,13 @@ public enum PhoneHandoffError: Error, Sendable, Equatable {
         case .noAnswer:
             return "The phone stopped answering before the handoff finished. Nothing was added; try again while the phone shows the code."
         case .protocolMismatch:
-            return "Something answered at that address, but it isn't ADFReader's \"Mac connects to phone\" screen. Check the address and port."
+            return "Something answered at that address, but it isn't ADFReader's \"Mac connects to phone\" screen. Check the address and port, and that the Mac reaches the phone over the same Wi-Fi (not through a VPN)."
+        case .phoneBusy:
+            return "The phone is busy with other connections, so nothing was sent. Wait a few seconds and try again while the phone shows the code."
         case .rejectedByPhone:
             return "The phone couldn't open the credential, so nothing was added. Open the screen on the phone again and retry."
+        case .unconfirmed:
+            return "The credential was sent, but adf-auth couldn't confirm the phone received it. Check the phone: if it asks \"Add <site> as <email>?\" for this account, tap Add; otherwise try again."
         case .invalidCredential(let detail):
             return "The saved account can't be sent: \(detail)"
         case .sealFailed(let detail):
@@ -68,11 +77,14 @@ public enum PhoneHandoffError: Error, Sendable, Equatable {
 ///
 /// ```text
 /// Mac   -> phone  "ADFH2" || B
-/// phone -> Mac    A || T      T  = HMAC-SHA256(Kt, "adf-handoff-v2 phone" || A || B)
-///                             Kt = HKDF-SHA256(ikm: C, salt: empty, info: "adf-handoff-v2 tag")
-/// Mac   -> phone  len32 || box   box = ChaChaPoly(K, aad: "adf-handoff-v2" || A || B)
-///                             K  = HKDF-SHA256(ikm: X25519(b, A), salt: C, info: "adf-handoff-v2 seal" || A || B)
-/// phone -> Mac    0x01 (received) | 0x02 (rejected)
+/// phone -> Mac    0x00 || A || T   T  = HMAC-SHA256(Kt, "adf-handoff-v2 phone" || A || B)
+///                                  Kt = HKDF-SHA256(ikm: C, salt: empty, info: "adf-handoff-v2 tag")
+///            or   0x03 (busy), then close
+/// Mac   -> phone  len32 || box     box = ChaChaPoly(K, aad: "adf-handoff-v2" || A || B)
+///                                  K   = HKDF-SHA256(ikm: X25519(b, A), salt: C, info: "adf-handoff-v2 seal" || A || B)
+/// phone -> Mac    s || M           s   = 0x01 (received) | 0x02 (rejected)
+///                                  M   = HMAC-SHA256(Ka, s || A || B)
+///                                  Ka  = HKDF-SHA256(ikm: X25519(b, A), salt: C, info: "adf-handoff-v2 ack" || A || B)
 /// ```
 ///
 /// A and B are raw 32-byte ephemeral X25519 public keys, C is the code.
@@ -85,12 +97,20 @@ enum PhoneHandoffHandshake {
     /// The largest box accepted (a sealed credential is ~1 KiB).
     static let maxBoxBytes = HandoffClient.maxResponseBytes
 
+    /// First byte of the phone's reply: A || T follows.
+    static let replyProceed: UInt8 = 0x00
+    /// First byte of the phone's reply: too many connections; nothing follows.
+    static let replyBusy: UInt8 = 0x03
+
     static let statusReceived: UInt8 = 0x01
     static let statusRejected: UInt8 = 0x02
+    /// s || M.
+    static let ackBytes = 1 + 32
 
     static let tagKeyInfo = Data("adf-handoff-v2 tag".utf8)
     static let tagLabel = Data("adf-handoff-v2 phone".utf8)
     static let sealInfoLabel = Data("adf-handoff-v2 seal".utf8)
+    static let ackInfoLabel = Data("adf-handoff-v2 ack".utf8)
     static let aadLabel = Data("adf-handoff-v2".utf8)
 
     /// Kt: the MAC key for T, from the code alone.
@@ -108,8 +128,35 @@ enum PhoneHandoffHandshake {
         HMAC<SHA256>.isValidAuthenticationCode(tag, authenticating: tagLabel + phoneKey + macKey, using: tagKey(code))
     }
 
-    /// K = HKDF-SHA256(ikm: X25519(own, peer), salt: C, info: "adf-handoff-v2 seal" || A || B).
+    /// The two keys of one session, both from X25519 and salted with C.
+    struct SessionKeys {
+        /// K, for the box.
+        let seal: SymmetricKey
+        /// Ka, for the final acknowledgement.
+        let ack: SymmetricKey
+    }
+
+    /// K = HKDF-SHA256(ikm: X25519(own, peer), salt: C, info: "adf-handoff-v2 seal" || A || B) and
+    /// Ka = HKDF-SHA256(ikm: X25519(own, peer), salt: C, info: "adf-handoff-v2 ack" || A || B).
     /// Throws if the key agreement fails.
+    static func sessionKeys(
+        privateKey: Curve25519.KeyAgreement.PrivateKey,
+        peerKey: Data,
+        code: PhonePairingCode,
+        phoneKey: Data,
+        macKey: Data
+    ) throws -> SessionKeys {
+        let peer = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerKey)
+        let shared = try privateKey.sharedSecretFromKeyAgreement(with: peer)
+        var salt = code.bytes
+        defer { salt.zeroize() }
+        return SessionKeys(
+            seal: shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: sealInfoLabel + phoneKey + macKey, outputByteCount: 32),
+            ack: shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: ackInfoLabel + phoneKey + macKey, outputByteCount: 32)
+        )
+    }
+
+    /// K alone (see ``sessionKeys(privateKey:peerKey:code:phoneKey:macKey:)``).
     static func sessionKey(
         privateKey: Curve25519.KeyAgreement.PrivateKey,
         peerKey: Data,
@@ -117,11 +164,21 @@ enum PhoneHandoffHandshake {
         phoneKey: Data,
         macKey: Data
     ) throws -> SymmetricKey {
-        let peer = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerKey)
-        let shared = try privateKey.sharedSecretFromKeyAgreement(with: peer)
-        var salt = code.bytes
-        defer { salt.zeroize() }
-        return shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt, sharedInfo: sealInfoLabel + phoneKey + macKey, outputByteCount: 32)
+        try sessionKeys(privateKey: privateKey, peerKey: peerKey, code: code, phoneKey: phoneKey, macKey: macKey).seal
+    }
+
+    /// s || HMAC-SHA256(Ka, s || A || B).
+    static func ack(_ status: UInt8, key: SymmetricKey, phoneKey: Data, macKey: Data) -> Data {
+        let message = Data([status]) + phoneKey + macKey
+        return Data([status]) + Data(HMAC<SHA256>.authenticationCode(for: message, using: key))
+    }
+
+    /// The status of an acknowledgement whose MAC verifies (constant time), else nil.
+    static func verifiedStatus(ofAck ack: Data, key: SymmetricKey, phoneKey: Data, macKey: Data) -> UInt8? {
+        guard ack.count == ackBytes, let status = ack.first else { return nil }
+        let mac = ack.dropFirst()
+        let message = Data([status]) + phoneKey + macKey
+        return HMAC<SHA256>.isValidAuthenticationCode(mac, authenticating: message, using: key) ? status : nil
     }
 
     /// Validates, encodes and seals; returns the `combined` box.
@@ -233,6 +290,33 @@ final class HandoffWire: Sendable {
         }
     }
 
+    /// Starts an accepted (inbound) connection and waits until it is ready.
+    func start(timeout: Duration) async -> Result<Void, Failure> {
+        let connection = self.connection
+        let result: Result<Void, Failure> = await withCheckedContinuation { continuation in
+            let once = Once()
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    if once.claim() { continuation.resume(returning: .success(())) }
+                case .waiting(let error), .failed(let error):
+                    if once.claim() { continuation.resume(returning: .failure(.failed(Self.describe(error)))) }
+                case .cancelled:
+                    if once.claim() { continuation.resume(returning: .failure(.closed)) }
+                default:
+                    break
+                }
+            }
+            queue.asyncAfter(deadline: .now() + timeout.timeInterval) {
+                if once.claim() { continuation.resume(returning: .failure(.timedOut)) }
+            }
+            connection.start(queue: queue)
+        }
+        connection.stateUpdateHandler = nil
+        if case .failure = result { connection.cancel() }
+        return result
+    }
+
     /// Exactly `count` bytes, or a failure.
     func receive(exactly count: Int, timeout: Duration) async -> Result<Data, Failure> {
         let connection = self.connection
@@ -297,7 +381,17 @@ final class HandoffWire: Sendable {
 
     /// The remote IPv4 address of a connection (dotted, no port), or nil.
     static func peerIPv4(of connection: NWConnection) -> String? {
-        guard case .hostPort(let host, _) = connection.endpoint else { return nil }
+        ipv4(of: connection.endpoint)
+    }
+
+    /// The local IPv4 address a ready connection uses (dotted), or nil.
+    static func localIPv4(of connection: NWConnection) -> String? {
+        connection.currentPath?.localEndpoint.flatMap(ipv4(of:))
+    }
+
+    /// The IPv4 address of a host-port endpoint (dotted, no port), or nil.
+    static func ipv4(of endpoint: NWEndpoint) -> String? {
+        guard case .hostPort(let host, _) = endpoint else { return nil }
         let address: IPv4Address?
         switch host {
         case .ipv4(let v4): address = v4

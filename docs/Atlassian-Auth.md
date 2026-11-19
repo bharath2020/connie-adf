@@ -50,7 +50,7 @@ before it reads a saved token. Signing with a stable identity stops that.
 | `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. It never prompts from a piped stdin: there `--site` and `--email` are required. |
 | `list` | Site, email, expiry, from the non-secret summary only. Suggests `rotate` at 14 days or fewer. |
 | `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. The QR is drawn only on a terminal; with stdout piped, `push` exits 2. |
-| `push --to <ipv4:port> [--code <code>] [--site <site>] [--timeout <seconds>]` | The phone listens, the Mac connects out (section 4, "Mac connects to phone"). For a Mac that blocks incoming connections. Without `--code` it prompts "Code shown on your phone: " (keeps the code out of shell history; needs a terminal). Prints the account (site + email) and the result. Timeout 5–300 s, default 30, for connect + send. Not with `--host`/`--port`. |
+| `push --to <ipv4:port> [--code <code>] [--site <site>] [--timeout <seconds>]` | The phone listens, the Mac connects out (section 4, "Mac connects to phone"). For a Mac that blocks incoming connections. Without `--code` it prompts "Code shown on your phone: " (recommended: an argument is visible to other processes in `ps` and stays in shell history; the prompt needs a terminal). Prints the account (site + email) and the result. Timeout 5–300 s, default 30, for connect + send. Not with `--host`/`--port`. |
 | `rotate <site> [--expiry-days <n>] [--token-stdin] [--no-open]` | `login` with the saved email, offers `push`, then points to the token page to revoke the old token. |
 | `remove <site> [--no-open]` | Deletes the Mac item, opens the token page to revoke it. The phone keeps its own copy. |
 | `probe-graphql --page <id> [--page <id> …] [--site <site>] [--raw]` | Runs `AdfProbePages`: title, space, emoji, link, and GraphQL errors verbatim. |
@@ -81,9 +81,11 @@ before it reads a saved token. Signing with a stable identity stops that.
 - **Mac connects to phone** (for a company-managed Mac that blocks incoming
   connections): the screen shows `adf-auth push --to <phone-ip>:<port>` and a code
   `XXXX-XXXX-XXXX-XXXX`, with a countdown and Cancel. It listens only while the
-  screen is open (5 min, one credential). Run the command on the Mac, type the
-  code, then **Add** on "Add <site> as <email>?" as with a scan. A mistyped code
-  sends nothing and the phone keeps waiting (it shows the failed attempt). Leaving
+  screen is open (5 min, one credential), on Wi-Fi/wired/bridge addresses only
+  (never cellular or a VPN). Run the command on the Mac, type the code, then
+  **Add** on "Add <site> as <email>?" as with a scan. A mistyped code sends
+  nothing and the phone keeps waiting (it shows the failed attempt; only boxes
+  that don't open count toward the limit, see section 4). Leaving
   the screen, Cancel, or the app going to the background stops the listener; on a
   timeout or after Cancel, **Try Again** starts over with a new code. Without a
   Wi-Fi/private IPv4 address it says to join Wi-Fi instead of showing a command.
@@ -133,8 +135,9 @@ entitlements needed); iOS uses the app's keychain.
 
 **Mac connects to phone** (`push --to`, `PhoneHandoffListener` /
 `PhoneHandoffSender`, `Sources/ADFAtlassianAuth/Handoff/PhoneHandoff*.swift`).
-The phone listens on TCP (IPv4, any port by default) and shows its private
-address and a code C: 80 random bits as 16 Crockford base32 symbols
+The phone listens on TCP (IPv4, any port by default, never on cellular) and
+shows its private Wi-Fi/wired/bridge address (`en*`, `bridge*`; never
+`pdp_ip*` or `utun*`) and a code C: 80 random bits as 16 Crockford base32 symbols
 (`XXXX-XXXX-XXXX-XXXX`; typing ignores case, `-` and spaces, reads I/L as 1 and
 O as 0, rejects U). The Mac only accepts a private `ipv4:port` (same ranges as
 the QR path; loopback only through a test-only initializer). Raw TCP,
@@ -144,22 +147,44 @@ raw; a fresh A for every connection).
 ```text
 Mac (adf-auth push --to)                         iPhone (PhoneHandoffListener)
 1. "ADFH2" || B  ---------------------------->
-2.               <----------------------------   A || T
+2.               <----------------------------   0x00 || A || T   (or 0x03 busy, then close)
                                                  T  = HMAC-SHA256(Kt, "adf-handoff-v2 phone" || A || B)
                                                  Kt = HKDF-SHA256(ikm C, salt empty, info "adf-handoff-v2 tag")
 3. check T (constant time); wrong -> close, "Wrong code", nothing sent
 4. u32 len || box --------------------------->   open, decode, validate
    box = ChaChaPoly(K, aad "adf-handoff-v2" || A || B)
    K   = HKDF-SHA256(ikm X25519(b, A), salt C, info "adf-handoff-v2 seal" || A || B)
-5.               <----------------------------   0x01 received (stop listening) | 0x02 rejected
+5.               <----------------------------   s || M   s = 0x01 received (stop listening) | 0x02 rejected
+                                                 M  = HMAC-SHA256(Ka, s || A || B)
+                                                 Ka = HKDF-SHA256(ikm X25519(b, A), salt C, info "adf-handoff-v2 ack" || A || B)
+6. check M (constant time): 0x01 -> done; 0x02 -> "couldn't open";
+   missing or wrong M -> "couldn't confirm the phone received it"
 ```
 
-- Limits: box ≤ 64 KiB; every read and write ≤ 15 s; the Mac's whole exchange
-  ≤ 30 s (`--timeout`). The phone takes one connection at a time, only from
-  private-range peers. A failed connection (bad greeting, timeout, hang-up,
-  box that won't open) is closed and the phone keeps listening; after 20
-  failures it stops. The first box that opens ends the session (one-shot); the
-  listener also stops after 5 minutes or on Cancel. Plaintext buffers are zeroed.
+- Limits: box ≤ 64 KiB. Mac: each step ≤ 15 s, the whole exchange ≤ 30 s
+  (`--timeout`). Phone: one overall deadline of 20 s per connection, from
+  accept to the box.
+- Availability: the phone runs up to 4 handshakes at once (at most 2 from one
+  peer address), each with its own ephemeral key, so a stalled or junk
+  connection can't hold the only slot. A connection beyond that has its
+  greeting read and gets the busy byte (at most 8 such replies in flight, 3 s
+  each; beyond that it is just closed); the Mac reports "the phone is busy, try
+  again". Only private-range peers are accepted, and only on one of the phone's
+  own Wi-Fi/wired/bridge addresses: the listener prohibits cellular, and a
+  connection whose local address is anything else (a VPN tunnel, for example)
+  is closed at once.
+- Failures: a failed connection is closed and the phone keeps listening. Only a
+  box that doesn't open counts toward the limit of 20 (each one is an online
+  guess of C); junk, a bad greeting, timeouts and a Mac that hangs up after a
+  wrong T (a mistyped code) don't. The first box that opens ends the session
+  (one-shot): the listener stops and every other in-flight connection is
+  closed before the acknowledgement is sent. The listener also stops after
+  5 minutes or on Cancel.
+- Start: a `.waiting` listener (network not ready yet, Local Network permission
+  pending) gets 20 s before `start()` fails; cancelling the task that calls
+  `start()` cancels the listener.
+- Plaintext buffers are zeroed on a best-effort basis (Swift and Foundation
+  may keep copies).
 
 Why this construction:
 
@@ -177,6 +202,12 @@ Why this construction:
   shared with the genuine phone. 80 bits is far beyond any search feasible in
   minutes (about 2^42 HMACs per GPU in 5 min). The Mac sends nothing that
   depends on C before T verifies, so a fake phone gets no offline oracle on C.
+- The acknowledgement is authenticated, so an on-path attacker can't fake
+  "received" after dropping the box: M needs Ka, which needs both the X25519
+  secret and C. Ka has its own HKDF label, so it is independent of K. The phone
+  sends M only after a box arrived, and the Mac checks M only after T passed;
+  a fake Mac without C learns nothing from a "rejected" M that T (which anyone
+  who connects gets) doesn't already give it.
 - Why not a PAKE (SPAKE2/CPace): CryptoKit has no curve point arithmetic, and
   hand-rolling one is riskier than this commit-first construction. No
   third-party dependency.
@@ -197,6 +228,8 @@ prints the gateway's response, never the request.
 
 **Known limits.** Guest or client-isolated Wi-Fi, VPNs, cellular, or denied Local
 Network access break the fetch: use Add Manually. Zeroing is best-effort.
+With `push --to`, someone on the same network can keep the phone's handshake
+slots busy (20 s at a time); the Mac then reports "busy" and the user retries.
 The QR direction still uses a plain-HTTP fetch of a box sealed with the QR key;
 `push --to` is the X25519 path.
 
@@ -288,13 +321,22 @@ data or ships its own crypto.
   (private IPv4:port only); handshake crypto (both sides derive the same K, K
   matches an independent HKDF, T only verifies with the right code and
   transcript, the box only opens with the right code and transcript and
-  untampered); loopback end-to-end: the credential arrives intact, a wrong code
-  is reported on the Mac while the phone keeps listening and a correct retry
-  succeeds, one-shot, listener timeout, cancel, the 20-failure cap, a stalled
-  connection, a fake phone gets only the greeting, a silent server times out.
+  untampered, Ka matches an independent HKDF and the acknowledgement verifies
+  only untampered); interface names (only `en*`/`bridge*` offered); loopback
+  end-to-end: the credential arrives intact, a wrong code is reported on the
+  Mac while the phone keeps listening (not counted) and a correct retry
+  succeeds, one-shot (also with other connections in flight, which are
+  closed), listener timeout, cancel (also of `start()`), the cap counts only
+  boxes that don't open (junk never), a stalled connection is closed at the
+  deadline and doesn't block a real Mac, the busy reply (total and per-peer
+  limits), a missing, forged, wrong-key, truncated or bare-status
+  acknowledgement is rejected, a fake phone gets only the greeting, a silent
+  server times out; and the real (non-loopback) binding on this Mac's LAN
+  address when it has one.
   Loopback is reachable only through test-only initializers
   (`PhoneHandoffAddress(loopbackForTestingPort:)`, the listener's
-  `.loopbackForTesting` binding), never through parsing.
+  `.loopbackForTesting` binding), never through parsing, and both are
+  compiled only in debug builds (`#if DEBUG`).
 - Real keychain round-trip: opt-in with `ADF_AUTH_KEYCHAIN_TESTS=1` (unique
   `com.connie.adfreader.atlassian.tests.<UUID>` service, cleaned up).
 - `Demo/ADFReaderUITests/AccountsUITests.swift`: offline, `-openAccounts` (opens

@@ -103,10 +103,14 @@ enum Help {
         example a company-managed Mac). In ADFReader open Settings → Atlassian
         Accounts → Mac connects to phone; it shows the command with its address and
         a one-time code (XXXX-XXXX-XXXX-XXXX). Run that command and type the code at
-        the prompt (--code works too, but puts the code in your shell history). The
-        phone first proves it knows the code; only then does the Mac send a copy sealed
-        with a fresh X25519 key. The code itself never crosses the network. A wrong
-        code sends nothing. Confirm on the phone to save the account.
+        the prompt (recommended: --code works too, but then the code is visible to
+        other processes in ps and stays in your shell history). The phone first
+        proves it knows the code; only then does the Mac send a copy sealed with a
+        fresh X25519 key. The code itself never crosses the network. A wrong code
+        sends nothing. Success is reported only after the phone's acknowledgement,
+        authenticated with the session key, checks out. If the phone says it is
+        busy, wait a few seconds and run the command again. Confirm on the phone to
+        save the account.
 
         Reading the saved token may show a macOS keychain prompt after a rebuild.
 
@@ -122,7 +126,8 @@ enum Help {
           --to <ipv4:port>      Connect to the phone at this address instead of showing a
                                 QR code (private-network addresses only; not with
                                 --host or --port)
-          --code <code>         The code the phone shows (asked when omitted)
+          --code <code>         The code the phone shows (asked when omitted; as an
+                                argument it shows in ps and shell history)
           -h, --help            Show this help
         """
 

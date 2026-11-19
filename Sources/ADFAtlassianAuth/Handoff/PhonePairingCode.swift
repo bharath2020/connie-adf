@@ -184,11 +184,14 @@ public struct PhoneHandoffAddress: Sendable, Equatable, CustomStringConvertible 
         self.port = port
     }
 
-    /// Test-only: `127.0.0.1:<port>`. Never reachable from parsing.
+    #if DEBUG
+    /// Test-only: `127.0.0.1:<port>`. Never reachable from parsing, and not
+    /// compiled into release builds.
     init(loopbackForTestingPort port: UInt16) {
         self.host = "127.0.0.1"
         self.port = port
     }
+    #endif
 
     /// `a.b.c.d:port`.
     public var description: String { "\(host):\(port)" }
@@ -196,11 +199,27 @@ public struct PhoneHandoffAddress: Sendable, Equatable, CustomStringConvertible 
     /// The Mac command to show on the phone: `adf-auth push --to a.b.c.d:port`.
     public var pushCommand: String { "adf-auth push --to \(description)" }
 
+    /// True for the interfaces the handoff uses: Wi-Fi and wired Ethernet
+    /// (`en*`) and bridges such as the Personal Hotspot (`bridge*`). Not
+    /// cellular (`pdp_ip*`), VPN tunnels (`utun*`, `ipsec*`), AWDL or loopback.
+    static func isLANInterfaceName(_ name: String) -> Bool {
+        name.hasPrefix("en") || name.hasPrefix("bridge")
+    }
+
+    /// The private IPv4 addresses of this device's Wi-Fi, wired and bridge
+    /// interfaces (``isLANInterfaceName(_:)``), in `getifaddrs` order.
+    static func lanAddresses() -> [String] {
+        LANAddress.ipv4Interfaces()
+            .filter { isLANInterfaceName($0.name) && PairingLink.isLocalNetworkHost($0.address) }
+            .map(\.address)
+    }
+
     /// This device's private local-network IPv4 addresses with `port`, best
-    /// first: `en0` (Wi-Fi), other `en*`, then the rest (for example the
-    /// Personal Hotspot bridge). Empty when there is no usable network.
+    /// first: `en0` (Wi-Fi), other `en*`, then `bridge*` (for example the
+    /// Personal Hotspot). Cellular and VPN addresses are never offered.
+    /// Empty when there is no usable network.
     public static func localCandidates(port: UInt16) -> [PhoneHandoffAddress] {
-        let interfaces = LANAddress.ipv4Interfaces()
+        let interfaces = LANAddress.ipv4Interfaces().filter { isLANInterfaceName($0.name) }
         func rank(_ name: String) -> Int {
             if name == "en0" { return 0 }
             if name.hasPrefix("en") { return 1 }
