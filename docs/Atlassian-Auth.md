@@ -11,7 +11,9 @@ auth, using a scoped API token the user creates at Atlassian. There is one
 credential per site (`<name>.atlassian.net` only): site, email, cloudId, token,
 scopes, created and expiry dates. `adf-auth` creates and checks it on the Mac and
 keeps it in the login keychain; `adf-auth push` hands it to the phone once over
-the local network. The app can also take the token by hand.
+the local network, in one of two directions: the Mac listens and the phone scans
+a QR code, or (`push --to`) the phone listens and the Mac connects out. The app
+can also take the token by hand.
 
 ```text
 Mac (adf-auth)                                   iPhone (ADFReader)
@@ -23,6 +25,12 @@ push:  QR adfreader://pair?v=1&h=<ip:port>&s=<sid>#k=<key>
        "Phone <ip> is asking for <site> — send? [y/N]"
        200 sealed box ---------------->          open with key -> "Add <site> as <email>?"
                                                  AdfAuthCheck -> iOS keychain
+push --to (Mac blocks incoming):                 Settings → Atlassian Accounts → Mac connects to phone
+                                                 shows "adf-auth push --to <ip:port>" + code XXXX-XXXX-XXXX-XXXX
+       adf-auth push --to <ip:port>; type code
+       TCP connect --------------------->        listener (one-shot, 5 min)
+       X25519 handshake, phone proves code first (section 4)
+       sealed box ---------------------->        open -> "Add <site> as <email>?" -> iOS keychain
 Manual path (no Mac):                            Add Manually -> Open Token Page -> paste
                                                  -> AdfAuthCheck -> iOS keychain
 ```
@@ -42,6 +50,7 @@ before it reads a saved token. Signing with a stable identity stops that.
 | `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. It never prompts from a piped stdin: there `--site` and `--email` are required. |
 | `list` | Site, email, expiry, from the non-secret summary only. Suggests `rotate` at 14 days or fewer. |
 | `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. The QR is drawn only on a terminal; with stdout piped, `push` exits 2. |
+| `push --to <ipv4:port> [--code <code>] [--site <site>] [--timeout <seconds>]` | The phone listens, the Mac connects out (section 4, "Mac connects to phone"). For a Mac that blocks incoming connections. Without `--code` it prompts "Code shown on your phone: " (keeps the code out of shell history; needs a terminal). Prints the account (site + email) and the result. Timeout 5–300 s, default 30, for connect + send. Not with `--host`/`--port`. |
 | `rotate <site> [--expiry-days <n>] [--token-stdin] [--no-open]` | `login` with the saved email, offers `push`, then points to the token page to revoke the old token. |
 | `remove <site> [--no-open]` | Deletes the Mac item, opens the token page to revoke it. The phone keeps its own copy. |
 | `probe-graphql --page <id> [--page <id> …] [--site <site>] [--raw]` | Runs `AdfProbePages`: title, space, emoji, link, and GraphQL errors verbatim. |
@@ -69,6 +78,15 @@ before it reads a saved token. Signing with a stable identity stops that.
   used only once the Mac has served it: after a cancelled or failed fetch (network,
   timeout, the Mac declined), **Try Again** / **Scan Again** works with the same
   code. Cancel on "Add …?" discards the credential; that code is spent, so push again.
+- **Mac connects to phone** (for a company-managed Mac that blocks incoming
+  connections): the screen shows `adf-auth push --to <phone-ip>:<port>` and a code
+  `XXXX-XXXX-XXXX-XXXX`, with a countdown and Cancel. It listens only while the
+  screen is open (5 min, one credential). Run the command on the Mac, type the
+  code, then **Add** on "Add <site> as <email>?" as with a scan. A mistyped code
+  sends nothing and the phone keeps waiting. The app calls
+  `PhoneHandoffListener` (`start()`, `code.formatted`,
+  `PhoneHandoffAddress.local(port:)?.pushCommand`, `waitForCredential()`,
+  `cancel()`).
 - **Expiry banner:** at 14 days or fewer, or expired, with **Replace Token** (manual
   form, site and email filled in). The row's context menu has it too.
 - **Remove:** swipe or context menu. Deletes the token from this device only;
@@ -108,6 +126,60 @@ entitlements needed); iOS uses the app's keychain.
   redirects refused, body capped at 64 KiB, waits up to 130 s. Info.plist has
   `NSLocalNetworkUsageDescription` and `NSAllowsLocalNetworking`.
 
+**Mac connects to phone** (`push --to`, `PhoneHandoffListener` /
+`PhoneHandoffSender`, `Sources/ADFAtlassianAuth/Handoff/PhoneHandoff*.swift`).
+The phone listens on TCP (IPv4, any port by default) and shows its private
+address and a code C: 80 random bits as 16 Crockford base32 symbols
+(`XXXX-XXXX-XXXX-XXXX`; typing ignores case, `-` and spaces, reads I/L as 1 and
+O as 0, rejects U). The Mac only accepts a private `ipv4:port` (same ranges as
+the QR path; loopback only through a test-only initializer). Raw TCP,
+length-prefixed binary, no HTTP. A, B = ephemeral X25519 public keys (32 bytes,
+raw; a fresh A for every connection).
+
+```text
+Mac (adf-auth push --to)                         iPhone (PhoneHandoffListener)
+1. "ADFH2" || B  ---------------------------->
+2.               <----------------------------   A || T
+                                                 T  = HMAC-SHA256(Kt, "adf-handoff-v2 phone" || A || B)
+                                                 Kt = HKDF-SHA256(ikm C, salt empty, info "adf-handoff-v2 tag")
+3. check T (constant time); wrong -> close, "Wrong code", nothing sent
+4. u32 len || box --------------------------->   open, decode, validate
+   box = ChaChaPoly(K, aad "adf-handoff-v2" || A || B)
+   K   = HKDF-SHA256(ikm X25519(b, A), salt C, info "adf-handoff-v2 seal" || A || B)
+5.               <----------------------------   0x01 received (stop listening) | 0x02 rejected
+```
+
+- Limits: box ≤ 64 KiB; every read and write ≤ 15 s; the Mac's whole exchange
+  ≤ 30 s (`--timeout`). The phone takes one connection at a time, only from
+  private-range peers. A failed connection (bad greeting, timeout, hang-up,
+  box that won't open) is closed and the phone keeps listening; after 20
+  failures it stops. The first box that opens ends the session (one-shot); the
+  listener also stops after 5 minutes or on Cancel. Plaintext buffers are zeroed.
+
+Why this construction:
+
+- K is a fresh full-strength 256-bit key from an ephemeral X25519 exchange. The
+  typed code never crosses the network and is never the cipher key itself.
+- C authenticates both ways. The phone proves it knows C with T before the Mac
+  sends anything; the Mac proves it knows C because only a K salted with C
+  opens the box.
+- A passive eavesdropper gets nothing (ECDH). An active attacker posing as the
+  phone must forge T without C; one posing as the Mac must produce a box under a
+  C-salted key.
+- T is visible to anyone who connects to the phone, so C only has to resist an
+  *offline* search for its lifetime (≤ 5 min, one-shot). Finding C after the
+  session gives nothing, because the credential was sealed under the ECDH key
+  shared with the genuine phone. 80 bits is far beyond any search feasible in
+  minutes (about 2^42 HMACs per GPU in 5 min). The Mac sends nothing that
+  depends on C before T verifies, so a fake phone gets no offline oracle on C.
+- Why not a PAKE (SPAKE2/CPace): CryptoKit has no curve point arithmetic, and
+  hand-rolling one is riskier than this commit-first construction. No
+  third-party dependency.
+- Caveats: a company VPN that blocks local-network access (common on managed
+  Macs), guest or client-isolated Wi-Fi, and a denied iOS Local Network
+  permission (Settings → Privacy & Security → Local Network → ADFReader) all
+  prevent this path. Then use the QR direction or Add Manually.
+
 **A photo of the QR** leaks the Mac's address, `sid` and the key, not the token.
 Until the code is used or expires, someone on the same network could request it,
 but the Mac shows their IP and asks you first. The photo plus a capture of that
@@ -120,8 +192,12 @@ prints the gateway's response, never the request.
 
 **Known limits.** Guest or client-isolated Wi-Fi, VPNs, cellular, or denied Local
 Network access break the fetch: use Add Manually. Zeroing is best-effort.
-Future work (hardening option C): an X25519 exchange with a confirmation code
-shown on both screens before the Mac encrypts.
+The QR direction still uses a plain-HTTP fetch of a box sealed with the QR key;
+`push --to` is the X25519 path.
+
+**Out of scope (follow-ups).** A cloud relay for networks where neither side can
+reach the other; updating the Homebrew formula / release for the new `push --to`;
+a TestFlight build with the iOS screen.
 
 ## 5. GraphQL only
 
@@ -202,6 +278,18 @@ data or ships its own crypto.
   synthetic tokens (`ATATT3xFfGF0-synthetic-…`), a `URLProtocol` stub
   (`AuthStubProtocol`) and `127.0.0.1` listeners; nothing calls Atlassian.
   Run `swift test --filter ADFAtlassianAuthTests`.
+- `PhoneHandoffTests.swift` (Mac connects to phone): code generate/format/parse,
+  known vectors, aliases, bad characters and lengths, redaction; address parsing
+  (private IPv4:port only); handshake crypto (both sides derive the same K, K
+  matches an independent HKDF, T only verifies with the right code and
+  transcript, the box only opens with the right code and transcript and
+  untampered); loopback end-to-end: the credential arrives intact, a wrong code
+  is reported on the Mac while the phone keeps listening and a correct retry
+  succeeds, one-shot, listener timeout, cancel, the 20-failure cap, a stalled
+  connection, a fake phone gets only the greeting, a silent server times out.
+  Loopback is reachable only through test-only initializers
+  (`PhoneHandoffAddress(loopbackForTestingPort:)`, the listener's
+  `.loopbackForTesting` binding), never through parsing.
 - Real keychain round-trip: opt-in with `ADF_AUTH_KEYCHAIN_TESTS=1` (unique
   `com.connie.adfreader.atlassian.tests.<UUID>` service, cleaned up).
 - `Demo/ADFReaderUITests/AccountsUITests.swift`: offline, `-openAccounts` (opens
