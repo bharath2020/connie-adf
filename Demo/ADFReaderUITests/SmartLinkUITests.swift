@@ -74,10 +74,10 @@ import XCTest
 /// - `testAfterScrollingWithNearby…` (mode 3): at the top nothing is
 ///   prefetched (the nearest other link is 13 positions below the intro,
 ///   beyond the 12 of "nearby"); in the sections, nearby batches of at most
-///   3, never farther than 12 positions; a short drag onto prefetched links
-///   shows their titles at once with no new visible lookup; a drag that
-///   starts with a batch in flight cancels it and starts nothing while
-///   scrolling.
+///   3, never farther than 12 positions; short drags onto prefetched links
+///   (until one comes on screen) show their titles at once with no new
+///   visible lookup; a drag that starts with a batch in flight cancels it
+///   and starts nothing while scrolling.
 @MainActor
 final class SmartLinkUITests: XCTestCase {
     /// One of the five smart links on the first screen: its paragraph's lead
@@ -507,9 +507,17 @@ final class SmartLinkUITests: XCTestCase {
     /// still in flight when a drag starts, short enough that nearby batches
     /// finish in well under a minute.
     static let modeDelay = 2.0
+    /// Mode 3's lookup duration: a nearby batch must still be in flight
+    /// when the held drag's finger moves, and on a loaded host XCUITest
+    /// takes a second or two between seeing the batch and moving it.
+    static let nearbyModeDelay = 4.0
     /// The nearby limits the design commits to (calls #47, #49).
     static let batchLimit = 3
     static let nearbyDistance = 12
+    /// Mode 3's short drags onto prefetched links: about 2–3 positions
+    /// each, at most 4 (well inside the 12 positions prefetched).
+    static let shortDrag: CGFloat = 130
+    static let maxShortDrags = 4
 
     func testWhileScrollingLooksUpDuringAHeldDragSwiftUI() throws {
         try whileScrollingLooksUpDuringAHeldDrag(textKit2: false)
@@ -638,7 +646,7 @@ final class SmartLinkUITests: XCTestCase {
     private func afterScrollingWithNearby(textKit2: Bool) throws {
         continueAfterFailure = true
         let arm = textKit2 ? "textkit2" : "swiftui"
-        let reader = launch(textKit2: textKit2, delay: Self.modeDelay, failureRate: 0,
+        let reader = launch(textKit2: textKit2, delay: Self.nearbyModeDelay, failureRate: 0,
                             resolution: "afterScrollingWithNearby")
 
         // A. At the top: the intro (blocks 0.2–0.6, positions 2–6) resolves.
@@ -673,15 +681,27 @@ final class SmartLinkUITests: XCTestCase {
         XCTAssertEqual(b["mockCalls"], b["calls"], "\(b)")
         attach(reader.app, "\(arm)-mode3-nearby-done")
 
-        // C. A short drag (about 3–5 positions) onto links prefetched in B:
-        // they show their titles at once (a lookup takes 2 s), counted as
-        // nearby hits, and no visible lookup starts for them.
-        reader.drag(by: 260)
-        let landed = Stats(probe: probeLine(reader))
-        let unresolved = onScreenUnresolved(reader)
-        let hit = probe(reader, "\(arm) mode 3: after the short drag")
-        note("\(arm) mode 3 short drag: before \(b) landed \(landed) unresolved \(unresolved)")
-        XCTAssertGreaterThan(landed["pfHits"], b["pfHits"], "no prefetched link came on screen: \(b) → \(landed)")
+        // C. Short drags (2–3 positions each) onto links prefetched in B,
+        // until one comes on screen: every link that comes on screen shows
+        // its title at once (a lookup takes 4 s), a prefetched one counted
+        // as a nearby hit, and no visible lookup starts for any of them.
+        // How far B's three drags carry the document varies by host (on a
+        // loaded one B rested about 135 pt higher, as if each drag moved
+        // 45 pt less), so one fixed drag can stop with the next new link
+        // just below the visible region and bring nothing prefetched on
+        // screen. The drags stay well inside the 12 positions B prefetched.
+        var hit = b
+        var unresolved: [String] = []
+        var shortDrags = 0
+        while hit["pfHits"] <= b["pfHits"], shortDrags < Self.maxShortDrags {
+            reader.drag(by: Self.shortDrag)
+            shortDrags += 1
+            unresolved += onScreenUnresolved(reader)
+            hit = probe(reader, "\(arm) mode 3: after short drag \(shortDrags)")
+        }
+        note("\(arm) mode 3 short drags: \(shortDrags) of \(Self.shortDrag) pt; before \(b) after \(hit) unresolved \(unresolved)")
+        XCTAssertGreaterThan(hit["pfHits"], b["pfHits"],
+                             "no prefetched link came on screen in \(shortDrags) short drags: \(b) → \(hit)")
         XCTAssertTrue(unresolved.isEmpty, "a link that came on screen did not show its title at once: \(unresolved)")
         let visibleCalls = { (stats: Stats) in stats["calls"] - stats["pfCalls"] }
         XCTAssertEqual(visibleCalls(hit), visibleCalls(b),
@@ -690,11 +710,14 @@ final class SmartLinkUITests: XCTestCase {
 
         // D. Scrolling stops prefetching: a new rest further down, wait for a
         // batch in flight, then a held drag. The batch is cancelled and
-        // nothing starts while scrolling.
+        // nothing starts while scrolling. The drag's points are found before
+        // the wait, so the finger moves within about a second of the batch
+        // being seen, well inside its 4 s even on a loaded host.
         reader.drag(by: 600)
+        let held = heldDragPoints(reader, by: 400)
         let inFlight = waitForProbe(reader, "\(arm) mode 3: a batch in flight", timeout: 15) { $0["pfInFlight"] > 0 }
         XCTAssertTrue(inFlight.met, "no nearby batch started at the new rest: \(inFlight.stats)")
-        heldDrag(reader, by: 400, hold: 1.5)
+        held.start.press(forDuration: 0.05, thenDragTo: held.end, withVelocity: .slow, thenHoldForDuration: 1.5)
         let stopped = waitForProbe(reader, "\(arm) mode 3: batch cancelled", timeout: 8) {
             $0["pfCancelled"] > inFlight.stats["pfCancelled"]
         }
@@ -727,13 +750,20 @@ final class SmartLinkUITests: XCTestCase {
     /// down for `hold` seconds: the document keeps scrolling (interacting)
     /// the whole time, with no fling at the end.
     private func heldDrag(_ reader: ReaderDriver, by points: CGFloat, hold: TimeInterval) {
+        let drag = heldDragPoints(reader, by: points)
+        drag.start.press(forDuration: 0.05, thenDragTo: drag.end, withVelocity: .slow, thenHoldForDuration: hold)
+    }
+
+    /// Where `heldDrag` presses and lifts, found ahead of time (the viewport
+    /// takes several queries) for a drag that must start promptly.
+    private func heldDragPoints(_ reader: ReaderDriver, by points: CGFloat) -> (start: XCUICoordinate, end: XCUICoordinate) {
         let area = reader.viewport.insetBy(dx: 0, dy: 30)
         let length = min(abs(points), area.height)
         let startY = points > 0 ? area.maxY : area.minY
         let origin = reader.app.coordinate(withNormalizedOffset: .zero)
         let start = origin.withOffset(CGVector(dx: area.midX, dy: startY))
         let end = origin.withOffset(CGVector(dx: area.midX, dy: points > 0 ? startY - length : startY + length))
-        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: hold)
+        return (start, end)
     }
 
     /// The probe's line as it is now (one read).
@@ -1155,7 +1185,10 @@ final class SmartLinkUITests: XCTestCase {
                               until condition: (Stats) -> Bool) -> (met: Bool, stats: Stats)
     {
         let element = reader.app.staticTexts[Self.probeID]
-        XCTAssertTrue(element.waitForExistence(timeout: 5), "smartlink-probe missing (-smartLinkProbe)")
+        // `waitForExistence` first checks about a second after it starts:
+        // skip it when the probe is already there, so the first read is
+        // prompt.
+        XCTAssertTrue(element.exists || element.waitForExistence(timeout: 5), "smartlink-probe missing (-smartLinkProbe)")
         let deadline = Date().addingTimeInterval(timeout)
         var stats = Stats(probe: element.label)
         var met = condition(stats)
