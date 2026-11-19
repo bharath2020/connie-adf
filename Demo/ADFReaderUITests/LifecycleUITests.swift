@@ -3181,21 +3181,24 @@ extension LifecycleUITests {
     /// stacked column text is TextKit 2 at the pair's first size and
     /// SwiftUI at its second on every device: the size rule's engine flip
     /// is gated at the cut-off, not tolerated. The columns must stack at
-    /// every accessibility size. Where the columns sit side by side at
-    /// size 0 (a regular-width device: the iPad), the boundary leg must
-    /// cross it both ways (side by side → stacked → side by side, gated
-    /// `crossed_boundary`), so the column text changes engine twice under
-    /// the switch; a compact-width device stacks at every size and
-    /// orientation, and records the boundary as not crossable there. Live
+    /// every accessibility size. The layout at size 0 is expected from the
+    /// destination, never read from the layout drawn
+    /// (`ContainerDriver.regularWidthDestination`, Astra delta R5): on an
+    /// iPad (regular width) the columns must sit side by side at size 0
+    /// and the boundary leg must cross it both ways (side by side →
+    /// stacked → side by side, gated `crossed_boundary`), so the column
+    /// text changes engine twice under the switch; a phone (compact width
+    /// in portrait) must stack them at size 0 and records the boundary as
+    /// not crossable there. Live
     /// TextKit 2 rows: after Text Size 3 and back at most the count before
     /// + `unshownRowAllowance` (no mass re-materialisation, ADR §16); after
     /// the boundary leg back at most its own starting count + the same
     /// allowance (the rows the stacked columns made are released; the counts
     /// at the leg's sizes are recorded). CPU settles ≤ 2 % within 5 s after
     /// each change. Passes after step 4. A run with K3 passes
-    /// `lifecycle-gate.sh` only beside a K3 record with `crossed_boundary`
-    /// true on both arms, its own or a regular-width run's
-    /// (`--k3-crossing`, review D-R5).
+    /// `lifecycle-gate.sh` only beside a K3 record with `regular_width`
+    /// and `crossed_boundary` true on both arms, its own or an iPad run's
+    /// (`--k3-crossing`, review D-R5, Astra delta R5).
     func testK3WidthAndTypeSizeChangesInContainers() throws {
         let agent = try HostAgent.fromEnvironment()
         typealias KP = ContainersParity
@@ -3331,7 +3334,12 @@ extension LifecycleUITests {
             try engines("boundary leg and back")
             reader.app.terminate()
 
-            let crossable = layoutBefore == "side-by-side"
+            // Whether the boundary must be crossed comes from the destination
+            // (an iPad: regular width), never from the layout drawn: columns
+            // wrongly stacked at size 0 fail here instead of making the
+            // crossing optional (Astra delta R5).
+            let crossable = ContainerDriver.regularWidthDestination
+            let expectedLayout = crossable ? "side-by-side" : "stacked"
             let crossed = layoutB0 == "side-by-side" && leg.last?.layout == "stacked" && layoutB1 == "side-by-side"
             let settles = [rotatedSettle, rotationSettle, upSettle, downSettle].map { $0.seconds ?? .infinity }
                 + leg.map { $0.settle ?? .infinity } + [axDownSettle.seconds ?? .infinity]
@@ -3348,6 +3356,10 @@ extension LifecycleUITests {
             for (name, value) in [("parked", layoutBefore), ("rotated back", layoutAfter), ("before the boundary leg", layoutB0),
                                   ("back from the boundary leg", layoutB1)] where value == "unknown" {
                 armFailures.append("column layout unknown \(name)")
+            }
+            if layoutBefore != expectedLayout {
+                armFailures.append("the columns are \(layoutBefore) at Text Size 0, expected \(expectedLayout) on this "
+                    + "\(crossable ? "regular" : "compact")-width destination")
             }
             for stage in leg where stage.size.isAccessibility && stage.layout != "stacked" {
                 armFailures.append("the columns did not stack at \(stage.size) (\(stage.layout))")
@@ -3378,9 +3390,10 @@ extension LifecycleUITests {
                 "boundary_leg_sizes": ["large"] + leg.map { "\($0.size)" } + ["large"],
                 "layout_boundary_leg": legLayouts,
                 "crossed_boundary_rotation": layoutBefore != layoutRotated,
+                "regular_width": crossable, "expected_layout_size_0": expectedLayout,
                 "crossed_boundary": crossed,
-                "boundary_gate": crossable ? "gated: side by side at size 0 (regular width)"
-                    : "not crossable here: the columns stack at size 0 (compact width), recorded",
+                "boundary_gate": crossable ? "gated: an iPad destination, side by side at size 0 (regular width)"
+                    : "not crossable here: a phone stacks the columns at size 0 (compact width), recorded",
                 "settle_s": settles, "live_rows_size_0_3_0": [live0, live3, liveBack],
                 "live_rows_boundary_leg": legLive,
                 "size_readouts": [up ?? "nil", down ?? "nil"],

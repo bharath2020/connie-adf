@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 // MARK: - Container fixtures (PR 4 plan §7.2)
@@ -485,6 +486,13 @@ struct ContainerDriver {
     /// production moves the cut-off, change this one line (for
     /// `size < .xxxLarge`: `(.xxLarge, .xxxLarge)`).
     static let containerSizeCutoff: (lastTextKit2: TextSizeStep, firstSwiftUI: TextSizeStep) = (.accessibility3, .accessibility4)
+
+    /// Whether the columns must sit side by side at Text Size 0 in
+    /// portrait, from the destination alone, never from the layout drawn
+    /// (Astra delta R5): on an iPad the app runs full screen at a regular
+    /// width, so `LayoutColumnsView` lays the columns side by side; on a
+    /// phone the width is compact and they stack.
+    static var regularWidthDestination: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
     /// Whether a column leaf is drawn by TextKit 2 in an arm at Text Size
     /// `size`: under the TextKit 2 switch only while its columns stack and

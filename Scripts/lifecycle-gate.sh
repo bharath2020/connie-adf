@@ -22,15 +22,17 @@
 #                   provisional — a gate verdict needs a quiet host.
 #   --out           output dir (lifecycle.md, results.jsonl, agent.log,
 #                   xcodebuild.log, lifecycle.xcresult, channel/).
-#   --k3-crossing   an earlier run's --out on a regular-width destination
-#                   (the iPad), of the same build (the sha256 its
+#   --k3-crossing   an earlier run's --out on an iPad (a regular-width
+#                   destination), of the same build (the sha256 its
 #                   lifecycle.md records must equal this build's, else exit
 #                   2 before the device is touched). A run that runs K3
 #                   fails (report row "K3 column boundary crossed", review
-#                   D-R5) unless its own K3 or one of these runs' K3 passed
-#                   with crossed_boundary true on both arms: a phone stacks
-#                   the columns at every size, so its K3 records the
-#                   boundary as not crossable.
+#                   D-R5, Astra delta R5) unless its own K3 or one of these
+#                   runs' K3 passed with regular_width and crossed_boundary
+#                   true on both arms. K3 takes regular_width from the
+#                   device, not from the layout drawn; a phone stacks the
+#                   columns at every size, so its K3 records the boundary as
+#                   not crossable.
 #   --derived-data  isolated derived data (default <out>/DerivedData). A fresh
 #                   build refuses a dir that already holds an .xctestrun;
 #                   --skip-build reuses one (recorded in lifecycle.md).

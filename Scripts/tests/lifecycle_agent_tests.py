@@ -176,11 +176,14 @@ expect("no recorded check is a failure", agent.main(["report", "--results", empt
 K3 = "K3 width and type-size changes in containers (containers-parity 0.46)"
 
 
-def k3_results(name: str, crossed: tuple[bool, bool], passed: bool = True) -> str:
+def k3_results(name: str, crossed: tuple[bool, bool], passed: bool = True, regular: bool | None = None) -> str:
     """A results file holding one K3 record whose swiftui and textkit2
-    arms have crossed_boundary `crossed`."""
+    arms have crossed_boundary `crossed` and regular_width `regular`
+    (default: whether both crossed, as K3 records it; None leaves it out)."""
     path = os.path.join(work, name + ".jsonl")
-    arms = [{"arm": arm, "crossed_boundary": value} for arm, value in zip(("swiftui", "textkit2"), crossed)]
+    regular = all(crossed) if regular is None else regular
+    arms = [{"arm": arm, "regular_width": regular, "crossed_boundary": value}
+            for arm, value in zip(("swiftui", "textkit2"), crossed)]
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"check": K3, "pass": passed, "arms": arms}) + "\n")
     return path
@@ -214,6 +217,16 @@ status, row = crossing_report(phone, os.path.join(work, "no-such-run.jsonl"))
 expect("D-R5: a missing crossing file is no evidence", (status, "| **FAIL** |" in row), (1, True))
 status, row = crossing_report(copied, phone)
 expect("D-R5: a run without K3 gets no crossing row", (status, row), (0, ""))
+status, row = crossing_report(phone, k3_results("k3-crossed-compact", (True, True), regular=False))
+expect("Astra R5: a crossing K3 not from a regular-width destination is no evidence", (status, "| **FAIL** |" in row),
+       (1, True))
+legacy = os.path.join(work, "k3-legacy.jsonl")
+with open(legacy, "w", encoding="utf-8") as fh:
+    fh.write(json.dumps({"check": K3, "pass": True, "arms": [{"arm": "swiftui", "crossed_boundary": True},
+                                                             {"arm": "textkit2", "crossed_boundary": True}]}) + "\n")
+status, row = crossing_report(phone, legacy)
+expect("Astra R5: a crossing K3 without regular_width (an older build) is no evidence",
+       (status, "| **FAIL** |" in row), (1, True))
 
 # ---- one request over the file channel ----------------------------------------
 channel = os.path.join(work, "channel-serve")

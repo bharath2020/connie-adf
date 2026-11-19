@@ -60,15 +60,16 @@ SUBCOMMANDS
            [--crossing-results FILE]...
 
 K3 COLUMN CROSSING (review D-R5)
-    K3 gates the side-by-side/stacked column boundary only where the
-    columns sit side by side at Text Size 0 (a regular width: the iPad); a
-    phone stacks them at every size and records `crossed_boundary` false.
-    So when --results holds a K3 record, the report adds the row
-    "K3 column boundary crossed" and fails unless some passing K3 record
-    whose two arms (swiftui, textkit2) both have crossed_boundary true is
-    in --results (this run was on a regular width) or in a
-    --crossing-results file (lifecycle-gate.sh --k3-crossing: an earlier
-    run of the same build on a regular-width destination).
+    K3 gates the side-by-side/stacked column boundary only on a
+    regular-width destination (an iPad: K3 sets `regular_width` from the
+    device, never from the layout drawn, and then requires side by side at
+    Text Size 0); a phone stacks the columns at every size and records
+    `crossed_boundary` false. So when --results holds a K3 record, the
+    report adds the row "K3 column boundary crossed" and fails unless some
+    passing K3 record whose two arms (swiftui, textkit2) both have
+    regular_width and crossed_boundary true is in --results (this run was
+    on an iPad) or in a --crossing-results file (lifecycle-gate.sh
+    --k3-crossing: an earlier iPad run of the same build).
 """
 
 from __future__ import annotations
@@ -290,12 +291,13 @@ def read_results(path: str) -> list[dict]:
 
 
 def k3_crossed(entry: dict) -> bool:
-    """A passing K3 record whose two arms both crossed the column boundary
-    both ways (side by side -> stacked -> side by side)."""
+    """A passing K3 record from a regular-width destination whose two arms
+    both crossed the column boundary both ways (side by side -> stacked ->
+    side by side)."""
     arms = entry.get("arms") if isinstance(entry.get("arms"), list) else []
     return (str(entry.get("check", "")).startswith(K3_CHECK) and entry.get("pass") is True
             and sorted(str(arm.get("arm")) for arm in arms if isinstance(arm, dict)) == ["swiftui", "textkit2"]
-            and all(arm.get("crossed_boundary") is True for arm in arms))
+            and all(arm.get("regular_width") is True and arm.get("crossed_boundary") is True for arm in arms))
 
 
 def k3_crossing_row(entries: list[dict], crossing: dict[str, list[dict]]) -> dict | None:
@@ -310,8 +312,8 @@ def k3_crossing_row(entries: list[dict], crossing: dict[str, list[dict]]) -> dic
             return {"check": K3_CROSSING_CHECK, "pass": True, "source": path}
     return {"check": K3_CROSSING_CHECK, "pass": False,
             "source": ", ".join(crossing) or "no --crossing-results",
-            "why": "no passing K3 record crossed the column boundary on both arms (a compact width stacks the "
-                   "columns at every size): run K3 on a regular-width destination and pass that run with "
+            "why": "no passing K3 record from a regular-width destination crossed the column boundary on both "
+                   "arms (a phone stacks the columns at every size): run K3 on an iPad and pass that run with "
                    "lifecycle-gate.sh --k3-crossing <its --out>"}
 
 
