@@ -3654,6 +3654,13 @@ extension LifecycleUITests {
     /// merely flung short.
     static let kFlingSwipeCap = 80
 
+    /// The most drags `kFlingEndToEnd` spends on one leg steering an
+    /// endpoint that is in the tree but outside the viewport (a row the
+    /// lazy stack prefetched, or one the last fling carried past) into it:
+    /// a loop guard. Each drag is at most 300 pt and aims at the element's
+    /// frame, so 10 cover about four screens.
+    static let kFlingSteerCap = 10
+
     /// What `kFlingEndToEnd` saw.
     private struct KFlings {
         var failures: [String] = []
@@ -3661,40 +3668,69 @@ extension LifecycleUITests {
         var ok: Bool { failures.isEmpty }
     }
 
-    /// `rounds` end-to-end flings: fast swipes toward the end until `end`
-    /// is in the tree, then back until the label `start` is (at most
-    /// `kFlingSwipeCap` swipes each way). Each leg must reach its end, after
-    /// at least one swipe: a leg that ran out of swipes, or never had to
-    /// fling, fails.
+    /// `rounds` end-to-end flings: toward the end until `end` intersects the
+    /// viewport, then back until the label `start` does (Astra delta R7: an
+    /// endpoint is reached by its frame, as K9's are, not by being in the
+    /// tree, where prefetched rows sit outside the viewport). Each leg flings
+    /// with fast swipes while its endpoint is not in the tree (at most
+    /// `kFlingSwipeCap`), then steers it into the viewport with drags aimed
+    /// at its frame (at most `kFlingSteerCap`). Each leg must reach its
+    /// endpoint after at least one fast swipe: a leg that ran out, or never
+    /// had to fling, fails.
     private func kFlingEndToEnd(_ reader: ReaderDriver, end: ContainerLeaf, start: String, rounds: Int) -> KFlings {
-        let cap = Self.kFlingSwipeCap
+        let cap = Self.kFlingSwipeCap, steerCap = Self.kFlingSteerCap
+        let driver = ContainerDriver(wrapping: reader)
         let scroll = reader.app.scrollViews.firstMatch
         let endElement = reader.element(labelPrefix: end.prefix)
         let startElement = reader.element(labelled: start)
+        /// One leg: (fast swipes, steering drags, whether `element` ended
+        /// intersecting the viewport).
+        func leg(to element: XCUIElement, towardEnd: Bool) -> (swipes: Int, steers: Int, reached: Bool) {
+            var swipes = 0, steers = 0
+            while !driver.isPartlyShown(element) {
+                if element.exists {
+                    guard steers < steerCap else { break }
+                    let frame = element.frame, viewport = reader.viewport
+                    reader.drag(by: frame.minY >= viewport.maxY ? min(300, frame.minY - viewport.maxY + 40)
+                        : -min(300, max(viewport.minY - frame.maxY, 0) + 40))
+                    reader.pause(0.4)
+                    steers += 1
+                } else {
+                    guard swipes < cap else { break }
+                    if towardEnd { scroll.swipeUp(velocity: .fast) } else { scroll.swipeDown(velocity: .fast) }
+                    swipes += 1
+                }
+            }
+            return (swipes, steers, driver.isPartlyShown(element))
+        }
         var result = KFlings()
         var swipes: [[Int]] = []
+        var steers: [[Int]] = []
         var reached: [[Bool]] = []
         for round in 1 ... rounds {
-            var down = 0, up = 0
-            while !endElement.exists, down < cap {
-                scroll.swipeUp(velocity: .fast)
-                down += 1
+            let down = leg(to: endElement, towardEnd: true)
+            let up = leg(to: startElement, towardEnd: false)
+            if !down.reached {
+                result.failures.append("fling round \(round): \(end.sentinel) never intersected the viewport "
+                    + "(\(down.swipes) swipes, \(down.steers) steering drags)")
             }
-            let reachedEnd = endElement.exists
-            while !startElement.exists, up < cap {
-                scroll.swipeDown(velocity: .fast)
-                up += 1
+            if down.reached, down.swipes == 0 {
+                result.failures.append("fling round \(round): \(end.sentinel) reached before any fast swipe")
             }
-            let reachedStart = startElement.exists
-            if !reachedEnd { result.failures.append("fling round \(round): \(end.sentinel) not reached in \(cap) swipes") }
-            if reachedEnd, down == 0 { result.failures.append("fling round \(round): \(end.sentinel) in the tree before any swipe") }
-            if !reachedStart { result.failures.append("fling round \(round): '\(start)' not reached in \(cap) swipes back") }
-            if reachedStart, up == 0 { result.failures.append("fling round \(round): '\(start)' in the tree before any swipe back") }
-            swipes.append([down, up])
-            reached.append([reachedEnd, reachedStart])
+            if !up.reached {
+                result.failures.append("fling round \(round): '\(start)' never intersected the viewport on the way back "
+                    + "(\(up.swipes) swipes, \(up.steers) steering drags)")
+            }
+            if up.reached, up.swipes == 0 {
+                result.failures.append("fling round \(round): '\(start)' reached before any fast swipe back")
+            }
+            swipes.append([down.swipes, up.swipes])
+            steers.append([down.steers, up.steers])
+            reached.append([down.reached, up.reached])
         }
-        result.figures = ["rounds": rounds, "swipes_down_up": swipes, "reached_end_start": reached,
-                          "end": end.sentinel, "start": start, "swipe_cap": cap]
+        result.figures = ["rounds": rounds, "swipes_down_up": swipes, "steer_drags_down_up": steers,
+                          "reached_end_start": reached, "reached_by": "frame intersects the viewport (as K9)",
+                          "end": end.sentinel, "start": start, "swipe_cap": cap, "steer_cap": steerCap]
         return result
     }
 
