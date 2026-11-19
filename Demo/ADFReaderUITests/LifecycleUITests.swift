@@ -3158,12 +3158,12 @@ extension LifecycleUITests {
     /// and back first caches the distant container roots as spacers. Then a
     /// no-change control (the same pause and re-anchor without a change),
     /// a rotation round trip, Text Size 0 → 3 → 0 and the column boundary
-    /// leg, Text Size 0 → the cut-off pair → 0. The pair is
-    /// `ContainerDriver.containerSizeCutoff` (lead call C53,
-    /// `TextKit2Scope.containerSizeKeepsRenderer`): accessibility3, the last
-    /// size at which a container body keeps TextKit 2, then accessibility4,
-    /// from which every container body keeps SwiftUI. `LayoutColumnsView`
-    /// stacks at every width at the accessibility sizes, so a pair below
+    /// leg, Text Size 0 → the cut-off pair → accessibility1 → 0. The pair
+    /// is `ContainerDriver.containerSizeCutoff` (lead call C55,
+    /// `TextKit2Scope.containerSizeKeepsRenderer`): xxLarge, the last size
+    /// at which a container body keeps TextKit 2, then xxxLarge, from which
+    /// every container body keeps SwiftUI. `LayoutColumnsView` stacks at
+    /// every width only at the accessibility sizes, so a pair below
     /// accessibility1 goes on to accessibility1 (the crossing needs a
     /// stacked stage). Each round
     /// trip is measured from KP-COL25-A after re-aligning it (the rotation
@@ -3177,19 +3177,22 @@ extension LifecycleUITests {
     /// asserted at every stage (parked, control, rotated, back, at
     /// xxxLarge, after the size steps, at each size of the boundary leg and
     /// back; at least one tracked leaf in the tree at each), the anchor in
-    /// the tree at each but the rotated one and xxxLarge. On TextKit 2 the
-    /// stacked column text is TextKit 2 at the pair's first size and
-    /// SwiftUI at its second on every device: the size rule's engine flip
-    /// is gated at the cut-off, not tolerated. The columns must stack at
+    /// the tree at each but the rotated one and xxxLarge. On TextKit 2,
+    /// where the columns stack (a phone), the column text is TextKit 2 at
+    /// the pair's first size and SwiftUI at its second: the size rule's
+    /// engine flip is gated at the cut-off, not tolerated. The columns must stack at
     /// every accessibility size. The layout at size 0 is expected from the
     /// destination, never read from the layout drawn
     /// (`ContainerDriver.regularWidthDestination`, Astra delta R5): on an
     /// iPad (regular width) the columns must sit side by side at size 0
     /// and the boundary leg must cross it both ways (side by side →
-    /// stacked → side by side, gated `crossed_boundary`), so the column
-    /// text changes engine twice under the switch; a phone (compact width
-    /// in portrait) must stack them at size 0 and records the boundary as
-    /// not crossable there. Live
+    /// stacked → side by side, gated `crossed_boundary`). Under C55 the
+    /// iPad's column text is SwiftUI at every stage on both arms (side by
+    /// side below the accessibility sizes, past the cut-off at them), so
+    /// there the leg proves the layout crossing and the engines, not a
+    /// TextKit 2 flip; a phone (compact width in portrait) must stack them
+    /// at size 0, records the boundary as not crossable, and gates the
+    /// flip. Live
     /// TextKit 2 rows: after Text Size 3 and back at most the count before
     /// + `unshownRowAllowance` (no mass re-materialisation, ADR §16); after
     /// the boundary leg back at most its own starting count + the same
@@ -3300,12 +3303,12 @@ extension LifecycleUITests {
             let sizeShift = LabelShift(from: s0, to: s1, scale: scale)
             try engines("xxxLarge and back")
 
-            // The column boundary leg: the cut-off pair (C53: accessibility3,
-            // the last size whose container bodies keep TextKit 2, then
-            // accessibility4, from which they keep SwiftUI), so the engine
-            // flip is gated exactly there; then accessibility1 when the pair
-            // lies below it, because the columns stack at every width only at
-            // the accessibility sizes.
+            // The column boundary leg: the cut-off pair (C55: xxLarge, the
+            // last size whose container bodies keep TextKit 2, then
+            // xxxLarge, from which they keep SwiftUI), so the engine flip is
+            // gated exactly there; then accessibility1 when the pair lies
+            // below it (it does under C55), because the columns stack at
+            // every width only at the accessibility sizes.
             let cutoff = ContainerDriver.containerSizeCutoff
             if cutoff.firstSwiftUI.rawValue != cutoff.lastTextKit2.rawValue + 1 {
                 armFailures.append("the cut-off pair is not two adjacent sizes: \(cutoff)")

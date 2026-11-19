@@ -478,14 +478,15 @@ struct ContainerDriver {
         return abs(first.frame.minY - second.frame.minY) < 4 && second.frame.minX > first.frame.maxX
     }
 
-    /// The container size rule's cut-off (lead call C53,
-    /// `TextKit2Scope.containerSizeKeepsRenderer`, `size < .accessibility4`):
-    /// the last Text Size at which a container body keeps TextKit 2 and the
-    /// first at which every container body keeps SwiftUI. K3's size stages
-    /// read only this pair (`columnTextKit2(_:sideBySide:size:)`); when
-    /// production moves the cut-off, change this one line (for
-    /// `size < .xxxLarge`: `(.xxLarge, .xxxLarge)`).
-    static let containerSizeCutoff: (lastTextKit2: TextSizeStep, firstSwiftUI: TextSizeStep) = (.accessibility3, .accessibility4)
+    /// The container size rule's cut-off (lead call C55, the pre-committed
+    /// rule of review D-R4: `TextKit2Scope.containerSizeKeepsRenderer`,
+    /// `size < .xxxLarge`): the last Text Size at which a container body
+    /// keeps TextKit 2 and the first at which every container body keeps
+    /// SwiftUI. K3's size stages read only this pair
+    /// (`columnTextKit2(_:sideBySide:size:)`); when production moves the
+    /// cut-off, change this one line (C53's `size < .accessibility4` was
+    /// `(.accessibility3, .accessibility4)`).
+    static let containerSizeCutoff: (lastTextKit2: TextSizeStep, firstSwiftUI: TextSizeStep) = (.xxLarge, .xxxLarge)
 
     /// Whether the columns must sit side by side at Text Size 0 in
     /// portrait, from the destination alone, never from the layout drawn

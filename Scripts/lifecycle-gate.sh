@@ -98,9 +98,9 @@
 #                   code child; ~8 min),
 #                   testK3WidthAndTypeSizeChangesInContainers (K3: rotation,
 #                   Text Size 0 → 3 → 0 and the size rule's cut-off leg
-#                   0 → accessibility3 → accessibility4 → 0 at the columns
-#                   of containers-parity, per arm; the column crossing
-#                   needs a regular width: --k3-crossing; ~10 min),
+#                   0 → xxLarge → xxxLarge → accessibility1 → 0 at the
+#                   columns of containers-parity, per arm; the column
+#                   crossing needs a regular width: --k3-crossing; ~10 min),
 #                   testK4SwitchDuringLoadAndSearchInContainers (K4: a
 #                   switch during the streaming load, task state, a search
 #                   in a nested expand and in a caption; ~4 min),
