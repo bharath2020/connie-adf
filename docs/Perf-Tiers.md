@@ -66,7 +66,11 @@ scratch root (`<root>/lock`); a second run waits for it. Rules
 - **Instructions and mallocs**: WARN at +2-5 %, FAIL at ≥ +5 % vs the
   same-session base. A line whose calibrated cross-process noise is higher
   gets max(2 %, noise) / max(5 %, 2 × noise); today only code-SwiftUI
-  (2.3 %) and containers-TK2 (2.1 %) are raised. Rep CV over 1 % is
+  (2.3 %) and containers-TK2 (2.1 %) are raised. An instruction rise
+  counts only when the cheapest rep rose too: on a loaded host some reps
+  do extra main-thread work on both sides (code slice: two of five reps
+  at +45 %), which can lift a median but not the minimum. Such a line
+  shows the smaller `min Δ` next to its verdict. Rep CV over 1 % is
   flagged `NOISY` (informational; the containers slice usually is).
 - **TK2 ÷ SwiftUI instruction ratio** per fixture, against budgets
   calibrated from 10 main passes (max × 1.02; `--calibrate 10 main

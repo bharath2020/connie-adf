@@ -26,7 +26,8 @@
 #                 simulator.
 #   --device-type <name>      for a created simulator (default "iPhone 17 Pro").
 #   --runtime <id>            for a created simulator (default the newest
-#                 available iOS runtime >= 26; pin it to compare sessions).
+#                 available iOS runtime >= 26 that supports --device-type;
+#                 pin it to compare sessions).
 #   --reps N      measured reps per renderer per slice (default 5).
 #   --passes N    probe passes per ref, base and candidate interleaved;
 #                 a side's passes combine by median (default 1).
@@ -389,8 +390,8 @@ ensure_device() {
     fi
     local runtime="$RUNTIME"
     if [[ -z "$runtime" ]]; then
-        runtime="$(xcrun simctl list runtimes -j | python3 -I "$HELPER" pick-runtime --min 26)" \
-            || die "no available iOS 26+ simulator runtime"
+        runtime="$(xcrun simctl list runtimes -j | python3 -I "$HELPER" pick-runtime --min 26 --device-type "$DEVICE_TYPE")" \
+            || die "no available iOS 26+ simulator runtime supports $DEVICE_TYPE"
     fi
     UDID="$(xcrun simctl create "perf-probe-$$" "$DEVICE_TYPE" "$runtime")" || die "simctl create failed"
     CREATED=1

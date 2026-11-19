@@ -17,7 +17,8 @@ USAGE
         [--budgets Scripts/perf-probe-budgets.json] [--margin-pct 2] \\
         --out <calibrated.json>
     # newest available iOS simulator runtime >= --min (simctl JSON on stdin):
-    xcrun simctl list runtimes -j | python3 -I Scripts/perf_probe.py pick-runtime --min 26
+    xcrun simctl list runtimes -j | python3 -I Scripts/perf_probe.py pick-runtime --min 26 \
+        [--device-type "iPhone 17 Pro"]   # newest runtime >= 26 that supports it
     # mirror a directory, rewriting only changed files (keeps mtimes, so
     # builds of an exported tree stay incremental):
     python3 -I Scripts/perf_probe.py sync <src> <dst> [--keep .swiftpm --keep .build]
@@ -37,8 +38,12 @@ RULES (thresholds from the budgets file; defaults in DEFAULT_BUDGETS)
                    max(fail_pct, noise_fail_factor × noise), noise =
                    instruction_noise_pct["tier/fixture/renderer"], the
                    spread (max/min − 1) of the pass medians in a
-                   calibration. Either side's rep CV above noise_cv_pct (1)
-                   adds NOISY (rerun before trusting it).
+                   calibration. A rise counts only when the minimum rep
+                   rose too (verdict on the smaller of the median Δ and
+                   the min Δ; extra work in some reps only adds
+                   instructions); a median rise the minimum does not
+                   share is flagged "min Δ". Either side's rep CV above
+                   noise_cv_pct (1) adds NOISY (rerun before trusting it).
     mallocs        render: main-thread count; parse: all threads. Same
                    thresholds as instructions (mallocs_*_pct), raised by
                    the calibrated malloc_noise_pct the same way.
@@ -222,6 +227,11 @@ def instr_median(record):
     return stats.get("median")
 
 
+def instr_min(record):
+    stats = (record or {}).get("instructions") or {}
+    return stats.get("min")
+
+
 def compare(args):
     budgets = load_budgets(args.budgets)
     base = combine(load_lines(args.base))
@@ -244,7 +254,14 @@ def compare(args):
         noise = (budgets.get("instruction_noise_pct") or {}).get(f"{tier}/{fixture}/{renderer}") or 0.0
         warn_at = max(budgets["instructions_warn_pct"], budgets["noise_warn_factor"] * noise)
         fail_at = max(budgets["instructions_fail_pct"], budgets["noise_fail_factor"] * noise)
-        v = threshold_verdict(d_instr, warn_at, fail_at)
+        # Extra work in a rep (a loaded host purging system caches) only
+        # adds instructions, and can lift the median of a few reps on both
+        # sides. A rise counts only when the least-disturbed rep (the
+        # minimum) rose as well.
+        d_min = pct(instr_min(b), instr_min(c))
+        v = threshold_verdict(d_instr if d_min is None or d_instr is None else min(d_instr, d_min), warn_at, fail_at)
+        if RANK[threshold_verdict(d_instr, warn_at, fail_at)] > RANK[v]:
+            flags.append(f"min Δ {fmt_pct(d_min)}")
         verdict = max(verdict, v, key=RANK.get)
         noisy = [side for side, r in (("base", b), ("cand", c))
                  if ((r.get("instructions") or {}).get("cv_pct") or 0) > budgets["noise_cv_pct"]]
@@ -509,6 +526,9 @@ def pick_runtime(args):
         version = tuple(int(p) for p in str(runtime.get("version", "0")).split(".") if p.isdigit())
         if not version or version[0] < args.min:
             continue
+        names = {d.get("name") for d in runtime.get("supportedDeviceTypes", [])}
+        if args.device_type and names and args.device_type not in names:
+            continue
         if best is None or version > best[0]:
             best = (version, runtime["identifier"])
     if best is None:
@@ -538,6 +558,7 @@ def main():
     k.add_argument("--meta", action="append")
     p = sub.add_parser("pick-runtime")
     p.add_argument("--min", type=int, default=26)
+    p.add_argument("--device-type")
     s = sub.add_parser("sync")
     s.add_argument("src")
     s.add_argument("dst")
