@@ -83,7 +83,12 @@ before it reads a saved token. Signing with a stable identity stops that.
   `XXXX-XXXX-XXXX-XXXX`, with a countdown and Cancel. It listens only while the
   screen is open (5 min, one credential). Run the command on the Mac, type the
   code, then **Add** on "Add <site> as <email>?" as with a scan. A mistyped code
-  sends nothing and the phone keeps waiting. The app calls
+  sends nothing and the phone keeps waiting (it shows the failed attempt). Leaving
+  the screen, Cancel, or the app going to the background stops the listener; on a
+  timeout or after Cancel, **Try Again** starts over with a new code. Without a
+  Wi-Fi/private IPv4 address it says to join Wi-Fi instead of showing a command.
+  The screen's hint names the Local Network permission, same Wi-Fi, and VPN
+  caveats (section 4). Cancel on "Add …?" discards the credential. The app calls
   `PhoneHandoffListener` (`start()`, `code.formatted`,
   `PhoneHandoffAddress.local(port:)?.pushCommand`, `waitForCredential()`,
   `cancel()`).
