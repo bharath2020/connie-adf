@@ -70,6 +70,18 @@ struct TextKit2SmartLinkTests {
         return hosted
     }
 
+    /// A host whose stages the test publishes by hand: its resolver is
+    /// asked for each of `urls` and never answers, so once they show
+    /// `.resolving` the coordinator publishes nothing more.
+    static func handPublished(_ json: String, renderer: ADFTextRenderer, urls: [String]) async throws -> Hosted {
+        let hosted = try await host(json, renderer: renderer, resolver: ScriptedSmartLinkResolver())
+        try await smartLinkEventually("the lookups started") {
+            urls.allSatisfy { hosted.model.smartLinks.stage(for: key($0)) == .resolving }
+        }
+        try await hosted.settle()
+        return hosted
+    }
+
     static func key(_ url: String) -> SmartLinkKey { SmartLinkKey(url)! }
 
     static func actionNames(_ row: TextKit2RowView?) -> [String] {
@@ -465,9 +477,8 @@ struct TextKit2SmartLinkTests {
             ("resolved issue", .resolved(ADFSmartLinkMetadata(title: "Fix the cache", icon: .issue)), "See Issue, Fix the cache now"),
             ("failed", .failed(.unauthorized), "See \(Self.a) now"),
         ]
-        // No resolver: nothing is asked, the stages are published by hand.
-        let textKit2 = try await Self.host(json, renderer: .textKit2, resolver: nil)
-        let swiftUI = try await Self.host(json, renderer: .swiftUI, resolver: nil)
+        let textKit2 = try await Self.handPublished(json, renderer: .textKit2, urls: [Self.a])
+        let swiftUI = try await Self.handPublished(json, renderer: .swiftUI, urls: [Self.a])
         defer {
             textKit2.close()
             swiftUI.close()
@@ -499,6 +510,33 @@ struct TextKit2SmartLinkTests {
                 #expect(swiftUI.model.smartLinks.leafBodiesByOwner["0.0"] != nil, "\(name): the SwiftUI leaf did not redraw")
             }
             #expect(TextKit2FallbackTests.rows(in: swiftUI.root).isEmpty, "SwiftUI built TextKit 2 rows")
+        }
+    }
+
+    @Test("no resolver: both renderers draw every link as authored, whatever the coordinator holds")
+    func noResolverLeavesLinksAsAuthored() async throws {
+        let json = Self.document([Self.paragraph(Self.text("See "), Self.link(Self.a), Self.text(" now"))])
+        for renderer in [ADFTextRenderer.swiftUI, .textKit2] {
+            let hosted = try await Self.host(json, renderer: renderer, resolver: nil, height: 600)
+            defer { hosted.close() }
+            let scroll = try #require(Self.scrollView(in: hosted.root))
+            scroll.showsVerticalScrollIndicator = false
+            scroll.showsHorizontalScrollIndicator = false
+            try await hosted.settle()
+            let before = try TK2Parity.bitmap(of: hosted.window, width: 390)
+
+            hosted.model.smartLinks.entry(for: Self.key(Self.a)).publish(.resolved(Self.page))
+            try await hosted.settle()
+            let after = try TK2Parity.bitmap(of: hosted.window, width: 390)
+            #expect(before.rgba == after.rgba, "\(renderer): a published title changed the drawing")
+            if renderer == .textKit2 {
+                let row = try #require(hosted.rows()["0.0"], "no TextKit 2 row")
+                #expect(row.attributed.string == "See \(Self.a) now", "drew \(row.attributed.string)")
+                #expect(!Self.hasAttachment(row))
+                #expect(row.accessibilityLabel == "See \(Self.a) now", "label \(row.accessibilityLabel ?? "nil")")
+            } else {
+                #expect(TextKit2FallbackTests.rows(in: hosted.root).isEmpty, "SwiftUI built TextKit 2 rows")
+            }
         }
     }
 

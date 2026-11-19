@@ -127,8 +127,9 @@ struct SmartLinkAccessibilityTests {
     }
 
     /// `model`'s blocks as the document draws them (`BlockView`), on the
-    /// SwiftUI renderer with the model's coordinator, without a scroll view.
-    static func host(_ model: ADFDocumentModel, opened: Opened) -> TK2Parity.Host {
+    /// SwiftUI renderer with the model's coordinator (none, as in a document
+    /// without a resolver, when `smartLinks` is false), without a scroll view.
+    static func host(_ model: ADFDocumentModel, opened: Opened, smartLinks: Bool = true) -> TK2Parity.Host {
         let blocks = VStack(alignment: .leading, spacing: 8) {
             ForEach(model.blocks) { block in
                 BlockView(block: block)
@@ -136,7 +137,7 @@ struct SmartLinkAccessibilityTests {
         }
         .environment(\.adfTheme, model.theme)
         .environment(\.adfTextRenderer, .swiftUI)
-        .environment(\.adfSmartLinks, model.smartLinks)
+        .environment(\.adfSmartLinks, smartLinks ? model.smartLinks : nil)
         .environment(\.openURL, OpenURLAction { url in
             opened.urls.append(url)
             return .handled
@@ -169,7 +170,7 @@ struct SmartLinkAccessibilityTests {
         let host = Self.host(model, opened: opened)
         defer { host.close() }
         // The TextKit 2 row of the same paragraph: the reference.
-        let textKit2 = try await T.host(T.document([sentence]), renderer: .textKit2, resolver: nil)
+        let textKit2 = try await T.handPublished(T.document([sentence]), renderer: .textKit2, urls: [a])
         defer { textKit2.close() }
 
         let stages: [(name: String, stage: SmartLinkStage, see: String, item: String, title: String?)] = [
@@ -264,6 +265,28 @@ struct SmartLinkAccessibilityTests {
         opened.urls = []
         #expect(first.actions.first.map { $0.actionHandler?($0) == true } == true)
         #expect(opened.urls == [URL(string: a)!], "opened \(opened.urls)")
+    }
+
+    @Test("without a resolver a paragraph and a list leader with a bare atlassian.net link keep SwiftUI's own link rotor")
+    func noResolverKeepsTheLinkRotor() async throws {
+        let previous = try Automation.set(1)
+        defer { _ = try? Automation.set(previous) }
+        let a = T.a
+        let model = try await Self.model(T.document([
+            T.paragraph(T.text("See "), T.link(a), T.text(" now")),
+            #"{"type":"bulletList","content":[{"type":"listItem","content":[\#(T.paragraph(T.text("Item "), T.link(a)))]}]}"#,
+        ]))
+        let host = Self.host(model, opened: Opened(), smartLinks: false)
+        defer { host.close() }
+        let see = "See \(a) now", item = "Item \(a)"
+        let tree = try await Self.read(host) { tree in
+            tree.contains { $0.label == see } && tree.contains { $0.label == item }
+        }
+        print("SMARTLINK_AX no resolver: \(tree)")
+        let paragraph = try #require(tree.first { $0.label == see }, "no paragraph in \(tree)")
+        let leader = try #require(tree.first { $0.label == item }, "no list leader in \(tree)")
+        #expect(paragraph.actionNames.isEmpty && leader.actionNames.isEmpty, "\(paragraph) \(leader)")
+        #expect(paragraph.rotors > 0 && leader.rotors > 0, "the link rotor is gone: \(paragraph) \(leader)")
     }
 }
 #endif

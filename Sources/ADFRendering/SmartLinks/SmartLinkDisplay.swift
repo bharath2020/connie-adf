@@ -375,8 +375,9 @@ struct SmartLinkAction: Hashable, Sendable {
 /// - Only the inputs change with the stage, never the modifier's shape, so
 ///   a stage change keeps the leaf's view identity. `SegmentedTextView`
 ///   applies it only in its branch for a merged leaf with smart-link keys
-///   (a constant for the leaf), and to an atom paragraph's link chunks; a
-///   leaf without keys draws its `Text` exactly as before.
+///   in a document with a resolver (a constant for the leaf), and to an
+///   atom paragraph's link chunks; any other leaf draws its `Text` exactly
+///   as before, so without a resolver iOS 17 / macOS 14 keep the rotor.
 struct SmartLinkSpeech: ViewModifier {
     /// The displayed text (`SmartLinkDisplay.apply`).
     let text: AttributedString

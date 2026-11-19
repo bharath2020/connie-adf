@@ -92,8 +92,8 @@ enum SmartLinkResolutionPreference {
 
 /// The persisted "Identify Renderer" switch
 /// (`ADFDocumentView(identifiesRenderer:)`), shared by `ReaderView`'s
-/// `@AppStorage` menu toggle and the `-identifyRenderer` launch argument
-/// (`-engineTint` is its old name, still accepted). A missing key means off.
+/// `@AppStorage` menu toggle and the `-identifyRenderer` launch argument.
+/// A missing key means off.
 ///
 /// It follows `RendererPreference` exactly: the flag writes `true` with an
 /// automation mark, the next launch without the flag removes a value

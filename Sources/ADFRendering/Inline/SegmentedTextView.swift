@@ -11,7 +11,8 @@ import ADFPreparation
 /// Smart links (`smartLinkKeys`, the owner's prepared keys): the leaf reads
 /// the coordinator's entries for exactly those keys and draws the displayed
 /// text (`SmartLinkDisplay`) after search painting. Empty keys — nearly
-/// every owner — read nothing and do nothing. While a link shows a stage
+/// every owner — and a document without a resolver (no `adfSmartLinks`)
+/// read nothing and do nothing. While a link shows a stage
 /// other than its prepared text, the leaf speaks the spoken text and offers
 /// an "Open link …" action per link (`SmartLinkSpeech`, view-level, so the
 /// callers' `textSelection(.enabled)` keeps it; in an atom paragraph each
@@ -54,7 +55,7 @@ struct SegmentedTextView: View {
         let composesSmartLinks = !stages.isEmpty
         let merged = Self.mergedText(displayed)
         Group {
-            if let merged, smartLinkKeys.isEmpty {
+            if let merged, smartLinks == nil || smartLinkKeys.isEmpty {
                 Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
             } else if let merged {
                 // A leaf with smart links (a constant for the leaf, so the

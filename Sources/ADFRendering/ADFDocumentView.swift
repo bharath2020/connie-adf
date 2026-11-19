@@ -13,6 +13,7 @@ public struct ADFDocumentView: View {
     private let mentionContent: (@MainActor (String) -> AnyView)?
     private let textRenderer: ADFTextRenderer
     private let identifiesRenderer: Bool
+    private let resolvesSmartLinks: Bool
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -44,7 +45,9 @@ public struct ADFDocumentView: View {
     ///   - smartLinkResolver: Looks up the titles of smart links (bare
     ///     `*.atlassian.net` links and inline cards) as they come on screen
     ///     (see `ADFSmartLinkResolver`). `nil`: every link stays as authored
-    ///     (inline cards keep their chips) and no lookup work is done. Handed
+    ///     (inline cards keep their chips), text leaves draw and speak it as
+    ///     a leaf without smart links does, and no lookup work is done.
+    ///     Installing or removing one rebuilds the text leaves once. Handed
     ///     to the model's per-document coordinator here, which is not
     ///     observable, so passing it invalidates nothing. Inline cards
     ///     become smart links only in documents whose blocks are prepared
@@ -84,6 +87,7 @@ public struct ADFDocumentView: View {
         self.textRenderer = textRenderer
         model.smartLinks.resolver = smartLinkResolver
         model.smartLinks.resolution = smartLinkResolution
+        self.resolvesSmartLinks = smartLinkResolver != nil
         self.identifiesRenderer = identifiesRenderer
         // Not observable: the report follows from a task.
         model.rendererIdentity.isIdentifying = identifiesRenderer
@@ -182,7 +186,7 @@ public struct ADFDocumentView: View {
         .environment(\.adfTaskStates, taskStates)
         .environment(\.adfMentionContent, mentionContent)
         .environment(\.adfDocumentSearch, model.search)
-        .environment(\.adfSmartLinks, model.smartLinks)
+        .environment(\.adfSmartLinks, resolvesSmartLinks ? model.smartLinks : nil)
         .environment(\.adfRendererIdentity, identifiesRenderer ? model.rendererIdentity : nil)
         .overlay { statusOverlay }
     }

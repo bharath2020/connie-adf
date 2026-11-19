@@ -65,8 +65,7 @@ final class RendererBadgeUITests: XCTestCase {
 
     func testIdentifyRendererMarksTheEngineThatDrew() throws {
         continueAfterFailure = true
-        // `-engineTint` is the switch's old name: the alias must still work.
-        let reader = ReaderDriver(launching: ["-fixture", "kitchen-sink", "-rendererReset", "-textkit2", "-engineTint"])
+        let reader = ReaderDriver(launching: ["-fixture", "kitchen-sink", "-rendererReset", "-textkit2", "-identifyRenderer"])
         reader.waitForRenderer("TextKit 2")
         let heading = reader.textKit2Row(labelled: KitchenSink.heading)
         XCTAssertTrue(heading.waitForExistence(timeout: 15), "\(KitchenSink.heading) is not a TextKit 2 row")

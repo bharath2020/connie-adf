@@ -42,12 +42,12 @@ import UIKit
 /// - `-rendererReset` removes that key first, so a UI test always starts on
 ///   SwiftUI regardless of what a previous run left behind. With both flags
 ///   the reset applies first, then `-textkit2`.
-/// - `-identifyRenderer` (old name `-engineTint`, still accepted) turns on
-///   the renderer menu's "Identify Renderer" switch for this launch
-///   (`ADFDocumentView(identifiesRenderer: true)`): every text block marks
-///   itself with the engine that actually drew it (`ADFTextEngine`: an
-///   orange fill and "SwiftUI" label, green "TextKit 2", blue "TextKit 1"
-///   for a TextKit 2 row whose links TextKit 1 lays out), so the text the
+/// - `-identifyRenderer` turns on the renderer menu's "Identify Renderer"
+///   switch for this launch (`ADFDocumentView(identifiesRenderer: true)`):
+///   every text block marks itself with the engine that actually drew it
+///   (`ADFTextEngine`: an orange fill and "SwiftUI" label, green
+///   "TextKit 2", blue "TextKit 1" for a TextKit 2 row whose links
+///   TextKit 1 lays out), so the text the
 ///   TextKit 2 renderer leaves on SwiftUI shows as SwiftUI. The toolbar
 ///   badge then shows the renderer's own report
 ///   (`ADFDocumentModel.rendererReport`): the engine that drew the text on
@@ -186,7 +186,7 @@ struct LaunchOptions: Sendable {
     /// `-smartLinkResolution <name>`: an `ADFSmartLinkResolution` raw value
     /// (`SmartLinkResolutionPreference` validates and applies it).
     var smartLinkResolution: String?
-    /// `-identifyRenderer` (or its old name `-engineTint`): the renderer
+    /// `-identifyRenderer`: the renderer
     /// identifies itself (`RendererIdentityPreference` applies it).
     var identifyRenderer = false
 
@@ -217,7 +217,7 @@ struct LaunchOptions: Sendable {
                 textKit2 = true
             case "-rendererReset":
                 rendererReset = true
-            case "-identifyRenderer", "-engineTint":
+            case "-identifyRenderer":
                 identifyRenderer = true
             case "-rendererStats":
                 rendererStats = true

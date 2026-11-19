@@ -17,8 +17,9 @@ import ADFPreparation
 /// - It attaches the leaf to the coordinator while it is materialised and
 ///   reports the leaf's own viewport visibility (`smartLinkAttachment`).
 ///
-/// With no smart links (`smartLinkKeys` empty — nearly every owner) it reads
-/// nothing and adds no modifier: the leaf is `TextEngineLeaf` as before.
+/// With no smart links (`smartLinkKeys` empty — nearly every owner) or no
+/// resolver (no `adfSmartLinks`) it reads nothing and adds no modifier: the
+/// leaf is `TextEngineLeaf` as before.
 struct SmartLinkTextLeaf<Fallback: View>: View {
     let segments: [InlineSegment]
     let smartLinkKeys: [SmartLinkKey]
@@ -48,7 +49,7 @@ struct SmartLinkTextLeaf<Fallback: View>: View {
         TextEngineLeaf(segments: textKit2Segments, style: style, ownerID: ownerID, allowsTextKit2: allowsTextKit2) {
             fallback
         }
-        .smartLinkAttachment(ownerID: ownerID, keys: smartLinkKeys)
+        .smartLinkAttachment(ownerID: ownerID, keys: smartLinks == nil ? [] : smartLinkKeys)
     }
 
     /// The segments the TextKit 2 arm judges and draws: the displayed text

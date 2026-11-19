@@ -1289,8 +1289,9 @@ private struct ADFSmartLinksKey: EnvironmentKey {
 
 extension EnvironmentValues {
     /// The document's smart-link coordinator, injected by `ADFDocumentView`
-    /// (the reference never changes, so injecting it invalidates nothing).
-    /// `nil` outside a document view: links stay plain.
+    /// while it has a resolver (the reference never changes, so injecting it
+    /// invalidates nothing). `nil` outside a document view or without a
+    /// resolver: links stay as authored and leaves add nothing for them.
     var adfSmartLinks: SmartLinkCoordinator? {
         get { self[ADFSmartLinksKey.self] }
         set { self[ADFSmartLinksKey.self] = newValue }
