@@ -316,6 +316,22 @@ enum ContainersDense {
     static func fraction(_ index: Int) -> String { containerFraction(index, of: preparedBlocks) }
 }
 
+// MARK: - Text Size steps
+
+/// A Text Size reached from the system's Large (the simulators' setting)
+/// by the toolbar's Text Size control, which walks
+/// `DynamicTypeSize.allCases`: `ReaderDriver.stepTextSize(n)` from
+/// `.large` lands on the case whose raw value is `n`. Launch with
+/// `-fontSizeStep 0`.
+enum TextSizeStep: Int, Comparable, CaseIterable, Sendable {
+    case large, xLarge, xxLarge, xxxLarge, accessibility1, accessibility2, accessibility3, accessibility4, accessibility5
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    /// `LayoutColumnsView` stacks its columns at every width from here.
+    var isAccessibility: Bool { self >= .accessibility1 }
+}
+
 // MARK: - Interaction probe (`-interactionProbe`)
 
 /// The About sheet's interaction-probe fields: task dispatches and URL
@@ -461,15 +477,24 @@ struct ContainerDriver {
         return abs(first.frame.minY - second.frame.minY) < 4 && second.frame.minX > first.frame.maxX
     }
 
-    /// Whether a column leaf is drawn by TextKit 2 in an arm: under the
-    /// TextKit 2 switch only while its columns stack. Side by side no
-    /// family keeps the renderer (PR 4 step 4: the off-grid column probe,
+    /// The container size rule's cut-off (lead call C53,
+    /// `TextKit2Scope.containerSizeKeepsRenderer`, `size < .accessibility4`):
+    /// the last Text Size at which a container body keeps TextKit 2 and the
+    /// first at which every container body keeps SwiftUI. K3's size stages
+    /// read only this pair (`columnTextKit2(_:sideBySide:size:)`); when
+    /// production moves the cut-off, change this one line (for
+    /// `size < .xxxLarge`: `(.xxLarge, .xxxLarge)`).
+    static let containerSizeCutoff: (lastTextKit2: TextSizeStep, firstSwiftUI: TextSizeStep) = (.accessibility3, .accessibility4)
+
+    /// Whether a column leaf is drawn by TextKit 2 in an arm at Text Size
+    /// `size`: under the TextKit 2 switch only while its columns stack and
+    /// the size is below the cut-off. Side by side no family keeps the
+    /// renderer (PR 4 step 4: the off-grid column probe,
     /// `TextKit2Scope.horizontalColumnKeepsRenderer`), so the column text
-    /// stays SwiftUI there in both arms; so does every container body at
-    /// accessibility4 and above (`atAccessibility4`: lead call C53,
-    /// `TextKit2Scope.containerSizeKeepsRenderer`).
-    static func columnTextKit2(_ textKit2: Bool, sideBySide: Bool, atAccessibility4: Bool = false) -> Bool {
-        textKit2 && !sideBySide && !atAccessibility4
+    /// stays SwiftUI there in both arms; so does every container body from
+    /// `containerSizeCutoff.firstSwiftUI` (lead call C53).
+    static func columnTextKit2(_ textKit2: Bool, sideBySide: Bool, size: TextSizeStep = .large) -> Bool {
+        textKit2 && !sideBySide && size < containerSizeCutoff.firstSwiftUI
     }
 
     // MARK: Geometry
