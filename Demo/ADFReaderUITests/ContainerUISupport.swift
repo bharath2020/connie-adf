@@ -465,9 +465,11 @@ struct ContainerDriver {
     /// TextKit 2 switch only while its columns stack. Side by side no
     /// family keeps the renderer (PR 4 step 4: the off-grid column probe,
     /// `TextKit2Scope.horizontalColumnKeepsRenderer`), so the column text
-    /// stays SwiftUI there in both arms.
-    static func columnTextKit2(_ textKit2: Bool, sideBySide: Bool) -> Bool {
-        textKit2 && !sideBySide
+    /// stays SwiftUI there in both arms; so does every container body at
+    /// accessibility4 and above (`atAccessibility4`: lead call C53,
+    /// `TextKit2Scope.containerSizeKeepsRenderer`).
+    static func columnTextKit2(_ textKit2: Bool, sideBySide: Bool, atAccessibility4: Bool = false) -> Bool {
+        textKit2 && !sideBySide && !atAccessibility4
     }
 
     // MARK: Geometry

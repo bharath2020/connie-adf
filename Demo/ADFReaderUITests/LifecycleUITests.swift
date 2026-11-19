@@ -3158,17 +3158,25 @@ extension LifecycleUITests {
     /// and back first caches the distant container roots as spacers. Then a
     /// no-change control (the same pause and re-anchor without a change),
     /// a rotation round trip, Text Size 0 → 3 → 0 and the column boundary
-    /// leg, Text Size 0 → 4 → 0: +4 is accessibility1 from the system's
-    /// large, where `LayoutColumnsView` stacks at every width. Each round
+    /// leg, Text Size 0 → 6 → 7 → 0: +6 is accessibility3 from the system's
+    /// large (`LayoutColumnsView` stacks at every width at the accessibility
+    /// sizes), the last size below the cut-off, and +7 is accessibility4,
+    /// from which every container body keeps SwiftUI (lead call C53,
+    /// `TextKit2Scope.containerSizeKeepsRenderer`). Each round
     /// trip is measured from KP-COL25-A after re-aligning it (the rotation
     /// can re-anchor the viewport in both arms, as on list-dense): drift ≤
     /// the arm's control drift + 2 px. The column text is TextKit 2 under
     /// the switch only while the columns stack (no family keeps the
-    /// renderer side by side, PR 4 step 4), so the engine every tracked
-    /// leaf in the tree must have follows the layout of the moment; it is
-    /// asserted at every stage (parked, control, rotated, back, after the
-    /// size steps, at accessibility1 and back), the anchor in the tree at
-    /// each but the rotated one. Where the columns sit side by side at
+    /// renderer side by side, PR 4 step 4) and the text size is below
+    /// accessibility4, so the engine every tracked leaf in the tree must
+    /// have follows the layout and size of the moment; it is asserted at
+    /// every stage (parked, control, rotated, back, at xxxLarge, after the
+    /// size steps, at accessibility3, at accessibility4 and back; at least
+    /// one tracked leaf in the tree at each), the anchor in the tree at
+    /// each but the rotated one and xxxLarge. On TextKit 2 the stacked
+    /// column text is TextKit 2 at accessibility3 and SwiftUI at
+    /// accessibility4 on every device: the size rule's engine flip is
+    /// gated at the cut-off, not tolerated. Where the columns sit side by side at
     /// size 0 (a regular-width device: the iPad), the boundary leg must
     /// cross it both ways (side by side → stacked → side by side, gated
     /// `crossed_boundary`), so the column text changes engine twice under
@@ -3177,8 +3185,8 @@ extension LifecycleUITests {
     /// TextKit 2 rows: after Text Size 3 and back at most the count before
     /// + `unshownRowAllowance` (no mass re-materialisation, ADR §16); after
     /// the boundary leg back at most its own starting count + the same
-    /// allowance (the rows the stacked columns made are released; the count
-    /// at accessibility1 is recorded). CPU settles ≤ 2 % within 5 s after
+    /// allowance (the rows the stacked columns made are released; the counts
+    /// at accessibility3 and accessibility4 are recorded). CPU settles ≤ 2 % within 5 s after
     /// each change. Passes after step 4.
     func testK3WidthAndTypeSizeChangesInContainers() throws {
         let agent = try HostAgent.fromEnvironment()
@@ -3207,28 +3215,34 @@ extension LifecycleUITests {
                 return driver.columnsSideBySide(KP.col25A, KP.col75A) == true ? "side-by-side" : "stacked"
             }
             /// The engine the column leaves have now: TextKit 2 under the
-            /// switch while the columns stack.
-            func engine() -> Bool {
-                ContainerDriver.columnTextKit2(textKit2, sideBySide: layout() == "side-by-side")
+            /// switch while the columns stack below accessibility4.
+            func engine(atAccessibility4: Bool) -> Bool {
+                ContainerDriver.columnTextKit2(textKit2, sideBySide: layout() == "side-by-side",
+                                               atAccessibility4: atAccessibility4)
             }
-            func aligned() throws -> [String: CGFloat] {
+            func aligned(atAccessibility4: Bool = false) throws -> [String: CGFloat] {
                 _ = driver.scroll(by: 300, until: driver.element(anchor), maxDrags: 10)
-                kWaitForEngine(driver, tracked.filter { driver.element($0).exists }, textKit2: engine())
+                kWaitForEngine(driver, tracked.filter { driver.element($0).exists },
+                               textKit2: engine(atAccessibility4: atAccessibility4))
                 return LabelShift.relative(Self.kTops(try reader.documentSnapshot(), tracked), to: anchor.sentinel) ?? [:]
             }
             /// Every tracked leaf in the tree has the engine of the layout
-            /// of the moment; the anchor must be in the tree (`anchored`).
-            func engines(_ stage: String, anchored: Bool = true) throws {
+            /// and text size of the moment; the anchor must be in the tree
+            /// (`anchored`).
+            func engines(_ stage: String, anchored: Bool = true, atAccessibility4: Bool = false) throws {
                 let current = layout()
                 let snapshot = try reader.documentSnapshot()
                 let present = tracked.filter { leaf in snapshot.all.contains { $0.label.hasPrefix(leaf.prefix) } }
+                if present.isEmpty { armFailures.append("\(stage): no tracked leaf is in the tree") }
                 if anchored, !present.contains(where: { $0.sentinel == anchor.sentinel }) {
                     armFailures.append("\(stage): \(anchor.sentinel) is not in the tree")
                 }
-                let expected = ContainerDriver.columnTextKit2(textKit2, sideBySide: current == "side-by-side")
+                let expected = ContainerDriver.columnTextKit2(textKit2, sideBySide: current == "side-by-side",
+                                                              atAccessibility4: atAccessibility4)
                 let wrong = Self.kWrongEngine(snapshot, present, textKit2: expected)
                 armFailures += wrong.map { "\(stage) (\(current)): \($0)" }
-                stages.append(["stage": stage, "layout": current, "expected_textkit2": expected,
+                stages.append(["stage": stage, "layout": current, "accessibility4": atAccessibility4,
+                               "expected_textkit2": expected,
                                "leaves_in_tree": present.map(\.sentinel), "wrong_engine": wrong])
             }
             func live() -> Int {
@@ -3263,6 +3277,7 @@ extension LifecycleUITests {
             let up = reader.stepTextSize(3)
             let upSettle = try agent.cpuSettleSeconds()
             let live3 = live()
+            try engines("text size 3", anchored: false)
             let down = reader.stepTextSize(-3)
             let downSettle = try agent.cpuSettleSeconds()
             let liveBack = live()
@@ -3270,30 +3285,39 @@ extension LifecycleUITests {
             let size = LabelShift(from: s0, to: s1, scale: scale)
             try engines("text size 3 and back")
 
-            // The column boundary: Text Size +4 is accessibility1, where the
-            // columns stack at every width.
+            // The column boundary: Text Size +6 is accessibility3, where the
+            // columns stack at every width and the text is still below the
+            // cut-off; then +1 more is accessibility4, where every container
+            // body keeps SwiftUI (call C53): the flip is gated exactly there.
             let b0 = try aligned()
             let layoutB0 = layout()
             let liveB0 = live()
-            let axUp = reader.stepTextSize(4)
+            let axUp = reader.stepTextSize(6)
             let axUpSettle = try agent.cpuSettleSeconds()
             _ = try aligned()
             let layoutAX = layout()
-            try engines("accessibility1")
-            attach(reader.app, "k3-\(arm)-accessibility1")
+            try engines("accessibility3")
+            attach(reader.app, "k3-\(arm)-accessibility3")
             let liveAX = live()
-            let axDown = reader.stepTextSize(-4)
+            let ax4Up = reader.stepTextSize(1)
+            let ax4UpSettle = try agent.cpuSettleSeconds()
+            _ = try aligned(atAccessibility4: true)
+            let layoutAX4 = layout()
+            try engines("accessibility4", atAccessibility4: true)
+            attach(reader.app, "k3-\(arm)-accessibility4")
+            let liveAX4 = live()
+            let axDown = reader.stepTextSize(-7)
             let axDownSettle = try agent.cpuSettleSeconds()
             let b1 = try aligned()
             let layoutB1 = layout()
             let liveB1 = live()
             let boundaryShift = LabelShift(from: b0, to: b1, scale: scale)
-            try engines("accessibility1 and back")
+            try engines("accessibility4 and back")
             reader.app.terminate()
 
             let crossable = layoutBefore == "side-by-side"
             let crossed = layoutB0 == "side-by-side" && layoutAX == "stacked" && layoutB1 == "side-by-side"
-            let settles = [rotatedSettle, rotationSettle, upSettle, downSettle, axUpSettle, axDownSettle]
+            let settles = [rotatedSettle, rotationSettle, upSettle, downSettle, axUpSettle, ax4UpSettle, axDownSettle]
                 .map { $0.seconds ?? .infinity }
             for (name, shift) in [("rotation", rotation), ("text size", size), ("boundary", boundaryShift)] {
                 if shift.common < 2 { armFailures.append("\(name): only \(shift.common) landmarks compared") }
@@ -3303,10 +3327,11 @@ extension LifecycleUITests {
                 }
             }
             for (name, value) in [("parked", layoutBefore), ("rotated back", layoutAfter), ("before the boundary leg", layoutB0),
-                                  ("back from accessibility1", layoutB1)] where value == "unknown" {
+                                  ("back from accessibility4", layoutB1)] where value == "unknown" {
                 armFailures.append("column layout unknown \(name)")
             }
-            if layoutAX != "stacked" { armFailures.append("the columns did not stack at accessibility1 (\(layoutAX))") }
+            if layoutAX != "stacked" { armFailures.append("the columns did not stack at accessibility3 (\(layoutAX))") }
+            if layoutAX4 != "stacked" { armFailures.append("the columns did not stack at accessibility4 (\(layoutAX4))") }
             if crossable, !crossed {
                 armFailures.append("the boundary was not crossed both ways: \(layoutB0) → \(layoutAX) → \(layoutB1)")
             }
@@ -3315,11 +3340,11 @@ extension LifecycleUITests {
                 armFailures.append("live rows jumped across the size steps: \(live0) → \(live3) → \(liveBack)")
             }
             if textKit2, liveB1 > liveB0 + Self.unshownRowAllowance {
-                armFailures.append("live rows after the boundary leg: \(liveB0) → \(liveAX) → \(liveB1)")
+                armFailures.append("live rows after the boundary leg: \(liveB0) → \(liveAX) → \(liveAX4) → \(liveB1)")
             }
             if up == nil || down != "100%" { armFailures.append("size readout \(up ?? "nil") → \(down ?? "nil")") }
-            if axUp == nil || axDown != "100%" {
-                armFailures.append("accessibility1 readout \(axUp ?? "nil") → \(axDown ?? "nil")")
+            if axUp == nil || ax4Up == nil || axUp == ax4Up || axDown != "100%" {
+                armFailures.append("accessibility readouts \(axUp ?? "nil") → \(ax4Up ?? "nil") → \(axDown ?? "nil")")
             }
             failures += armFailures.map { "\(arm): \($0)" }
             arms.append([
@@ -3327,14 +3352,15 @@ extension LifecycleUITests {
                 "rotation_worst": rotation.worstLabel, "size_px": Double(size.maxPixels), "size_worst": size.worstLabel,
                 "boundary_px": Double(boundaryShift.maxPixels), "boundary_worst": boundaryShift.worstLabel,
                 "layout": [layoutBefore, layoutRotated, layoutAfter],
-                "layout_boundary_leg": [layoutB0, layoutAX, layoutB1],
+                "layout_boundary_leg": [layoutB0, layoutAX, layoutAX4, layoutB1],
                 "crossed_boundary_rotation": layoutBefore != layoutRotated,
                 "crossed_boundary": crossed,
                 "boundary_gate": crossable ? "gated: side by side at size 0 (regular width)"
                     : "not crossable here: the columns stack at size 0 (compact width), recorded",
                 "settle_s": settles, "live_rows_size_0_3_0": [live0, live3, liveBack],
-                "live_rows_boundary_0_ax1_0": [liveB0, liveAX, liveB1],
-                "size_readouts": [up ?? "nil", down ?? "nil"], "accessibility1_readouts": [axUp ?? "nil", axDown ?? "nil"],
+                "live_rows_boundary_0_ax3_ax4_0": [liveB0, liveAX, liveAX4, liveB1],
+                "size_readouts": [up ?? "nil", down ?? "nil"],
+                "accessibility_readouts_ax3_ax4_0": [axUp ?? "nil", ax4Up ?? "nil", axDown ?? "nil"],
                 "stages": stages, "failures": armFailures,
             ])
         }
