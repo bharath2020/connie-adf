@@ -229,8 +229,9 @@ struct TextKit2OffGridWidthTests {
     /// last baseline differs between the arms at an equal height and
     /// identical pixels: at AX1 in a 320 pt document on 3x, SwiftUI's arm
     /// reports 515.625 (off the pixel grid) and the row 515.167, with or
-    /// without the row fix on captions. Recorded as a known issue, so a
-    /// change either way fails; every other case is hard.
+    /// without the row fix on captions. Recorded as a known issue where
+    /// the caption draws on TextKit 2 (from iOS 26), so a change either
+    /// way fails; every other case is hard.
     nonisolated static let captionLastBaselineResidual: [CGFloat: Set<String>] = [3: ["accessibility1 288.0"]]
 
     @Test("a caption in a panel at an off-grid child width sits and draws as SwiftUI's does")
@@ -283,7 +284,7 @@ struct TextKit2OffGridWidthTests {
                 if abs(ga.height - gb.height) > C.tolerance { caseFailures.append("height swiftUI=\(ga.height) textKit2=\(gb.height)") }
                 if abs(ga.first - gb.first) > C.tolerance { caseFailures.append("first baseline swiftUI=\(ga.first) textKit2=\(gb.first)") }
                 let lastDiffers = abs(ga.last - gb.last) > C.tolerance && abs(ga.last - gb.last - onePixel) > C.tolerance
-                if Self.captionLastBaselineResidual[scale, default: []].contains("\(size) \(width)") {
+                if draws, Self.captionLastBaselineResidual[scale, default: []].contains("\(size) \(width)") {
                     withKnownIssue("a caption in a panel: the last baseline guide differs at an equal height and identical pixels (\(label): swiftUI=\(ga.last) textKit2=\(gb.last))") {
                         #expect(!lastDiffers)
                     }
