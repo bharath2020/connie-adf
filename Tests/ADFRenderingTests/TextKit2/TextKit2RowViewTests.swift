@@ -169,6 +169,31 @@ struct TextKit2RowViewTests {
                 #expect(list.layoutResult(forProposedWidth: reported) == fresh, "\(size) at \(proposed): a list row lays out anew at \(reported)")
                 #expect(list.keptReportedLayoutCount == 0)
                 if fresh.lineCount != first.lineCount {
+                    // Delta review R6: only right after the narrower
+                    // proposal. A measurement at another width in between
+                    // is a real width change: the reported width lays out
+                    // anew, although the narrower layout is still cached.
+                    let moved = row(.root)
+                    _ = moved.layoutResult(forProposedWidth: proposed)
+                    _ = moved.layoutResult(forProposedWidth: proposed + 40)
+                    #expect(moved.cachedWidths.contains(proposed))
+                    #expect(moved.layoutResult(forProposedWidth: reported) == fresh, "\(size) at \(proposed): after another width, \(reported) lays out anew")
+                    #expect(moved.keptReportedLayoutCount == 0)
+                    // Asked again, the same answer; and back at the
+                    // narrower width then the reported one, kept again.
+                    #expect(moved.layoutResult(forProposedWidth: reported) == fresh)
+                    #expect(moved.layoutResult(forProposedWidth: proposed) == first)
+                    #expect(moved.layoutResult(forProposedWidth: reported) == first)
+                    #expect(moved.keptReportedLayoutCount == 1)
+                    // Natural-size and zero-width proposals are not bounded
+                    // measurements, and a repeated re-proposal is stable.
+                    let repeated = row(.root)
+                    _ = repeated.layoutResult(forProposedWidth: proposed)
+                    _ = repeated.layoutResult(forProposedWidth: nil)
+                    _ = repeated.layoutResult(forProposedWidth: 0)
+                    #expect(repeated.layoutResult(forProposedWidth: reported) == first)
+                    #expect(repeated.layoutResult(forProposedWidth: reported) == first)
+                    #expect(repeated.keptReportedLayoutCount == 2)
                     // New inputs (another size, Bold Text) clear every
                     // reported layout: back on the first inputs, the
                     // reported width lays out anew.

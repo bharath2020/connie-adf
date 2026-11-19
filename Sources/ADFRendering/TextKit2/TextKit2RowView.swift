@@ -114,6 +114,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// that it answered with the layout it reported
     /// (`layoutResult(forProposedWidth:)`). Read by tests only.
     private(set) var keptReportedLayoutCount = 0
+    /// The layout that answered the last bounded measurement of wrapping
+    /// text (`layoutResult(forProposedWidth:)`): the only one a
+    /// re-proposal of its reported width keeps. Cleared with the cache.
+    private var lastBoundedMeasurement: TextKit2LayoutResult?
 
     /// The block this row draws; also its accessibility identifier
     /// (`tk2-row:<ownerID>`).
@@ -235,6 +239,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         containerWidth = -1
         drawn = nil
         cache.removeAll()
+        lastBoundedMeasurement = nil
         switch (attributed.length > 0 ? attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle : nil)?.alignment {
         case .center: alignmentFactor = 0.5
         case .right: alignmentFactor = 1
@@ -262,8 +267,13 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// and pure in (inputs, width) but for one case:
     ///
     /// A paragraph or heading row (`ownerKind == .root`) proposed exactly
-    /// the width it reported for a narrower bounded proposal answers with
-    /// that proposal's layout. A line that fills its width reports the
+    /// the width it reported for a narrower bounded proposal, right after
+    /// that proposal, answers with that proposal's layout: only when the
+    /// bounded measurement before this one was the narrower one (delta
+    /// review R6). A measurement at any other width in between is a real
+    /// width change, and the reported width then lays out anew although
+    /// the narrower layout is still cached; natural-size and zero-width
+    /// proposals are not bounded measurements and change nothing. A line that fills its width reports the
     /// width ceiled to the pixel grid (`proposalCeil`), so a proposal a few
     /// ulps past a device pixel (a panel's child width, with its icon's
     /// measured width in the arithmetic: 225.66666666666669 at 3x) reports
@@ -295,13 +305,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         if let proposed, proposed.isFinite {
             guard proposed > 0 else { return .zero }
             if inputs.layoutPolicy == .wrapping {
-                if ownerKind == .root, let reported = cache.mostRecent(where: {
-                    $0.width != Self.unboundedWidth && $0.width < proposed && $0.size.width == proposed
-                }) {
+                if ownerKind == .root, let reported = lastBoundedMeasurement,
+                   reported.width != Self.unboundedWidth, reported.width < proposed, reported.size.width == proposed {
                     keptReportedLayoutCount += 1
                     return reported
                 }
-                return result(atWidth: proposed)
+                let measured = result(atWidth: proposed)
+                lastBoundedMeasurement = measured
+                return measured
             }
         }
         if let natural = cache.value(for: .infinity) { return natural }

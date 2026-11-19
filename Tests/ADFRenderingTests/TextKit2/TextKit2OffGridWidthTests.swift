@@ -208,6 +208,101 @@ struct TextKit2OffGridWidthTests {
         if scale == 3 { #expect(compared > 0, "no linked width reported a pixel at which a fresh layout has another line count") }
     }
 
+    /// Delta review R6: a caption's row is a `.root` row too, outside
+    /// `RichTextBlockView` (`MediaBlockView.caption`), so the row fix
+    /// covers it. A wrapping caption under a media box in a panel takes
+    /// the panel's child width, a few ulps past a pixel at some sizes. At
+    /// every size containers keep TextKit 2 and every iPhone document
+    /// width, the panel on both arms has the same height and baselines
+    /// (PR 1's one-pixel last-baseline residual allowed) and passes PR 1's
+    /// pixel rule over the whole panel. On 3x the caption must have been
+    /// measured at an off-grid width in some case.
+    ///
+    /// Measured (17pro, iOS 26.3, 3x; tk2fix logs t-r4 and
+    /// t-r5-caption-excluded): 80 cases, 48 with the caption at an off-grid
+    /// width, 6 where the row kept a reported layout; with captions left
+    /// out of the row fix the 80 results are the same, so the fix neither
+    /// helps nor harms a caption here and its scope stays the owner kind.
+    /// One case differs on both builds, in a guide only
+    /// (`captionLastBaselineResidual`).
+    /// Cases (`<size> <row width>`, by display scale) where the panel's
+    /// last baseline differs between the arms at an equal height and
+    /// identical pixels: at AX1 in a 320 pt document on 3x, SwiftUI's arm
+    /// reports 515.625 (off the pixel grid) and the row 515.167, with or
+    /// without the row fix on captions. Recorded as a known issue, so a
+    /// change either way fails; every other case is hard.
+    nonisolated static let captionLastBaselineResidual: [CGFloat: Set<String>] = [3: ["accessibility1 288.0"]]
+
+    @Test("a caption in a panel at an off-grid child width sits and draws as SwiftUI's does")
+    func captionInPanelOffGridWidth() async throws {
+        typealias C = TK2Caption
+        let caption = "A caption under the image inside a panel, long enough to wrap onto several lines at every text size, so that one of its lines fills the width the panel gives it"
+        let blocks = try await C.prepared([
+            "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(C.mediaNode(C.t(caption)))]}",
+        ])
+        let panel = try #require(blocks.first)
+        guard case .panel(_, let children) = panel.kind, let child = children.first else {
+            Issue.record("not a panel")
+            return
+        }
+        let media = try C.media(child, name: "in-panel")
+        let allowed: Set<TextKit2BlockKind> = [.richText, .panel, .media]
+        let draws = TextKit2Scope.captionsUseTextKit2 && C.drawsRow(media.caption)
+        let scale = TK2Parity.nativeScale
+        let onePixel = 1 / scale
+        var offGrid = 0
+        var kept = 0
+        var failures: [String] = []
+        for size in DynamicTypeSize.allCases.filter(TextKit2Scope.containerSizeKeepsRenderer) {
+            let env = TK2Parity.Environment(size: size)
+            for documentWidth in TextKit2FixtureSweepTests.containerDocumentWidths {
+                let width = documentWidth - 4 * TK2Parity.theme.spacing
+                let a = C.Host(width: width)
+                let b = C.Host(width: width)
+                defer {
+                    a.close()
+                    b.close()
+                }
+                a.show(C.environment(BlockView(block: panel), arm: .swiftUI, env: env))
+                b.show(C.environment(C.documentRow(panel, allowed: allowed), arm: .textKit2, env: env))
+                try await a.settle()
+                try await b.settle()
+                let label = "\(size) W=\(width)"
+                let rows = b.rows
+                guard rows.count == (draws ? 1 : 0), a.rows.isEmpty else {
+                    failures.append("\(label): TextKit 2 rows \(rows.map { $0.ownerID ?? "?" }), SwiftUI arm \(a.rows.count)")
+                    continue
+                }
+                let measured = rows.first?.cachedWidths.filter { $0 < 100_000 } ?? []
+                let off = measured.contains { TextKit2RowView.proposalCeil($0, scale: scale) > $0 }
+                let rowKept = rows.first?.keptReportedLayoutCount ?? 0
+                if off { offGrid += 1 }
+                kept += rowKept
+                let ga = a.guides, gb = b.guides
+                var caseFailures: [String] = []
+                if abs(ga.height - gb.height) > C.tolerance { caseFailures.append("height swiftUI=\(ga.height) textKit2=\(gb.height)") }
+                if abs(ga.first - gb.first) > C.tolerance { caseFailures.append("first baseline swiftUI=\(ga.first) textKit2=\(gb.first)") }
+                let lastDiffers = abs(ga.last - gb.last) > C.tolerance && abs(ga.last - gb.last - onePixel) > C.tolerance
+                if Self.captionLastBaselineResidual[scale, default: []].contains("\(size) \(width)") {
+                    withKnownIssue("a caption in a panel: the last baseline guide differs at an equal height and identical pixels (\(label): swiftUI=\(ga.last) textKit2=\(gb.last))") {
+                        #expect(!lastDiffers)
+                    }
+                } else if lastDiffers {
+                    caseFailures.append("last baseline swiftUI=\(ga.last) textKit2=\(gb.last)")
+                }
+                let height = (max(ga.height, gb.height) + 8).rounded(.up)
+                let pixelRule = C.pixelFailures(try a.bitmap(height: height), try b.bitmap(height: height), dark: false)
+                caseFailures += pixelRule.failures
+                print("TK2_OFF_GRID_CAPTION \(label) on \(scale)x measured=\(measured) offGrid=\(off) kept=\(rowKept) h=\(ga.height)/\(gb.height) last=\(ga.last)/\(gb.last) differing=\(pixelRule.differing)/\(pixelRule.total) failures=\(caseFailures.count)")
+                failures += caseFailures.map { "\(label) measured=\(measured) kept=\(rowKept): \($0)" }
+            }
+        }
+        print("TK2_OFF_GRID_CAPTION_SUMMARY offGridCases=\(offGrid) kept=\(kept) failures=\(failures.count) draws=\(draws)")
+        #expect(failures.isEmpty, "\(failures.prefix(6).joined(separator: "\n"))")
+        // Not vacuous on 3x: the panel gave the caption an off-grid width.
+        if scale == 3, draws { #expect(offGrid > 0, "no caption was measured at an off-grid width") }
+    }
+
     /// The row fix's one case never arises on PR 1's corpus: every
     /// eligible top-level paragraph and heading of the root sweep's
     /// documents (`TextKit2FixtureSweepTests.documents`), laid out at each
