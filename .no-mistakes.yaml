@@ -19,7 +19,8 @@ test:
     Put the T0 markdown table (the report.md path printed at the end of the
     probe run) in the test evidence so the PR body shows it. A count marked
     CHANGED needs a one-line explanation; a FAIL blocks the push. A
-    "T0 work probe SKIPPED" note (busy host) does not block it: say so in
+    "T0 work probe SKIPPED" note (busy host, or a base that cannot build
+    the current probe suite) does not block it: say so in
     the test evidence and the PR body, with the printed command to run T0
     by hand later. T1
     (Scripts/perf-scroll-counters.sh) and T2 (Scripts/perf-gate.sh) are not

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic cases for the TK2 ÷ SwiftUI ratio and instruction verdicts of
-Scripts/perf_probe.py compare, and for its pick-runtime simulator choice.
+Scripts/perf_probe.py compare, for its pick-runtime simulator choice, and
+for Scripts/perf-probe.sh when the base cannot build the probe suite.
 
 USAGE
     python3 -I Scripts/tests/perf_probe_tests.py [<workdir>]
@@ -8,8 +9,10 @@ USAGE
 Writes base and candidate probe JSONL plus a budgets file per case under
 <workdir> (default: a temporary directory), runs `perf_probe.py compare` on
 them and checks the exit status, the overall verdict and the ratio row's
-verdict in summary.json. Prints one line per case and "<passed>/<total>
-passed"; exits 1 on any mismatch. Standard library only.
+verdict in summary.json. The perf-probe.sh cases export HEAD (git, bash)
+under <workdir> with a stub `swift` on PATH, so <workdir> must be outside
+the repository. Prints one line per case and "<passed>/<total> passed";
+exits 1 on any mismatch. Standard library only.
 """
 
 from __future__ import annotations
@@ -26,26 +29,30 @@ FIXTURE = "list-dense"
 BUDGET = 1.2
 
 
-def line(renderer: str, instructions: float) -> str:
+def line(renderer: str, instructions) -> str:
+    median, low = instructions if isinstance(instructions, tuple) else (instructions, instructions)
     return json.dumps({
         "schema": 1, "tier": "render", "fixture": FIXTURE, "renderer": renderer,
         "fixture_fnv64": "0123456789abcdef", "blocks": 100,
         "counts": {"uiviews": 10, "calayers": 20},
         "counts_unstable": [],
-        "instructions": {"median": instructions, "min": instructions, "max": instructions, "cv_pct": 0.1},
+        "instructions": {"median": median, "min": low, "max": median, "cv_pct": 0.1},
         "mallocs": {"main": 1000, "all": 2000},
     })
 
 
-def write_side(path: str, tk2: float, swiftui: float) -> None:
+def write_side(path: str, tk2, swiftui) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("PERF_PROBE " + line("textKit2", tk2) + "\n")
         handle.write("PERF_PROBE " + line("swiftUI", swiftui) + "\n")
 
 
-# (name, base (tk2, swiftUI), candidate (tk2, swiftUI), exit, overall, ratio verdict)
+# (name, base (tk2, swiftUI), candidate (tk2, swiftUI), exit, overall, ratio verdict);
+# an instruction figure is the median, or (median, min).
 CASES = [
     ("both within the budget", (1.15e9, 1.0e9), (1.15e9, 1.0e9), 0, "PASS", "PASS"),
+    ("disturbed reps lift the candidate TK2 median over the budget, minimum flat",
+     (1.15e9, 1.0e9), ((1.265e9, 1.15e9), 1.0e9), 0, "PASS", "PASS"),
     ("candidate over, base within", (1.18e9, 1.0e9), (1.18e9, 0.97e9), 1, "FAIL", "FAIL"),
     ("base also over, candidate at the base ratio", (1.25e9, 1.0e9), (1.25e9, 1.0e9), 0, "WARN", "WARN"),
     ("base also over, candidate slightly above it", (1.25e9, 1.0e9), (1.255e9, 1.0e9), 0, "WARN", "WARN"),
@@ -135,6 +142,44 @@ def run_runtime_case(case: tuple) -> tuple[bool, str]:
     return ok, f"got {got!r} (exit {result.returncode}), want {want!r}"
 
 
+STUB_SWIFT = """#!/bin/sh
+echo "Building for debugging..."
+echo "$PWD/{path}:12:5: error: cannot find 'TextKit2RowView' in scope"
+exit 1
+"""
+
+# (name, file the stub compiler error names, exit, wanted stdout prefix or None for "no SKIPPED")
+SCRIPT_CASES = [
+    ("the base cannot build the overlaid probe suite: SKIPPED",
+     "Tests/ADFPreparationTests/Perf/ParsePreparePerfTests.swift", 0,
+     "T0 work probe SKIPPED: base {sha} cannot build the current probe suite "
+     "(Tests/ADFPreparationTests/Perf/ParsePreparePerfTests.swift:12:5: error: cannot find 'TextKit2RowView' in scope)"),
+    ("the base fails to build outside the probe suite: error", "Sources/ADFParser/ADFParser.swift", 2, None),
+]
+
+
+def run_script_case(workdir: str, index: int, case: tuple) -> tuple[bool, str]:
+    name, path, want_exit, want_prefix = case
+    folder = os.path.join(workdir, f"script-{index}")
+    stubs = os.path.join(folder, "bin")
+    os.makedirs(stubs, exist_ok=True)
+    for tool, body in (("swift", STUB_SWIFT.format(path=path)), ("xcodebuild", "#!/bin/sh\nexit 0\n")):
+        stub = os.path.join(stubs, tool)
+        with open(stub, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        os.chmod(stub, 0o755)
+    repo = os.path.dirname(SCRIPTS)
+    sha = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()[:9]
+    env = dict(os.environ, PATH=stubs + os.pathsep + os.environ.get("PATH", ""))
+    result = subprocess.run(["bash", os.path.join(SCRIPTS, "perf-probe.sh"), "--tier", "parse", "--allow-busy",
+                             "--root", os.path.join(folder, "root"), "HEAD", "HEAD"],
+                            capture_output=True, text=True, env=env)
+    skipped = result.stdout.startswith("T0 work probe SKIPPED")
+    ok = result.returncode == want_exit and (
+        result.stdout.startswith(want_prefix.format(sha=sha)) if want_prefix else not skipped)
+    return ok, f"got exit {result.returncode}, stdout {result.stdout.strip()!r}, stderr tail {result.stderr[-300:]!r}"
+
+
 def main() -> int:
     if len(sys.argv) > 1:
         workdir = os.path.abspath(sys.argv[1])
@@ -156,7 +201,11 @@ def main() -> int:
         ok, detail = run_runtime_case(case)
         passed += ok
         print(f"{'ok  ' if ok else 'FAIL'} pick-runtime: {case[0]}" + ("" if ok else f": {detail}"))
-    total = len(CASES) + len(INSTRUCTION_CASES) + len(RUNTIME_CASES)
+    for index, case in enumerate(SCRIPT_CASES):
+        ok, detail = run_script_case(workdir, index, case)
+        passed += ok
+        print(f"{'ok  ' if ok else 'FAIL'} perf-probe.sh: {case[0]}" + ("" if ok else f": {detail}"))
+    total = len(CASES) + len(INSTRUCTION_CASES) + len(RUNTIME_CASES) + len(SCRIPT_CASES)
     print(f"{passed}/{total} passed")
     if holder is not None:
         holder.cleanup()

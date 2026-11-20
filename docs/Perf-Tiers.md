@@ -77,7 +77,9 @@ scratch root (`<root>/lock`); a second run waits for it. Rules
   at +45 %), which can lift a median but not the minimum. Such a line
   shows the smaller `min Δ` next to its verdict. Rep CV over 1 % is
   flagged `NOISY` (informational; the containers slice usually is).
-- **TK2 ÷ SwiftUI instruction ratio** per fixture, against budgets
+- **TK2 ÷ SwiftUI instruction ratio** per fixture (the lower of the
+  median-rep and minimum-rep ratios, so disturbed reps on a busy host do
+  not lift it), against budgets
   calibrated from 10 main passes (max × 1.02; `--calibrate 10 main
   --write-budgets`, about 8 min). Current budgets: list-dense 1.216,
   stress-1k 1.291, kitchen-sink 1.128, code 1.188, giant-table 1.027,
@@ -91,7 +93,7 @@ scratch root (`<root>/lock`); a second run waits for it. Rules
 - **TK2 layouts per TK2 row** is reported; values above 1 are the issue 10
   double layout.
 
-Exit codes: 0 PASS/WARN/CHANGED, 1 FAIL, 2 usage or infrastructure error.
+Exit codes: 0 PASS/WARN/CHANGED or SKIPPED, 1 FAIL, 2 usage or infrastructure error.
 
 In the push gate (`.no-mistakes.yaml`, `--busy-wait 300 --skip-when-busy`)
 a busy host never fails or blocks the push for long: when another lane's
@@ -99,6 +101,12 @@ a busy host never fails or blocks the push for long: when another lane's
 after 5 minutes in total, T0 prints `T0 work probe SKIPPED` with the
 command to run it by hand later, and exits 0. Run by hand, the defaults
 stay: wait up to 30 minutes (`--busy-wait`), then exit 2.
+
+T0 builds this checkout's `Perf/` suites against the base tree too. When
+they do not compile there (a refactor renamed an internal the suite uses),
+there is nothing to compare: T0 prints `T0 work probe SKIPPED: base <sha>
+cannot build the current probe suite (<first compiler error>)` and exits 0,
+in the push gate and by hand. Any other build error still exits 2.
 
 Measured on this Mac (busy host; Debug, 5 reps, warm-up pass on):
 

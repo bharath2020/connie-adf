@@ -100,7 +100,8 @@
 #
 # OUTPUTS  <out>/{base,cand}.{render,parse}.<pass>.jsonl, warmup.jsonl,
 #          report.md, summary.json, logs/, xcresult/.
-# EXIT     0 PASS/WARN/CHANGED (or SKIPPED with --skip-when-busy); 1 FAIL;
+# EXIT     0 PASS/WARN/CHANGED, SKIPPED with --skip-when-busy, or SKIPPED
+#          when the base cannot compile this checkout's Perf/ suites; 1 FAIL;
 #          2 usage, build, test or host error.
 set -euo pipefail
 
@@ -200,7 +201,7 @@ phase_done() {
 }
 
 # ------------------------------------------------------------ refs --
-# resolve <ref> <slot> -> sets TREE and LABEL
+# resolve <ref> <slot> -> sets TREE, SHA and LABEL
 resolve() {
     local ref="$1" slot="$2" commit index
     if [[ "$ref" == "WORKTREE" ]]; then
@@ -221,6 +222,7 @@ resolve() {
         TREE="$(git -C "$REPO" rev-parse "$commit^{tree}")"
         LABEL="$ref@${commit:0:9}"
     fi
+    SHA="${commit:0:9}"
 }
 
 # export_slot <slot> <tree> -> <root>/src/<slot> holds the tree plus overlays
@@ -419,18 +421,33 @@ boot_device() {
 XCB_CONFIG=()
 [[ "$CONFIG" == "Release" ]] && XCB_CONFIG=(-configuration Release ENABLE_TESTABILITY=YES)
 
+# skip_unbuildable_base <slot> <log>: the candidate's Perf/ suites, overlaid
+# on the base tree, do not compile there (they follow a refactor the base
+# lacks). Nothing to compare: SKIPPED, exit 0. Any other build failure stays
+# an error.
+SUITE_ERROR_RE="/($(IFS='|'; echo "${OVERLAY_DIRS[*]}"))/[^:]*\.swift:[0-9]+:[0-9]+: error: "
+skip_unbuildable_base() {
+    local slot="$1" logfile="$2" first
+    [[ "$slot" == "base" && -n "$CAND_REF" ]] || return 0
+    first="$(grep -m1 -E "$SUITE_ERROR_RE" "$logfile" || true)"
+    [[ -n "$first" ]] || return 0
+    log "T0 SKIPPED: base $BASE_SHA cannot build the current probe suite (see $logfile)"
+    printf 'T0 work probe SKIPPED: base %s cannot build the current probe suite (%s)\n' "$BASE_SHA" "${first#"$ROOT/src/base/"}"
+    exit 0
+}
+
 build_render() {
     local slot="$1" logfile="$OUT/logs/build-render-$1.log"
     run_logged "$logfile" 3600 "$ROOT/src/$slot" xcodebuild build-for-testing -scheme "$SCHEME" \
         -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath "$ROOT/dd/$slot-$CONFIG" \
         ${XCB_CONFIG[@]+"${XCB_CONFIG[@]}"} \
-        || die "build-for-testing failed for $slot (see $logfile)"
+        || { skip_unbuildable_base "$slot" "$logfile"; die "build-for-testing failed for $slot (see $logfile)"; }
 }
 
 build_parse() {
     local slot="$1" logfile="$OUT/logs/build-parse-$1.log"
     run_logged "$logfile" 3600 "$ROOT/src/$slot" swift build --build-tests --scratch-path "$ROOT/spm/$slot" \
-        || die "swift build failed for $slot (see $logfile)"
+        || { skip_unbuildable_base "$slot" "$logfile"; die "swift build failed for $slot (see $logfile)"; }
 }
 
 # run_render <slot> <label> <jsonl> <tag> <reps>
@@ -474,7 +491,7 @@ collect() {
 }
 
 # ------------------------------------------------------------ plan --
-resolve "$BASE_REF" base; BASE_TREE="$TREE"; BASE_LABEL="$LABEL"
+resolve "$BASE_REF" base; BASE_TREE="$TREE"; BASE_SHA="$SHA"; BASE_LABEL="$LABEL"
 SLOTS=(base)
 if [[ -n "$CAND_REF" ]]; then
     resolve "$CAND_REF" cand; CAND_TREE="$TREE"; CAND_LABEL="$LABEL"

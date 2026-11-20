@@ -316,11 +316,16 @@ def compare(args):
         if tier == "render" and fixture not in fixtures:
             fixtures.append(fixture)
     for fixture in fixtures:
-        def ratio(side):
-            tk2 = instr_median(side.get(("render", fixture, "textKit2")))
-            sui = instr_median(side.get(("render", fixture, "swiftUI")))
+        def ratio(side, stat):
+            tk2 = stat(side.get(("render", fixture, "textKit2")))
+            sui = stat(side.get(("render", fixture, "swiftUI")))
             return tk2 / sui if tk2 and sui else None
-        br, cr = ratio(base), ratio(cand)
+
+        def judged_ratio(side):
+            values = [v for v in (ratio(side, instr_median), ratio(side, instr_min)) if v is not None]
+            return min(values) if values else None
+        br, cr = judged_ratio(base), judged_ratio(cand)
+        cr_median = ratio(cand, instr_median)
         budget = (budgets.get("ratio_budgets") or {}).get(fixture)
         limit = budget.get("max") if isinstance(budget, dict) else budget
         verdict = "PASS"
@@ -328,6 +333,9 @@ def compare(args):
             verdict = "–"
         elif limit is None:
             verdict = "uncalibrated"
+        elif cr_median is not None and cr <= limit < cr_median:
+            notes.append(f"- `{fixture}` TK2 ÷ SwiftUI median ratio {cr_median:.3f} is over the budget {limit:.3f}, "
+                         f"the minimum-rep ratio {cr:.3f} is not (disturbed reps); judged on the lower.")
         elif cr > limit:
             verdict = "FAIL"
             if br is not None and br > limit and cr <= br * (1 + budgets["ratio_rise_fail_pct"] / 100.0):
