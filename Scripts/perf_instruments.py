@@ -127,7 +127,7 @@ MIN_RUNS = 2
 # docs/Perf-Instruments.md "Calibration". gated=False metrics are printed
 # but never change the verdict.
 LIMITS = [
-    ("renderer_cpu_ms_s", "Renderer CPU (main thread)", "ms/s", "rel", 8.0, 15.0, True),
+    ("renderer_cpu_ms_s", "Renderer CPU (main thread)", "ms/s", "rel", 10.0, 20.0, True),
     # Report-only: non-renderer main-thread work (UIKit update-cycle
     # scheduling, mach_msg) varied by up to ~22 % within one arm in the
     # 2026-11-20 quiet slot, wider than the fail limit.
@@ -139,15 +139,20 @@ LIMITS = [
     ("hitch_count", "Hitch count (trace)", "", "abs", 10.0, 25.0, False),
     ("app_hitch_ms_s", "App hitch ratio (CADisplayLink)", "ms/s", "abs", 5.0, 10.0, False),
     ("app_dropped", "App dropped frames (CADisplayLink)", "", "abs", 20.0, 40.0, False),
-    # Burst and list-window metrics (GitHub issue 10). Report-only with
-    # placeholder limits until calibration runs pick the gates.
+    # Burst and list-window metrics (GitHub issue 10). Calibrated
+    # 2026-11-20 on the quiet Mac: main vs main moved app code + TextKit
+    # CPU by +2.3 % / -9.0 % (list window +0.4 % / -12.2 %); issue 10
+    # moved it by +18.1 % (pr1->pr2, list window +22.9 %) and +29.1 %
+    # (TextKit 2 off->on, list window +32.9 %). Renderer CPU moved -9.7 %
+    # main vs main, so its limits are wider. Burst times did not separate
+    # issue 10 from noise and stay report-only.
     ("burst_ms_s", "Burst time, stretches >= 12 ms", "ms/s", "rel", 8.0, 15.0, False),
     ("burst8_ms_s", "Burst time, stretches >= 8 ms", "ms/s", "rel", 8.0, 15.0, False),
     ("burst_count", "Burst count, stretches >= 12 ms", "", "abs", 10.0, 25.0, False),
-    ("tk_app_ms_s", "App code + TextKit CPU", "ms/s", "rel", 8.0, 15.0, False),
+    ("tk_app_ms_s", "App code + TextKit CPU", "ms/s", "rel", 10.0, 15.0, True),
     ("list_renderer_ms_s", "List window: renderer CPU", "ms/s", "rel", 8.0, 15.0, False),
     ("list_burst_ms_s", "List window: burst time >= 12 ms", "ms/s", "rel", 8.0, 15.0, False),
-    ("list_tk_app_ms_s", "List window: app code + TextKit CPU", "ms/s", "rel", 8.0, 15.0, False),
+    ("list_tk_app_ms_s", "List window: app code + TextKit CPU", "ms/s", "rel", 10.0, 15.0, True),
 ]
 
 

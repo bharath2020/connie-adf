@@ -30,7 +30,7 @@
 #                       first-boot work, so repeat runs are much faster with
 #                       a kept device; give each lane its own NAME.
 #   --keep-sim          keep the simulator the script created
-#   --time-limit SECS   per-recording cap (default 180)
+#   --time-limit SECS   per-recording cap (default 300)
 #   --busy-wait SECS    longest wait for another lane's perf-gate.sh /
 #                       perf_trial.py frame run to finish before each
 #                       recording (default 1800; then exit 2)
@@ -94,7 +94,7 @@ CACHE="$HOME/Library/Caches/connie-adf-perf-instruments"
 UDID=""
 SIM_NAME=""
 KEEP_SIM=0
-TIME_LIMIT=180
+TIME_LIMIT=300
 BUSY_WAIT=1800
 BUILD_ONLY=0
 DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
@@ -337,11 +337,24 @@ record() {
         t0="$(now)"
         rc=0
         rm -rf "$trace"
+        # xctrace can hang while finishing a recording that hit its time
+        # limit; a watchdog stops it TIME_LIMIT + 120 s after it starts.
         xcrun xctrace record --device "$UDID" --template 'Time Profiler' \
             --instrument 'stdout/stderr' --time-limit "${TIME_LIMIT}s" --no-prompt \
             --output "$trace" \
             --launch -- "$BUNDLE_ID" -fixture "$FIXTURE" -autoscroll $argv \
-            > "$log" 2>&1 || rc=$?
+            > "$log" 2>&1 &
+        local xpid=$! waited=0
+        while kill -0 "$xpid" 2>/dev/null; do
+            if [ "$waited" -ge $(( TIME_LIMIT + 120 )) ]; then
+                say "$arm run $run: xctrace still running after ${waited}s; stopping it"
+                echo "watchdog $arm-$run: xctrace stopped after ${waited}s" >> "$OUT/logs/timings.txt"
+                kill -TERM "$xpid" 2>/dev/null; sleep 10; kill -KILL "$xpid" 2>/dev/null
+                break
+            fi
+            sleep 5; waited=$(( waited + 5 ))
+        done
+        wait "$xpid" || rc=$?
         # A simulator that is booted but not yet serving logs makes the
         # stdout/stderr instrument fail before the app runs; wait and retry.
         grep -q 'os_log support not available' "$log" || break
