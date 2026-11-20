@@ -16,8 +16,9 @@ import SwiftUI
 /// counters (`ADFDocumentModel.smartLinkStats`), the mock resolver's
 /// own counts (`MockSmartLinkResolver`) and the text-leaf body and TextKit 2
 /// conversion and layout totals, and last of all the smart-link resolution
-/// mode with its scroll and nearby counters, and where the reader's custom
-/// emoji images come from (`EmojiResolvers`). The checksum lets a screen recording be
+/// mode with its scroll and nearby counters, where the reader's custom
+/// emoji images come from (`EmojiResolvers`), and after them the demo media
+/// fetch's counts (`MockMediaFetch`, via `DemoMedia.shared`). The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -81,6 +82,9 @@ struct BuildInfoView: View {
     @State private var textLeafStats: ADFTextLeafStats?
     @State private var textKit2Conversions: Int?
     @State private var textKit2Layouts: Int?
+    /// The demo media fetch's counts (`DemoMedia.shared.mock`), polled
+    /// likewise; `nil` until the first read and under `-media off`.
+    @State private var mediaCounts: MockMediaFetch.Counts?
 
     var body: some View {
         NavigationStack {
@@ -184,6 +188,9 @@ struct BuildInfoView: View {
                             .accessibilityIdentifier("build-emoji-source")
                     }
                 }
+                // After the smart-link sections, so it moves none of their
+                // rows.
+                mediaSection
             }
             .navigationTitle("About This Build")
             .navigationBarTitleDisplayMode(.inline)
@@ -223,6 +230,7 @@ struct BuildInfoView: View {
                     textLeafStats = ADFTextRenderer.textLeafStats
                     textKit2Conversions = stats.conversionCount
                     textKit2Layouts = stats.layoutCount
+                    mediaCounts = DemoMedia.shared.mock?.snapshot
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }
@@ -353,6 +361,39 @@ struct BuildInfoView: View {
                 Text("Off (-smartLinks off)")
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("smartlink-off")
+            }
+        }
+    }
+
+    /// The demo media fetch's view since launch (`MockMediaFetch`): every
+    /// fetch the provider made (memory and disk hits make none), how many
+    /// it cancelled, how many are waiting now, and how many returned bytes
+    /// or threw. Each value is its own element (`media-calls`,
+    /// `-cancelled`, `-in-flight`, `-fetched`, `-failed`) for a UI test to
+    /// read, and the footer (`media-config`) gives the delay, failure rate,
+    /// disk limit, decode scale and whether the disk cache started cold;
+    /// `media-off` under `-media off`.
+    @ViewBuilder
+    private var mediaSection: some View {
+        let media = DemoMedia.shared
+        if media.mock != nil {
+            Section {
+                countRow("Calls", mediaCounts?.calls, id: "media-calls")
+                countRow("Cancelled", mediaCounts?.cancelled, id: "media-cancelled")
+                countRow("In Flight", mediaCounts?.inFlight, id: "media-in-flight")
+                countRow("Fetched", mediaCounts?.fetched, id: "media-fetched")
+                countRow("Failed", mediaCounts?.failed, id: "media-failed")
+            } header: {
+                Text("Media (Mock Fetch, Cache First)")
+            } footer: {
+                Text(verbatim: media.summary)
+                    .accessibilityIdentifier("media-config")
+            }
+        } else {
+            Section("Media") {
+                Text(verbatim: media.summary)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("media-off")
             }
         }
     }

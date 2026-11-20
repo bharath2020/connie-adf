@@ -56,7 +56,12 @@ struct ReaderView: View {
     /// `ADFDocumentView` only, so this reads the system/app baseline.
     @Environment(\.dynamicTypeSize) private var systemTypeSize
 
-    private let mediaProvider = PlaceholderMediaProvider()
+    /// Shared by every reader this launch (see `DemoMedia.shared`):
+    /// `CacheFirstMediaProvider` over `MockMediaFetch`, the demo's stand-in
+    /// for an Atlassian media download; `nil` under `-media off`, so media
+    /// shows its placeholder box and nothing loads. A real app passes its
+    /// own fetch closure to `CacheFirstMediaProvider`.
+    private let mediaProvider: (any ADFMediaProvider)?
     /// Shared by every reader this launch, remote pages included; `nil`
     /// under `-smartLinks off` (see `MockSmartLinkResolver.shared`).
     /// ADFReader is a sample app, so its titles are mock data on purpose:
@@ -78,6 +83,7 @@ struct ReaderView: View {
         self.source = source
         self.options = options
         _emoji = State(initialValue: EmojiResolvers.initialChoice(for: source))
+        mediaProvider = DemoMedia.shared.provider
         // The HUD stays hidden during `-autoscroll` measurement runs: its
         // material-blur backdrop re-renders over the scrolling content and
         // would perturb the very frame pacing being measured. `FrameMetrics`

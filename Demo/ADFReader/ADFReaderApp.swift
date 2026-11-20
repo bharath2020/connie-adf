@@ -202,6 +202,21 @@ import UIKit
 ///   About This Build names the reader's source (`build-emoji-source`).
 ///   The fixture made for it is `-fixture emoji-custom`; `list-dense` has
 ///   80 custom emoji.
+/// - Media: by default every reader gets one shared media provider
+///   (`DemoMedia.shared`): `CacheFirstMediaProvider` — decoded images in
+///   memory, encoded bytes in a 200 MB disk cache under
+///   `Caches/ADFReaderMedia` — over `MockMediaFetch`, which returns a
+///   deterministic gradient JPEG per media id or URL, no network. About
+///   This Build shows the mock's calls, cancellations, fetches in flight,
+///   fetched and failed counts since launch (only cache misses reach it).
+///   - `-media off` passes no provider: media shows its placeholder box and
+///     nothing loads. `-media mock` (or no flag) is the default.
+///   - `-mediaDelay <seconds>` (default 0.3, clamped to 0…3600): how long
+///     each mock fetch takes. It is a `Task.sleep`, so a fetch the provider
+///     cancels ends at once.
+///   - `-mediaCache cold` empties the disk cache at launch, before the
+///     first lookup, so UI tests and perf runs start with no disk hits
+///     (memory starts empty on every launch anyway).
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -240,6 +255,15 @@ struct LaunchOptions: Sendable {
     /// `-identifyRenderer`: the renderer
     /// identifies itself (`RendererIdentityPreference` applies it).
     var identifyRenderer = false
+
+    // Media (see `DemoMedia.shared`).
+    /// `-media off` passes no media provider; `-media mock` (or no flag)
+    /// passes the cache-first provider over `MockMediaFetch`.
+    var mediaEnabled = true
+    /// `-mediaDelay <seconds>`: each mock fetch's duration.
+    var mediaDelay = 0.3
+    /// `-mediaCache cold`: empty the media disk cache at launch.
+    var mediaCacheCold = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -305,6 +329,18 @@ struct LaunchOptions: Sendable {
                 if let rate = Double(arguments[index]), rate.isFinite {
                     smartLinkFailureRate = min(max(rate, 0), 1)
                 }
+            // Media
+            case "-media" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                mediaEnabled = arguments[index].lowercased() != "off"
+            case "-mediaDelay" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                if let seconds = Double(arguments[index]), seconds.isFinite {
+                    mediaDelay = min(max(seconds, 0), 3_600)
+                }
+            case "-mediaCache" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                mediaCacheCold = arguments[index].lowercased() == "cold"
             default:
                 break
             }
