@@ -87,7 +87,11 @@ enum TK2CodeLogic {
 
 /// Where code may be drawn by TextKit 2, as rules (plan 3.2): a top-level
 /// code block keeps the renderer choice and is a `.codeRoot` leaf of its
-/// own kind; code anywhere else is out of scope. Cross-platform.
+/// own kind. From PR 4 step 7 a code block below a container the renderer
+/// reaches (a panel whose body passes the shape rule, a quote, an expand
+/// body, a stacked layout column) is a `.containerCode` leaf of the same
+/// kind; code in a list item, a table cell or a side-by-side column stays
+/// out of scope. Cross-platform.
 @Suite("TextKit 2 code scope: rules")
 struct TextKit2CodeScopeRuleTests {
     /// Code at the top level (`0.0`, `0.7`) and inside every kind of
@@ -145,7 +149,7 @@ struct TextKit2CodeScopeRuleTests {
         return found
     }
 
-    @Test("a top-level code block keeps the renderer choice; every container still resets it")
+    @Test("a top-level code block keeps the renderer choice; a container keeps it as the container allow list says and, from step 7, passes it to its code, except side by side; a list item and a table cell never do")
     func inheritsRenderer() async throws {
         let blocks = try await TK2CodeLogic.prepared(try TK2CodeLogic.document(Self.content()))
         #expect(Self.nestedCodeIDs(blocks) == Self.nestedCode)
@@ -158,8 +162,50 @@ struct TextKit2CodeScopeRuleTests {
             case .listRows:
                 #expect(block.id == "0.1")
                 #expect(inherits, "\(block.id): the list keeps the choice for its own text")
+            case .panel, .quote, .layoutColumns, .expand:
+                // From PR 4 step 3 the panel (its body passes the shape
+                // rule) and the quote keep the choice for their prose, from
+                // step 4 the layout section and from step 5 the expand for
+                // its open body's; from step 7 they pass it to their code
+                // (below).
+                #expect(["0.2", "0.3", "0.4", "0.5"].contains(block.id), "\(block.id)")
+                #expect(inherits, "\(block.id): panels, quotes, layout columns and expands are in the container allow list")
             default:
                 #expect(!inherits, "\(block.id): a container must reset the choice")
+            }
+            let children: [RenderBlock]
+            switch block.kind {
+            case .panel(_, let blocks), .quote(let blocks): children = blocks
+            case .layoutColumns(let columns): children = columns.flatMap(\.blocks)
+            default: children = []
+            }
+            for child in children where TextKit2CodeCoverageTests.isCode(child) {
+                // PR 4 step 7: code joined the container allow list. Every
+                // migrated parent passes the renderer to a code block, but a
+                // side-by-side column (no family keeps it there, lead call
+                // C32); a parent that inherited SwiftUI never does.
+                for parent in [TextKit2ContainerParent.panel, .quote, .expandBody, .extensionBody, .column(sideBySide: false), .column(sideBySide: true)] {
+                    for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                        let renderer = TextKit2Scope.childRenderer(
+                            for: child.kind, in: parent, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: direction,
+                            dynamicTypeSize: .large
+                        )
+                        // Right to left no container passes it (the
+                        // container direction rule, lead dispositions F-Q6).
+                        let expected: ADFTextRenderer = parent == .column(sideBySide: true) || direction == .rightToLeft ? .swiftUI : .textKit2
+                        #expect(renderer == expected, "\(child.id) in \(parent) \(direction): code is in the container allow list from step 7")
+                        #expect(TextKit2Scope.childRenderer(
+                            for: child.kind, in: parent, inherited: .swiftUI, allowed: TextKit2Scope.containerChildKinds, layoutDirection: direction,
+                            dynamicTypeSize: .large
+                        ) == .swiftUI, "\(child.id) in \(parent): never turned back on below SwiftUI")
+                    }
+                    // Before step 7's list (the step-5 stage), the same code
+                    // stayed on SwiftUI: the allow list is what changed.
+                    let step5 = TextKit2Scope.containerChildKinds.subtracting([.codeBlock])
+                    #expect(TextKit2Scope.childRenderer(
+                        for: child.kind, in: parent, inherited: .textKit2, allowed: step5, layoutDirection: .leftToRight, dynamicTypeSize: .large
+                    ) == .swiftUI, "\(child.id) in \(parent) without code in the list")
+                }
             }
         }
         let kinds = blocks.filter { if case .codeBlock = $0.kind { return true } else { return false } }
@@ -170,12 +216,23 @@ struct TextKit2CodeScopeRuleTests {
         #expect(TextKit2Scope.inheritsRenderer(.codeBlock(language: nil, code: AttributedString())))
         #expect(TextKit2Scope.inheritsRenderer(.codeBlock(language: "make", code: TK2CodeLogic.stamped("all:\n\ttrue"))))
         let code = RenderBlock(id: "q.0", kind: .codeBlock(language: nil, code: TK2CodeLogic.stamped("x")))
-        #expect(!TextKit2Scope.inheritsRenderer(.quote([code])))
+        #expect(TextKit2Scope.inheritsRenderer(.quote([code])), "a quote keeps the choice for its prose")
+        #expect(TextKit2Scope.childRenderer(
+            for: code.kind, in: .quote, inherited: .textKit2, allowed: TextKit2Scope.containerChildKinds, layoutDirection: .leftToRight,
+            dynamicTypeSize: .large
+        ) == .textKit2, "and from step 7 for its code")
+        // A panel keeps it only where its body passes the shape rule: code
+        // alone does, code beside a paragraph does not (step 3's rule).
+        #expect(TextKit2Scope.inheritsRenderer(.panel(ADFTheme.default.panelPalette(.info, colorHex: nil), [code])))
+        let beside = RenderBlock(id: "p.0", kind: .richText(segments: [], style: TextBlockStyle(
+            font: ADFTheme.default.body, isHeading: false, headingLevel: nil, alignment: nil, indentation: 0, breakout: nil
+        )))
+        #expect(!TextKit2Scope.inheritsRenderer(.panel(ADFTheme.default.panelPalette(.info, colorHex: nil), [beside, code])))
         #expect(!TextKit2Scope.inheritsRenderer(.divider))
         #expect(!TextKit2Scope.inheritsRenderer(.unknown(typeName: "mystery")))
     }
 
-    @Test("the coverage walk visits top-level code as code roots and no code inside a container")
+    @Test("the coverage walk visits top-level code as code roots and, from step 7, code in a panel, a quote and a stacked column as container code; never code in a list item or a table cell")
     func leaves() async throws {
         let blocks = try await TK2CodeLogic.prepared(try TK2CodeLogic.document(Self.content()))
         var owners: [String] = []
@@ -184,19 +241,32 @@ struct TextKit2CodeScopeRuleTests {
         TextKit2Scope.forEachLeaf(in: blocks) { leaf in
             owners.append(leaf.ownerID)
             positions.append(leaf.position)
-            if leaf.position == .codeRoot { codeLeaves.append(leaf) }
+            if leaf.position == .codeRoot || leaf.position == .containerCode { codeLeaves.append(leaf) }
         }
         // The two top-level code blocks and the one list row that keeps the
-        // renderer (the two items holding code keep their text on SwiftUI).
-        #expect(owners == ["0.0", "0.1.2", "0.7"])
-        #expect(positions == [.codeRoot, .listLeader, .codeRoot])
-        #expect(Set(owners).isDisjoint(with: Self.nestedCode))
+        // renderer (the two items holding code keep their text on SwiftUI);
+        // from PR 4 step 4 the column's paragraph (container prose); from
+        // step 7 the code in the panel, the quote and the column (container
+        // code). The expand's body is not prepared with the document, and
+        // the code in the list items and the table cell stays out.
+        #expect(owners == ["0.0", "0.1.2", "0.2.0", "0.4.0", "0.5.0.0", "0.5.1.0", "0.7"])
+        #expect(positions == [.codeRoot, .listLeader, .containerCode, .containerCode, .containerCode, .containerProse, .codeRoot])
+        #expect(Set(owners).intersection(Self.nestedCode) == ["0.2.0", "0.4.0", "0.5.0.0"])
         for leaf in codeLeaves {
             // A code leaf carries the block's prepared string and nothing a
             // prose leaf carries.
             #expect(leaf.segments.isEmpty && leaf.style == nil, "\(leaf.ownerID)")
-            let stored = try TK2CodeLogic.preparedCode(leaf.ownerID, in: blocks)
+            let block = try #require(TextKit2ContainerCoverageTests.find(leaf.ownerID, in: blocks), "no block \(leaf.ownerID)")
+            guard case .codeBlock(_, let stored) = block.kind else {
+                Issue.record("\(leaf.ownerID) is not a code block")
+                continue
+            }
             #expect(leaf.code == stored, "\(leaf.ownerID)")
+            // Container code is gated before iOS 26 (`containerCodeVerdict`).
+            if leaf.position == .containerCode, !TextKit2Eligibility.containerTextMatchesText {
+                #expect(TK2CodeLogic.reason(leaf.verdict) == .osGatedContainer, "\(leaf.ownerID)")
+                continue
+            }
             guard case .eligible(let text) = leaf.verdict else {
                 Issue.record("\(leaf.ownerID): \(leaf.verdict)")
                 continue
@@ -204,9 +274,14 @@ struct TextKit2CodeScopeRuleTests {
             #expect(text == leaf.code, "\(leaf.ownerID): the verdict hands back the stored string")
         }
 
-        // Code is counted apart from the text leaves, and only at the top level.
+        // Code is counted apart from the text leaves: top-level code in the
+        // two code-root counts, code below a container in the two nested
+        // counts, so the root sum still holds (plan §6.3).
         let coverage = ADFTextRenderer.textKit2Coverage(of: blocks)
+        let containers = TextKit2Eligibility.containerTextMatchesText
         #expect(coverage.eligibleCodeRoots == 2 && coverage.fallbackCodeRoots == 0)
+        #expect(coverage.eligibleCodeRoots + coverage.fallbackCodeRoots == 2, "the top-level code blocks")
+        #expect(coverage.eligibleNestedCode == (containers ? 3 : 0) && coverage.fallbackNestedCode == (containers ? 0 : 3), "\(coverage)")
         #expect(coverage.eligibleRoots == 0 && coverage.fallbackRoots == blocks.count)
         #expect(coverage.listLeaderLeaves == 1 && coverage.listTrailingLeaves == 0)
         #expect(coverage.eligibleTextLeaves + coverage.fallbackTextLeaves == 1)
@@ -344,14 +419,15 @@ extension TK2CodeLogic {
 
 /// Through the real views under `.textKit2` (plan 3.2, 3.3): a top-level
 /// code block's code is drawn by a TextKit 2 row identified
-/// `tk2-row:<block id>`; a code block inside a list item, a panel, an
-/// expand, a quote, a layout column or a table cell gets none, because the
-/// document row and the list row are the only places the renderer choice is
-/// passed on and neither passes it there.
+/// `tk2-row:<block id>`; a code block inside a list item or a table cell
+/// gets none, because the list row resets the choice and a table never
+/// keeps it. From PR 4 step 7 a code block in a panel, an open expand, a
+/// quote or a stacked layout column gets one too (from iOS 26), through its
+/// container's boundary; side by side a column keeps it on SwiftUI.
 @Suite("TextKit 2 code scope", .serialized)
 @MainActor
 struct TextKit2CodeScopeTests {
-    @Test("top-level code gets a TextKit 2 row; code in a list item, panel, expand, quote, layout column and table cell gets none")
+    @Test("top-level code gets a TextKit 2 row; from step 7 so does code in a panel, an open expand, a quote and a stacked column (iOS 26); code in a list item and a table cell gets none")
     func scope() async throws {
         let model = try await TK2CodeLogic.loadedModel(try TK2CodeLogic.document(TextKit2CodeScopeRuleTests.content()))
         // The nested code blocks exist as prepared code, so their absence
@@ -379,17 +455,35 @@ struct TextKit2CodeScopeTests {
 
         let found = Set(TextKit2DiagnosticsTests.identifiers(in: hosted.host.view).map { String($0.dropFirst("tk2-row:".count)) })
         var expected: Set<String> = ["0.0", "0.7"]
+        let stacked = hosted.window.traitCollection.horizontalSizeClass != .regular
+        // PR 4 step 7: the code in the panel, the quote and the open
+        // expand's body, and while the columns stack the code in the
+        // column, from iOS 26 (before it nested code is
+        // `osGatedContainer`). Never the list items' or the table cell's.
+        var nestedRows: Set<String> = []
+        if TextKit2Eligibility.containerTextMatchesText {
+            nestedRows = ["0.2.0", "0.3.0", "0.4.0"]
+            if stacked { nestedRows.insert("0.5.0.0") }
+        }
+        expected.formUnion(nestedRows)
         // The plain list item beside the two items holding code (from
         // iOS 26; before it lists keep their text on SwiftUI).
         if TextKit2Eligibility.listsMatchText { expected.insert("0.1.2") }
+        // The paragraph in the layout column beside the column holding code
+        // while the columns stack (PR 4 step 4: a phone's compact width;
+        // side by side no family keeps the renderer), from iOS 26 (before
+        // it container text stays on SwiftUI).
+        if TextKit2Eligibility.containerTextMatchesText, stacked { expected.insert("0.5.1.0") }
         #expect(found == expected, "missing \(expected.subtracting(found).sorted()), unexpected \(found.subtracting(expected).sorted())")
-        #expect(found.isDisjoint(with: TextKit2CodeScopeRuleTests.nestedCode))
-        // Nothing under the expand, whatever ids its body's blocks take.
-        #expect(!found.contains { $0.hasPrefix("expand") || $0.hasPrefix("0.3") })
+        #expect(found.intersection(TextKit2CodeScopeRuleTests.nestedCode) == nestedRows.subtracting(["0.3.0"]))
+        // The list items' and the table cell's code never.
+        #expect(found.isDisjoint(with: ["0.1.0.1", "0.1.1.0", "0.6.0.0.0"]))
 
-        // The two code rows are code rows: counted as such, never wrapping.
+        // The code rows are code rows: counted as such, never wrapping; the
+        // nested ones carry the container context beside the owner kind.
         let rows = hosted.rows
-        #expect(Set(rows.filter { $0.ownerKind == .code }.compactMap(\.ownerID)) == ["0.0", "0.7"])
+        #expect(Set(rows.filter { $0.ownerKind == .code }.compactMap(\.ownerID)) == nestedRows.union(["0.0", "0.7"]))
+        #expect(Set(rows.filter { $0.ownerKind == .code && $0.containerContext == .container }.compactMap(\.ownerID)) == nestedRows)
         for row in rows {
             let policy: TextKit2LayoutPolicy = row.ownerKind == .code ? .natural : .wrapping
             #expect(row.inputs?.layoutPolicy == policy, "\(row.ownerID ?? "?")")

@@ -18,7 +18,6 @@ struct MediaBlockView: View {
     @Environment(\.adfTheme) private var theme
     @Environment(\.adfMediaProvider) private var provider
     @Environment(\.openURL) private var openURL
-    @Environment(\.adfSmartLinks) private var smartLinks
 
     @State private var loadedImage: Image?
     @State private var loadFailed = false
@@ -31,10 +30,9 @@ struct MediaBlockView: View {
         VStack(alignment: stackAlignment, spacing: theme.spacing * 0.75) {
             mediaBox
             if let caption = media.caption, !caption.isEmpty {
-                SegmentedTextView(segments: caption, ownerID: media.id, smartLinkKeys: media.captionSmartLinkKeys)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .smartLinkAttachment(ownerID: media.id, keys: smartLinks == nil ? [] : media.captionSmartLinkKeys)
+                Self.caption(
+                    caption, ownerID: media.id, layout: media.layout, theme: theme, smartLinkKeys: media.captionSmartLinkKeys
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: frameAlignment)
@@ -44,6 +42,49 @@ struct MediaBlockView: View {
             containerWidth = width
         }
         .lightbox(isPresented: $showsLightbox, media: media)
+    }
+
+    // MARK: - Caption
+
+    /// The caption below the box: a text leaf (`TextEngineLeaf`) owned by
+    /// the media's id, the owner search highlights. Its SwiftUI text is the
+    /// `.footnote`, `.secondary` caption; under the TextKit 2 renderer an
+    /// eligible caption is a TextKit 2 row in the caption context, drawing
+    /// its uncoloured runs in the same foreground (`adfCaptionLeaf`). Every
+    /// prepared caption run carries its own font, so `.footnote` sets no
+    /// caption metric and the row needs no font of its own. A layout whose
+    /// caption frame does not match keeps it on SwiftUI
+    /// (`TextKit2Scope.captionLayoutKeepsRenderer`), and so does a caption
+    /// whose runs carry a run background (the caption verdict,
+    /// `TextKit2Scope.captionRunsKeepRenderer`). No selection: the caption
+    /// has none on either engine.
+    ///
+    /// Smart links (`PreparedMedia.captionSmartLinkKeys`): the leaf is a
+    /// `SmartLinkTextLeaf`, as a paragraph's is, so a TextKit 2 caption row
+    /// draws the displayed stage as its input, the SwiftUI text reads the
+    /// stages itself, and the leaf attaches to the coordinator and feeds it
+    /// its visibility. With no keys or no resolver it adds nothing.
+    static func caption(
+        _ segments: [InlineSegment], ownerID: String, layout: ADFMediaLayout, theme: ADFTheme,
+        smartLinkKeys: [SmartLinkKey] = []
+    ) -> some View {
+        SmartLinkTextLeaf(
+            segments: segments, smartLinkKeys: smartLinkKeys, style: captionStyle(theme: theme), ownerID: ownerID,
+            allowsTextKit2: TextKit2Scope.captionLayoutKeepsRenderer(layout)
+        ) {
+            SegmentedTextView(segments: segments, ownerID: ownerID, smartLinkKeys: smartLinkKeys)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .adfCaptionLeaf()
+    }
+
+    /// The caption leaf's block style, for every media layout: the list
+    /// leader's (`ListRowView.leaderStyle(theme:)`), body text with no
+    /// alignment, as the caption's `Text` has none. A TextKit 2 row reads
+    /// only its alignment and heading flag; fonts come from the runs.
+    static func captionStyle(theme: ADFTheme) -> TextBlockStyle {
+        TextBlockStyle(font: theme.body, isHeading: false, headingLevel: nil, alignment: nil, indentation: 0, breakout: nil)
     }
 
     // MARK: - Box

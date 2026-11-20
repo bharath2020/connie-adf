@@ -23,6 +23,9 @@ struct TextKit2CodeGate<Fallback: View>: View {
     let text: AttributedString
     let style: TextBlockStyle
     let ownerID: String?
+    /// Where the code sits (`TextKit2ContainerContext`), for the row's
+    /// counters: code in a container stays code.
+    let context: TextKit2ContainerContext
     let fallback: Fallback
 
     @Environment(\.layoutDirection) private var layoutDirection
@@ -30,10 +33,14 @@ struct TextKit2CodeGate<Fallback: View>: View {
     @Environment(\.legibilityWeight) private var legibilityWeight
     @Environment(\.displayScale) private var displayScale
 
-    init(text: AttributedString, style: TextBlockStyle, ownerID: String?, @ViewBuilder fallback: () -> Fallback) {
+    init(
+        text: AttributedString, style: TextBlockStyle, ownerID: String?, context: TextKit2ContainerContext = .none,
+        @ViewBuilder fallback: () -> Fallback
+    ) {
         self.text = text
         self.style = style
         self.ownerID = ownerID
+        self.context = context
         self.fallback = fallback()
     }
 
@@ -42,7 +49,7 @@ struct TextKit2CodeGate<Fallback: View>: View {
             text, sizeCategory: dynamicTypeSize.uiContentSizeCategory, legibilityWeight: legibilityWeight,
             displayScale: displayScale, layoutDirection: layoutDirection
         ) == nil {
-            TextKit2Leaf(text: text, style: style, ownerID: ownerID, ownerKind: .code) { fallback }
+            TextKit2Leaf(text: text, style: style, ownerID: ownerID, ownerKind: .code, context: context) { fallback }
         } else {
             fallback
         }

@@ -1,0 +1,44 @@
+# SHA-256 of every Fixtures/*.json, one line per file in shasum format
+# ("<64 hex digits>  <file name>"). Lines starting with "#" are comments.
+# Check from the repository root with:
+#   (cd Fixtures && shasum -a 256 -c SHA256SUMS)
+# Tests/ADFModelTests/FixtureManifestTests.swift asserts that this list
+# names exactly the JSON files in Fixtures/ and that every digest matches
+# (manifestMatchesDirectory), and pins the sha256 of every byte above the
+# "# PR 4" line (ancestorBlockIsPinned): no fixture listed above that line
+# may change. These are the 16 fixtures at main be500c8; 13 come from
+# Tools/make-fixtures.swift (`swift Tools/make-fixtures.swift --check`
+# regenerates them in memory and compares), kitchen-sink, youtube and
+# youtube-dense are hand-authored.
+6d7b1673a5b75952036b46a5791bee7a2bf56487a6aa0404a7eef12aac0e9ea8  code-dense.json
+506e06d7066f7d58a99f5298cc1b92471f4fd1bde156965c698ae9c3d1cbc3a1  code-parity.json
+07521f3e28a95262251d411cf675d11c22cbf793f0c8f0e5efaddd8a947b64c7  code-tall.json
+e48999d5ae59d1cdcae9305012da016ba408bb557e5a66e9167c41332028cbf4  giant-table.json
+36a42f36a217617ac71e9c2721c743568a0fd97df12744ea4ca5d0409cd7ed94  kitchen-sink.json
+d9e39ebf915ffd0017488d2b8ff9a02ee530f4acf63abdf59a8391c44ea69559  list-dense.json
+3ad28dd943d68b487f7f0206202e5fbd48618707e60c70415edc409a1c5c18a5  list-tall.json
+8ebdded7a773bdb83ec6ad9342208a7526512d7092c531542faef6180a27f904  lists-links.json
+6e234ae338fc7dd59f6a142e7ac4a668593f225948d8261d3d8dff3e562914e4  lists-parity.json
+10504f261248196b215369b76e6b5c7a92de67cba3e12ea362402669779032e7  long-paragraph.json
+09a3e5fcb382dc7d89a9d027c1067c7388b4bcbcabf8afda803692b1252147d4  media-gallery.json
+7d143eab005f9ff3a139fd55cf33de05f05b851891793a7607fb75c56443aae3  stress-1k.json
+1134355c2674aef60245440d451a43fc86b665f0999ffba0825c9c64705b9001  stress-5k.json
+9d0b71f9c4d2aeee94f6b8c65e8dd96ec99e5b2ab2ae908ac5e6b9003bbcc8ca  text-dense.json
+dac0f57d0f30edecb62614319ba1f71acdf20cb9d482eb7c5152fbaa5d0406a9  youtube-dense.json
+3ab5d0d9c88d0432a4f3886d00cc1d1781d3d66986c34e8a1eb866b0b78b4d67  youtube.json
+# PR 4
+# PR 4's fixtures (Tools/make-fixtures.swift; captions-parity and
+# containers-parity are hand-authored inside it). Frozen at PR 4's fixture
+# freeze (plan step 9 item 2): these lines are final, the bytes are the
+# ones first committed in bfe6c4f, and `swift Tools/make-fixtures.swift
+# --check` regenerates them byte for byte. containers-dense is version 1
+# (ContainersDenseSpec.version).
+dfe7a40ac7662590c4fdd056bf39a91d4f6d71d83df71d4b1faab5d5d692f3ef  captions-parity.json
+69d5cbe3444171189633fc3658e5a06375717edf013985d1c80db3d48c4f3fb8  containers-dense.json
+38cd67a65adc56b9e27354747836ac9686b315748d8b8bdeff642d2bc6ec77db  containers-expand.json
+528792d1aa4160b174cfe22f459962b5a4d6ed8b469ec614e5ca41c1c5a615be  containers-parity.json
+# main 33d549f
+# main's smart-links fixture (9b03ae4, Tools/make-fixtures.swift fixture 13),
+# listed when PR 4 merged main 33d549f; `swift Tools/make-fixtures.swift
+# --check` regenerates it byte for byte.
+66a1514bf3ca9eec58bc2dceb7e3dd585b26d9bc639a0c430c1f42888a5ef904  smart-links.json

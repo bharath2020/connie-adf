@@ -86,8 +86,12 @@ struct ExtensionPlaceholderBlockView: View {
     let blocks: [RenderBlock]
 
     @Environment(\.adfTheme) private var theme
+    @Environment(\.adfTextWidthBound) private var widthBound
 
     var body: some View {
+        // The body's width bound: the placeholder's less its padding on
+        // both sides.
+        let childBound = widthBound.narrowed(by: theme.spacing * 3)
         VStack(alignment: .leading, spacing: theme.spacing) {
             HStack(spacing: theme.spacing * 0.75) {
                 Image(systemName: "puzzlepiece.extension")
@@ -102,6 +106,7 @@ struct ExtensionPlaceholderBlockView: View {
                 VStack(alignment: .leading, spacing: theme.spacing) {
                     ForEach(blocks) { block in
                         BlockView(block: block)
+                            .adfContainerChild(block, in: .extensionBody, widthBound: childBound)
                     }
                 }
             }

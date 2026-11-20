@@ -51,7 +51,7 @@ struct ListRowView: View {
 
     @Environment(\.adfTheme) private var theme
     @Environment(\.adfTextRenderer) private var renderer
-    @Environment(\.adfListWidth) private var listWidth
+    @Environment(\.adfTextWidthBound) private var widthBound
     @Environment(\.layoutDirection) private var layoutDirection
     /// Marker column width, scaled with Dynamic Type so glyphs stay aligned
     /// with the text they annotate.
@@ -69,7 +69,7 @@ struct ListRowView: View {
                 if !row.segments.isEmpty {
                     SmartLinkTextLeaf(segments: row.segments, smartLinkKeys: row.smartLinkKeys,
                                       style: Self.leaderStyle(theme: theme), ownerID: row.id,
-                                      allowsTextKit2: keepsRenderer && TextKit2Scope.listTextFits(textColumnWidth)) {
+                                      allowsTextKit2: keepsRenderer && TextKit2Scope.listTextFits(widthBound, inset: textColumnInset)) {
                         SegmentedTextView(segments: row.segments, ownerID: row.id, smartLinkKeys: row.smartLinkKeys)
                             .textSelection(.enabled)
                     }
@@ -106,20 +106,19 @@ struct ListRowView: View {
         return false
     }
 
-    /// The width the row's `HStack` proposes its text column: the list's
-    /// width less the depth padding, the decision padding, the marker
-    /// column and the gap after it. `nil` when the list's width is unknown.
-    private var textColumnWidth: CGFloat? {
-        guard let listWidth else { return nil }
-        let inset = CGFloat(row.depth) * (markerWidth + theme.spacing) + (isDecision ? 2 * theme.spacing : 0)
-        return listWidth - inset - markerWidth - theme.spacing
+    /// How much narrower than the list (its width bound,
+    /// `adfTextWidthBound`) the row's `HStack` proposes its text column:
+    /// the depth padding, the decision padding, the marker column and the
+    /// gap after it.
+    private var textColumnInset: CGFloat {
+        CGFloat(row.depth) * (markerWidth + theme.spacing) + (isDecision ? 2 * theme.spacing : 0) + markerWidth + theme.spacing
     }
 
     /// Whether a trailing paragraph or heading has room for TextKit 2, less
     /// its own indentation.
     private func textFits(_ block: RenderBlock) -> Bool {
         guard case .richText(_, let style) = block.kind else { return false }
-        return TextKit2Scope.listTextFits(textColumnWidth.map { $0 - RichTextBlockView.indentationPadding(style, theme: theme) })
+        return TextKit2Scope.listTextFits(widthBound, inset: textColumnInset + RichTextBlockView.indentationPadding(style, theme: theme))
     }
 
     /// A task row's enlarged checkbox tap target, over the marker column and

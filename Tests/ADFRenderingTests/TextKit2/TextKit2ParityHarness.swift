@@ -30,12 +30,18 @@ enum TK2Parity {
         var direction: LayoutDirection = .leftToRight
         var legibility: LegibilityWeight? = nil
         var dark = false
+        /// The inherited foreground the library sets on a leaf
+        /// (`adfTextForeground`; `.secondary` on a caption): the SwiftUI
+        /// arm gets it as its foreground style, the TextKit 2 row as its
+        /// inherited foreground.
+        var foreground: Color? = nil
 
         var description: String {
             var parts = ["\(size)"]
             if direction == .rightToLeft { parts.append("rtl") }
             if legibility == .bold { parts.append("boldText") }
             if dark { parts.append("dark") }
+            if let foreground { parts.append("foreground=\(foreground)") }
             return parts.joined(separator: " ")
         }
     }
@@ -87,6 +93,7 @@ enum TK2Parity {
     @MainActor
     static func hosted(_ fixture: Fixture, arm: ADFTextRenderer, env: Environment) -> some View {
         RichTextBlockView(segments: fixture.segments, style: fixture.style)
+            .modifier(InheritedForeground(color: env.foreground))
             .environment(\.adfTextRenderer, arm)
             .environment(\.adfTheme, theme)
             .environment(\.layoutDirection, env.direction)
@@ -125,7 +132,26 @@ enum TK2Parity {
         values.layoutDirection = env.direction
         values.legibilityWeight = env.legibility
         values.displayScale = nativeScale
+        values.adfTextForeground = env.foreground
         return TextKit2RowRepresentable.inputs(text: try #require(fixture.describableText), style: fixture.style, environment: values)
+    }
+
+    /// `Environment.foreground` on a hosted leaf, as the library sets an
+    /// inherited foreground beside the SwiftUI style it mirrors
+    /// (`adfCaptionLeaf`): the foreground style for `Text`, the explicit
+    /// copy for the TextKit 2 row.
+    struct InheritedForeground: ViewModifier {
+        let color: Color?
+
+        func body(content: Content) -> some View {
+            if let color {
+                content
+                    .foregroundStyle(color)
+                    .environment(\.adfTextForeground, color)
+            } else {
+                content
+            }
+        }
     }
 
     /// The layout the hosted TextKit 2 row computes at `width` (its own

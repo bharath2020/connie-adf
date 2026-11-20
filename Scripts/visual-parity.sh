@@ -93,6 +93,43 @@
 #   above it, below the top band) and, for a fallback capture, a named owner
 #   visibly present.
 #
+# CAPTURE KINDS (PR 4; the same --code-capture declaration with a kind)
+#     <fixture>@<position>[#s<step>]=[<kind>:]<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id>
+#   <kind> is code (the default: a declaration without a kind, as every
+#   PR 3 declaration is), container or caption. A position may carry one
+#   declaration per kind; a declaration replaces the one for the same
+#   position, step and kind only. The owners of a kind are:
+#     code       a code block's RenderBlock id (CODE CAPTURES above);
+#     container  the owner of a text leaf inside a panel, quote, expand,
+#                layout column or extension body: its block id (a node
+#                path such as 0.5.1) or, for a nested list's leader, the
+#                PreparedListRow id (0.5.1.0, 0.5.1.0#cont1);
+#     caption    a mediaSingle caption's owner, the PreparedMedia id.
+#   Positive: every owner marked tk2 is drawn by TextKit 2 on arm C, with
+#   context container (not a code row) or caption; fallback: every named
+#   owner stays on SwiftUI. visual_diff.py ("CONTAINER AND CAPTION
+#   CAPTURES") reads the kind's counters and per-owner line after
+#   SCROLL_LANDED (tk2ContainerLive, tk2ContainerNativeDraws and
+#   `TK2_CONTAINER_ROWS owners=<id>:<native draws>,...`; tk2CaptionLive,
+#   tk2CaptionNativeDraws and `TK2_CAPTION_ROWS ...`), ties each tk2 owner
+#   to its TextKit 2 row in the capture-time geometry (a root or list row
+#   on screen, with ink inside its frame) and, on the A-C pair, scores a
+#   text crop over that row's on-screen frame with the code text rule:
+#   the kind's crop limit, every line displaced 0 px in x and y, its ink
+#   centroid <= 0.5 px. Arms B and C of a declared capture of any kind get
+#   the SCROLL_LANDED wait and the geometry bracket.
+#   Adding a capture is one line: append its declaration to
+#   CONTAINER_CAPTURES_DEFAULT below; its fixture@position joins the
+#   default plan by itself when no --fixture is given.
+#
+# FIXTURES  before the first capture (never on --dry-run or --skip-capture)
+#   Scripts/fixtures-check.sh must pass on this checkout (make-fixtures
+#   --check and Fixtures/SHA256SUMS), and every captured fixture's JSON in
+#   each arm's .app (--ref-app; --app when arm B or C runs) must equal the
+#   checkout's Fixtures/<fixture>.json byte for byte: a pair of builds that
+#   render different documents proves nothing. Either failure is an input
+#   error (exit 2); env.txt records the digests.
+#
 # CAPTURE PROCEDURE (identical for every arm)
 #   terminate + uninstall + install the arm's .app (no persisted renderer key
 #   or text size leaks), verify the installed binary sha256 equals the .app's,
@@ -107,12 +144,13 @@
 #   the same timeline) plus --settle (default 3 s), `simctl io screenshot`,
 #   terminate. A reference built from a commit that predates the re-jump
 #   needs it patched into Demo/ADFReader/ReaderView.swift, or arm A lands
-#   nondeterministically. Arms B and C of a declared code capture also wait
-#   (up to 15 s more, normally not at all) for the app's `SCROLL_LANDED`
-#   line, printed about 2.6 s after READY with the RENDERER_STATS and
-#   TK2_CODE_ROWS lines the code proof reads: the screenshot is never taken
-#   before the log describes it. A build that never prints the line is
-#   captured anyway and its code pairs score INVALID. Those arms then
+#   nondeterministically. Arms B and C of a declared capture (any kind)
+#   also wait (up to 15 s more, normally not at all) for the app's
+#   `SCROLL_LANDED` line, printed about 2.6 s after READY with the
+#   RENDERER_STATS, TK2_CODE_ROWS, TK2_CONTAINER_ROWS and TK2_CAPTION_ROWS
+#   lines the proofs read: the screenshot is never taken before the log
+#   describes it. A build that never prints the line is captured anyway
+#   and its declared pairs score INVALID. Those arms then
 #   bracket the screenshot: `simctl spawn notifyutil -p
 #   com.connie.adfreader.geometry`, wait (up to 5 s) for the app's
 #   `CAPTURE_GEOMETRY seq=1` line, `simctl io screenshot`, post again and
@@ -173,14 +211,67 @@
 #                @0.66   block 22: CP-S5, tabs, emoji/CJK, combining marks,
 #                        RTL, "" and "\n" (all SwiftUI: expected fallback)
 #                @0.78   block 26: CP-22 (its header under the band), CP-23,
-#                        CP-24, then CP-S6, nested code (all SwiftUI;
-#                        lands three blocks above CP-S6 because the
-#                        document end clamps a landing on CP-S6 itself)
+#                        CP-24, then CP-S6, nested code (all SwiftUI,
+#                        after PR 4 step 7 too: CP-25 is in a list item,
+#                        CP-26 in a panel beside the panel's paragraph,
+#                        CP-27 in a closed expand; lands three blocks
+#                        above CP-S6 because the document end clamps a
+#                        landing on CP-S6 itself)
 #              code-dense (600 blocks, code only)
 #                @0      block 0 (its header under the band), blocks 1, 2
 #                @0.5    block 300 (its header under the band), then 301
 #                        and on
 #   code captures  one declaration per code position (CODE_CAPTURES_DEFAULT)
+#   container and caption captures  CONTAINER_CAPTURES_DEFAULT (each PR 4
+#              step that enables a family declares its own; a declared
+#              position not in the fixture defaults above is captured too).
+#              --no-code-captures drops every default declaration, of every
+#              kind. From xxxLarge (capture step 3) every container keeps
+#              its text on SwiftUI (TextKit2Scope.containerSizeKeepsRenderer,
+#              size < .xxxLarge, call C55): a position whose owners are
+#              positive at step 0 is a fallback at step 3 (but @0.54,
+#              below). Step 3 (panels, quotes, extension bodies):
+#              containers-parity (87 prepared blocks)
+#                @0      block 0, KP-S1: panels 0.1-0.6 (one paragraph each)
+#                @0.1321 block 11: panels 0.11 and 0.12 (headings), whose
+#                        bodies stay on SwiftUI (the panel shape rule)
+#                @0.3045 block 26, KP-S3: quotes 0.27-0.29 (three deep)
+#                @0.362  block 31, KP-S4: panel in quote, quote in panel,
+#                        panel in and quote in an extension body
+#                @0.4425 block 38, KP-S5: extension body 0.39
+#                @0.8218 block 71, KP-S10: panel 0.71, prose beside a code
+#                        block, stays on SwiftUI (the panel shape rule;
+#                        declared at step 3 only, from step 6)
+#              Step 4 (layout columns; positive on a phone, where the
+#              columns stack — side by side every column stays SwiftUI):
+#                @0.5229 block 45, KP-S6: the 25/75 and 33/67 columns
+#                @0.5919 block 51, KP-S7: the zero, negative, indented
+#                        and (step 0 only) all non-positive column cases
+#              Step 5 (expand bodies): containers-parity
+#                @0.6609 block 57, KP-S8: expands 0.58 and 0.59 and the
+#                        column's nested expand closed (no body row)
+#              Step 6 (lists in containers, KP-S9; a panel's list and a
+#              rule-A row stay SwiftUI):
+#                @0.7183 block 62: lists in the quotes 0.64 and 0.65 (step
+#                        3: the first two rows), the panel 0.63 SwiftUI
+#                @0.7643 block 66: lists in the extension 0.67 and the
+#                        stacked 25/75 section 0.68
+#              Step 7 (nested code; CP-S6 in code-parity stays fallback):
+#                @0.8218 block 71, KP-S10: the quote's code 0.72.0
+#                        (step 3: a code fallback)
+#              Step 8 (captions): captions-parity (25 prepared blocks)
+#                @0.14   block 3: CAP-03 plain, CAP-04 marks (SwiftUI:
+#                        inline code's run background)
+#                @0.30   block 7: CAP-07 colour/highlight (SwiftUI: the
+#                        highlight's run background), CAP-08 placeholder
+#                @0.38   block 9: CAP-09 atoms (SwiftUI), CAP-10 wrapping
+#                @0.46   block 11: CAP-11 mixed scripts and emoji
+#                @0.54   block 13: CAP-12 in a panel, CAP-13 in a column
+#                        (stacked on a phone: TextKit 2 from step 4); step 0
+#                        only (at step 3 the TextKit 2 caption 0.11.0 is
+#                        under the bar)
+#                @0.70, @0.78, @0.86  blocks 17, 19, 21: one caption per
+#                        media layout
 #   list fixtures  lists-parity:3 list-dense:3 list-tall:3 (--list-fixture
 #              replaces the set; pairs of other fixtures are not list pairs)
 #   masks      --top-band 330 (status bar + inline nav bar/toolbar, where the
@@ -206,6 +297,10 @@
 #                    RENDERER_STATS lines, png sha256, time, status, and the
 #                    SCROLL_LANDED line with the RENDERER_STATS and
 #                    TK2_CODE_ROWS lines printed after it (the code proof),
+#                    the TK2_CONTAINER_ROWS and TK2_CAPTION_ROWS lines
+#                    printed after it (the container and caption proofs;
+#                    landed_container_rows, landed_caption_rows; empty for
+#                    a build without them),
 #                    and the CAPTURE_GEOMETRY seq=1 and seq=2 lines
 #                    (geometry_before, geometry_after; empty for arms
 #                    without the bracket)
@@ -246,7 +341,7 @@ CONTENT_SIZE="large"
 SETTLE_SECONDS=3
 SCROLL_WAIT_SECONDS=2
 READY_TIMEOUT=90
-LANDED_WAIT_SECONDS=15   # extra wait for SCROLL_LANDED on a declared code capture
+LANDED_WAIT_SECONDS=15   # extra wait for SCROLL_LANDED on a declared capture (any kind)
 GEOMETRY_NOTIFICATION="com.connie.adfreader.geometry"   # CaptureGeometryHook (-captureGeometryHook)
 GEOMETRY_WAIT_SECONDS=5  # per CAPTURE_GEOMETRY line of the screenshot bracket
 MASKS=()
@@ -347,13 +442,162 @@ CODE_CAPTURES_DEFAULT=(
     # the admitted cohort.
     "code-parity@0.66=fallback;0.23=swiftui,0.24=swiftui,0.25=swiftui,0.26=swiftui;land=0.22"
     # CP-S6: nested code stays on SwiftUI (CP-25 in a bullet item, CP-26 in
-    # a panel; CP-27 is in a collapsed expand and not on screen). The
+    # a panel; CP-27 is in a collapsed expand and not on screen). PR 4
+    # step 7 puts code in containers on TextKit 2, but not these: a list
+    # item keeps its code on SwiftUI (P5), and CP-26's panel holds a
+    # paragraph beside the code, a panel shape that keeps the whole body
+    # on SwiftUI (`panelKeepsRenderer`), so 0.31.1 stays swiftui and this
+    # declaration (and its pins in tests/gate-scripts-tests.sh) is
+    # unchanged. An opened CP-27 would draw on TextKit 2. The
     # landing block CP-22 (non-ASCII) is outside the admitted cohort, and
     # CP-23 ("") and CP-24 ("\n") below it hold no drawable text (fallback
     # .empty), so none of the five may have a TextKit 2 row (G6).
     "code-parity@0.78=fallback;0.26=swiftui,0.27=swiftui,0.28=swiftui,0.30.0.1=swiftui,0.31.1=swiftui;land=0.26"
     "code-dense@0=positive;0.1=tk2,0.2=tk2;land=0.0"
     "code-dense@0.5=positive;0.301=tk2;land=0.300"
+)
+# ---- Container and caption captures (PR 4) -----------------------------------
+# One line per capture, in the step that enables its family (plan §7.4):
+#   "<fixture>@<position>[#s<step>]=<container|caption>:<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id>"
+# for example (not declared):
+#   "containers-parity@0.1=container:positive;0.4.0=tk2,0.4.1=tk2;land=0.3"
+# A positive capture names its TextKit 2 owners (tk2) and may name owners
+# that stay on SwiftUI beside them; a fallback capture names SwiftUI owners
+# only. Name only owners whose text is below the top band at the
+# screenshot (a tk2 owner must own a scored text crop), and confirm every
+# fraction, land= block and owner against the fixture's READY block count
+# and owner table, as for the code captures above. The position is
+# captured by default (DEFAULT_FIXTURE_SPECS needs no edit).
+CONTAINER_CAPTURES_DEFAULT=(
+    # From xxxLarge (step 3) every container keeps its body on SwiftUI
+    # (TextKit2Scope.containerSizeKeepsRenderer, size < .xxxLarge: call C55,
+    # the pre-committed rule of review D-R4): a container position is a
+    # positive capture at step 0 and a fallback at step 3, naming there the
+    # owners whose top-level block is fully on screen (visibleRows at step
+    # 3, measured on the SwiftUI arm; fixU vis-3, a build whose containers
+    # were SwiftUI at xxxLarge).
+    # Step 3, panels, quotes and extension bodies (containers-parity, 87
+    # prepared blocks; owners from the fixture's owner table). Landings and
+    # owner frames measured on an iPhone 17 Pro (iOS 26.3) at -fontSizeStep
+    # 0 and 3: every named owner is on screen below the top band and above
+    # the bottom band at both steps. None of them is linked (a linked row
+    # draws through TextKit 1: 0 native draws, never proof).
+    # KP-S1: the palette panels, one paragraph each (0.7.0 and 0.8.0 run
+    # into the bottom band).
+    "containers-parity@0#s0=container:positive;0.1.0=tk2,0.2.0=tk2,0.3.0=tk2,0.4.0=tk2,0.5.0=tk2,0.6.0=tk2;land=0.0"
+    "containers-parity@0#s3=container:fallback;0.1.0=swiftui,0.2.0=swiftui,0.3.0=swiftui,0.4.0=swiftui,0.5.0=swiftui,0.6.0=swiftui;land=0.0"
+    # Panels 0.11 (H2 and H5 among three paragraphs) and 0.12 (H1) hold
+    # headings, so their bodies stay on SwiftUI. Landing on 0.11 keeps
+    # panel 0.8 (TextKit 2) off screen; at 0.10 it sits under the top band
+    # and a fallback capture would see it.
+    "containers-parity@0.1321=container:fallback;0.11.0=swiftui,0.11.1=swiftui,0.11.2=swiftui,0.11.4=swiftui,0.12.0=swiftui;land=0.11"
+    # KP-S3: a one-paragraph quote, a quote with a heading between two
+    # paragraphs, and quotes three deep.
+    "containers-parity@0.3045#s0=container:positive;0.27.0=tk2,0.28.0=tk2,0.28.1=tk2,0.28.2=tk2,0.29.0=tk2,0.29.1.0=tk2,0.29.1.1.0=tk2,0.29.2=tk2;land=0.26"
+    "containers-parity@0.3045#s3=container:fallback;0.27.0=swiftui,0.28.0=swiftui,0.28.1=swiftui,0.28.2=swiftui,0.29.0=swiftui,0.29.1.0=swiftui,0.29.1.1.0=swiftui,0.29.2=swiftui;land=0.26"
+    # KP-S4: panel in quote, quote in panel, panel in an extension body,
+    # quote in an extension body (0.36, quote > panel > quote, runs into
+    # the bottom band at step 3).
+    "containers-parity@0.362#s0=container:positive;0.32.0=tk2,0.32.1.0=tk2,0.33.0=tk2,0.33.1.0=tk2,0.34.0=tk2,0.34.1.0=tk2,0.35.0.0=tk2;land=0.31"
+    "containers-parity@0.362#s3=container:fallback;0.32.0=swiftui,0.32.1.0=swiftui,0.33.0=swiftui,0.33.1.0=swiftui,0.34.0=swiftui,0.34.1.0=swiftui,0.35.0.0=swiftui;land=0.31"
+    # KP-S5: an extension body with a heading between two paragraphs (the
+    # bodied sync block's paragraph 0.43.0 below it is root text).
+    "containers-parity@0.4425#s0=container:positive;0.39.0=tk2,0.39.1=tk2,0.39.2=tk2;land=0.38"
+    "containers-parity@0.4425#s3=container:fallback;0.39.0=swiftui,0.39.1=swiftui,0.39.2=swiftui;land=0.38"
+    # KP-S10: panel 0.71's paragraph sits beside a code block, so the panel
+    # stays on SwiftUI (the quote, panel and extension below it hold only
+    # code: code rows from step 7, never container rows). Landed on the
+    # panel itself, at step 3 only: from step 6 the stacked 25/75 section
+    # 0.68 above it holds TextKit 2 list rows, and at step 0 its last row
+    # (0.68.1.1.0) is still on screen under the top band with any landing
+    # that keeps 0.71.0 in view, which a fallback capture refuses. Landed
+    # on the heading 0.70 (0.8103) the rows are on screen at both steps.
+    "containers-parity@0.8218#s3=container:fallback;0.71.0=swiftui;land=0.71"
+    # Step 4, layout columns. On a phone (a compact width) the columns
+    # stack and their text is TextKit 2; side by side (a regular width) no
+    # family keeps the renderer, so on an iPad these positions would show
+    # SwiftUI only (the masks above are an iPhone 17 Pro's: the script
+    # stops on another screen size unless masks are passed).
+    # KP-S6: the 25/75 columns (a heading in the 75 % column) and the
+    # 33/67 columns (the linked paragraph 0.47.1.1 is not named).
+    "containers-parity@0.5229#s0=container:positive;0.46.0.0=tk2,0.46.0.1=tk2,0.46.1.0=tk2,0.46.1.1=tk2,0.46.1.2=tk2,0.47.0.0=tk2,0.47.1.0=tk2;land=0.45"
+    "containers-parity@0.5229#s3=container:fallback;0.46.0.0=swiftui,0.46.0.1=swiftui,0.46.1.0=swiftui,0.46.1.1=swiftui,0.46.1.2=swiftui,0.47.0.0=swiftui,0.47.1.0=swiftui;land=0.45"
+    # KP-S7: the zero-percent column (its code block stays SwiftUI), the
+    # negative-percent column, the level-6 indented paragraph in the 25 %
+    # column (drawn from x = 160 pt) and, at step 0, the all-non-positive
+    # control 0.55; at step 3 it is below the screen and 0.54.1.0 runs into
+    # the bottom band.
+    "containers-parity@0.5919#s0=container:positive;0.52.0.0=tk2,0.52.1.0=tk2,0.53.0.0=tk2,0.53.1.0=tk2,0.54.0.0=tk2,0.54.1.0=tk2,0.55.0.0=tk2,0.55.1.0=tk2;land=0.51"
+    "containers-parity@0.5919#s3=container:fallback;0.52.0.0=swiftui,0.52.1.0=swiftui,0.53.0.0=swiftui,0.53.1.0=swiftui;land=0.51"
+    # Step 5, expand bodies. KP-S8 at launch: expands 0.58 (a nested
+    # expand inside) and 0.59 closed, and the 50/50 section 0.60 (a
+    # closed nested expand in its first column). A closed body mounts no
+    # row, so its owners stay on SwiftUI on arm C; the stacked column
+    # paragraphs 0.60.0.0 and 0.60.1.0 are TextKit 2 (step 4). Opened
+    # bodies get no three-arm crop (plan §7.4, P15): the hosted
+    # expandBody and nestedExpandBody suites are their proof.
+    "containers-parity@0.6609#s0=container:positive;0.60.0.0=tk2,0.60.1.0=tk2,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57"
+    "containers-parity@0.6609#s3=container:fallback;0.60.0.0=swiftui,0.60.1.0=swiftui,0.58.0=swiftui,0.59.0.0=swiftui;land=0.57"
+    # Step 6, lists in containers (KP-S9). Landed on the section heading
+    # 0.62: the panel 0.63 holds a list, so its whole body stays on
+    # SwiftUI (0.63.0 named); in the quote 0.64 the ordered rows, the row
+    # after the rule-A row and the tasks are TextKit 2, and the rule-A row
+    # 0.64.1.0 (it holds a panel) stays on SwiftUI; the quote 0.65's
+    # Hebrew and Arabic rows (a left-to-right layout) are TextKit 2. At
+    # step 3 only the ordered rows are above the bottom band.
+    "containers-parity@0.7183#s0=container:positive;0.64.0.0=tk2,0.64.0.1=tk2,0.64.1.1=tk2,0.64.2.0=tk2,0.64.2.1=tk2,0.65.0.0=tk2,0.65.0.1=tk2,0.63.0=swiftui,0.64.1.0=swiftui;land=0.62"
+    "containers-parity@0.7183#s3=container:fallback;0.63.0=swiftui;land=0.62"
+    # Landed on the expand 0.66 (closed: its lists are not prepared): the
+    # extension 0.67's ordered rows and nested bullet, and the 25/75
+    # section 0.68, stacked on a phone: the three-deep list of the 25 %
+    # column and the ordered rows and decision of the 75 % column. At step
+    # 3 the decision 0.68.1.1.0 runs into the bottom band.
+    "containers-parity@0.7643#s0=container:positive;0.67.0.0=tk2,0.67.0.1=tk2,0.67.0.1.1.0=tk2,0.68.0.0.0=tk2,0.68.0.0.0.1.0=tk2,0.68.0.0.0.1.0.1.0=tk2,0.68.1.0.0=tk2,0.68.1.0.1=tk2,0.68.1.1.0=tk2;land=0.66"
+    "containers-parity@0.7643#s3=container:fallback;0.67.0.0=swiftui,0.67.0.1=swiftui,0.67.0.1.1.0=swiftui;land=0.66"
+    # Step 7, nested code (KP-S10, landed on the panel 0.71): the quote's
+    # code 0.72.0 is a TextKit 2 code row at step 0 and stays on SwiftUI at
+    # step 3 (a container child at xxxLarge). The panel's quote's code
+    # 0.73.0.0 is a TextKit 2 code row at step 0 too, but its box is not
+    # found as a scored code box (the panel's fill around it), so it is
+    # not named.
+    "containers-parity@0.8218#s0=code:positive;0.72.0=tk2;land=0.71"
+    "containers-parity@0.8218#s3=code:fallback;0.72.0=swiftui;land=0.71"
+    # Captions (step 8): captions-parity, 25 prepared blocks (`Int(f x 25)`).
+    # Each landing, owner and live caption row was checked on the enabled
+    # build at 3x (SCROLL_LANDED and TK2_CAPTION_ROWS). Linked captions
+    # (CAP-05 0.5.0, CAP-06 0.6.0) are TextKit 1-backed rows with no native
+    # draws, never proof: they are not named.
+    # CAP-03 plain; CAP-04 bold, italic, inline code, strike, underline,
+    # sub/superscript stays on SwiftUI: a caption whose text carries a run
+    # background (inline code's band, a highlight) keeps the renderer from
+    # iOS 26 (TextKit2Scope.captionRunsKeepRenderer, code review M2: the
+    # TextKit 2 centred band was one device pixel larger, PR 1 residual 5).
+    "captions-parity@0.14=caption:positive;0.3.0=tk2,0.4.0=swiftui;land=0.3"
+    # CAP-07 author colour and highlight (SwiftUI, the same rule), CAP-08
+    # placeholder.
+    "captions-parity@0.30=caption:positive;0.7.0=swiftui,0.8.0=tk2;land=0.7"
+    # CAP-09 (mention, date, status: atoms) stays on SwiftUI beside CAP-10
+    # (wrapping, hard break).
+    "captions-parity@0.38=caption:positive;0.9.0=swiftui,0.10.0=tk2;land=0.9"
+    # CAP-11 accents, CJK, emoji, Hebrew and Arabic in one caption.
+    "captions-parity@0.46=caption:positive;0.11.0=tk2;land=0.11"
+    # CAP-12 in a panel (TextKit 2: panels and media are in the allow list
+    # from steps 3 and 8) and CAP-13 in a column (stacked at phone width;
+    # TextKit 2 since step 4 added layout columns; side by side, as on an
+    # iPad, it would stay SwiftUI). Both are container children, so at
+    # step 3 (xxxLarge) both stay on SwiftUI; step 3 carries no caption
+    # declaration: there the top-level CAP-11 caption 0.11.0 (TextKit 2 at
+    # every size) is on screen under the bar, which a fallback capture
+    # refuses, and no owner below the top band is TextKit 2 for a positive
+    # one. Its pairs are scored on pixels alone.
+    "captions-parity@0.54#s0=caption:positive;0.13.1.0=tk2,0.14.0.0.0=tk2;land=0.13"
+    # CAP-S3, one caption per layout: center, wrap-left; wrap-right,
+    # align-start; align-end, wide, full-width. The document ends below
+    # CAP-L-FULL-WIDTH: 0.86 is the last landing with at most one block
+    # above it (0.90 lands on the same screen).
+    "captions-parity@0.70=caption:positive;0.17.0=tk2,0.18.0=tk2;land=0.17"
+    "captions-parity@0.78=caption:positive;0.19.0=tk2,0.20.0=tk2;land=0.19"
+    "captions-parity@0.86=caption:positive;0.21.0=tk2,0.22.0=tk2,0.23.0=tk2;land=0.21"
 )
 CODE_CAPTURES=()
 CODE_CAPTURES_EXPLICIT=()
@@ -412,25 +656,45 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ ${#FIXTURE_SPECS[@]} -gt 0 ]] || FIXTURE_SPECS=("${DEFAULT_FIXTURE_SPECS[@]}")
 [[ ${#LIST_FIXTURES[@]} -gt 0 ]] || LIST_FIXTURES=("${LIST_FIXTURES_DEFAULT[@]}")
 for rule in "${LIST_FIXTURES[@]}"; do
     [[ "$rule" =~ ^[A-Za-z0-9_.-]+(:[0-9]+)?$ ]] || die "--list-fixture '$rule': want <name>[:<min markers>]"
 done
-# Code captures: the defaults (unless --no-code-captures), then the explicit
+# Captures: the defaults (unless --no-code-captures), then the explicit
 # ones; code_rule_for reads the list from the end, so a later declaration
-# for the same position and step wins.
-[[ $NO_CODE_CAPTURES -eq 1 ]] || CODE_CAPTURES=("${CODE_CAPTURES_DEFAULT[@]}")
+# for the same position, step and kind wins.
+DEFAULT_CAPTURES=("${CODE_CAPTURES_DEFAULT[@]}"
+    ${CONTAINER_CAPTURES_DEFAULT[@]+"${CONTAINER_CAPTURES_DEFAULT[@]}"})
+[[ $NO_CODE_CAPTURES -eq 1 ]] || CODE_CAPTURES=("${DEFAULT_CAPTURES[@]}")
 for decl in ${CODE_CAPTURES_EXPLICIT[@]+"${CODE_CAPTURES_EXPLICIT[@]}"}; do CODE_CAPTURES+=("$decl"); done
-CODE_CAPTURE_RE='^[A-Za-z0-9_.-]+@(0|1|0?[.][0-9]+|1[.]0*)(#s-?[0-9]+)?=(positive|fallback);[0-9.]+=(tk2|swiftui)(,[0-9.]+=(tk2|swiftui))*(;land=[0-9.]+)$'
+# An owner is a node path, or a list continuation row's id (<item id>#cont<n>).
+CAPTURE_OWNER_RE='[0-9][0-9.]*(#cont[0-9]+)?=(tk2|swiftui)'
+CODE_CAPTURE_RE="^[A-Za-z0-9_.-]+@(0|1|0?[.][0-9]+|1[.]0*)(#s-?[0-9]+)?=((code|container|caption):)?(positive|fallback);$CAPTURE_OWNER_RE(,$CAPTURE_OWNER_RE)*(;land=[0-9.]+)\$"
 for decl in ${CODE_CAPTURES[@]+"${CODE_CAPTURES[@]}"}; do
     [[ "$decl" =~ $CODE_CAPTURE_RE ]] ||
-        die "--code-capture '$decl': want <fixture>@<position>[#s<step>]=<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id> (land= is required: the landing is measured)"
+        die "--code-capture '$decl': want <fixture>@<position>[#s<step>]=[<code|container|caption>:]<positive|fallback>;<owner>=<tk2|swiftui>[,...];land=<block id> (land= is required: the landing is measured)"
     case "$decl" in
-        *"=positive;"*) [[ "$decl" == *=tk2* ]] || die "--code-capture '$decl': a positive capture needs an owner marked tk2" ;;
+        *"=positive;"*|*":positive;"*) [[ "$decl" == *=tk2* ]] || die "--code-capture '$decl': a positive capture needs an owner marked tk2" ;;
         *) [[ "$decl" != *=tk2* ]] || die "--code-capture '$decl': a fallback capture cannot mark an owner tk2" ;;
     esac
 done
+# The fixture positions: --fixture's, or the defaults plus the position of
+# every default declaration they do not capture yet (so a new declaration
+# is one line), in declaration order.
+if [[ ${#FIXTURE_SPECS[@]} -eq 0 ]]; then
+    FIXTURE_SPECS=("${DEFAULT_FIXTURE_SPECS[@]}")
+    [[ $NO_CODE_CAPTURES -eq 0 ]] || DEFAULT_CAPTURES=()
+    for decl in ${DEFAULT_CAPTURES[@]+"${DEFAULT_CAPTURES[@]}"}; do
+        key="${decl%%=*}"
+        key="${key%%#*}"
+        captured=0
+        for spec in "${FIXTURE_SPECS[@]}"; do
+            [[ "$spec" == *@* ]] || spec="$spec@0"
+            case ",${spec#*@}," in *",${key#*@},"*) [[ "${spec%%@*}" != "${key%%@*}" ]] || captured=1 ;; esac
+        done
+        [[ $captured -eq 1 ]] || FIXTURE_SPECS+=("$key")
+    done
+fi
 # Every declared code capture needs the engine proof and the capture-time
 # geometry, which only -rendererStats and -captureGeometryHook print.
 [[ $RENDERER_STATS -eq 1 || ${#CODE_CAPTURES[@]} -eq 0 ]] ||
@@ -505,24 +769,38 @@ for fixture_pos in "${POSITIONS[@]}"; do
 done
 [[ ${#PLAN[@]} -gt 0 ]] || die "empty capture plan (check --appearances / --size-steps)"
 
-# code_rule_for <fixture> <position> <step>: "<class>\t<owners[;land=…]>" of
-# the code capture declared for that configuration, or nothing. A
+# code_rule_for <fixture> <position> <step>: one line "<class>\t<owners[;land=…]>"
+# per capture kind declared for that configuration (code, then container,
+# then caption), or nothing. <class> is the declaration's class field in
+# canonical form: a code capture's without a kind ("positive"; "code:" is
+# dropped), the other kinds' with it ("container:positive"). Per kind, a
 # declaration with #s<step> beats one without; among equals the last wins.
 code_rule_for() {
-    local fixture="$1" pos="$2" step="$3" index decl key value general=""
-    index=${#CODE_CAPTURES[@]}
-    while (( index > 0 )); do
-        index=$(( index - 1 ))
-        decl="${CODE_CAPTURES[$index]}"
-        key="${decl%%=*}"
-        value="${decl#*=}"
-        if [[ "$key" == "$fixture@$pos#s$step" ]]; then
-            printf '%s\t%s\n' "${value%%;*}" "${value#*;}"
-            return 0
-        fi
-        [[ -n "$general" || "$key" != "$fixture@$pos" ]] || general="$value"
+    local fixture="$1" pos="$2" step="$3" kind index decl key value cls decl_kind found general
+    for kind in code container caption; do
+        index=${#CODE_CAPTURES[@]}
+        found=""
+        general=""
+        while (( index > 0 )); do
+            index=$(( index - 1 ))
+            decl="${CODE_CAPTURES[$index]}"
+            key="${decl%%=*}"
+            value="${decl#*=}"
+            cls="${value%%;*}"
+            decl_kind="code"
+            [[ "$cls" != *:* ]] || decl_kind="${cls%%:*}"
+            [[ "$decl_kind" == "$kind" ]] || continue
+            if [[ "$key" == "$fixture@$pos#s$step" ]]; then
+                found="$value"
+                break
+            fi
+            [[ -n "$general" || "$key" != "$fixture@$pos" ]] || general="$value"
+        done
+        [[ -n "$found" ]] || found="$general"
+        [[ -n "$found" ]] || continue
+        cls="${found%%;*}"
+        printf '%s\t%s\n' "${cls#code:}" "${found#*;}"
     done
-    [[ -z "$general" ]] || printf '%s\t%s\n' "${general%%;*}" "${general#*;}"
 }
 
 # An explicit declaration that matches no planned position is a typo.
@@ -559,30 +837,32 @@ arm_engine() {
 }
 
 # pair_args <require-files:0|1>: the --pair arguments for every configuration,
-# and the --code-capture declaration of each pair of a code capture.
+# and the --code-capture declaration of each pair of a declared capture, one
+# per kind (the class argument carries a kind other than code:
+# container:positive).
 PAIR_ARGS=()
 CODE_ARGS=()
 PAIR_COUNT=0
 build_pairs() {
-    local require="$1" entry cfg a fixture pos appearance step rule cls owners
+    local require="$1" entry cfg a fixture pos appearance step rules
     PAIR_ARGS=()
     CODE_ARGS=()
     PAIR_COUNT=0
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
         a="$CAPTURES/$cfg-A.png"
-        rule="$(code_rule_for "$fixture" "$pos" "$step")"
-        cls="${rule%%$'\t'*}"
-        owners="${rule#*$'\t'}"
+        rules="$(code_rule_for "$fixture" "$pos" "$step")"
         add_pair() {   # <kind> <suffix> <arm>
-            local cand="$CAPTURES/$cfg-$3.png" engine log="-"
+            local cand="$CAPTURES/$cfg-$3.png" engine log="-" rule
             if [[ $require -eq 0 ]] || [[ -f "$a" && -f "$cand" ]]; then
                 PAIR_ARGS+=(--pair "$1" "$cfg-$2" "$a" "$cand")
                 PAIR_COUNT=$(( PAIR_COUNT + 1 ))
-                if [[ -n "$rule" ]]; then
+                if [[ -n "$rules" ]]; then
                     engine="$(arm_engine "$3")"
                     [[ "$engine" == "none" ]] || log="$CAPTURES/$cfg-$3.log"
-                    CODE_ARGS+=(--code-capture "$cfg-$2" "$cls" "$owners" "$engine" "$log")
+                    while IFS= read -r rule; do
+                        CODE_ARGS+=(--code-capture "$cfg-$2" "${rule%%$'\t'*}" "${rule#*$'\t'}" "$engine" "$log")
+                    done <<<"$rules"
                 fi
             fi
         }
@@ -590,6 +870,37 @@ build_pairs() {
         if has_arm B; then add_pair exact AB B; fi
         if has_arm C; then add_pair tolerant AC C; fi
     done
+}
+
+# plan_fixtures: the fixture names the plan captures, one per line, in order.
+plan_fixtures() {
+    local entry cfg fixture pos appearance step seen=" "
+    for entry in "${PLAN[@]}"; do
+        IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
+        case "$seen" in *" $fixture "*) ;; *) seen="$seen$fixture "; printf '%s\n' "$fixture" ;; esac
+    done
+}
+
+# check_fixtures: FIXTURES (usage text). Dies on a mismatch; prints the
+# digests for env.txt.
+check_fixtures() {
+    local out fixture app digest want apps=("$REF_APP") names="ref app"
+    if has_arm B || has_arm C; then apps+=("$APP"); names="ref app, app"; fi
+    out="$("$BASH" "$SCRIPT_DIR/fixtures-check.sh" --repo "$ROOT" 2>&1)" || {
+        printf '%s\n' "$out" >&2
+        die "the checkout's fixtures differ from Tools/make-fixtures.swift or Fixtures/SHA256SUMS (Scripts/fixtures-check.sh)"
+    }
+    printf '%s\n' "$out" | sed 's/^fixtures-check: /fixtures_check=/'
+    while IFS= read -r fixture; do
+        [[ -f "$ROOT/Fixtures/$fixture.json" ]] || die "fixture '$fixture' is not in $ROOT/Fixtures"
+        want="$(shasum -a 256 "$ROOT/Fixtures/$fixture.json" | awk '{print $1}')"
+        for app in "${apps[@]}"; do
+            [[ -f "$app/$fixture.json" ]] || die "$app has no $fixture.json"
+            digest="$(shasum -a 256 "$app/$fixture.json" | awk '{print $1}')"
+            [[ "$digest" == "$want" ]] || die "$app/$fixture.json (sha256 $digest) differs from Fixtures/$fixture.json ($want)"
+        done
+        printf 'fixture=%s sha256=%s (checkout, %s)\n' "$fixture" "$want" "$names"
+    done < <(plan_fixtures)
 }
 
 if [[ $DRY_RUN -eq 1 ]]; then
@@ -613,14 +924,20 @@ if [[ $DRY_RUN -eq 1 ]]; then
             done
         done
     fi
-    echo "code captures (configuration: class; owners; landing block):"
+    if [[ $SKIP_CAPTURE -eq 0 ]]; then
+        echo "fixtures:     $SCRIPT_DIR/fixtures-check.sh, then each captured fixture's JSON in every arm's .app" \
+            "== Fixtures/<fixture>.json ($(plan_fixtures | tr '\n' ' ' | sed 's/ $//'))"
+    fi
+    echo "code captures (configuration: [kind:]class; owners; landing block):"
     declared=0
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"
-        rule="$(code_rule_for "$fixture" "$pos" "$step")"
-        [[ -n "$rule" ]] || continue
-        declared=$(( declared + 1 ))
-        echo "  $cfg: ${rule%%$'\t'*}; ${rule#*$'\t'}"
+        rules="$(code_rule_for "$fixture" "$pos" "$step")"
+        [[ -n "$rules" ]] || continue
+        while IFS= read -r rule; do
+            declared=$(( declared + 1 ))
+            echo "  $cfg: ${rule%%$'\t'*}; ${rule#*$'\t'}"
+        done <<<"$rules"
     done
     [[ $declared -gt 0 ]] || echo "  (none)"
     build_pairs 0
@@ -776,7 +1093,7 @@ capture() {
     ready="$(marker_line READY "$launch_log")"
     sleep "$SCROLL_WAIT_SECONDS"
     sleep "$SETTLE_SECONDS"
-    # The proof of a declared code capture is what the app prints once the
+    # The proof of a declared capture is what the app prints once the
     # jump has landed. It is there by now (about 2.6 s after READY); on a
     # slow host, wait for it rather than capture a screen the log does not
     # describe yet.
@@ -798,7 +1115,7 @@ capture() {
         LAUNCH_PID=""
         return 1
     fi
-    # Arms B and C of a declared code capture: what is on screen right before
+    # Arms B and C of a declared capture: what is on screen right before
     # and right after the screenshot (CAPTURE_GEOMETRY seq=1 and seq=2), so
     # visual_diff.py can tie each scored code box to the row that drew it.
     local bracket=0 geometry_note=""
@@ -844,7 +1161,8 @@ capture() {
         "${stats:-}" "$( [[ -s "$png" ]] && sha256 "$png" || echo missing )" \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${problems:-ok}" \
         "$(marker_line SCROLL_LANDED "$launch_log")" "$(landed_line RENDERER_STATS "$launch_log")" \
-        "$(landed_line TK2_CODE_ROWS "$launch_log")" "$(geometry_line 1 "$launch_log")" \
+        "$(landed_line TK2_CODE_ROWS "$launch_log")" "$(landed_line TK2_CONTAINER_ROWS "$launch_log")" \
+        "$(landed_line TK2_CAPTION_ROWS "$launch_log")" "$(geometry_line 1 "$launch_log")" \
         "$(geometry_line 2 "$launch_log")" >>"$MANIFEST"
 
     if [[ -n "$problems" ]]; then
@@ -862,6 +1180,8 @@ capture() {
 
 CAPTURE_FAILURES=0
 if [[ $SKIP_CAPTURE -eq 0 ]]; then
+    log "fixtures: $SCRIPT_DIR/fixtures-check.sh and each captured fixture in the apps"
+    FIXTURE_DIGESTS="$(check_fixtures)" || exit 2
     trap cleanup EXIT
     trap 'exit 130' INT TERM
     prepare_device
@@ -885,10 +1205,12 @@ if [[ $SKIP_CAPTURE -eq 0 ]]; then
         echo "renderer_stats_required=$RENDERER_STATS"
         echo "visual_diff_args=${DIFF_ARGS[*]}"
         echo "checkout=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo ?) dirty_paths=$(git -C "$ROOT" status --porcelain 2>/dev/null | grep -c . || true)"
+        printf '%s\n' "$FIXTURE_DIGESTS"
     } >"$OUT/env.txt"
     tsv capture arm fixture position appearance size_step content_size app app_sha256 installed_sha256 \
         argv udid device runtime locale ready_line renderer_stats png_sha256 captured_utc status \
-        scroll_landed landed_renderer_stats landed_code_rows geometry_before geometry_after >"$MANIFEST"
+        scroll_landed landed_renderer_stats landed_code_rows landed_container_rows landed_caption_rows \
+        geometry_before geometry_after >"$MANIFEST"
 
     for entry in "${PLAN[@]}"; do
         IFS=$'\t' read -r cfg fixture pos appearance step <<<"$entry"

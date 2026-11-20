@@ -26,6 +26,9 @@ struct SmartLinkTextLeaf<Fallback: View>: View {
     let style: TextBlockStyle
     let ownerID: String?
     var allowsTextKit2 = true
+    /// Handed to the leaf unchanged (`TextEngineLeaf.widthInset`): a
+    /// paragraph's indentation, which the under-1-pt width guard subtracts.
+    var widthInset: CGFloat = 0
     let fallback: Fallback
 
     @Environment(\.adfTextRenderer) private var renderer
@@ -34,19 +37,22 @@ struct SmartLinkTextLeaf<Fallback: View>: View {
 
     init(
         segments: [InlineSegment], smartLinkKeys: [SmartLinkKey], style: TextBlockStyle, ownerID: String?,
-        allowsTextKit2: Bool = true, @ViewBuilder fallback: () -> Fallback
+        allowsTextKit2: Bool = true, widthInset: CGFloat = 0, @ViewBuilder fallback: () -> Fallback
     ) {
         self.segments = segments
         self.smartLinkKeys = smartLinkKeys
         self.style = style
         self.ownerID = ownerID
         self.allowsTextKit2 = allowsTextKit2
+        self.widthInset = widthInset
         self.fallback = fallback()
     }
 
     var body: some View {
         let _ = smartLinks?.noteLeafBody(ownerID, engine: true)
-        TextEngineLeaf(segments: textKit2Segments, style: style, ownerID: ownerID, allowsTextKit2: allowsTextKit2) {
+        TextEngineLeaf(
+            segments: textKit2Segments, style: style, ownerID: ownerID, allowsTextKit2: allowsTextKit2, widthInset: widthInset
+        ) {
             fallback
         }
         .smartLinkAttachment(ownerID: ownerID, keys: smartLinks == nil ? [] : smartLinkKeys)

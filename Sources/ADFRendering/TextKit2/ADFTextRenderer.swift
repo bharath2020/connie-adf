@@ -1,7 +1,10 @@
 import SwiftUI
 
 /// Which text engine draws top-level paragraphs and headings, the text of
-/// top-level lists, and the code of top-level code blocks.
+/// top-level lists, the code of top-level code blocks, the paragraphs,
+/// headings, lists and code blocks in quotes, extension bodies, open expand
+/// bodies and stacked layout columns, and the paragraphs and headings (and
+/// a lone code block) in panels.
 ///
 /// `.swiftUI` is the shipping path (`Text(AttributedString)`). `.textKit2`
 /// routes plain (atom-free) top-level paragraphs and headings, the
@@ -26,10 +29,39 @@ import SwiftUI
 /// laid out right to left, matched by the active search, or would need a
 /// drawing surface over the admission caps at the current text size.
 ///
-/// Everything else stays on SwiftUI regardless of the setting: containers
-/// and the lists, code and text inside them, captions, table cells, and
-/// atom-bearing text. On platforms without UIKit, `.textKit2` behaves as
-/// `.swiftUI`.
+/// From iOS 26, paragraphs and headings in a panel, a quote, a bodied
+/// extension or an open expand's (or nested expand's) body, and in those
+/// nested in one another, go to TextKit 2 too; the container's icon, bar,
+/// fill, border, padding and title (an expand's title and chevron
+/// included) stay SwiftUI. A panel whose body holds a list or an expand, a
+/// heading of its own, or a sub/superscript or small-text run or a code
+/// block beside another block (directly or in a quote, extension body or
+/// layout column in it) keeps its whole body on SwiftUI. Laid out right to
+/// left, or at xxxLarge and above, every container keeps its body on
+/// SwiftUI.
+/// An expand body is prepared when it opens, as before; the renderer never
+/// starts or restarts that preparation. A layout section's columns pass
+/// the same choice to their blocks while the columns stack (compact width;
+/// at the accessibility text sizes they also stack, past the xxxLarge
+/// limit, so they stay on SwiftUI); columns laid out side by side keep all
+/// their text on SwiftUI.
+/// The lists in a quote, an expand or extension body or a stacked column
+/// follow the list rules above at the width the container leaves them,
+/// below xxxLarge (from there they stay on SwiftUI with their container); a
+/// panel holding a list keeps its whole body on SwiftUI. Code blocks in
+/// those places follow their container's choice and then the code rules
+/// above, as a top-level code block does (a panel holding code beside
+/// another block keeps its whole body on SwiftUI).
+///
+/// A media caption's text follows the setting from iOS 26 when its text
+/// is eligible (and has no highlighted or inline-code run) and its media
+/// is in scope (a top-level row, or a child a container's boundary passes
+/// the setting to), drawn in the caption's secondary foreground; the media
+/// box is SwiftUI.
+///
+/// Everything else stays on SwiftUI regardless of the setting: side-by-side
+/// layout columns, container bodies laid out right to left or at xxxLarge
+/// and above, code inside a list item, table cells, and atom-bearing text. On platforms without UIKit, `.textKit2` behaves as `.swiftUI`.
 public enum ADFTextRenderer: String, CaseIterable, Sendable, Identifiable {
     case swiftUI = "swiftui"
     case textKit2 = "textkit2"
@@ -68,9 +100,10 @@ private struct ADFRebuildControlKey: EnvironmentKey {
 /// that list text and code, not only top-level text, are drawn by
 /// TextKit 2.
 ///
-/// The kind says what the text is, not where it sits: a later stage that
-/// draws code inside a container keeps `.code` and adds the container's
-/// context beside it.
+/// The kind says what the text is, not where it sits: text below a
+/// container's boundary keeps its kind (code stays `.code`, list text
+/// `.list`), and the container context (`TextKit2ContainerContext`,
+/// `adfTextContainerContext`) is carried beside it.
 enum TextKit2OwnerKind: Sendable, Hashable {
     case root
     case list
@@ -102,16 +135,47 @@ private struct ADFTextOwnerKindKey: EnvironmentKey {
     static let defaultValue: TextKit2OwnerKind = .root
 }
 
-private struct ADFListWidthKey: EnvironmentKey {
-    static let defaultValue: CGFloat? = nil
+/// A guaranteed lower bound on the width text below it is laid out at
+/// (`adfTextWidthBound`). It decides eligibility only, never layout: a
+/// TextKit 2 row lays out at the width it is proposed (`sizeThatFits`),
+/// but the engine is chosen earlier, in `body`, so a width-dependent rule
+/// needs a width known before layout. Those rules are list rule D
+/// (`TextKit2Scope.listTextFits`) and the under-1-pt guard on every
+/// wrapping leaf (`TextKit2Scope.textFits`).
+///
+/// Because it is only a lower bound, a bound that is too small can keep
+/// text on SwiftUI, never lay TextKit 2 text out wrongly. A bound larger
+/// than the real width breaks the contract: whoever writes one removes
+/// every inset between itself and the text below, or writes `unproven`.
+enum TextKit2WidthBound: Sendable, Hashable {
+    /// Not known yet: before the document's first width observation, or a
+    /// host outside `ADFDocumentView`. Permissive, as an unknown list
+    /// width always was: a restrictive first pass would build the first
+    /// screen's leaves twice, once on each engine.
+    case pending
+    /// The text is laid out at least this many points wide.
+    case atLeast(CGFloat)
+    /// A container above the text cannot bound its insets. Restrictive:
+    /// every wrapping leaf below stays on SwiftUI.
+    case unproven
+}
+
+private struct ADFTextWidthBoundKey: EnvironmentKey {
+    static let defaultValue: TextKit2WidthBound = .pending
+}
+
+private struct ADFTextForegroundKey: EnvironmentKey {
+    static let defaultValue: Color? = nil
 }
 
 extension EnvironmentValues {
     /// The text engine a text leaf (`TextEngineLeaf`) should use.
     /// `ADFDocumentView`'s rows set it to the host's choice for top-level
-    /// `.richText`, `.listRows` and `.codeBlock` rows, and list rows pass it
-    /// on to their own text only (`TextKit2Scope`). Every other position
-    /// gets `.swiftUI`.
+    /// `.richText`, `.listRows` and `.codeBlock` rows and for the container
+    /// kinds the container allow list holds, list rows pass it on to their
+    /// own text only, and a container's child boundary
+    /// (`View.adfContainerChild`) to the children that list allows
+    /// (`TextKit2Scope`). Every other position gets `.swiftUI`.
     var adfTextRenderer: ADFTextRenderer {
         get { self[ADFTextRendererKey.self] }
         set { self[ADFTextRendererKey.self] = newValue }
@@ -132,15 +196,33 @@ extension EnvironmentValues {
         set { self[ADFTextOwnerKindKey.self] = newValue }
     }
 
-    /// The width a top-level list is laid out at, the document's content
-    /// column (`ADFDocumentView`'s rows); `nil` when the host does not know
-    /// it. A list row works out its own text column from it, and keeps
-    /// that text on SwiftUI when the column has no room
-    /// (`TextKit2Scope.listTextFits`). Only top-level lists draw TextKit 2
-    /// text (`TextKit2Scope.rowKeepsRenderer`), so nested ones never need it.
-    var adfListWidth: CGFloat? {
-        get { self[ADFListWidthKey.self] }
-        set { self[ADFListWidthKey.self] = newValue }
+    /// A lower bound on the width the text below is laid out at
+    /// (`TextKit2WidthBound`), for eligibility only, never for layout.
+    /// `ADFDocumentView`'s rows seed it with the row's content width, the
+    /// document column widened or capped by the block's breakout mark
+    /// (`TextKit2WidthBound.rowSeed`); `.pending` before the column is
+    /// measured and in hosts outside the document view. Any view that
+    /// passes it on into a narrower region must remove that region's
+    /// insets first, or write `.unproven`. Read by a list row, which works
+    /// out its text column from it (`TextKit2Scope.listTextFits`), and by
+    /// every wrapping TextKit 2 leaf (`TextKit2Scope.textFits`).
+    var adfTextWidthBound: TextKit2WidthBound {
+        get { self[ADFTextWidthBoundKey.self] }
+        set { self[ADFTextWidthBoundKey.self] = newValue }
+    }
+
+    /// The foreground colour text below inherits where the library styles
+    /// its SwiftUI text with a foreground style: `.secondary` on a media
+    /// caption (`View.adfCaptionLeaf`, its one setter); `nil`, the
+    /// default, everywhere else. SwiftUI does not expose an inherited
+    /// foreground style to UIKit, so a TextKit 2 row reads this explicit
+    /// copy (`TextKit2RenderInputs.inheritedForeground`) for the runs the
+    /// preparer did not colour. Internal: there is no public styling
+    /// channel. A host's `.foregroundStyle`, `.tint` or `.fontWeight`
+    /// around the document is still not observed by TextKit 2 rows.
+    var adfTextForeground: Color? {
+        get { self[ADFTextForegroundKey.self] }
+        set { self[ADFTextForegroundKey.self] = newValue }
     }
 }
 

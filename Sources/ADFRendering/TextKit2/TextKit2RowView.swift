@@ -97,9 +97,27 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     var ownerKind: TextKit2OwnerKind = .root {
         didSet {
             guard ownerKind != oldValue else { return }
-            TextKit2Diagnostics.shared.row(ownerKind: ownerKind, was: oldValue, ownerID: ownerID)
+            TextKit2Diagnostics.shared.row(ownerKind: ownerKind, was: oldValue, context: containerContext, ownerID: ownerID)
         }
     }
+    /// Where the row's text sits (`TextKit2ContainerContext`), set by the
+    /// representable beside `ownerKind`, before the inputs. The row counts
+    /// itself by the two together: container text that is not code
+    /// (`TextKit2Diagnostics.liveContainerRowCount`, its draws and the
+    /// per-owner proof `containerRowDraws`) and captions
+    /// (`liveCaptionRowCount`, `captionRowDraws`). Diagnostics only: it
+    /// changes nothing the row lays out or draws.
+    var containerContext: TextKit2ContainerContext = .none {
+        didSet {
+            guard containerContext != oldValue else { return }
+            TextKit2Diagnostics.shared.row(context: containerContext, was: oldValue, ownerKind: ownerKind, ownerID: ownerID)
+        }
+    }
+    /// Whether the row is counted outside any window
+    /// (`TextKit2Diagnostics.liveOffWindowRowCount`): from creation until
+    /// it first moves into a window, and again whenever it leaves one, as a
+    /// row the lazy stack keeps after showing it does.
+    private var countedOffWindow = true
     /// Width the layout manager is currently laid out at (`-1`: none).
     private var containerWidth: CGFloat = -1
     /// The layout being drawn and hit-tested (set by `syncToBounds`), and
@@ -114,6 +132,14 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// Container-width relayouts performed by this view (the global count
     /// lives in `TextKit2Diagnostics`).
     private(set) var relayoutCount = 0
+    /// Re-proposals of a width this row reported for a narrower proposal
+    /// that it answered with the layout it reported
+    /// (`layoutResult(forProposedWidth:)`). Read by tests only.
+    private(set) var keptReportedLayoutCount = 0
+    /// The layout that answered the last bounded measurement of wrapping
+    /// text (`layoutResult(forProposedWidth:)`): the only one a
+    /// re-proposal of its reported width keeps. Cleared with the cache.
+    private var lastBoundedMeasurement: TextKit2LayoutResult?
 
     /// The block this row draws; also its accessibility identifier
     /// (`tk2-row:<ownerID>`).
@@ -149,6 +175,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         // rows are created and released by the screenful on every switch,
         // so each per-row object counts.
         TextKit2Diagnostics.shared.rowCreated()
+        TextKit2Diagnostics.shared.row(offWindow: true)
     }
 
     @available(*, unavailable)
@@ -206,14 +233,35 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     deinit {
         let backed = isTextKit1Backed
         let kind = ownerKind
+        let context = containerContext
+        let offWindow = countedOffWindow
         let owner = ownerID
         // UIKit releases views on the main thread; hop there if a caller
         // ever drops the last reference elsewhere.
         if Thread.isMainThread {
-            MainActor.assumeIsolated { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
+            MainActor.assumeIsolated {
+                TextKit2Diagnostics.shared.rowDestroyed(
+                    textKit1Backed: backed, ownerKind: kind, context: context, offWindow: offWindow, ownerID: owner
+                )
+            }
         } else {
-            DispatchQueue.main.async { TextKit2Diagnostics.shared.rowDestroyed(textKit1Backed: backed, ownerKind: kind, ownerID: owner) }
+            DispatchQueue.main.async {
+                TextKit2Diagnostics.shared.rowDestroyed(
+                    textKit1Backed: backed, ownerKind: kind, context: context, offWindow: offWindow, ownerID: owner
+                )
+            }
         }
+    }
+
+    /// Counts the row in or out of `liveOffWindowRowCount` as it enters or
+    /// leaves a window. A counter update only: nothing is laid out or drawn
+    /// here.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        let offWindow = window == nil
+        guard offWindow != countedOffWindow else { return }
+        countedOffWindow = offWindow
+        TextKit2Diagnostics.shared.row(offWindow: offWindow)
     }
 
     // MARK: Inputs
@@ -225,7 +273,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// or laying out its text (`applyColorScheme`).
     func apply(_ newInputs: TextKit2RenderInputs, colorScheme: ColorScheme = .light, ownerID newOwnerID: String? = nil) {
         if newOwnerID != ownerID {
-            TextKit2Diagnostics.shared.row(ownerID: newOwnerID, was: ownerID, ownerKind: ownerKind)
+            TextKit2Diagnostics.shared.row(ownerID: newOwnerID, was: ownerID, ownerKind: ownerKind, context: containerContext)
             ownerID = newOwnerID
             accessibilityIdentifier = newOwnerID.map { "tk2-row:\($0)" }
         }
@@ -264,6 +312,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         containerWidth = -1
         drawn = nil
         cache.removeAll()
+        lastBoundedMeasurement = nil
         switch (attributed.length > 0 ? attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle : nil)?.alignment {
         case .center: alignmentFactor = 0.5
         case .right: alignmentFactor = 1
@@ -287,8 +336,33 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     // MARK: Measurement
 
     /// The layout for a proposed width: `nil` or infinite = natural width
-    /// (unbounded container), zero = `.zero` without any layout. Pure in
-    /// (inputs, width); memoized.
+    /// (unbounded container), zero = `.zero` without any layout. Memoized,
+    /// and pure in (inputs, width) but for one case:
+    ///
+    /// A paragraph or heading row (`ownerKind == .root`) proposed exactly
+    /// the width it reported for a narrower bounded proposal, right after
+    /// that proposal, answers with that proposal's layout: only when the
+    /// bounded measurement before this one was the narrower one (delta
+    /// review R6). A measurement at any other width in between is a real
+    /// width change, and the reported width then lays out anew although
+    /// the narrower layout is still cached; natural-size and zero-width
+    /// proposals are not bounded measurements and change nothing. A line that fills its width reports the
+    /// width ceiled to the pixel grid (`proposalCeil`), so a proposal a few
+    /// ulps past a device pixel (a panel's child width, with its icon's
+    /// measured width in the arithmetic: 225.66666666666669 at 3x) reports
+    /// the next pixel (226), as `Text` does, and SwiftUI then places the
+    /// row by proposing that width again. Laid out anew there, a word more
+    /// fitted a line and the row came out a line shorter, centred in the
+    /// slot measured first, where `Text` keeps its lines (code review F-R4:
+    /// the container-leaf sweep's equal-height baseline shift, in panel
+    /// bodies from xSmall to AX5; probe log t-ed3b). Proposed that width
+    /// fresh, both lay out anew. List rows (`.list`) keep laying out anew:
+    /// a list that grows to a row's reported width proposes every row that
+    /// width again, and `Text` lays out anew there (lists-parity at
+    /// 385.333 pt, AX1). A proposal on the pixel grid (any whole-point
+    /// width) never reports past itself, so this case never arises there;
+    /// new inputs (text, size, Bold Text) clear the cache, and with it every
+    /// reported layout (`keptReportedLayoutCount` counts the case).
     ///
     /// Text that never wraps (`TextKit2LayoutPolicy.natural`: code) has the
     /// natural layout only, and it answers every positive width as well: the
@@ -303,7 +377,16 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         guard let inputs else { return .zero }
         if let proposed, proposed.isFinite {
             guard proposed > 0 else { return .zero }
-            if inputs.layoutPolicy == .wrapping { return result(atWidth: proposed) }
+            if inputs.layoutPolicy == .wrapping {
+                if ownerKind == .root, let reported = lastBoundedMeasurement,
+                   reported.width != Self.unboundedWidth, reported.width < proposed, reported.size.width == proposed {
+                    keptReportedLayoutCount += 1
+                    return reported
+                }
+                let measured = result(atWidth: proposed)
+                lastBoundedMeasurement = measured
+                return measured
+            }
         }
         if let natural = cache.value(for: .infinity) { return natural }
         let natural = compute(atContainerWidth: Self.unboundedWidth)
@@ -705,7 +788,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         if let textKit1 {
             drawTextKit1(textKit1, in: context, scale: scale)
             context.restoreGState()
-            TextKit2Diagnostics.shared.didDraw(native: false, textKit1: true)
+            TextKit2Diagnostics.shared.didDraw(native: false, textKit1: true, code: ownerKind == .code, context: containerContext, ownerID: ownerID)
             return
         }
         context.translateBy(x: drawnShift, y: 0)
@@ -739,7 +822,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             return true
         }
         context.restoreGState()
-        TextKit2Diagnostics.shared.didDraw(native: fragments > 0, code: ownerKind == .code, ownerID: ownerID)
+        TextKit2Diagnostics.shared.didDraw(native: fragments > 0, code: ownerKind == .code, context: containerContext, ownerID: ownerID)
     }
 
     /// Text containing a link, drawn as SwiftUI draws it: SwiftUI renders
@@ -751,7 +834,12 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// container as wide as the `Text`'s frame, its first baseline on a
     /// device pixel — this does the same, identical to the pixel
     /// (`TextKit2PixelParityTests`). The same stack lays the text out
-    /// (`textKit1Result`) and hit-tests its links.
+    /// (`textKit1Result`) and hit-tests its links. The container is the
+    /// bounds' width, never the placed layout's (`drawn`): a row placed a
+    /// fraction of a pixel wider than it was measured (the pixel it
+    /// reported, `layoutResult(forProposedWidth:)`) can draw a line fewer
+    /// than its height holds, and so does `Text`, pixel for pixel
+    /// (delta review R1; `TextKit2OffGridWidthTests.linkedOffGridWidth`).
     private func drawTextKit1(_ stack: TextKit1Stack, in context: CGContext, scale: CGFloat) {
         stack.setWidth(bounds.width)
         let glyphs = stack.manager.glyphRange(for: stack.container)

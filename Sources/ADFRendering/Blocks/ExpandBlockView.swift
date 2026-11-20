@@ -19,6 +19,7 @@ struct ExpandBlockView: View {
     /// Same plugins as the document's initial prepare — a claimed node inside
     /// this body must produce the identical block the search index expects.
     @Environment(\.adfCustomRenderers) private var customRenderers
+    @Environment(\.adfTextWidthBound) private var widthBound
     /// Fallback when rendered outside ADFDocumentView (previews): behaves
     /// like the old private state.
     @State private var localExpanded = false
@@ -71,9 +72,13 @@ struct ExpandBlockView: View {
             if isExpanded {
                 Group {
                     if let preparedBody {
+                        // The body's width bound: the expand's less the
+                        // body's horizontal padding on both sides.
+                        let childBound = widthBound.narrowed(by: theme.spacing * 2.5)
                         VStack(alignment: .leading, spacing: theme.spacing) {
                             ForEach(preparedBody) { block in
                                 BlockView(block: block)
+                                    .adfContainerChild(block, in: .expandBody, widthBound: childBound)
                             }
                         }
                     } else {

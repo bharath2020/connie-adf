@@ -16,6 +16,14 @@ import ADFPreparation
 ///         fallbackTextLeaves=<n> listLeaderLeaves=<n> listTrailingLeaves=<n>
 ///         tk2CodeLive=<n> tk2CodeDraws=<n> eligibleCodeRoots=<n>
 ///         fallbackCodeRoots=<n> codeAdmitted=<n> codeGated=<n>
+///         tk2ContainerLive=<n> tk2ContainerNativeDraws=<n>
+///         tk2ContainerTK1Draws=<n> tk2CaptionLive=<n>
+///         tk2CaptionNativeDraws=<n> tk2OffWindow=<n>
+///         eligibleContainerLeaves=<n> linkedContainerLeaves=<n>
+///         fallbackContainerLeaves=<n> containerListLeaves=<n>
+///         eligibleCaptionLeaves=<n> fallbackCaptionLeaves=<n>
+///         eligibleNestedCode=<n> fallbackNestedCode=<n>
+///         unpreparedExpands=<n> nestedCodeAdmitted=<n> nestedCodeGated=<n>
 ///         [rebuildControlRows=<n> rebuildControlAppeared=<n>]
 ///
 /// `renderer` is the persisted switch at print time; `tk2Live` counts live
@@ -28,7 +36,16 @@ import ADFPreparation
 /// performed since launch. `tk2CodeLive` counts the live rows drawing a
 /// code block's code and `tk2CodeDraws` the native draw passes of such rows
 /// since launch (the code-native proof: a paragraph or list row drawing
-/// natively proves nothing about code).
+/// natively proves nothing about code). `tk2ContainerLive` counts the live
+/// rows drawing text below a container's boundary that is not code
+/// (paragraphs, headings and list text in a panel, quote, expand body,
+/// extension body or layout column), `tk2ContainerNativeDraws` and
+/// `tk2ContainerTK1Draws` their native and TextKit 1-backed (linked) draw
+/// passes since launch (the container-native proof: a code row in a
+/// container is counted as code only); `tk2CaptionLive` and
+/// `tk2CaptionNativeDraws` the same for media captions; `tk2OffWindow` the
+/// live row views outside any window (built by the lazy stack ahead of the
+/// viewport, or kept after showing).
 ///
 /// Coverage of `model.blocks` (`ADFTextKit2Coverage`, static): the root
 /// richText, legacy keys `eligibleRoots`/`fallbackRoots`/
@@ -48,7 +65,21 @@ import ADFPreparation
 /// many a view-time rule keeps on SwiftUI there (right-to-left layout, a
 /// canvas over the admission caps, or before iOS 26 an interior empty line
 /// at AX4 and AX5); `codeAdmitted + codeGated ==
-/// eligibleCodeRoots` (`ADFTextRenderer.textKit2CodeAdmission`). The
+/// eligibleCodeRoots` (`ADFTextRenderer.textKit2CodeAdmission`). Text below
+/// containers and in captions joins none of those keys: the container keys
+/// count it apart (static, stacked and left to right):
+/// `eligibleContainerLeaves`/`fallbackContainerLeaves` its paragraphs,
+/// headings and list text, `linkedContainerLeaves` the linked eligible
+/// ones, `containerListLeaves` the list text among them;
+/// `eligibleCaptionLeaves`/`fallbackCaptionLeaves` captions;
+/// `eligibleNestedCode`/`fallbackNestedCode` code in containers, with
+/// `nestedCodeAdmitted`/`nestedCodeGated` measured as `codeAdmitted`/
+/// `codeGated` are, in the same walk
+/// (`ADFTextRenderer.textKit2CodeAdmissionIncludingNested`);
+/// `unpreparedExpands` the expands in scope whose bodies, prepared only
+/// when opened, the count could not enter. Every container key is 0 while
+/// no container family is enabled; `tk2OffWindow` is not a container key:
+/// it counts every live row kind outside a window. The
 /// bracketed keys appear only under
 /// `-rebuildControlPicks` (`RebuildControl`). Parsed by
 /// `Scripts/perf_trial.py` (one line at READY, one after `SCROLL_METRICS`).
@@ -60,13 +91,17 @@ import ADFPreparation
 ///     SCROLL_LANDED fixture=<name> fraction=<f> index=<i> block=<id> blocks=<n>
 ///     RENDERER_STATS …
 ///     TK2_CODE_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+///     TK2_CONTAINER_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+///     TK2_CAPTION_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
 ///
 /// `SCROLL_LANDED` names the block the jump went to (`block=`, the
 /// `RenderBlock.id` at `index=` of `blocks=`: the jump's target, not a
 /// measured position) and is printed with or without `-rendererStats`; the
-/// other two only with it. `TK2_CODE_ROWS` is the per-owner code proof
+/// others only with it. `TK2_CODE_ROWS` is the per-owner code proof
 /// (`printCodeRows`): a total cannot say which block drew, and a count
-/// says a row drew, not that it is on screen.
+/// says a row drew, not that it is on screen. `TK2_CONTAINER_ROWS` and
+/// `TK2_CAPTION_ROWS` are the same proof for container text that is not
+/// code and for captions (`printContainerRows`, `printCaptionRows`).
 ///
 /// Under `-captureGeometryHook`, each `com.connie.adfreader.geometry` post
 /// prints what is on screen at that moment (`printCaptureGeometry`), which
@@ -88,9 +123,12 @@ import ADFPreparation
 /// TextKit 2 row in the window (`ADFTextRenderer.textKit2RowFrames(in:)`,
 /// sorted by owner id, then top): its owner, kind, the frame it can draw
 /// in (bounds and canvas), that frame clipped by its clipping ancestors and
-/// the window (`-` when nothing of it shows) and, for a code row, its
-/// native draws (`TK2_CODE_ROWS`); `rows=-` when there is none. Ids are
-/// node paths, which hold none of ` ,;|` (any would print as `_`).
+/// the window (`-` when nothing of it shows) and its owner's native draws
+/// at this moment: always for a code row (`TK2_CODE_ROWS`), for a
+/// container or caption row when its owner is live there
+/// (`TK2_CONTAINER_ROWS`, `TK2_CAPTION_ROWS`), else `-` (a top-level
+/// row); `rows=-` when there is none. Ids are node paths, which hold none
+/// of ` ,;|` (any would print as `_`).
 @MainActor
 enum RendererStats {
     /// The environment the reader draws a document in, for the measured
@@ -145,13 +183,38 @@ enum RendererStats {
     /// in it by value), `live=` counts them, and `owners=-` means no live
     /// code row, as with the switch off.
     static func printCodeRows() {
-        let rows = ADFTextRenderer.textKit2CodeRowDraws
+        printOwnerRows("TK2_CODE_ROWS", ADFTextRenderer.textKit2CodeRowDraws)
+    }
+
+    /// The `TK2_CONTAINER_ROWS` line: every live TextKit 2 row drawing
+    /// text below a container's boundary that is not code
+    /// (`ADFTextRenderer.textKit2ContainerRowDraws`), in `TK2_CODE_ROWS`'s
+    /// format. `<id>` is the text leaf's owner: a paragraph's or heading's
+    /// `RenderBlock.id`, or a nested list row's `PreparedListRow.id`. A
+    /// linked row draws through TextKit 1 and lists zero native draws.
+    ///
+    ///     TK2_CONTAINER_ROWS live=<n> owners=<id>:<draws>[,<id>:<draws>…]
+    ///     TK2_CONTAINER_ROWS live=0 owners=-
+    static func printContainerRows() {
+        printOwnerRows("TK2_CONTAINER_ROWS", ADFTextRenderer.textKit2ContainerRowDraws)
+    }
+
+    /// The `TK2_CAPTION_ROWS` line: every live TextKit 2 row drawing a
+    /// media caption (`ADFTextRenderer.textKit2CaptionRowDraws`, by
+    /// `PreparedMedia.id`), in `TK2_CODE_ROWS`'s format.
+    static func printCaptionRows() {
+        printOwnerRows("TK2_CAPTION_ROWS", ADFTextRenderer.textKit2CaptionRowDraws)
+    }
+
+    /// `<marker> live=<n> owners=<id>:<draws>[,…]|-`: owners sorted by id
+    /// (numbers in it by value), `live=` counting them.
+    private static func printOwnerRows(_ marker: String, _ rows: [String: Int]) {
         let owners = rows.keys.sorted { first, second in
             let order = first.compare(second, options: .numeric)
             return order == .orderedSame ? first < second : order == .orderedAscending
         }
         let list = owners.isEmpty ? "-" : owners.map { "\($0):\(rows[$0] ?? 0)" }.joined(separator: ",")
-        Swift.print("TK2_CODE_ROWS live=\(owners.count) owners=\(list)")
+        Swift.print("\(marker) live=\(owners.count) owners=\(list)")
         fflush(stdout)
     }
 
@@ -173,6 +236,8 @@ enum RendererStats {
         }
         let screen = window.screen
         let draws = ADFTextRenderer.textKit2CodeRowDraws
+        let textDraws = ADFTextRenderer.textKit2ContainerRowDraws
+            .merging(ADFTextRenderer.textKit2CaptionRowDraws) { container, _ in container }
         let rows = ADFTextRenderer.textKit2RowFrames(in: window).sorted { first, second in
             let order = first.ownerID.compare(second.ownerID, options: .numeric)
             if order != .orderedSame { return order == .orderedAscending }
@@ -194,7 +259,8 @@ enum RendererStats {
         line += " visibleRows=\(visibleRows)"
         let rowList = rows.map { row in
             let visible = row.visible.map(geometryRect) ?? "-"
-            let rowDraws = row.kind == .code ? String(draws[row.ownerID] ?? 0) : "-"
+            let rowDraws = row.kind == .code
+                ? String(draws[row.ownerID] ?? 0) : textDraws[row.ownerID].map(String.init) ?? "-"
             return "\(geometryID(row.ownerID))|\(row.kind.rawValue)|\(geometryRect(row.frame))|\(visible)|\(rowDraws)"
         }
         line += " rows=\(rowList.isEmpty ? "-" : rowList.joined(separator: ";"))"
@@ -225,7 +291,7 @@ enum RendererStats {
         let stats = ADFTextRenderer.textKit2Stats
         let coverage = ADFTextRenderer.textKit2Coverage(of: blocks)
         let environment = environment ?? launchEnvironment()
-        let code = ADFTextRenderer.textKit2CodeAdmission(
+        let code = ADFTextRenderer.textKit2CodeAdmissionIncludingNested(
             of: blocks, dynamicTypeSize: environment.dynamicTypeSize, legibilityWeight: environment.legibilityWeight,
             displayScale: environment.displayScale, layoutDirection: environment.layoutDirection
         )
@@ -245,6 +311,16 @@ enum RendererStats {
         line += " tk2CodeLive=\(stats.liveCodeRowCount) tk2CodeDraws=\(stats.codeNativeDrawCount)"
         line += " eligibleCodeRoots=\(coverage.eligibleCodeRoots) fallbackCodeRoots=\(coverage.fallbackCodeRoots)"
         line += " codeAdmitted=\(code.admittedCodeRoots) codeGated=\(code.gatedCodeRoots)"
+        line += " tk2ContainerLive=\(stats.liveContainerRowCount) tk2ContainerNativeDraws=\(stats.containerNativeDrawCount)"
+        line += " tk2ContainerTK1Draws=\(stats.containerTextKit1DrawCount)"
+        line += " tk2CaptionLive=\(stats.liveCaptionRowCount) tk2CaptionNativeDraws=\(stats.captionNativeDrawCount)"
+        line += " tk2OffWindow=\(stats.liveOffWindowRowCount)"
+        line += " eligibleContainerLeaves=\(coverage.eligibleContainerLeaves) linkedContainerLeaves=\(coverage.linkedContainerLeaves)"
+        line += " fallbackContainerLeaves=\(coverage.fallbackContainerLeaves) containerListLeaves=\(coverage.containerListLeaves)"
+        line += " eligibleCaptionLeaves=\(coverage.eligibleCaptionLeaves) fallbackCaptionLeaves=\(coverage.fallbackCaptionLeaves)"
+        line += " eligibleNestedCode=\(coverage.eligibleNestedCode) fallbackNestedCode=\(coverage.fallbackNestedCode)"
+        line += " unpreparedExpands=\(coverage.unpreparedExpands)"
+        line += " nestedCodeAdmitted=\(code.nestedCodeAdmitted) nestedCodeGated=\(code.nestedCodeGated)"
         if RebuildControl.configured {
             line += " rebuildControlRows=\(ADFTextRenderer.rebuildControlRows.live)"
             line += " rebuildControlAppeared=\(ADFTextRenderer.rebuildControlRows.appeared)"

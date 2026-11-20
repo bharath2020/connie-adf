@@ -146,7 +146,7 @@ struct TextKit2ListParityTests {
     static func hostedList(_ block: RenderBlock, arm: ADFTextRenderer, env: TK2Parity.Environment, listWidth: CGFloat, theme: ADFTheme = TK2Parity.theme) -> some View {
         BlockView(block: block)
             .environment(\.adfTextRenderer, TextKit2Scope.inheritsRenderer(block.kind) ? arm : .swiftUI)
-            .environment(\.adfListWidth, listWidth)
+            .environment(\.adfTextWidthBound, .atLeast(listWidth))
             .environment(\.adfTheme, theme)
             .environment(\.layoutDirection, env.direction)
             .environment(\.legibilityWeight, env.legibility)
@@ -157,7 +157,7 @@ struct TextKit2ListParityTests {
     static func hostedRow(_ row: PreparedListRow, arm: ADFTextRenderer, env: TK2Parity.Environment, listWidth: CGFloat) -> some View {
         ListRowView(row: row)
             .environment(\.adfTextRenderer, arm)
-            .environment(\.adfListWidth, listWidth)
+            .environment(\.adfTextWidthBound, .atLeast(listWidth))
             .environment(\.adfTheme, theme)
             .environment(\.layoutDirection, env.direction)
             .environment(\.legibilityWeight, env.legibility)

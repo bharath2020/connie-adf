@@ -11,8 +11,9 @@ import ADFPreparation
 /// rebuilding its text or laying it out again, and the repainted pixels
 /// match fresh rows created in each scheme — on every draw path: a plain
 /// `.label` row (TextKit 2 fragment drawing), an author-coloured run, run
-/// backgrounds drawn by the row (TextKit 2 line drawing) and an accent
-/// link (TextKit 1-backed drawing). A flip together with a real width or
+/// backgrounds drawn by the row (TextKit 2 line drawing), an accent
+/// link (TextKit 1-backed drawing) and text in an inherited `.secondary`
+/// foreground (a caption's, `adfTextForeground`). A flip together with a real width or
 /// content change still lays out (and rebuilds) as before.
 @Suite("TextKit 2 appearance flips", .serialized)
 @MainActor
@@ -21,8 +22,11 @@ struct TextKit2AppearanceFlipTests {
     nonisolated static let maxDifferingFraction = TextKit2PixelParityTests.maxDifferingFraction
 
     enum Case: String, CaseIterable, Sendable, CustomStringConvertible {
-        case plainLabel, authorHex, runBackground, accentLink
+        case plainLabel, authorHex, runBackground, accentLink, secondaryForeground
         var description: String { rawValue }
+
+        /// The inherited foreground the case's leaf is hosted with.
+        var foreground: Color? { self == .secondaryForeground ? .secondary : nil }
     }
 
     static let wrapping = "after it, enough plain words to wrap the paragraph onto a second and a third line at the default size"
@@ -46,6 +50,8 @@ struct TextKit2AppearanceFlipTests {
                 t("inline code", "{\"type\":\"code\"}"),
                 t(", and " + wrapping),
             ].joined(separator: ","))
+        case .secondaryForeground:
+            return try await TK2Parity.plain("secondary-foreground", "Caption-coloured secondary text " + wrapping)
         case .accentLink:
             return try await TK2Parity.fixture("accent-link", content: [
                 t("Plain text, "),
@@ -61,13 +67,15 @@ struct TextKit2AppearanceFlipTests {
     func liveFlip(_ kind: Case) async throws {
         let fixture = try await Self.fixture(kind)
         let height = Self.windowHeight(fixture)
-        let freshLight = try LiveRow.snapshot(fixture, width: Self.width, height: height, dark: false)
-        let freshDark = try LiveRow.snapshot(fixture, width: Self.width, height: height, dark: true)
+        let foreground = kind.foreground
+        let freshLight = try LiveRow.snapshot(fixture, width: Self.width, height: height, dark: false, foreground: foreground)
+        let freshDark = try LiveRow.snapshot(fixture, width: Self.width, height: height, dark: true, foreground: foreground)
 
-        let live = LiveRow(fixture, width: Self.width, height: height, dark: false)
+        let live = LiveRow(fixture, width: Self.width, height: height, dark: false, foreground: foreground)
         defer { live.close() }
         let row = try #require(live.row)
         #expect(row.isTextKit1Backed == (kind == .accentLink))
+        #expect(row.inputs?.inheritedForeground == foreground, "the row's inherited foreground")
         _ = try live.bitmap()
         let placed = row.frame(in: live.window)
         let geometry = row.placedResult(for: row.bounds.size)
@@ -81,7 +89,7 @@ struct TextKit2AppearanceFlipTests {
             let diagnostics = TextKit2Diagnostics.shared
             let layouts = diagnostics.layoutCount
             let draws = diagnostics.drawCount
-            live.update(fixture: fixture, width: Self.width, dark: dark)
+            live.update(fixture: fixture, width: Self.width, dark: dark, foreground: foreground)
             #expect(live.row === row, "\(label): the flip kept the row")
             #expect(row.traitCollection.userInterfaceStyle == (dark ? .dark : .light), "\(label): the row did not receive the scheme")
             LiveRow.display(live.window)
@@ -260,9 +268,10 @@ final class LiveRow {
     struct Root: View {
         var fixture: TK2Parity.Fixture
         var width: CGFloat
+        var foreground: Color? = nil
 
         var body: some View {
-            TK2Parity.hosted(fixture, arm: .textKit2, env: TK2Parity.Environment())
+            TK2Parity.hosted(fixture, arm: .textKit2, env: TK2Parity.Environment(foreground: foreground))
                 .frame(width: width, alignment: .topLeading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .ignoresSafeArea()
@@ -273,9 +282,9 @@ final class LiveRow {
     let host: UIHostingController<Root>
     private(set) var width: CGFloat
 
-    init(_ fixture: TK2Parity.Fixture, width: CGFloat, height: CGFloat, dark: Bool) {
+    init(_ fixture: TK2Parity.Fixture, width: CGFloat, height: CGFloat, dark: Bool, foreground: Color? = nil) {
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: max(width, TextKit2AppearanceFlipTests.width), height: height))
-        host = UIHostingController(rootView: Root(fixture: fixture, width: width))
+        host = UIHostingController(rootView: Root(fixture: fixture, width: width, foreground: foreground))
         host.view.backgroundColor = .clear
         host.safeAreaRegions = []
         self.width = width
@@ -286,15 +295,15 @@ final class LiveRow {
     }
 
     /// A fresh row's pixels.
-    static func snapshot(_ fixture: TK2Parity.Fixture, width: CGFloat, height: CGFloat, dark: Bool) throws -> TK2Parity.Bitmap {
-        let row = LiveRow(fixture, width: width, height: height, dark: dark)
+    static func snapshot(_ fixture: TK2Parity.Fixture, width: CGFloat, height: CGFloat, dark: Bool, foreground: Color? = nil) throws -> TK2Parity.Bitmap {
+        let row = LiveRow(fixture, width: width, height: height, dark: dark, foreground: foreground)
         defer { row.close() }
         return try row.bitmap()
     }
 
-    func update(fixture: TK2Parity.Fixture, width: CGFloat, dark: Bool) {
+    func update(fixture: TK2Parity.Fixture, width: CGFloat, dark: Bool, foreground: Color? = nil) {
         self.width = width
-        host.rootView = Root(fixture: fixture, width: width)
+        host.rootView = Root(fixture: fixture, width: width, foreground: foreground)
         style(dark: dark)
         settle()
     }

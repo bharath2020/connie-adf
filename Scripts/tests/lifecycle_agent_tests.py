@@ -172,6 +172,202 @@ empty = os.path.join(work, "empty.jsonl")
 open(empty, "w").close()
 expect("no recorded check is a failure", agent.main(["report", "--results", empty, "--out", report]), 1)
 
+# ---- K3 column crossing (review D-R5) ------------------------------------------
+K3 = "K3 width and type-size changes in containers (containers-parity 0.46)"
+
+
+def k3_results(name: str, crossed: tuple[bool, bool], passed: bool = True, regular: bool | None = None) -> str:
+    """A results file holding one K3 record whose swiftui and textkit2
+    arms have crossed_boundary `crossed` and regular_width `regular`
+    (default: whether both crossed, as K3 records it; None leaves it out)."""
+    path = os.path.join(work, name + ".jsonl")
+    regular = all(crossed) if regular is None else regular
+    arms = [{"arm": arm, "regular_width": regular, "crossed_boundary": value}
+            for arm, value in zip(("swiftui", "textkit2"), crossed)]
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"check": K3, "pass": passed, "arms": arms}) + "\n")
+    return path
+
+
+def crossing_report(results: str, *crossing: str) -> tuple[int, str]:
+    argv = ["report", "--results", results, "--out", report]
+    for path in crossing:
+        argv += ["--crossing-results", path]
+    status = agent.main(argv)
+    rows = [line for line in open(report, encoding="utf-8").read().splitlines() if line.startswith("| K3 column")]
+    return status, rows[0] if rows else ""
+
+
+phone = k3_results("k3-phone", (False, False))
+ipad = k3_results("k3-ipad", (True, True))
+# A Pro Max K3 whose rotation crossed the column boundary with the engine
+# flip (review N2, below): a phone run needs it too, so the D-R5 case that
+# passes carries it.
+rotation_evidence = os.path.join(work, "k3-promax.jsonl")
+with open(rotation_evidence, "w", encoding="utf-8") as fh:
+    fh.write(json.dumps({"check": K3, "pass": True, "arms": [
+        {"arm": "swiftui", "regular_width": False, "crossed_boundary": False, "rotation_crossable": True,
+         "crossed_rotation": True, "rotation_textkit2_leaves": [0, 0, 0]},
+        {"arm": "textkit2", "regular_width": False, "crossed_boundary": False, "rotation_crossable": True,
+         "crossed_rotation": True, "rotation_textkit2_leaves": [4, 0, 4], "in_window_rows_rotation": [40, 8, 40],
+         "release_at_top": True, "release_off_window": 0}]}) + "\n")
+status, row = crossing_report(phone, rotation_evidence)
+expect("D-R5: a phone K3 (passed, not crossable) alone fails the report", (status, "| **FAIL** |" in row), (1, True))
+expect("... the row says how to supply the crossing", "--k3-crossing" in row, True)
+status, row = crossing_report(phone, ipad, rotation_evidence)
+expect("D-R5: ... and passes with an iPad run's crossing K3 as --crossing-results", (status, "| PASS |" in row), (0, True))
+expect("... naming that file", f"source={ipad}" in row, True)
+status, row = crossing_report(ipad)
+expect("D-R5: a run whose own K3 crossed (an iPad destination) passes on its own", (status, "source=this run" in row),
+       (0, True))
+status, row = crossing_report(phone, k3_results("k3-ipad-failed", (True, True), passed=False))
+expect("D-R5: a crossing K3 that failed is no evidence", (status, "| **FAIL** |" in row), (1, True))
+status, row = crossing_report(phone, k3_results("k3-ipad-one-arm", (True, False)))
+expect("D-R5: a K3 that crossed on one arm only is no evidence", (status, "| **FAIL** |" in row), (1, True))
+status, row = crossing_report(phone, os.path.join(work, "no-such-run.jsonl"))
+expect("D-R5: a missing crossing file is no evidence", (status, "| **FAIL** |" in row), (1, True))
+status, row = crossing_report(copied, phone)
+expect("D-R5: a run without K3 gets no crossing row", (status, row), (0, ""))
+status, row = crossing_report(phone, k3_results("k3-crossed-compact", (True, True), regular=False))
+expect("Astra R5: a crossing K3 not from a regular-width destination is no evidence", (status, "| **FAIL** |" in row),
+       (1, True))
+legacy = os.path.join(work, "k3-legacy.jsonl")
+with open(legacy, "w", encoding="utf-8") as fh:
+    fh.write(json.dumps({"check": K3, "pass": True, "arms": [{"arm": "swiftui", "crossed_boundary": True},
+                                                             {"arm": "textkit2", "crossed_boundary": True}]}) + "\n")
+status, row = crossing_report(phone, legacy)
+expect("Astra R5: a crossing K3 without regular_width (an older build) is no evidence",
+       (status, "| **FAIL** |" in row), (1, True))
+
+# ---- K3 rotation crossing (review N2) ------------------------------------------
+
+
+def k3_record(name: str, arms: list[dict], passed: bool = True) -> str:
+    path = os.path.join(work, name + ".jsonl")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"check": K3, "pass": passed, "arms": arms}) + "\n")
+    return path
+
+
+def k3_arm(arm: str, regular: bool = False, crossed: bool = False, rotation: bool = False,
+           rotated: bool | None = None, leaves: list | None = None, in_window: list | None = None,
+           at_top: bool | None = None, off_window: object = "default") -> dict:
+    """One K3 arm: `regular`/`crossed` as the D-R5 fields; `rotation` is
+    rotation_crossable, `rotated` crossed_rotation (default: rotation),
+    `leaves` rotation_textkit2_leaves (default: what the arm draws when it
+    rotates across: textkit2 > 0 -> 0 -> > 0, swiftui 0 throughout; a
+    compact phone's textkit2 arm stays > 0). C60 rows: `in_window`
+    in_window_rows_rotation (default on textkit2: 40 portrait, 8
+    landscape, one per stage; the swiftui arm records null), `at_top`
+    release_at_top and `off_window` release_off_window (default on a
+    crossing textkit2 arm: True, 0; else null)."""
+    if leaves is None:
+        leaves = [0, 0, 0] if arm == "swiftui" else ([4, 0, 4] if rotation else [4, 4, 4])
+    released = arm == "textkit2" and rotation
+    if in_window is None:
+        in_window = [None] * len(leaves) if arm == "swiftui" else [8 if i % 2 else 40 for i in range(len(leaves))]
+    return {"arm": arm, "regular_width": regular, "crossed_boundary": crossed, "rotation_crossable": rotation,
+            "crossed_rotation": rotation if rotated is None else rotated, "rotation_textkit2_leaves": leaves,
+            "in_window_rows_rotation": in_window,
+            "release_at_top": (True if released else None) if at_top is None else at_top,
+            "release_off_window": (0 if released else None) if off_window == "default" else off_window}
+
+
+def rows_of(results: str, *crossing: str) -> tuple[int, dict[str, str]]:
+    """The report's exit status and its K3 crossing rows by check prefix
+    ("K3 column", "K3 rotation"; a row the report did not add is "")."""
+    argv = ["report", "--results", results, "--out", report]
+    for path in crossing:
+        argv += ["--crossing-results", path]
+    status = agent.main(argv)
+    lines = open(report, encoding="utf-8").read().splitlines()
+    return status, {key: next((l for l in lines if l.startswith("| " + key)), "")
+                    for key in ("K3 column", "K3 rotation")}
+
+
+ipad_n2 = k3_record("n2-ipad", [k3_arm(a, regular=True, crossed=True) for a in ("swiftui", "textkit2")])
+promax = k3_record("n2-promax", [k3_arm(a, rotation=True) for a in ("swiftui", "textkit2")])
+phone17 = k3_record("n2-phone", [k3_arm(a) for a in ("swiftui", "textkit2")])
+status, rows = rows_of(phone17, ipad_n2, promax)
+expect("N2: a phone K3 passes with an iPad crossing and a Pro Max rotation crossing",
+       (status, "| PASS |" in rows["K3 column"], "| PASS |" in rows["K3 rotation"],
+        f"source={promax}" in rows["K3 rotation"]), (0, True, True, True))
+two_trips = k3_record("n2-promax-two-trips", [k3_arm("swiftui", rotation=True, leaves=[0, 0, 0, 0, 0]),
+                                              k3_arm("textkit2", rotation=True, leaves=[6, 0, 6, 0, 6])])
+status, rows = rows_of(phone17, ipad_n2, two_trips)
+expect("N2: a Pro Max record with two round trips that both flipped is evidence",
+       (status, "| PASS |" in rows["K3 rotation"]), (0, True))
+landscape_varies = k3_record("n2-promax-landscape-varies",
+                             [k3_arm("swiftui", rotation=True, leaves=[0, 0, 0, 0, 0]),
+                              k3_arm("textkit2", rotation=True, leaves=[6, 0, 6, 0, 6], in_window=[40, 8, 40, 9, 40])])
+status, rows = rows_of(phone17, ipad_n2, landscape_varies)
+expect("C60: rows in a window are compared at the portrait stages only (landscape recorded)",
+       (status, "| PASS |" in rows["K3 rotation"]), (0, True))
+status, rows = rows_of(phone17, ipad_n2)
+expect("N2: ... and fails without the Pro Max record (the iPad crossing alone flips no engine)",
+       (status, "| PASS |" in rows["K3 column"], "| **FAIL** |" in rows["K3 rotation"]), (1, True, True))
+expect("... the row says how to supply the rotation crossing", "Pro Max" in rows["K3 rotation"] and "--k3-crossing"
+       in rows["K3 rotation"], True)
+status, rows = rows_of(promax, ipad_n2)
+expect("N2: a Pro Max run's own rotation crossing passes its row (this run), with the iPad's crossing",
+       (status, "source=this run" in rows["K3 rotation"], "| PASS |" in rows["K3 column"]), (0, True, True))
+status, rows = rows_of(promax)
+expect("N2: ... but a Pro Max run still needs the iPad crossing (D-R5 kept as is)",
+       (status, "| **FAIL** |" in rows["K3 column"], "| PASS |" in rows["K3 rotation"]), (1, True, True))
+status, rows = rows_of(ipad_n2)
+expect("N2: an iPad run (regular in both orientations) gets no rotation row and passes on its own crossing",
+       (status, rows["K3 rotation"], "| PASS |" in rows["K3 column"]), (0, "", True))
+status, rows = rows_of(copied, promax)
+expect("N2: a run without K3 gets no rotation row", (status, rows["K3 rotation"]), (0, ""))
+no_flip = k3_record("n2-promax-no-flip", [k3_arm("swiftui", rotation=True),
+                                          k3_arm("textkit2", rotation=True, leaves=[4, 4, 4])])
+status, rows = rows_of(phone17, ipad_n2, no_flip)
+expect("N2: a Pro Max K3 whose column text stayed TextKit 2 side by side (no flip) is no evidence",
+       (status, "| **FAIL** |" in rows["K3 rotation"]), (1, True))
+for name, arms in (
+        ("n2-tk2-never", [k3_arm("swiftui", rotation=True), k3_arm("textkit2", rotation=True, leaves=[0, 0, 0])]),
+        ("n2-tk2-not-back", [k3_arm("swiftui", rotation=True), k3_arm("textkit2", rotation=True, leaves=[4, 0, 0])]),
+        ("n2-swiftui-tk2", [k3_arm("swiftui", rotation=True, leaves=[0, 1, 0]), k3_arm("textkit2", rotation=True)]),
+        ("n2-not-crossed", [k3_arm("swiftui", rotation=True, rotated=False),
+                            k3_arm("textkit2", rotation=True, rotated=False)]),
+        ("n2-one-arm", [k3_arm("swiftui", rotation=True), k3_arm("textkit2", rotation=True, rotated=False)]),
+        ("n2-compact", [k3_arm("swiftui", rotation=False, rotated=True),
+                        k3_arm("textkit2", rotation=False, rotated=True, leaves=[4, 0, 4])]),
+        ("n2-textkit2-only", [k3_arm("textkit2", rotation=True)]),
+        ("n2-leaves-missing", [{k: v for k, v in k3_arm(a, rotation=True).items() if k != "rotation_textkit2_leaves"}
+                               for a in ("swiftui", "textkit2")]),
+        ("n2-leaves-bool", [k3_arm("swiftui", rotation=True, leaves=[False, False, False]),
+                            k3_arm("textkit2", rotation=True, leaves=[True, False, True])]),
+        ("n2-second-trip-no-flip", [k3_arm("swiftui", rotation=True, leaves=[0, 0, 0, 0, 0]),
+                                    k3_arm("textkit2", rotation=True, leaves=[6, 0, 6, 6, 6])]),
+        ("n2-leaves-even", [k3_arm("swiftui", rotation=True, leaves=[0, 0, 0, 0]),
+                            k3_arm("textkit2", rotation=True, leaves=[6, 0, 6, 0])]),
+        ("C60 in-window mismatch after a trip", [k3_arm("swiftui", rotation=True),
+                                                 k3_arm("textkit2", rotation=True, in_window=[40, 8, 41])]),
+        ("C60 in-window mismatch after the second trip",
+         [k3_arm("swiftui", rotation=True, leaves=[0, 0, 0, 0, 0]),
+          k3_arm("textkit2", rotation=True, leaves=[6, 0, 6, 0, 6], in_window=[40, 8, 40, 8, 52])]),
+        ("C60 in-window not applicable (no off-window count)",
+         [k3_arm("swiftui", rotation=True), k3_arm("textkit2", rotation=True, in_window=[None, None, None])]),
+        ("C60 in-window one count short", [k3_arm("swiftui", rotation=True),
+                                           k3_arm("textkit2", rotation=True, in_window=[40, 40])]),
+        ("C60 off-window rows left at the top", [k3_arm("swiftui", rotation=True),
+                                                 k3_arm("textkit2", rotation=True, off_window=3)]),
+        ("C60 release not applicable (no off-window count)",
+         [k3_arm("swiftui", rotation=True), k3_arm("textkit2", rotation=True, off_window=None)]),
+        ("C60 release read away from the top", [k3_arm("swiftui", rotation=True),
+                                                k3_arm("textkit2", rotation=True, at_top=False)])):
+    status, rows = rows_of(phone17, ipad_n2, k3_record(name, arms))
+    expect(f"N2: {name} is no rotation evidence", (status, "| **FAIL** |" in rows["K3 rotation"]), (1, True))
+failed = k3_record("n2-promax-failed", [k3_arm(a, rotation=True) for a in ("swiftui", "textkit2")], passed=False)
+status, rows = rows_of(phone17, ipad_n2, failed)
+expect("N2: a Pro Max K3 that failed is no evidence", (status, "| **FAIL** |" in rows["K3 rotation"]), (1, True))
+status, rows = rows_of(phone17, ipad_n2, os.path.join(work, "no-such-promax.jsonl"))
+expect("N2: a missing rotation file is no evidence", (status, "| **FAIL** |" in rows["K3 rotation"]), (1, True))
+status, rows = rows_of(phone, ipad)
+expect("N2: a K3 record without the rotation fields (an older build) gets the row and fails it",
+       (status, "| **FAIL** |" in rows["K3 rotation"]), (1, True))
+
 # ---- one request over the file channel ----------------------------------------
 channel = os.path.join(work, "channel-serve")
 os.makedirs(channel, exist_ok=True)

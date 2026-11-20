@@ -9,9 +9,10 @@ import ADFPreparation
 /// the shipping path. When the environment selects `.textKit2` AND the
 /// content is eligible (`TextKit2Eligibility`: no inline atom, every run
 /// with a font spec) AND no inherited styling the row cannot reproduce is
-/// set AND the active search has no highlight for it (`TextKit2Leaf`), a
-/// UIKit-hosted TextKit 2 row draws it instead. Without UIKit the SwiftUI
-/// arm always runs.
+/// set AND the active search has no highlight for it AND at least 1 pt of
+/// width is left beside its indentation (`TextKit2Leaf`), a UIKit-hosted
+/// TextKit 2 row draws it instead. Without UIKit the SwiftUI arm always
+/// runs.
 struct RichTextBlockView: View {
     let segments: [InlineSegment]
     let style: TextBlockStyle
@@ -31,7 +32,11 @@ struct RichTextBlockView: View {
     }
 
     private var content: some View {
-        SmartLinkTextLeaf(segments: segments, smartLinkKeys: smartLinkKeys, style: style, ownerID: ownerID) {
+        // The leaf sits inside `body`'s indentation padding, so the
+        // under-1-pt guard measures what is left of the width bound.
+        SmartLinkTextLeaf(
+            segments: segments, smartLinkKeys: smartLinkKeys, style: style, ownerID: ownerID, widthInset: indentationPadding
+        ) {
             swiftUIText
         }
     }

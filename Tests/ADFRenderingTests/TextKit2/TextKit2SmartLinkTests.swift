@@ -602,5 +602,197 @@ struct TextKit2SmartLinkTests {
         print("SMARTLINK height: swiftUI=\(swiftUI) textKit2=\(textKit2) diff=\(textKit2 - swiftUI)")
         #expect(abs(swiftUI - textKit2) <= 1, "content height swiftUI=\(swiftUI) textKit2=\(textKit2)")
     }
+
+    /// Container text and captions are TextKit 2 rows from iOS 26 (PR 4):
+    /// their leaves are `SmartLinkTextLeaf`s too, so a resolved smart link
+    /// lands in the row as it does in a top-level paragraph. Before iOS 26
+    /// such text stays on SwiftUI, so the test is skipped there (merge
+    /// review M1).
+    @Test("a smart link in a panel, a quote and a media caption resolves in its TextKit 2 row, which stays a row in its container context",
+          .enabled(if: TextKit2Eligibility.containerTextMatchesText, "container text and captions are TextKit 2 rows from iOS 26"))
+    func containerAndCaptionRowsResolve() async throws {
+        let json = Self.document([
+            #"{"type":"panel","attrs":{"panelType":"info"},"content":[\#(Self.paragraph(Self.text("Panel "), Self.link(Self.a)))]}"#,
+            #"{"type":"blockquote","content":[\#(Self.paragraph(Self.text("Quote "), Self.link(Self.a)))]}"#,
+            #"{"type":"mediaSingle","content":[{"type":"media","attrs":{"type":"external","url":"https://example.com/a.png","width":100,"height":50}},{"type":"caption","content":[\#(Self.text("Caption ")),\#(Self.link(Self.a))]}]}"#,
+        ])
+        let resolver = ScriptedSmartLinkResolver()
+        let hosted = try await Self.host(json, renderer: .textKit2, resolver: resolver)
+        defer { hosted.close() }
+        try await smartLinkEventually("the lookup") { resolver.waitingURLs.count == 1 }
+        try await hosted.settle()
+
+        let expected: [(name: String, context: TextKit2ContainerContext)] = [
+            ("Panel", .container), ("Quote", .container), ("Caption", .caption),
+        ]
+        var rows = hosted.rows()
+        #expect(rows.count == 3, "owners \(rows.keys.sorted())")
+        for item in expected {
+            let row = rows.values.first { $0.accessibilityLabel == "\(item.name) \(Self.a), loading title" }
+            #expect(row?.containerContext == item.context, "\(item.name): labels \(rows.values.map { $0.accessibilityLabel ?? "nil" })")
+        }
+        let start = TextKit2StableIDReplacementTests.before(rows)
+
+        resolver.answer(URL(string: Self.a)!, .success(Self.page))
+        try await smartLinkEventually("a resolved") { hosted.model.smartLinks.stage(for: Self.key(Self.a)) == .resolved(Self.page) }
+        try await hosted.settle()
+        rows = hosted.rows()
+        #expect(Set(rows.keys) == Set(start.keys), "a resolved row left TextKit 2: \(rows.keys.sorted())")
+        for item in expected {
+            guard let (owner, row) = rows.first(where: { $0.value.accessibilityLabel == "\(item.name) Page, Q3 Roadmap" }),
+                  let was = start[owner] else {
+                Issue.record("\(item.name): row missing; labels \(rows.values.map { $0.accessibilityLabel ?? "nil" })")
+                continue
+            }
+            #expect(row.containerContext == item.context, "\(item.name)")
+            #expect(row === was.view, "\(item.name): the row got a new view")
+            #expect(row.attributed !== was.string, "\(item.name): not converted again")
+            #expect(row.attributed.string.contains("\u{FFFC}\u{00A0}Q3 Roadmap"), "\(item.name): drew \(row.attributed.string)")
+            #expect(Self.hasAttachment(row), "\(item.name): no icon attachment")
+            #expect(row.isTextKit1Backed, "\(item.name): linked text is TextKit 1-backed")
+            #expect(Self.actionNames(row) == ["Open link Q3 Roadmap"], "\(item.name): actions \(Self.actionNames(row))")
+        }
+        let stats = hosted.model.smartLinkStats
+        #expect(stats.resolverCalls == 1 && stats.resolved == 1 && stats.inFlight == 0, "\(stats)")
+    }
+
+    /// Merge review M2: a resolved smart link in a panel is a TextKit
+    /// 1-backed row with an icon attachment at the panel's child width,
+    /// which carries the icon column's measured width and so sits a few
+    /// ulps past a pixel at some sizes (225.66666666666669 pt at 3x). That
+    /// is where the row keeps the layout it reported
+    /// (`TextKit2RowView.layoutResult(forProposedWidth:)`) and the
+    /// TextKit 1 stack draws at the bounds' width
+    /// (`TextKit2OffGridWidthTests.linkedOffGridWidth`, plain links only).
+    /// `containerAndCaptionRowsResolve` proves the stage lands in the row;
+    /// this compares the drawing with SwiftUI's.
+    ///
+    /// The panel is hosted as a document row on both arms
+    /// (`TK2Caption.Host`, as `captionInPanelOffGridWidth` hosts its
+    /// panel), at every size containers keep TextKit 2 and every iPhone
+    /// document width. Each arm has its own coordinator without a resolver
+    /// (it starts no lookup and only holds the stage), with the link's
+    /// title published before the first layout, so both arms draw the
+    /// resolved stage on their first frame. The two panels must have the
+    /// same height and first and last baselines (PR 1's one-pixel
+    /// last-baseline residual allowed, as the container suites allow it)
+    /// and pass PR 1's pixel rule over the whole panel
+    /// (`TK2Caption.pixelFailures`). On 3x the row must have been measured
+    /// at an off-grid width, and have kept a reported layout, in some case.
+    ///
+    /// The log line also gives the differing pixels inside the icon's box
+    /// and the rule with that box taken from SwiftUI's bitmap, so a failure
+    /// shows whether the icon alone differs (`Text(Image(systemName:))`
+    /// against the row's text attachment).
+    @Test("a resolved smart link in a panel at an off-grid child width sits and draws as SwiftUI's does",
+          .enabled(if: TextKit2Eligibility.containerTextMatchesText, "container text is a TextKit 2 row from iOS 26"))
+    func resolvedLinkInPanelOffGridWidth() async throws {
+        typealias C = TK2Caption
+        let words = "ten tired otters cheer while a careful heron stares at the outer rim of the sunlit marsh in late autumn"
+        let paragraph = Self.paragraph(
+            Self.text("Before the review read "), Self.link(Self.a), Self.text(" and note that " + words + ", and that " + words))
+        let panelJSON = #"{"type":"panel","attrs":{"panelType":"info"},"content":[\#(paragraph)]}"#
+        let blocks = try await C.prepared([panelJSON])
+        let panel = try #require(blocks.first)
+        guard case .panel = panel.kind else {
+            Issue.record("not a panel")
+            return
+        }
+        let allowed: Set<TextKit2BlockKind> = [.richText, .panel]
+        let key = Self.key(Self.a)
+        let scale = TK2Parity.nativeScale
+        let onePixel = 1 / scale
+        var cases = 0
+        var offGrid = 0
+        var kept = 0
+        var residuals = 0
+        var failures: [String] = []
+        for size in DynamicTypeSize.allCases.filter(TextKit2Scope.containerSizeKeepsRenderer) {
+            let env = TK2Parity.Environment(size: size)
+            for documentWidth in TextKit2FixtureSweepTests.containerDocumentWidths {
+                let width = documentWidth - 4 * TK2Parity.theme.spacing
+                let label = "\(size) W=\(width)"
+                let coordinators = [SmartLinkCoordinator(hasVisibilityFeed: false), SmartLinkCoordinator(hasVisibilityFeed: false)]
+                for coordinator in coordinators { coordinator.entry(for: key).publish(.resolved(Self.page)) }
+                let a = C.Host(width: width)
+                let b = C.Host(width: width)
+                defer {
+                    a.close()
+                    b.close()
+                }
+                a.show(C.environment(BlockView(block: panel), arm: .swiftUI, env: env).environment(\.adfSmartLinks, coordinators[0]))
+                b.show(C.environment(C.documentRow(panel, allowed: allowed), arm: .textKit2, env: env).environment(\.adfSmartLinks, coordinators[1]))
+                try await a.settle()
+                try await b.settle()
+                cases += 1
+                let rows = b.rows
+                guard rows.count == 1, let row = rows.first, a.rows.isEmpty else {
+                    failures.append("\(label): TextKit 2 rows \(rows.map { $0.ownerID ?? "?" }), SwiftUI arm \(a.rows.count)")
+                    continue
+                }
+                var caseFailures: [String] = []
+                let drawn = row.attributed.string
+                if row.containerContext != .container { caseFailures.append("the row's context is \(row.containerContext)") }
+                if !row.isTextKit1Backed { caseFailures.append("the row is not TextKit 1-backed") }
+                if !Self.hasAttachment(row) || !drawn.contains("\u{FFFC}\u{00A0}Q3 Roadmap") { caseFailures.append("the row drew \(drawn)") }
+                let measured = row.cachedWidths.filter { $0 < 100_000 }
+                let off = measured.contains { TextKit2RowView.proposalCeil($0, scale: scale) > $0 }
+                let rowKept = row.keptReportedLayoutCount
+                if off { offGrid += 1 }
+                kept += rowKept
+                let ga = a.guides, gb = b.guides
+                if abs(ga.height - gb.height) > C.tolerance { caseFailures.append("height swiftUI=\(ga.height) textKit2=\(gb.height)") }
+                if abs(ga.first - gb.first) > C.tolerance { caseFailures.append("first baseline swiftUI=\(ga.first) textKit2=\(gb.first)") }
+                if abs(ga.last - gb.last) > C.tolerance {
+                    if abs(ga.last - gb.last - onePixel) <= C.tolerance {
+                        residuals += 1
+                    } else {
+                        caseFailures.append("last baseline swiftUI=\(ga.last) textKit2=\(gb.last)")
+                    }
+                }
+                let height = (max(ga.height, gb.height) + 8).rounded(.up)
+                let bitmapA = try a.bitmap(height: height)
+                let bitmapB = try b.bitmap(height: height)
+                let pixelRule = C.pixelFailures(bitmapA, bitmapB, dark: false)
+                caseFailures += pixelRule.failures
+                // The icon's box (pixels, two pixels' slack), and the rule
+                // with that box drawn as SwiftUI drew it: diagnostics only.
+                let iconRange = NSString(string: drawn).range(of: "\u{FFFC}")
+                var icon = "none"
+                if iconRange.location != NSNotFound, let rect = row.segmentRects(for: iconRange).first {
+                    let placed = row.convert(rect, to: b.window)
+                    let box = (
+                        x: max(Int((placed.minX * scale).rounded(.down)) - 2, 0)..<min(Int((placed.maxX * scale).rounded(.up)) + 2, bitmapB.width),
+                        y: max(Int((placed.minY * scale).rounded(.down)) - 2, 0)..<min(Int((placed.maxY * scale).rounded(.up)) + 2, bitmapB.height))
+                    if bitmapA.width == bitmapB.width, bitmapA.height == bitmapB.height, !box.x.isEmpty, !box.y.isEmpty {
+                        var rgba = bitmapB.rgba
+                        var differing = 0
+                        for y in box.y {
+                            for x in box.x {
+                                let p = bitmapA[x, y], q = bitmapB[x, y]
+                                if abs(p.r - q.r) > 24 || abs(p.g - q.g) > 24 || abs(p.b - q.b) > 24 { differing += 1 }
+                                let i = (y * bitmapB.width + x) * 4
+                                rgba.replaceSubrange(i..<i + 4, with: bitmapA.rgba[i..<i + 4])
+                            }
+                        }
+                        let masked = C.pixelFailures(
+                            bitmapA, TK2Parity.Bitmap(width: bitmapB.width, height: bitmapB.height, scale: bitmapB.scale, rgba: rgba), dark: false)
+                        icon = "x=\(box.x) y=\(box.y) differing=\(differing) ruleWithoutIcon=\(masked.failures.count) failures, \(masked.differing)/\(masked.total)"
+                    }
+                }
+                print("SMARTLINK_PANEL_OFF_GRID \(label) on \(scale)x measured=\(measured) offGrid=\(off) kept=\(rowKept) bounds=\(row.bounds.width) h=\(ga.height)/\(gb.height) first=\(ga.first)/\(gb.first) last=\(ga.last)/\(gb.last) differing=\(pixelRule.differing)/\(pixelRule.total) icon: \(icon) failures=\(caseFailures.count)")
+                failures += caseFailures.map { "\(label) measured=\(measured) kept=\(rowKept): \($0)" }
+            }
+        }
+        print("SMARTLINK_PANEL_OFF_GRID_SUMMARY cases=\(cases) offGridCases=\(offGrid) kept=\(kept) lastBaselineResiduals=\(residuals) failures=\(failures.count)")
+        #expect(failures.isEmpty, "\(failures.prefix(6).joined(separator: "\n"))")
+        #expect(cases > 0)
+        // Not vacuous on 3x: the panel gave the row an off-grid width, and
+        // the row was re-proposed the pixel it reported there.
+        if scale == 3 {
+            #expect(offGrid > 0, "no row was measured at an off-grid width")
+            #expect(kept > 0, "no row kept a reported layout")
+        }
+    }
 }
 #endif

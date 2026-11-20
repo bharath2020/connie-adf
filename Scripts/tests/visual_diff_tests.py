@@ -9,7 +9,9 @@ each pair and checks the verdict and exit status; then code boxes (the
 grey box, header strip and code lines of a code block) with the negative
 controls of the code crops, of the engine proof and of the capture-time
 geometry (CAPTURE_GEOMETRY: which TextKit 2 row drew a scored box, the
-measured landing). Needs Pillow and numpy (as visual_diff.py does). Exits
+measured landing); then container and caption captures (PR 4: the kind
+on the declaration, the kind's engine proof, the owner geometry and the
+owner text crops). Needs Pillow and numpy (as visual_diff.py does). Exits
 1 on any mismatch.
 """
 
@@ -747,6 +749,458 @@ check("fallback declaration naming a tk2 owner -> usage error",
 check("a declaration without land= -> usage error (the landing is measured)",
       run("cb-usage-land", "tolerant", code_a, code_b,
           *code_capture("cb-usage-land", "positive", "0.12=tk2", "textkit2", good_log)), 2, "(no scores.json)")
+
+
+# ------------------------------------------------- container and caption captures
+# PR 4 (plan §5 step 3 item 5, P16): the declaration's class carries a kind
+# (container:positive, caption:fallback); the kind's counters and per-owner
+# line prove the engine, the capture-time geometry ties each tk2 owner to
+# its TextKit 2 row, and a text crop over that row's on-screen frame is
+# held to the code text rule.
+
+def container_page(name: str, *, text_dx: int = 0, text_dy: int = 0, lines: tuple[int, ...] = (200, 150, 110),
+                   text: bool = True, caption_dx: int = 0, line_dx: tuple[int, ...] = (),
+                   band_tint: tuple[int, int, int] | None = None) -> str:
+    """A 300x400 white page: a page text line (y 30-40), a tinted panel
+    (x 20-280, y 80-200) holding soft-edged text lines from (40, 100) every
+    14 px (a container owner's text; `text_dx`/`text_dy` move it, and
+    `line_dx[i]` moves line i alone), and a light media box (y 220-300)
+    with a soft-edged caption line at (40, 310) (`caption_dx` moves it).
+    Tint and media box stay under the ink threshold, as a panel's tint
+    does. `band_tint` repaints the panel's bottom band (y 160-198, away
+    from its text) in another low-contrast tint: a fill difference."""
+    background, ink = 255, 20
+    img = np.full((400, 300, 3), background, dtype=np.uint8)
+    img[30:40, 20:220] = ink
+    tint = (224, 241, 255)
+    img[80:200, 20:280] = tint
+    if band_tint is not None:
+        img[160:198, 20:280] = band_tint
+
+    def soft_line(top: int, left: int, width: int, level: float) -> None:
+        profile = np.full(width, float(ink))
+        ramp = level + (ink - level) * np.arange(1, 11) / 11.0
+        profile[:10], profile[-10:] = ramp, ramp[::-1]
+        img[top:top + 9, left:left + width] = np.round(profile)[None, :, None]
+
+    if text:
+        for index, width in enumerate(lines):
+            dx = text_dx + (line_dx[index] if index < len(line_dx) else 0)
+            soft_line(100 + index * 14 + text_dy, 40 + dx, width, float(np.mean(tint)))
+    img[220:300, 20:280] = 235
+    soft_line(310, 40 + caption_dx, 180, float(background))
+    path = os.path.join(work, name + ".png")
+    Image.fromarray(img).save(path)
+    return path
+
+
+# Owner 0.4.0's container row over the panel text (x 40-240, y 100-137) and
+# caption owner 0.6.0's row over the caption line (x 40-220, y 310-319), at 1x,
+# each with its owner's native draws at the screenshot (a live container or
+# caption row always reports them: D-R8).
+ROW_040 = "0.4.0|root|36,96,264,141|36,96,264,141|4"
+ROW_060 = "0.6.0|root|36,306,264,323|36,306,264,323|2"
+
+
+def owner_log(name: str, *, renderer: str = "textkit2", container: tuple[int, int] | None = (1, 4),
+              caption: tuple[int, int] | None = (0, 0), container_rows: str | None = "0.4.0:4",
+              caption_rows: str | None = "-", landed: str = "0.3", geo: list[str] | None = None,
+              visible: str = "0.3,0.4,0.5,0.6", code: tuple[int, int] = (0, 0), code_rows: str = "-") -> str:
+    """A launch log of a container or caption capture: READY, then after
+    SCROLL_LANDED the stats with the code, container and caption keys
+    (`code` / `container` / `caption` = (live, draws); None leaves the
+    container or caption keys out: a build without them), TK2_CODE_ROWS
+    (`code_rows`), TK2_CONTAINER_ROWS and TK2_CAPTION_ROWS (None leaves a
+    line out) and the geometry (default: 0.4.0's row)."""
+    keys = (f"tk2CodeLive={code[0]} tk2CodeDraws={code[1]} eligibleCodeRoots=0 fallbackCodeRoots=0 "
+            "codeAdmitted=0 codeGated=0")
+    if container is not None:
+        keys += f" tk2ContainerLive={container[0]} tk2ContainerNativeDraws={container[1]} tk2ContainerTK1Draws=0"
+    if caption is not None:
+        keys += f" tk2CaptionLive={caption[0]} tk2CaptionNativeDraws={caption[1]}"
+    text = ["APP: /builds/ADFReader.app", "READY fixture=containers-parity blocks=12 firstChunkMs=9",
+            f"RENDERER_STATS renderer={renderer} tk2Live=0 {keys}",
+            f"SCROLL_LANDED fixture=containers-parity fraction=0.25 index=3 block={landed} blocks=12",
+            f"RENDERER_STATS renderer={renderer} tk2Live=3 {keys}",
+            f"TK2_CODE_ROWS live={0 if code_rows == '-' else code_rows.count(',') + 1} owners={code_rows}"]
+    for marker, rows in (("TK2_CONTAINER_ROWS", container_rows), ("TK2_CAPTION_ROWS", caption_rows)):
+        if rows is not None:
+            text.append(f"{marker} live={0 if rows == '-' else rows.count(',') + 1} owners={rows}")
+    text += geometry(ROW_040, visible=visible) if geo is None else geo
+    path = os.path.join(work, name + ".log")
+    with open(path, "w", newline="") as handle:
+        handle.write("\r\n".join(text) + "\r\n")
+    return path
+
+
+def owner_case(name: str, label: str, owners: str, log: str, *extra: str, engine: str = "textkit2",
+               kind: str = "tolerant", ref: str | None = None, cand: str | None = None) -> tuple[int, dict]:
+    return run_pair(name, kind, ref or panel_ref, cand or panel_cand, *extra,
+                    *code_capture(name, label, owners, engine, log))
+
+
+def owner_crops_of(pair: dict) -> list[tuple[str, str]]:
+    return [(crop.get("owner"), crop.get("verdict")) for crop in pair.get("owner_details", [])]
+
+
+panel_ref, panel_cand = container_page("panel-ref"), container_page("panel-cand")
+container_pos = "0.4.0=tk2;land=0.3"
+container_good = owner_log("own-good")
+
+code, pair = owner_case("o-same", "container:positive", container_pos, container_good)
+check("container capture, identical, 0.4.0's row over the panel text -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("one owner text crop, three lines, PASS", (owner_crops_of(pair), (pair.get("owner_details") or [{}])[0].get("lines")),
+       ([("0.4.0", "PASS")], 3))
+expect("the class carries the kind", pair.get("owner_class"), "container:positive")
+expect("the proof reads the container keys",
+       pair.get("owner_proof", "").startswith("container: owner-level: tk2ContainerLive=1 tk2ContainerNativeDraws=4"), True)
+expect("no code class (no code declaration)", pair.get("code_class"), "")
+expect("the crop is the row's frame", (pair.get("owner_details") or [{}])[0].get("box"), "36,96,264,141")
+
+moved_right = container_page("panel-1px-right", text_dx=1)
+check("container text 1 px right, undeclared: invisible to the text crops -> PASS",
+      run("o-dx-undeclared", "tolerant", panel_ref, moved_right), 0, "PASS")
+code, pair = owner_case("o-dx", "container:positive", container_pos, owner_log("own-dx"), cand=moved_right)
+check("container text 1 px right, declared -> FAIL (the owner text crop)", (code, pair["verdict"]), 1, "FAIL")
+expect("... the crop says x", "container line displaced +1,+0 px (x,y)" in (pair.get("owner_details") or [{}])[0].get("notes", ""), True)
+code, pair = owner_case("o-dy", "container:positive", container_pos, owner_log("own-dy"),
+                        cand=container_page("panel-1px-lower", text_dy=1))
+check("container text 1 px lower -> FAIL", (code, pair["verdict"]), 1, "FAIL")
+code, pair = owner_case("o-missing", "container:positive", container_pos, owner_log("own-missing"),
+                        cand=container_page("panel-no-text", text=False))
+check("container text missing in the candidate under its row -> FAIL", (code, pair["verdict"]), 1, "FAIL")
+expect("... and its crop says the row's drawing is not on screen",
+       "no candidate ink inside owner 0.4.0's on-screen frame" in (pair.get("owner_details") or [{}])[0].get("notes", ""), True)
+
+# F-R24: two tk2 owners of one kind, only one failing. 0.4.0's row holds
+# the panel's first line (y 100-109), 0.4.1's the second and third.
+ROW_040_TOP = "0.4.0|root|36,96,264,112|36,96,264,112|4"
+ROW_041 = "0.4.1|list|36,112,264,141|36,112,264,141|3"
+two_pos = "0.4.0=tk2,0.4.1=tk2;land=0.3"
+two_geo = geometry(ROW_040_TOP + ";" + ROW_041, visible="0.3,0.4")
+code, pair = owner_case("o-two", "container:positive", two_pos,
+                        owner_log("own-two", container=(2, 7), container_rows="0.4.0:4,0.4.1:3", geo=two_geo))
+check("two tk2 container owners, identical -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... one crop per owner", owner_crops_of(pair), [("0.4.0", "PASS"), ("0.4.1", "PASS")])
+code, pair = owner_case("o-two-one-moved", "container:positive", two_pos,
+                        owner_log("own-two-one-moved", container=(2, 7), container_rows="0.4.0:4,0.4.1:3", geo=two_geo),
+                        cand=container_page("panel-line2-1px-right", line_dx=(0, 1, 0)))
+check("two tk2 owners, only 0.4.1's second line 1 px right -> FAIL", (code, pair["verdict"]), 1, "FAIL")
+expect("... 0.4.0's crop passes, 0.4.1's fails", owner_crops_of(pair), [("0.4.0", "PASS"), ("0.4.1", "FAIL")])
+code, pair = owner_case("o-two-one-tk1", "container:positive", two_pos,
+                        owner_log("own-two-one-tk1", container=(2, 4), container_rows="0.4.0:4,0.4.1:0", geo=two_geo))
+check("two tk2 owners, only 0.4.1 TextKit 1-backed (0 native draws) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names 0.4.1 only", ("owner 0.4.1 is a live TextKit 2 container row with no native draw" in notes_of(pair),
+                                "owner 0.4.0 is a live" in notes_of(pair)), (True, False))
+code, pair = owner_case("o-two-one-off", "container:positive", two_pos,
+                        owner_log("own-two-one-off", container=(2, 7), container_rows="0.4.0:4,0.4.1:3",
+                                  geo=geometry(ROW_040_TOP + ";0.4.1|list|36,500,264,545|-|-", visible="0.3,0.4")))
+check("two tk2 owners, only 0.4.1's row off screen -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names 0.4.1", "owner 0.4.1: its row is clipped off screen" in notes_of(pair), True)
+
+# F-Q5: the capture-geometry bracket reports a container or caption row's
+# draws at the screenshot (a number on a root or list row); O3 then needs
+# them > 0, as G3 does for a code row. A row remade after the TK2_*_ROWS
+# line has drawn nothing yet. D-R8: "-" on a tk2 owner's shown row is
+# INVALID (a reporter regression must not switch the check off).
+ROW_040_DRAWN = ROW_040[:-1] + "4"
+code, pair = owner_case("o-geo-draws", "container:positive", container_pos,
+                        owner_log("own-geo-draws", geo=geometry(ROW_040_DRAWN, visible="0.3,0.4")))
+check("F-Q5: the owner's row reports 4 draws at the screenshot -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... the geometry summary carries them", "draws 4" in pair.get("owner_geometry", ""), True)
+code, pair = owner_case("o-geo-draws-0", "container:positive", container_pos,
+                        owner_log("own-geo-draws-0", geo=geometry(ROW_040[:-1] + "0", visible="0.3,0.4")))
+check("F-Q5: listed with 4 draws at the landing, but its row reports 0 at the screenshot -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0: its shown row has not drawn natively at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("o-geo-draws-bad", "container:positive", container_pos,
+                        owner_log("own-geo-draws-bad", geo=geometry(ROW_040[:-1] + "x", visible="0.3,0.4")))
+check("F-Q5: a root row's draws that are not a number -> INVALID (malformed geometry)", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "bad draws on a root row" in notes_of(pair), True)
+code, pair = owner_case("o-geo-draws-other", "container:positive", container_pos,
+                        owner_log("own-geo-draws-other", container=(2, 4), container_rows="0.4.0:4,0.4.9:0",
+                                  geo=geometry(ROW_040_DRAWN + ";0.4.9|root|36,150,264,160|36,150,264,160|0",
+                                               visible="0.3,0.4")))
+check("F-Q5: an undeclared owner's row with 0 draws is information on a positive capture -> PASS",
+      (code, pair["verdict"]), 0, "PASS")
+code, pair = owner_case("c-geo-draws-0", "caption:positive", "0.6.0=tk2;land=0.3",
+                        owner_log("cap-geo-draws-0", caption=(1, 2), caption_rows="0.6.0:2", container=(0, 0),
+                                  container_rows="-", geo=geometry(ROW_060[:-1] + "0", visible="0.3,0.4,0.5,0.6")))
+check("F-Q5: a caption row reporting 0 draws at the screenshot -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.6.0: its shown row has not drawn natively at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("o-geo-draws-none", "container:positive", container_pos,
+                        owner_log("own-geo-draws-none", geo=geometry(ROW_040[:-1] + "-", visible="0.3,0.4")))
+check("D-R8: a tk2 container owner's shown row reporting draws - -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0: its shown row reports no draws at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("c-geo-draws-none", "caption:positive", "0.6.0=tk2;land=0.3",
+                        owner_log("cap-geo-draws-none", caption=(1, 2), caption_rows="0.6.0:2", container=(0, 0),
+                                  container_rows="-", geo=geometry(ROW_060[:-1] + "-", visible="0.3,0.4,0.5,0.6")))
+check("D-R8: a tk2 caption owner's shown row reporting draws - -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.6.0: its shown row reports no draws at the screenshot" in notes_of(pair), True)
+code, pair = owner_case("o-two-one-none", "container:positive", two_pos,
+                        owner_log("own-two-one-none", container=(2, 7), container_rows="0.4.0:4,0.4.1:3",
+                                  geo=geometry(ROW_040_TOP + ";" + ROW_041[:-1] + "-", visible="0.3,0.4")))
+check("D-R8: two tk2 owners, only 0.4.1's row reporting draws - -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names 0.4.1 only", ("owner 0.4.1: its shown row reports no draws" in notes_of(pair),
+                                "owner 0.4.0: its shown row reports no draws" in notes_of(pair)), (True, False))
+code, pair = owner_case("o-geo-draws-none-other", "container:positive", container_pos,
+                        owner_log("own-geo-draws-none-other", container=(2, 4), container_rows="0.4.0:4,0.4.9:0",
+                                  geo=geometry(ROW_040 + ";0.4.9|root|36,150,264,160|36,150,264,160|-",
+                                               visible="0.3,0.4")))
+check("D-R8: draws - on an undeclared owner's row stays information on a positive capture -> PASS",
+      (code, pair["verdict"]), 0, "PASS")
+code, pair = owner_case("o-geo-draws-absent", "container:positive", container_pos,
+                        owner_log("own-geo-draws-absent", geo=geometry(ROW_040.rpartition("|")[0], visible="0.3,0.4")))
+check("Astra R4: a tk2 owner's row with no draws column at all (a legacy capture) -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... the geometry is malformed", "bad row '0.4.0|root|" in notes_of(pair), True)
+
+# Engine proof (the kind's keys and per-owner line).
+code, pair = owner_case("o-no-keys", "container:positive", container_pos, owner_log("own-no-keys", container=None))
+check("a build without the container keys -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "a build without the container keys" in notes_of(pair), True)
+code, pair = owner_case("o-no-line", "container:positive", container_pos, owner_log("own-no-line", container_rows=None))
+check("no TK2_CONTAINER_ROWS line -> INVALID (the owner-level proof is required)", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "no TK2_CONTAINER_ROWS line after SCROLL_LANDED" in notes_of(pair), True)
+code, pair = owner_case("o-tk1", "container:positive", container_pos,
+                        owner_log("own-tk1", container=(1, 0), container_rows="0.4.0:0"))
+check("the owner's row is TextKit 1-backed (0 native draws) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0 is a live TextKit 2 container row with no native draw" in notes_of(pair), True)
+code, pair = owner_case("o-other", "container:positive", container_pos, owner_log("own-other", container_rows="0.4.1:2"))
+check("the owner is not in TK2_CONTAINER_ROWS (only another owner is) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0 has no live TextKit 2 container row (declared tk2)" in notes_of(pair), True)
+check("the code counters alone prove no container (code draws, container 0) -> INVALID",
+      run("o-code-only", "tolerant", panel_ref, panel_cand,
+          *code_capture("o-code-only", "container:positive", container_pos, "textkit2",
+                        owner_log("own-code-only", container=(0, 0), container_rows="-"))), 1, "INVALID")
+# F-R24: the owner's text drawn natively by a live code row (code counters
+# and TK2_CODE_ROWS > 0, its geometry row a code row with draws), the
+# container counters 0: the code proof is never container proof.
+code_only_geo = geometry(ROW_040.replace("|root|", "|code|").replace("|-", "|4"), visible="0.3,0.4")
+code, pair = owner_case("o-code-draws", "container:positive", container_pos,
+                        owner_log("own-code-draws", container=(0, 0), container_rows="-", code=(1, 4),
+                                  code_rows="0.4.0:4", geo=code_only_geo))
+check("the owner drawn natively by a code row (code 1/4, 0.4.0:4 in TK2_CODE_ROWS), container 0 -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... the container proof names the zero counters, the geometry the code row",
+       ("tk2ContainerLive=0" in notes_of(pair), "owner 0.4.0: its TextKit 2 row is a code row" in notes_of(pair)),
+       (True, True))
+code, pair = owner_case("o-code-draws-listed", "container:positive", container_pos,
+                        owner_log("own-code-draws-listed", container=(1, 4), container_rows="-", code=(1, 4),
+                                  code_rows="0.4.0:4", geo=code_only_geo))
+check("... with container counters > 0 but the owner listed only as a code row -> INVALID",
+      (code, pair["verdict"]), 1, "INVALID")
+expect("... names it", "owner 0.4.0 has no live TextKit 2 container row (declared tk2)" in notes_of(pair), True)
+
+# Owner geometry (O3, O4, O6, O8).
+code, pair = owner_case("o-code-row", "container:positive", container_pos,
+                        owner_log("own-code-row", geo=geometry(ROW_040.replace("|root|", "|code|").replace("|-", "|4"),
+                                                               visible="0.3,0.4")))
+check("the owner's only row is a code row -> INVALID (container proof counts no code row)", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "owner 0.4.0: its TextKit 2 row is a code row" in notes_of(pair), True)
+code, pair = owner_case("o-off", "container:positive", container_pos,
+                        owner_log("own-off", geo=geometry("0.4.0|root|36,500,264,545|-|-", visible="0.3,0.4")))
+check("the owner's row is live but off screen -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "owner 0.4.0: its row is clipped off screen" in notes_of(pair), True)
+code, pair = owner_case("o-no-row", "container:positive", container_pos,
+                        owner_log("own-no-row", geo=geometry("-", visible="0.3,0.4")))
+check("no TextKit 2 row for the owner in the window -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+code, pair = owner_case("o-blank", "container:positive", container_pos,
+                        owner_log("own-blank", geo=geometry("0.4.0|root|36,330,264,380|36,330,264,380|4",
+                                                            visible="0.3,0.4")))
+check("the owner's row is shown over no text in either image -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "no text ink inside owner 0.4.0's on-screen frame in either image" in notes_of(pair), True)
+code, pair = owner_case("o-band", "container:positive", container_pos, owner_log("own-band"), "--top-band", "150")
+check("the owner's row under the top band (no scorable pixel) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... no owner text crop for a positive capture", "positive container capture without an owner text crop" in notes_of(pair), True)
+
+fallback_pos = "0.4.0=swiftui;land=0.3"
+fallback_log = owner_log("own-fallback", container=(0, 0), container_rows="-", geo=geometry("-", visible="0.3,0.4"))
+code, pair = owner_case("o-fallback", "container:fallback", fallback_pos, fallback_log)
+check("container fallback, the owner has no TextKit 2 row -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... no owner crop on a fallback capture", pair.get("owner_crops"), 0)
+code, pair = owner_case("o-fallback-row", "container:fallback", fallback_pos,
+                        owner_log("own-fallback-row", container_rows="-"))
+check("container fallback, the swiftui owner has a TextKit 2 row in the window (O6) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "owner 0.4.0 (declared swiftui) has a TextKit 2 row in the window (on screen)" in notes_of(pair), True)
+other_on_screen = geometry("0.4.1|list|36,150,264,190|36,150,264,190|-", visible="0.3,0.4")
+code, pair = owner_case("o-fallback-other", "container:fallback", fallback_pos,
+                        owner_log("own-fallback-other", container_rows="0.4.1:2", geo=other_on_screen))
+check("container fallback, an undeclared container row on screen (O4) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "TextKit 2 container row 0.4.1 is on screen (a fallback capture)" in notes_of(pair), True)
+code, pair = owner_case("o-positive-other", "container:positive", container_pos,
+                        owner_log("own-positive-other", container_rows="0.4.0:4,0.4.1:2",
+                                  geo=geometry(ROW_040 + ";0.4.1|list|36,150,264,190|36,150,264,190|-",
+                                               visible="0.3,0.4")))
+check("container positive, an undeclared container row on screen -> PASS (information, not coverage)",
+      (code, pair["verdict"]), 0, "PASS")
+expect("... noted", "undeclared native owner 0.4.1 (not coverage)" in pair.get("owner_geometry", ""), True)
+code, pair = owner_case("o-fallback-absent", "container:fallback", fallback_pos,
+                        owner_log("own-fallback-absent", container=(0, 0), container_rows="-",
+                                  geo=geometry("-", visible="0.3,0.5")))
+check("container fallback, the owner's top-level block 0.4 not visible (O8) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+# F-R7: container and caption captures are held to the fill limit. The
+# candidate's panel band is 12 levels lighter (y 160-198): under the
+# tolerant threshold, away from ink, a fill difference.
+band_cand = container_page("panel-band", band_tint=(236, 253, 255))
+check("panel band 12 levels lighter, undeclared pair -> PASS (fill is information only)",
+      run("o-fill-undeclared", "tolerant", panel_ref, band_cand), 0, "PASS")
+code, pair = owner_case("o-fill", "container:positive", container_pos, owner_log("own-fill"), cand=band_cand)
+check("panel band 12 levels lighter, container positive -> FAIL (fill)", (code, pair["verdict"]), 1, "FAIL")
+expect("... the note gives the fill's box", "fill 9880 px (8.2333%) > 0.01%, bbox 20,160,280,198" in notes_of(pair), True)
+expect("... and the owner text crop still passes", owner_crops_of(pair), [("0.4.0", "PASS")])
+code, pair = owner_case("o-fill-fallback", "container:fallback", fallback_pos, fallback_log, cand=band_cand)
+check("panel band 12 levels lighter, container fallback -> FAIL (fill, whatever the class)",
+      (code, pair["verdict"]), 1, "FAIL")
+code, pair = owner_case("o-fill-same", "container:fallback", fallback_pos, fallback_log)
+check("... the same fallback pair without the band -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... fill 0", pair.get("fill_px"), 0)
+fill_b_log = owner_log("own-fill-b", renderer="swiftui", container=(0, 0), container_rows="-",
+                       geo=geometry("-", visible="0.3,0.4"))
+code, pair = owner_case("o-fill-b", "container:positive", container_pos, fill_b_log, engine="swiftui", cand=band_cand)
+check("panel band 12 levels lighter on arm B (swiftui, tolerant) -> FAIL (fill)", (code, pair["verdict"]), 1, "FAIL")
+
+code, pair = owner_case("o-fallback-land", "container:fallback", fallback_pos,
+                        owner_log("own-fallback-land", container=(0, 0), container_rows="-", landed="0.2",
+                                  geo=geometry("-", visible="0.3,0.4")))
+check("container fallback on arm C, the jump went to another block -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+
+# The SwiftUI arm and the reference.
+b_log = owner_log("own-b", renderer="swiftui", container=(0, 0), container_rows="-", geo=geometry("-", visible="0.3,0.4"))
+code, pair = owner_case("o-b", "container:positive", container_pos, b_log, engine="swiftui", kind="exact")
+check("arm B (swiftui) container capture with zero container counters -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... no owner crop on an exact pair", pair.get("owner_crops"), 0)
+code, pair = owner_case("o-b-native", "container:positive", container_pos,
+                        owner_log("own-b-native", renderer="swiftui", container=(1, 3), container_rows="0.4.0:3",
+                                  geo=geometry("-", visible="0.3,0.4")), engine="swiftui", kind="exact")
+check("arm B reporting TextKit 2 container rows -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... says so", "SwiftUI arm lists live TextKit 2 container rows (0.4.0)" in notes_of(pair), True)
+code, pair = owner_case("o-b-row", "container:positive", container_pos,
+                        owner_log("own-b-row", renderer="swiftui", container=(0, 0), container_rows="-"),
+                        engine="swiftui", kind="exact")
+check("arm B whose geometry lists a TextKit 2 row (G9) -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+code, pair = owner_case("o-a", "container:positive", container_pos, "-", engine="none", kind="noise")
+check("reference build (engine none) on the noise pair -> PASS", (code, pair["verdict"]), 0, "PASS")
+code, pair = owner_case("o-none", "container:positive", container_pos, "-", engine="none")
+check("engine none on a tolerant pair -> INVALID (no engine proof)", (code, pair["verdict"]), 1, "INVALID")
+
+# The same image described at 2x: the crop follows the geometry's scale.
+code, pair = owner_case("o-2x", "container:positive", container_pos,
+                        owner_log("own-2x", geo=geometry("0.4.0|root|18,48,132,70.5|18,48,132,70.5|4", scale=2,
+                                                         screen=(150, 200), visible="0.3,0.4")))
+check("2x geometry (150x200 pt) of the same image -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... the crop is in image pixels", (pair.get("owner_details") or [{}])[0].get("box"), "36,96,264,141")
+
+# A nested list's continuation row (<item id>#cont<n>) is an owner like any other.
+code, pair = owner_case("o-cont", "container:positive", "0.4.0#cont1=tk2;land=0.3",
+                        owner_log("own-cont", container_rows="0.4.0#cont1:2",
+                                  geo=geometry(ROW_040.replace("0.4.0|", "0.4.0#cont1|"), visible="0.3,0.4")))
+check("a continuation row's owner id (0.4.0#cont1) -> PASS", (code, pair["verdict"]), 0, "PASS")
+
+# Captions: their own keys and line.
+caption_pos = "0.6.0=tk2;land=0.3"
+caption_good = owner_log("cap-good", caption=(1, 2), caption_rows="0.6.0:2", container=(0, 0), container_rows="-",
+                         geo=geometry(ROW_060, visible="0.3,0.4,0.5,0.6"))
+code, pair = owner_case("c-same", "caption:positive", caption_pos, caption_good)
+check("caption capture, identical, 0.6.0's row over the caption -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... read from the caption keys", pair.get("owner_proof", "").startswith(
+    "caption: owner-level: tk2CaptionLive=1 tk2CaptionNativeDraws=2 rows 0.6.0:2"), True)
+code, pair = owner_case("c-dx", "caption:positive", caption_pos, owner_log(
+    "cap-dx", caption=(1, 2), caption_rows="0.6.0:2", geo=geometry(ROW_060, visible="0.3,0.4,0.5,0.6")),
+    cand=container_page("panel-caption-1px-right", caption_dx=1))
+check("caption 1 px right -> FAIL", (code, pair["verdict"]), 1, "FAIL")
+code, pair = owner_case("c-container-keys", "caption:positive", caption_pos,
+                        owner_log("cap-container-keys", caption=None, caption_rows=None, container_rows="0.6.0:2",
+                                  geo=geometry(ROW_060, visible="0.3,0.4,0.5,0.6")))
+check("a caption proved only by container keys -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... a build without the caption keys", "a build without the caption keys" in notes_of(pair), True)
+
+# Two kinds on one pair: each proved on its own.
+both_log = owner_log("own-both", caption=(1, 2), caption_rows="0.6.0:2",
+                     geo=geometry(ROW_040 + ";" + ROW_060, visible="0.3,0.4,0.5,0.6"))
+code, pair = run_pair("o-both", "tolerant", panel_ref, panel_cand,
+                      *code_capture("o-both", "container:positive", container_pos, "textkit2", both_log),
+                      *code_capture("o-both", "caption:positive", caption_pos, "textkit2", both_log))
+check("container and caption declared on one pair, both proved -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... both classes and both crops", (pair.get("owner_class"), owner_crops_of(pair)),
+       ("container:positive+caption:positive", [("0.4.0", "PASS"), ("0.6.0", "PASS")]))
+code, pair = run_pair("o-both-bad", "tolerant", panel_ref, panel_cand,
+                      *code_capture("o-both-bad", "container:positive", container_pos, "textkit2", both_log),
+                      *code_capture("o-both-bad", "caption:positive", "0.6.1=tk2;land=0.3", "textkit2", both_log))
+check("... and one kind's failing proof makes the pair INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... naming the kind", "caption engine proof: owner 0.6.1 has no live TextKit 2 caption row" in notes_of(pair), True)
+# Code and container on one pair: each proof stands on its own.
+def mixed_log(name: str, container_keys: bool) -> str:
+    """proof_log's code capture plus a container owner 0.11.0 (the page text
+    line at y 30-40) on screen, with (or without) the container keys."""
+    path = proof_log(name, geo=geometry(ROW_012 + ";0.11.0|root|20,30,220,40|20,30,220,40|3"))
+    lines_ = open(path, newline="").read().split("\r\n")
+    landed_at = next(i for i, line in enumerate(lines_) if line.startswith("SCROLL_LANDED"))
+    if container_keys:
+        lines_[landed_at + 1] += " tk2ContainerLive=1 tk2ContainerNativeDraws=3 tk2CaptionLive=0 tk2CaptionNativeDraws=0"
+    lines_.insert(landed_at + 3, "TK2_CONTAINER_ROWS live=1 owners=0.11.0:3")
+    with open(path, "w", newline="") as handle:
+        handle.write("\r\n".join(lines_))
+    return path
+
+
+mixed_owners = "0.11.0=tk2;land=0.10"
+code, pair = run_pair("o-code-mixed", "tolerant", code_a, code_b,
+                      *code_capture("o-code-mixed", "positive", positive, "textkit2", mixed_log("proof-mixed", True)),
+                      *code_capture("o-code-mixed", "container:positive", mixed_owners, "textkit2",
+                                    mixed_log("proof-mixed-2", True)))
+check("a code and a container declaration on one pair, both proved -> PASS", (code, pair["verdict"]), 0, "PASS")
+expect("... both classes, the code box and the owner crop",
+       (pair.get("code_class"), pair.get("owner_class"), owners_of(pair), owner_crops_of(pair)),
+       ("positive", "container:positive", ["tk2:0.12"], [("0.11.0", "PASS")]))
+nokeys = mixed_log("proof-mixed-nokeys", False)
+code, pair = run_pair("o-code-mixed-nokeys", "tolerant", code_a, code_b,
+                      *code_capture("o-code-mixed-nokeys", "positive", positive, "textkit2", nokeys),
+                      *code_capture("o-code-mixed-nokeys", "container:positive", mixed_owners, "textkit2", nokeys))
+check("... the same from a build without the container keys -> INVALID", (code, pair["verdict"]), 1, "INVALID")
+expect("... the code proof still passes on its own", pair.get("code_proof", "").startswith("owner-level"), True)
+expect("... the container proof names the missing keys",
+       "container engine proof: RENDERER_STATS has no tk2ContainerLive" in notes_of(pair), True)
+
+# Coverage per kind.
+code, scored = run_pairs(
+    "o-coverage", [("noise", "ocov-AA", panel_ref, panel_cand), ("tolerant", "ocov-pos-AC", panel_ref, panel_cand),
+                   ("tolerant", "ocov-fb-AC", panel_ref, panel_cand)],
+    *code_capture("ocov-pos-AC", "container:positive", container_pos, "textkit2", container_good),
+    *code_capture("ocov-fb-AC", "container:fallback", fallback_pos, "textkit2", fallback_log))
+try:
+    scores_json = json.load(open(os.path.join(work, "o-coverage", "scores.json")))
+except (OSError, ValueError):
+    scores_json = {}
+expect("container coverage counts the positive capture only",
+       (code, scores_json.get("owner_coverage", {}).get("container"), scores_json.get("code_coverage", {}).get("positive_pairs")),
+       (0, {"positive_pairs": 1, "positive_pass": 1, "fallback_pairs": 1, "fallback_pass": 1}, 0))
+expect("scores.json records the declarations by kind",
+       scores_json.get("settings", {}).get("owner_captures", {}).get("ocov-pos-AC", {}).get("container", {}).get("class"),
+       "positive")
+try:
+    coverage_md = open(os.path.join(work, "o-coverage", "summary.md")).read()
+except OSError:
+    coverage_md = ""
+expect("summary.md has the owner columns and the container coverage line",
+       ("| owner geometry |" in coverage_md, "Container coverage (candidate on TextKit 2): 1/1 positive" in coverage_md),
+       (True, True))
+
+# Usage errors.
+check("an unknown kind -> usage error",
+      run("o-usage-kind", "tolerant", panel_ref, panel_cand,
+          *code_capture("o-usage-kind", "table:positive", container_pos, "textkit2", container_good)), 2, "(no scores.json)")
+check("two container declarations for one pair -> usage error",
+      run("o-usage-twice", "tolerant", panel_ref, panel_cand,
+          *code_capture("o-usage-twice", "container:positive", container_pos, "textkit2", container_good),
+          *code_capture("o-usage-twice", "container:fallback", fallback_pos, "textkit2", container_good)), 2, "(no scores.json)")
+check("a container positive without a tk2 owner -> usage error",
+      run("o-usage-positive", "tolerant", panel_ref, panel_cand,
+          *code_capture("o-usage-positive", "container:positive", fallback_pos, "textkit2", container_good)),
+      2, "(no scores.json)")
+check("code: as an explicit kind is the code kind",
+      run("o-usage-code", "tolerant", code_a, code_b,
+          *code_capture("o-usage-code", "code:positive", positive, "textkit2", good_log)), 0, "PASS")
 
 print(f"\n{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

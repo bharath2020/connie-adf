@@ -11,9 +11,11 @@ import UIKit
 /// `ADFDocumentView(identifiesRenderer:)`: the registry the marked leaves
 /// write (coalesced, visibility-gated publishing of `ADFRendererReport`),
 /// and, through the real document view, what each leaf reports: under
-/// `.textKit2` an eligible paragraph, heading and list item report TextKit
-/// 2, a linked paragraph TextKit 1, and the text the renderer leaves on
-/// SwiftUI (an atom paragraph, a panel's paragraph, a caption) SwiftUI;
+/// `.textKit2` an eligible paragraph, heading and list item, and from
+/// iOS 26 a panel's paragraph and a caption, report TextKit 2, a linked
+/// paragraph TextKit 1, and the text the renderer leaves on SwiftUI (an
+/// atom paragraph; before iOS 26 the panel's paragraph and the caption)
+/// SwiftUI;
 /// under `.swiftUI` everything reports SwiftUI; off, nothing is added.
 @Suite("Renderer identification", .serialized)
 @MainActor
@@ -168,11 +170,19 @@ struct RendererIdentityTests {
         #expect(built["t:" + id.paragraph] == .textKit2, "\(built)")
         #expect(built["t:" + id.heading] == .textKit2, "\(built)")
         #expect(built["t:" + id.linked] == .textKit1, "\(built)")
-        // Left on SwiftUI: the atom paragraph, the panel's paragraph, the caption.
+        // Left on SwiftUI: the atom paragraph.
         #expect(built["s:" + id.atoms] == .swiftUI && built["t:" + id.atoms] == nil, "\(built)")
+        // The panel's paragraph and the caption are TextKit 2 rows from
+        // iOS 26 (container text and captions, PR 4); before it they stay
+        // on SwiftUI (`TextKit2Eligibility.containerTextMatchesText`).
         let panelLeaves = built.filter { $0.key.dropFirst(2).hasPrefix(id.panel + ".") }
-        #expect(!panelLeaves.isEmpty && panelLeaves.allSatisfy { $0.key.hasPrefix("s:") && $0.value == .swiftUI }, "\(built)")
-        #expect(built["s:" + id.media] == .swiftUI, "\(built)")
+        if TextKit2Eligibility.containerTextMatchesText {
+            #expect(!panelLeaves.isEmpty && panelLeaves.allSatisfy { $0.key.hasPrefix("t:") && $0.value == .textKit2 }, "\(built)")
+            #expect(built["t:" + id.media] == .textKit2 && built["s:" + id.media] == nil, "\(built)")
+        } else {
+            #expect(!panelLeaves.isEmpty && panelLeaves.allSatisfy { $0.key.hasPrefix("s:") && $0.value == .swiftUI }, "\(built)")
+            #expect(built["s:" + id.media] == .swiftUI, "\(built)")
+        }
         if TextKit2Eligibility.listsMatchText {
             #expect(built["t:" + id.listRow] == .textKit2, "\(built)")
         } else {

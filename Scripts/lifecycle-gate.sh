@@ -11,8 +11,8 @@
 # USAGE
 #   Scripts/lifecycle-gate.sh --udid <UDID> --out <dir>
 #       [--derived-data <dir>] [--skip-build] [--only <test>]...
-#       [--suite-timeout 13800] [--xcodebuild-grace 120] [--keep-booted]
-#       [--allow-other-booted] [--dry-run]
+#       [--suite-timeout 22600] [--xcodebuild-grace 120] [--keep-booted]
+#       [--allow-other-booted] [--k3-crossing <dir>]... [--dry-run]
 #
 #   --udid          required; never creates devices; refuses when another
 #                   simulator is booted; shuts down only a device it booted.
@@ -22,6 +22,29 @@
 #                   provisional — a gate verdict needs a quiet host.
 #   --out           output dir (lifecycle.md, results.jsonl, agent.log,
 #                   xcodebuild.log, lifecycle.xcresult, channel/).
+#   --k3-crossing   an earlier run's --out on an iPad (a regular-width
+#                   destination) or on a Pro Max (a phone whose landscape
+#                   is regular width), of the same build (the sha256 its
+#                   lifecycle.md records must equal this build's, else exit
+#                   2 before the device is touched). A run that runs K3
+#                   fails (report row "K3 column boundary crossed", review
+#                   D-R5, Astra delta R5) unless its own K3 or one of these
+#                   runs' K3 passed with regular_width and crossed_boundary
+#                   true on both arms. K3 takes regular_width from the
+#                   device, not from the layout drawn; a phone stacks the
+#                   columns at every size, so its K3 records the boundary as
+#                   not crossable. Under the size cut-off that iPad crossing
+#                   flips no TextKit 2 row, so a run whose K3 did not run on
+#                   an iPad also fails (report row "K3 rotation flips the
+#                   column engines", review N2) unless its own K3 or one of
+#                   these runs' K3 passed with rotation_crossable and
+#                   crossed_rotation true on both arms and the column text
+#                   TextKit 2 -> SwiftUI -> TextKit 2 on the textkit2 arm
+#                   (SwiftUI throughout on the swiftui arm): a Pro Max
+#                   rotating stacked -> side by side -> stacked. K3 takes
+#                   rotation_crossable from the device too. Order: the iPad
+#                   K3 run; the Pro Max K3 run with --k3-crossing <iPad>;
+#                   the phone suite with both.
 #   --derived-data  isolated derived data (default <out>/DerivedData). A fresh
 #                   build refuses a dir that already holds an .xctestrun;
 #                   --skip-build reuses one (recorded in lifecycle.md).
@@ -75,7 +98,46 @@
 #                   fling, horizontal fling inside a wide block, scene
 #                   thrash, 60 s soak; ~4 each),
 #                   testC6TwentyFlipsCodeDense (C6: test7's design on
-#                   code-dense, live code rows 0 after every OFF, ~30 min)
+#                   code-dense, live code rows 0 after every OFF, ~30 min);
+#                   PR 4 containers (PR 4 plan §8.2, CONTAINER_TESTS):
+#                   testK1SwitchRoundTripsAtContainerLandmarks (8.2 K1:
+#                   five ON/OFF round trips at panel, quote, column and
+#                   open-expand landmarks of containers-parity, then a
+#                   caption of captions-parity; ~6 min),
+#                   testK2OpenExpandRoundTripAcrossSwitch (K2: an open
+#                   outer and nested expand of containers-parity away and
+#                   back across a switch, both directions, plus a panned
+#                   code child; ~8 min),
+#                   testK3WidthAndTypeSizeChangesInContainers (K3: rotation,
+#                   Text Size 0 → 3 → 0 and the size rule's cut-off leg
+#                   0 → xxLarge → xxxLarge → accessibility1 → 0 at the
+#                   columns of containers-parity, per arm; the column
+#                   crossing needs a regular width and the rotation
+#                   crossing a Pro Max: --k3-crossing; ~10 min),
+#                   testK4SwitchDuringLoadAndSearchInContainers (K4: a
+#                   switch during the streaming load, task state, a search
+#                   in a nested expand and in a caption; ~4 min),
+#                   testK5aFlingOpenExpandsSwiftUI,
+#                   testK5bFlingOpenExpandsTextKit2 (K5: end-to-end flings
+#                   over containers-expand with five expands open, scene
+#                   thrash, 60 s soak, then a walk of the open bodies;
+#                   ~6 each),
+#                   testK6TwentyFlipsContainers (K6: test7's design on
+#                   containers-expand with CE-OPEN-1 open, live rows 0 after
+#                   the closing OFF; ~35 min),
+#                   testK7ExpandOpenCloseCycles (K7: five open/close/reopen
+#                   cycles of each CE-OPEN expand, per arm, open time and
+#                   footprint growth; ~14 min),
+#                   testK8TallExpandMountAndFlip (K8: the 300-paragraph
+#                   CE-TALL expand mounted and flipped, five launches per
+#                   arm alternating, M2-M4; ~15 min),
+#                   testK10aFlingThrashSoakContainersSwiftUI,
+#                   testK10bFlingThrashSoakContainersTextKit2 (K10: test5's
+#                   fling, thrash and soak on containers-dense plus the
+#                   container census; ~4 each).
+#                   testK1 never selects testK10a (the short-name rule
+#                   above). K9 (MediaRowGuardUITests) is not in the list:
+#                   --only MediaRowGuardUITests/testK9MediaRowScrollBackSettles.
 #   --dry-run       print the plan; touch no simulator, run no xcodebuild.
 #                   With a built --derived-data it also checks that the
 #                   UI-test bundle holds every selected test.
@@ -85,11 +147,13 @@
 # usage errors and when the built UI-test bundle lacks a selected test (the
 # run then stops before the device is touched). Estimated duration: ~43 min
 # for tests 1-8 (test7 ~30, the two soak tests ~3 each) + ~70 min for the
-# list tests (testL6 ~30) + ~61 min for the code tests (testC6 ~30) = ~176
-# min, plus ~4 min for a fresh build; the default --suite-timeout (13800 s)
-# leaves room for a loaded host. A failed check whose record carries
-# failure_class (a no-switch control drift over 2 px) is the known lifecycle
-# flake (Fable F16): rerun it with --only; limits are never re-tuned.
+# list tests (testL6 ~30) + ~61 min for the code tests (testC6 ~30) + ~112
+# min for the container tests (testK6 ~35) = ~288 min, plus ~4 min for a
+# fresh build; the default --suite-timeout (22600 s, the 13800 s that
+# covered ~176 min scaled to ~288) leaves room for a loaded host. A failed
+# check whose record carries failure_class (a no-switch control drift over
+# 2 px) is the known lifecycle flake (Fable F16): rerun it with --only;
+# limits are never re-tuned.
 #
 # bash 3.2 compatible; needs Xcode, xcodegen, python3.
 set -euo pipefail
@@ -108,10 +172,17 @@ CLASS="LifecycleUITests"
 # named differently there, change the name HERE (the run refuses a build
 # whose UI-test bundle lacks a selected test, so a mismatch cannot pass).
 CODE_TESTS="testC1CodeFiveRoundTripsCodeDense testC1bCodeFiveRoundTripsPannedWideBlock testC2CodeCollapseRoundTripBothDirections testC3CodeTextSizeDriftMatchesSwiftUI testC4CodeSwitchDuringStreamingLoad testC5aFlingThrashSoakCodeDenseSwiftUI testC5bFlingThrashSoakCodeDenseTextKit2 testC6TwentyFlipsCodeDense"
-ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense $CODE_TESTS"
+# PR 4's container tests (PR 4 plan §8.2: the testK names in its order,
+# K9 excluded — it runs in its own class). The same contract as CODE_TESTS.
+# A step that adds a name here updates, in the same commit, the usage text
+# above, SUITE_TIMEOUT (sized from the estimate above plus the test's pilot
+# duration) and the pins of Scripts/tests/gate-scripts-tests.sh
+# (CONTAINER_TESTS_EXPECTED, EXPECTED_SUITE_TIMEOUT).
+CONTAINER_TESTS="testK1SwitchRoundTripsAtContainerLandmarks testK2OpenExpandRoundTripAcrossSwitch testK3WidthAndTypeSizeChangesInContainers testK4SwitchDuringLoadAndSearchInContainers testK5aFlingOpenExpandsSwiftUI testK5bFlingOpenExpandsTextKit2 testK6TwentyFlipsContainers testK7ExpandOpenCloseCycles testK8TallExpandMountAndFlip testK10aFlingThrashSoakContainersSwiftUI testK10bFlingThrashSoakContainersTextKit2"
+ALL_TESTS="test1CollapseRoundTripKeepsRows test2RotationRoundTripDriftMatchesSwiftUI test3SwitchDuringStreamingLoad test4SwitchKeepsSearchExpandAndTasks test5FlingThrashSoakSwiftUI test6FlingThrashSoakTextKit2 test7TwentyFlipsReleaseRows test8RendererLaunchFlagsAndPersistence testL1ListFiveRoundTripsAtParkedPositions testL1bListFiveRoundTripsListDense testL2ListCollapseRoundTripBothDirections testL3aListRotateAndSizeDriftMatchesSwiftUI testL3bListStateSurvivesRotateSizeAndSwitch testL3cListStateSurvivesRotateSizeAndSwitchListDense testL4aListSwitchDuringStreamingLoad testL4bListCollidingIDsReplacementDocument testL5aFlingThrashSoakListDenseSwiftUI testL5bFlingThrashSoakListDenseTextKit2 testL6TwentyFlipsListDense $CODE_TESTS${CONTAINER_TESTS:+ $CONTAINER_TESTS}"
 
-UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=13800; GRACE=120
-KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0
+UDID=""; OUT=""; DERIVED_DATA=""; SKIP_BUILD=0; ONLY=""; SUITE_TIMEOUT=22600; GRACE=120
+KEEP_BOOTED=0; DRY_RUN=0; ALLOW_OTHERS=0; K3_CROSSING=""
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 log() { printf '[lifecycle-gate %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
@@ -161,6 +232,12 @@ tests_starting_with() {
     printf '%s\n' "$out"
 }
 
+# recorded_build_sha <run dir>: the app sha256 an earlier run's
+# lifecycle.md records on its build line (nothing when there is none).
+recorded_build_sha() {
+    sed -n 's/^- build: .* sha256=\([0-9a-f]\{64\}\)$/\1/p' "$1/lifecycle.md" 2>/dev/null | head -n 1
+}
+
 # missing_tests <UI-test bundle binary> <selected test>...: the selected
 # tests whose method name the binary does not hold (the selector XCTest
 # discovers a test by), one per line.
@@ -188,6 +265,8 @@ while [[ $# -gt 0 ]]; do
         --xcodebuild-grace) GRACE="$2"; shift 2 ;;
         --keep-booted) KEEP_BOOTED=1; shift ;;
         --allow-other-booted) ALLOW_OTHERS=1; shift ;;
+        --k3-crossing) [[ -d "$2" && "$2" != *[[:space:]]* ]] || die "--k3-crossing needs a run directory without spaces: '$2'"
+            K3_CROSSING="${K3_CROSSING:+$K3_CROSSING }$(cd "$2" && pwd)"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
@@ -203,6 +282,14 @@ for t in ${ONLY:-$ALL_TESTS}; do
         die "unknown test '$t'${hint:+ (did you mean: $hint)} (see --help)"
     }
     case " $TESTS " in *" $resolved "*) ;; *) TESTS="${TESTS:+$TESTS }$resolved" ;; esac
+done
+# The report's K3 crossing evidence (D-R5): never empty (bash 3.2, set -u).
+# The dirs comma-joined (no spaces), so the dry run's printed report
+# command stays one word per argument with two runs (an iPad, a Pro Max).
+REPORT_EXTRA=(--meta "k3_crossing=$(printf '%s' "${K3_CROSSING:-none}" | tr ' ' ',')")
+for dir in $K3_CROSSING; do
+    [[ -s "$dir/results.jsonl" ]] || die "--k3-crossing $dir holds no results.jsonl (give an earlier run's --out)"
+    REPORT_EXTRA+=(--crossing-results "$dir/results.jsonl")
 done
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
@@ -229,7 +316,8 @@ if [[ $DRY_RUN -eq 1 ]]; then
     else echo "build:        ( cd $DEMO_DIR && $XCODEGEN generate ) && ${BUILD_CMD[*]}"; fi
     echo "agent:        python3 -I -u $AGENT_PY serve --udid $UDID --channel $CHANNEL --results $RESULTS --log $AGENT_LOG"
     echo "test:         TEST_RUNNER_ADF_LIFECYCLE_DIR=$CHANNEL xcodebuild test-without-building -xctestrun <exact> -destination 'platform=iOS Simulator,id=$UDID' ${ONLY_ARGS[*]} -resultBundlePath $RESULT_BUNDLE"
-    echo "report:       python3 -I $AGENT_PY report --results $RESULTS --out $OUT/lifecycle.md"
+    echo "k3 crossing:  ${K3_CROSSING:-none (only a K3 of this run that crosses can pass its crossing rows)}"
+    echo "report:       python3 -I $AGENT_PY report --results $RESULTS --out $OUT/lifecycle.md ${REPORT_EXTRA[*]}"
     echo "suite timeout: ${SUITE_TIMEOUT}s"
     if [[ -f "$UITEST_BINARY" ]]; then
         MISSING="$(bundle_missing)"
@@ -292,6 +380,10 @@ MISSING="$(bundle_missing)"
 [[ -z "$MISSING" ]] || die "the UI-test bundle has no $MISSING; was it built from a checkout without those tests, or are they named differently (see CODE_TESTS)?"
 XCTESTRUN="$(select_xctestrun "$DERIVED_DATA")" || die "cannot pick the xctestrun"
 BUILD_SHA="$(shasum -a 256 "$APP/ADFReader" | awk '{print $1}')"
+for dir in $K3_CROSSING; do
+    crossing_sha="$(recorded_build_sha "$dir")"
+    [[ "$crossing_sha" == "$BUILD_SHA" ]] || die "--k3-crossing $dir ran build sha256=${crossing_sha:-unknown}; this build is $BUILD_SHA"
+done
 
 # ------------------------------------------------------------------ device
 OTHERS="$(sim_other_booted "$UDID" | tr '\n' ' ' | sed 's/ *$//')"
@@ -363,7 +455,7 @@ python3 -I "$AGENT_PY" report --results "$RESULTS" --out "$OUT/lifecycle.md" \
     --meta "device=$UDID $(sim_device_field "$UDID" name) $(sim_device_field "$UDID" runtime)" \
     --meta "tests=$TESTS" --meta "xcresult=$RESULT_BUNDLE" --meta "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --meta "other_booted_simulators=${OTHERS:-none}$([[ -n "$OTHERS" ]] && echo ' (shared host: CPU/soak/footprint figures provisional)')" \
-    || REPORT_STATUS=$?
+    "${REPORT_EXTRA[@]}" || REPORT_STATUS=$?
 [[ $REPORT_STATUS -eq 0 ]] || problems=$((problems + 1))
 log "report: $OUT/lifecycle.md"
 if (( problems > 0 )); then

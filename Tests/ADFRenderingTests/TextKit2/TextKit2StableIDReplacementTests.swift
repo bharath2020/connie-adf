@@ -22,7 +22,15 @@ import ADFPreparation
 /// - (b) a replacement document (`load`) whose rows reuse every structural
 ///   ID with different content;
 /// - (c) the root-paragraph control: the same replacement of a top-level
-///   paragraph (PR 1's path).
+///   paragraph (PR 1's path);
+/// - (d) container children: a panel's and a quote's paragraphs (and a
+///   paragraph in a panel nested in the quote) replaced under their stable
+///   IDs, from iOS 26 (before it container text stays on SwiftUI, which
+///   the case then asserts). Layout column children join with the column
+///   family.
+/// - (e) a media caption: the same replacement of a captioned image, whose
+///   caption row is owned by the media node, from iOS 26 (before it the
+///   caption stays on SwiftUI, which the case then asserts).
 ///
 /// Every check compares each row with the same owner's row in a document
 /// loaded fresh with the new content (same window, same width). A row whose
@@ -320,6 +328,120 @@ struct TextKit2StableIDReplacementTests {
         let figures = Self.verify("(c) root replace", replaced: hosted, fresh: fresh, start: start,
                                   expected: expected, changed: changed, stable: true)
         Self.evidence("(c) root replace", conversions: converted, changed: changed, figures)
+    }
+
+    /// A panel (`0.0`: `0.0.0` grows, `0.0.1` unchanged), a quote (`0.1`:
+    /// `0.1.0` shrinks, a nested panel `0.1.1` whose `0.1.1.0` keeps its
+    /// length with new words) and a root paragraph (`0.2`, unchanged).
+    static func containerJSON(_ content: Content) -> String {
+        func paragraph(_ text: String) -> String {
+            #"{"type":"paragraph","content":[{"type":"text","text":"\#(text)"}]}"#
+        }
+        let panel = #"{"type":"panel","attrs":{"panelType":"info"},"content":[\#(paragraph(content.leader0)),\#(paragraph(content.nested))]}"#
+        let inner = #"{"type":"panel","attrs":{"panelType":"note"},"content":[\#(paragraph(content.continuation))]}"#
+        let quote = #"{"type":"blockquote","content":[\#(paragraph(content.leader1)),\#(inner)]}"#
+        return #"{"version":1,"type":"doc","content":[\#(panel),\#(quote),\#(paragraph(content.rootTail))]}"#
+    }
+
+    static func containerTexts(_ content: Content) -> [String: String] {
+        ["0.0.0": content.leader0, "0.0.1": content.nested, "0.1.0": content.leader1, "0.1.1.0": content.continuation, "0.2": content.rootTail]
+    }
+
+    @Test("(d) container children (a panel's, a quote's and a nested panel's paragraphs) replaced under their stable IDs draw, label and lay out the new text")
+    func containerStableIDReplacement() async throws {
+        let oldJSON = Self.containerJSON(Self.before)
+        let newJSON = Self.containerJSON(Self.after)
+        let old = Self.containerTexts(Self.before), new = Self.containerTexts(Self.after)
+        let changed = Self.changed(old, new)
+        #expect(changed == ["0.0.0", "0.1.0", "0.1.1.0"])
+
+        let hosted = try await Self.host(oldJSON)
+        defer { hosted.close() }
+        // Before iOS 26 container text stays on SwiftUI: only the root row.
+        let containers = TextKit2Eligibility.containerTextMatchesText
+        let owners = containers ? Set(old.keys) : ["0.2"]
+        let startRows = hosted.rows()
+        #expect(Set(startRows.keys) == owners, "the old document's rows: \(startRows.keys.sorted())")
+        let start = Self.before(startRows)
+        let conversions = TextKit2Diagnostics.shared.conversionCount
+        var revision: UInt64 = 0
+        for id in ["0.0", "0.1"] {
+            revision += 1
+            let replacement = try await Self.block(id, of: newJSON, for: hosted.model)
+            try await hosted.model.apply([.replace(itemID: id, block: replacement)], revision: revision)
+        }
+        try await hosted.settle()
+        let converted = TextKit2Diagnostics.shared.conversionCount - conversions
+        #expect(converted >= (containers ? changed.count : 0), "conversions \(converted)")
+
+        let fresh = try await Self.host(newJSON)
+        defer { fresh.close() }
+        let expected = new.filter { owners.contains($0.key) }
+        let figures = Self.verify("(d) container replace", replaced: hosted, fresh: fresh, start: start,
+                                  expected: expected, changed: containers ? changed : [], stable: true)
+        for row in hosted.rows().values where row.ownerID != "0.2" {
+            #expect(row.containerContext == .container, "\(row.ownerID ?? "?")")
+        }
+        Self.evidence("(d) container replace", conversions: converted, changed: changed, figures)
+    }
+}
+
+// MARK: - (e) captions
+
+extension TextKit2StableIDReplacementTests {
+    static let captionBefore = "CAPTION-OLD short"
+    static let captionAfter = "CAPTION-NEW grows: a caption long enough to wrap onto a second and a third line under the image at phone width"
+
+    /// A captioned image (`0.0`; its media node owns the caption) and a root
+    /// paragraph (`0.1`).
+    static func captionJSON(_ caption: String) -> String {
+        let media = #"{"type":"media","attrs":{"type":"external","url":"placeholder://stable-id","width":640,"height":480}}"#
+        let captionNode = #"{"type":"caption","content":[{"type":"text","text":"\#(caption)"}]}"#
+        let image = #"{"type":"mediaSingle","attrs":{"layout":"center","width":240,"widthType":"pixel"},"content":[\#(media),\#(captionNode)]}"#
+        let paragraph = #"{"type":"paragraph","content":[{"type":"text","text":"\#(before.rootTail)"}]}"#
+        return #"{"version":1,"type":"doc","content":[\#(image),\#(paragraph)]}"#
+    }
+
+    @Test("(e) a caption replaced under its media's stable ID draws, labels and lays out the new text")
+    func captionStableIDReplacement() async throws {
+        let oldJSON = Self.captionJSON(Self.captionBefore)
+        let newJSON = Self.captionJSON(Self.captionAfter)
+        let hosted = try await Self.host(oldJSON)
+        defer { hosted.close() }
+        let image = try #require(hosted.model.blocks.first)
+        guard case .media(let media) = image.kind else {
+            Issue.record("\(image.id) is not media")
+            return
+        }
+        let old = [media.id: Self.captionBefore, "0.1": Self.before.rootTail]
+        let new = [media.id: Self.captionAfter, "0.1": Self.before.rootTail]
+        let changed = Self.changed(old, new)
+        #expect(changed == [media.id])
+
+        // Before iOS 26 captions stay on SwiftUI: only the root row.
+        let captions = TextKit2Eligibility.containerTextMatchesText
+        let owners: Set<String> = captions ? Set(old.keys) : ["0.1"]
+        let startRows = hosted.rows()
+        #expect(Set(startRows.keys) == owners, "the old document's rows: \(startRows.keys.sorted())")
+        #expect(startRows.mapValues { $0.accessibilityLabel ?? "" } == old.filter { owners.contains($0.key) }, "the old document's rows")
+        if captions { #expect(startRows[media.id]?.containerContext == .caption) }
+        let start = Self.before(startRows)
+        let replacement = try await Self.block(image.id, of: newJSON, for: hosted.model)
+        let conversions = TextKit2Diagnostics.shared.conversionCount
+        try await hosted.model.apply([.replace(itemID: image.id, block: replacement)], revision: 1)
+        try await hosted.settle()
+        let converted = TextKit2Diagnostics.shared.conversionCount - conversions
+        #expect(converted >= (captions ? changed.count : 0), "conversions \(converted)")
+
+        let fresh = try await Self.host(newJSON)
+        defer { fresh.close() }
+        let figures = Self.verify("(e) caption replace", replaced: hosted, fresh: fresh, start: start,
+                                  expected: new.filter { owners.contains($0.key) }, changed: captions ? changed : [], stable: true)
+        if captions {
+            let row = hosted.rows()[media.id]
+            #expect(row?.containerContext == .caption && row?.inputs?.inheritedForeground == .secondary)
+        }
+        Self.evidence("(e) caption replace", conversions: converted, changed: changed, figures)
     }
 }
 #endif

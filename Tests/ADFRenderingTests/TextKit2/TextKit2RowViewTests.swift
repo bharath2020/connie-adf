@@ -131,6 +131,98 @@ struct TextKit2RowViewTests {
         #expect(rects.allSatisfy { abs($0.minY - lastLine.frame.minY) < 0.01 }, "segments at A's line positions: \(rects) vs \(lastLine.frame)")
     }
 
+    /// Code review F-R4 (the container-leaf sweep's equal-height baseline
+    /// shift): a proposal a few ulps past a pixel reports the next pixel
+    /// when a line fills it, and SwiftUI places the row by proposing that
+    /// width again. A paragraph row keeps the layout it reported; a list
+    /// row, and any row proposed that width fresh, lays out anew.
+    @Test("a paragraph row re-proposed the width it reported keeps its lines; a list row and a fresh row lay out anew")
+    func reproposedReportedWidth() {
+        let scale: CGFloat = 3
+        let text = Self.sentence + " " + Self.sentence
+        var reproposed = 0
+        var shifted = 0
+        for size in [DynamicTypeSize.xSmall, .large, .xxLarge, .accessibility2] {
+            func row(_ kind: TextKit2OwnerKind) -> TextKit2RowView {
+                let view = TextKit2RowView()
+                view.ownerKind = kind
+                view.apply(TextKit2RenderInputs(text: self.text(text), sizeCategory: size.uiContentSizeCategory, displayScale: scale))
+                return view
+            }
+            for pixels in 600...1_050 {
+                // An ulp past the pixel, as a panel's child width can be
+                // (225.66666666666669 at 3x).
+                let proposed = (CGFloat(pixels) / scale).nextUp
+                let reported = TextKit2RowView.proposalCeil(proposed, scale: scale)
+                guard reported > proposed else { continue }
+                let paragraph = row(.root)
+                let first = paragraph.layoutResult(forProposedWidth: proposed)
+                guard first.size.width == reported else { continue }
+                let fresh = row(.root).layoutResult(forProposedWidth: reported)
+                let relayouts = paragraph.relayoutCount
+                #expect(paragraph.layoutResult(forProposedWidth: reported) == first, "\(size) at \(proposed): re-proposed \(reported), the paragraph keeps its lines")
+                #expect(paragraph.relayoutCount == relayouts, "\(size) at \(proposed): no layout at the reported width")
+                #expect(paragraph.keptReportedLayoutCount == 1)
+                #expect(paragraph.placedResult(for: first.size) == first)
+                let list = row(.list)
+                #expect(list.layoutResult(forProposedWidth: proposed) == first)
+                #expect(list.layoutResult(forProposedWidth: reported) == fresh, "\(size) at \(proposed): a list row lays out anew at \(reported)")
+                #expect(list.keptReportedLayoutCount == 0)
+                if fresh.lineCount != first.lineCount {
+                    // Delta review R6: only right after the narrower
+                    // proposal. A measurement at another width in between
+                    // is a real width change: the reported width lays out
+                    // anew, although the narrower layout is still cached.
+                    let moved = row(.root)
+                    _ = moved.layoutResult(forProposedWidth: proposed)
+                    _ = moved.layoutResult(forProposedWidth: proposed + 40)
+                    #expect(moved.cachedWidths.contains(proposed))
+                    #expect(moved.layoutResult(forProposedWidth: reported) == fresh, "\(size) at \(proposed): after another width, \(reported) lays out anew")
+                    #expect(moved.keptReportedLayoutCount == 0)
+                    // Asked again, the same answer; and back at the
+                    // narrower width then the reported one, kept again.
+                    #expect(moved.layoutResult(forProposedWidth: reported) == fresh)
+                    #expect(moved.layoutResult(forProposedWidth: proposed) == first)
+                    #expect(moved.layoutResult(forProposedWidth: reported) == first)
+                    #expect(moved.keptReportedLayoutCount == 1)
+                    // Natural-size and zero-width proposals are not bounded
+                    // measurements, and a repeated re-proposal is stable.
+                    let repeated = row(.root)
+                    _ = repeated.layoutResult(forProposedWidth: proposed)
+                    _ = repeated.layoutResult(forProposedWidth: nil)
+                    _ = repeated.layoutResult(forProposedWidth: 0)
+                    #expect(repeated.layoutResult(forProposedWidth: reported) == first)
+                    #expect(repeated.layoutResult(forProposedWidth: reported) == first)
+                    #expect(repeated.keptReportedLayoutCount == 2)
+                    // New inputs (another size, Bold Text) clear every
+                    // reported layout: back on the first inputs, the
+                    // reported width lays out anew.
+                    let original = TextKit2RenderInputs(text: self.text(text), sizeCategory: size.uiContentSizeCategory, displayScale: scale)
+                    var bold = original
+                    bold.legibilityWeight = .bold
+                    let other = TextKit2RenderInputs(text: self.text(text), sizeCategory: DynamicTypeSize.medium.uiContentSizeCategory, displayScale: scale)
+                    for changed in [bold, other] {
+                        let view = row(.root)
+                        _ = view.layoutResult(forProposedWidth: proposed)
+                        view.apply(changed)
+                        _ = view.layoutResult(forProposedWidth: proposed)
+                        view.apply(original)
+                        #expect(view.layoutResult(forProposedWidth: reported) == fresh, "\(size) at \(proposed): new inputs keep no reported layout")
+                        #expect(view.keptReportedLayoutCount == 0)
+                    }
+                    shifted += 1
+                }
+                reproposed += 1
+            }
+        }
+        // Not vacuous: lines fill the proposal at many widths, and some fit
+        // a word more one pixel wider, where the paragraph would have come
+        // out a line shorter.
+        print("ROW_REPROPOSED reported-past-proposal=\(reproposed) fewer-lines-fresh=\(shifted)")
+        #expect(reproposed > 0, "no proposal in 200 to 350 pt at xSmall, Large, xxLarge or AX2 reported the next pixel")
+        #expect(shifted > 0, "no proposal in 200 to 350 pt at xSmall, Large, xxLarge or AX2 fits a word more at its reported width")
+    }
+
     @Test("re-applying equal inputs is a no-op; new content at a stable row clears the cache")
     func contentChange() {
         let view = TextKit2RowView()
@@ -383,7 +475,7 @@ struct TextKit2RowViewTests {
         #expect(TextKit2RowView.pixelCeil(42.287, scale: 3) == 127 * (1 / CGFloat(3)))
     }
 
-    @Test("foreground precedence: prepared colour, link tint, label")
+    @Test("foreground precedence: prepared colour, link tint, inherited colour, label")
     func foregroundPrecedence() {
         var authored = text("red ")
         authored.foregroundColor = .red
@@ -404,6 +496,12 @@ struct TextKit2RowViewTests {
         #expect(same(colour(base, at: 0), UIColor(Color.red)), "an authored colour beats the link tint")
         #expect(same(colour(base, at: 4), tint), "an uncoloured link takes the tint")
         #expect(same(colour(base, at: 10), UIColor.label))
+
+        var inherited = base
+        inherited.inheritedForeground = .green
+        #expect(same(colour(inherited, at: 0), UIColor(Color.red)), "prepared colour beats inherited")
+        #expect(same(colour(inherited, at: 4), tint), "a foreground style does not recolour links")
+        #expect(same(colour(inherited, at: 10), UIColor(Color.green)))
     }
 
     @Test("alignment resolves against the SwiftUI layout direction")
