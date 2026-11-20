@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "ADFBeam", targets: ["ADFBeam"]),
         .executable(name: "ADFSearchBench", targets: ["ADFSearchBench"]),
         .library(name: "ADFAtlassianAuth", targets: ["ADFAtlassianAuth"]),
+        .library(name: "ADFResolvers", targets: ["ADFResolvers"]),
         .executable(name: "adf-auth", targets: ["ADFAuthCLI"]),
     ],
     targets: [
@@ -29,5 +30,7 @@ let package = Package(
         .target(name: "ADFAtlassianAuth"),
         .executableTarget(name: "ADFAuthCLI", dependencies: ["ADFAtlassianAuth"]),
         .testTarget(name: "ADFAtlassianAuthTests", dependencies: ["ADFAtlassianAuth"]),
+        .target(name: "ADFResolvers", dependencies: ["ADFRendering"]),
+        .testTarget(name: "ADFResolversTests", dependencies: ["ADFResolvers"]),
     ]
 )

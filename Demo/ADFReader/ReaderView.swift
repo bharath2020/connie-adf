@@ -63,6 +63,9 @@ struct ReaderView: View {
     /// `ADFDocumentView` does not know how titles are loaded, and a real app
     /// installs its own resolver.
     private let smartLinkResolver = MockSmartLinkResolver.shared
+    /// Custom emoji images (see `ADFEmojiResolver`). `nil`: custom emoji
+    /// show their short name.
+    private let emojiResolver: (any ADFEmojiResolver)? = nil
     private let taskStore = TaskStateStore()
     private let fontSizeStore = FontSizeStore()
 
@@ -89,6 +92,7 @@ struct ReaderView: View {
                         textRenderer: activeRenderer,
                         smartLinkResolver: smartLinkResolver,
                         smartLinkResolution: smartLinkResolution,
+                        emojiResolver: emojiResolver,
                         identifiesRenderer: identifiesRenderer)
             .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
             .adfRebuildControl(rebuildControl)

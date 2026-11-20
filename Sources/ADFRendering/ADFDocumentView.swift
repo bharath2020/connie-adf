@@ -7,13 +7,15 @@ import ADFPreparation
 /// never does heavy work during scroll.
 public struct ADFDocumentView: View {
     private let model: ADFDocumentModel
-    private let mediaProvider: any ADFMediaProvider
+    private let mediaProvider: (any ADFMediaProvider)?
     private let interactionHandler: (@MainActor (ADFInteraction) -> Void)?
     private let taskStates: [String: Bool]
     private let mentionContent: (@MainActor (String) -> AnyView)?
     private let textRenderer: ADFTextRenderer
     private let identifiesRenderer: Bool
     private let resolvesSmartLinks: Bool
+    /// Stored for the custom-emoji coordinator (ADR §23); not read yet.
+    private let emojiResolver: (any ADFEmojiResolver)?
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -38,6 +40,9 @@ public struct ADFDocumentView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// - Parameters:
+    ///   - mediaProvider: Loads the images of media blocks (see
+    ///     `ADFMediaProvider`). `nil` (the default): every media box keeps
+    ///     its placeholder.
     ///   - textRenderer: The engine for top-level paragraphs and headings,
     ///     the text of top-level lists and the code of top-level code
     ///     blocks (see `ADFTextRenderer`); `.textKit2` is opt-in and falls
@@ -61,6 +66,9 @@ public struct ADFDocumentView: View {
     ///     off-screen links nearest the screen. Handed to the same
     ///     coordinator, so changing it invalidates no row, and it can change
     ///     at any time.
+    ///   - emojiResolver: Looks up the images of custom emoji (emoji with
+    ///     no unicode text; see `ADFEmojiResolver`). Not used yet: custom
+    ///     emoji show their short name whether or not one is passed.
     ///   - identifiesRenderer: Makes the renderer identify itself: every
     ///     text leaf marks itself with the engine that actually drew it
     ///     (`ADFTextEngine`): a fill in the engine's colour behind its text,
@@ -71,13 +79,14 @@ public struct ADFDocumentView: View {
     ///     `ADFDocumentModel.rendererReport`. Off (the default) adds nothing
     ///     to any leaf. Turning it on or off rebuilds the text leaves once.
     public init(model: ADFDocumentModel,
-                mediaProvider: any ADFMediaProvider,
+                mediaProvider: (any ADFMediaProvider)? = nil,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
                 taskStates: [String: Bool] = [:],
                 mentionContent: (@MainActor (String) -> AnyView)? = nil,
                 textRenderer: ADFTextRenderer = .swiftUI,
                 smartLinkResolver: (any ADFSmartLinkResolver)? = nil,
                 smartLinkResolution: ADFSmartLinkResolution = .whileScrolling,
+                emojiResolver: (any ADFEmojiResolver)? = nil,
                 identifiesRenderer: Bool = false) {
         self.model = model
         self.mediaProvider = mediaProvider
@@ -88,6 +97,7 @@ public struct ADFDocumentView: View {
         model.smartLinks.resolver = smartLinkResolver
         model.smartLinks.resolution = smartLinkResolution
         self.resolvesSmartLinks = smartLinkResolver != nil
+        self.emojiResolver = emojiResolver
         self.identifiesRenderer = identifiesRenderer
         // Not observable: the report follows from a task.
         model.rendererIdentity.isIdentifying = identifiesRenderer

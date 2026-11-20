@@ -24,6 +24,8 @@ targets:
         product: ADFBeam
       - package: ADFKit
         product: ADFAtlassianAuth
+      - package: ADFKit
+        product: ADFResolvers
     info:
       path: ADFReader/Info.plist
       properties:

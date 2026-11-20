@@ -273,6 +273,14 @@ The extension is MV3 with no build step (`pako`/`qrcode-generator` vendored; CSP
 
 ---
 
+## 23. Custom emoji: resolver protocol in ADFKit, cache in ADFResolvers
+
+---
+
+## 24. Media: coordinator-fed loads, memory and disk cache in ADFResolvers
+
+---
+
 ## Summary of measurement-driven reversals
 
 | Initial choice | Measured problem | Final choice |
