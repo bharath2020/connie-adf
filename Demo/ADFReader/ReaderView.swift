@@ -56,12 +56,16 @@ struct ReaderView: View {
     /// `ADFDocumentView` only, so this reads the system/app baseline.
     @Environment(\.dynamicTypeSize) private var systemTypeSize
 
-    /// Shared by every reader this launch (see `DemoMedia.shared`):
-    /// `CacheFirstMediaProvider` over `MockMediaFetch`, the demo's stand-in
-    /// for an Atlassian media download; `nil` under `-media off`, so media
-    /// shows its placeholder box and nothing loads. A real app passes its
-    /// own fetch closure to `CacheFirstMediaProvider`.
-    private let mediaProvider: (any ADFMediaProvider)?
+    /// This document's media provider, picked once when it opens by the
+    /// Images setting (`DemoMedia.resolve(for:)`): the launch's shared
+    /// `CacheFirstMediaProvider` over `LiveMediaFetch` (a remote page whose
+    /// site has an account, under Atlassian) or `MockMediaFetch`; `nil`
+    /// under Off, so media shows its placeholder box and nothing loads.
+    /// `@State`, so a later pick applies to the next document, not this one.
+    @State private var media: DemoMedia.Resolution
+    /// Persisted Images setting; `-media` / `-rendererReset` seed it at
+    /// launch (see `MediaModePreference`).
+    @AppStorage(MediaModePreference.key) private var mediaMode: DemoMedia.Mode = .live
     /// Shared by every reader this launch, remote pages included; `nil`
     /// under `-smartLinks off` (see `MockSmartLinkResolver.shared`).
     /// ADFReader is a sample app, so its titles are mock data on purpose:
@@ -83,7 +87,7 @@ struct ReaderView: View {
         self.source = source
         self.options = options
         _emoji = State(initialValue: EmojiResolvers.initialChoice(for: source))
-        mediaProvider = DemoMedia.shared.provider
+        _media = State(initialValue: DemoMedia.shared.resolve(for: source))
         // The HUD stays hidden during `-autoscroll` measurement runs: its
         // material-blur backdrop re-renders over the scrolling content and
         // would perturb the very frame pacing being measured. `FrameMetrics`
@@ -97,7 +101,7 @@ struct ReaderView: View {
 
     var body: some View {
         ADFDocumentView(model: model,
-                        mediaProvider: mediaProvider,
+                        mediaProvider: media.provider,
                         interactionHandler: handle,
                         taskStates: taskStates,
                         mentionContent: { AnyView(ProfileCard(name: $0)) },
@@ -144,7 +148,7 @@ struct ReaderView: View {
             }
             .sheet(isPresented: $buildInfoPresented) {
                 BuildInfoView(renderer: activeRenderer, model: model, smartLinkResolution: smartLinkResolution,
-                              emojiSource: emoji.summary)
+                              emojiSource: emoji.summary, media: media)
             }
             .task { load() }
             .onChange(of: model.blocks.count) { _, count in
@@ -274,6 +278,24 @@ struct ReaderView: View {
                         }
                     }
                     .accessibilityIdentifier("smartlink-resolution-\(mode.rawValue)")
+                }
+            }
+            // The setting, not this page's mode (About This Build shows
+            // that): a pick applies to the next document opened.
+            Section("Images (Next Page Opened)") {
+                ForEach(DemoMedia.Mode.allCases) { mode in
+                    Button {
+                        MediaModePreference.userChose()
+                        mediaMode = mode
+                    } label: {
+                        if mode == mediaMode {
+                            Label(mode.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(mode.displayName)
+                        }
+                        Text(mode.detail)
+                    }
+                    .accessibilityIdentifier("media-mode-\(mode.rawValue)")
                 }
             }
             Section {

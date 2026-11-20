@@ -13,7 +13,8 @@ import SwiftUI
 /// started, landed, cancelled, failed, decoded images released, the most
 /// calls at once and the calls running now), then the demo mock fetch's
 /// counts since launch (`DemoMedia.shared.mock`; only the provider's memory
-/// and disk misses reach it), each `-1` under `-media off` (no mock).
+/// and disk misses reach it), each `-1` while no document has used the
+/// mock (`-media off`, or only live documents).
 ///
 /// Like `SmartLinkProbe`: one element read in one query, so a test gets a
 /// consistent snapshot without opening About This Build; it polls every

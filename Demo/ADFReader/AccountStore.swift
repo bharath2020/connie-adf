@@ -37,13 +37,18 @@ final class AccountStore {
         }
     }
 
+    /// Bumped by every `connect` and `remove`, so a cache built from
+    /// `credential(for:)` (`DemoMedia`'s live fetchers) knows to load again.
+    @ObservationIgnored private(set) var changeCount = 0
+
     func summary(for site: AtlassianSite) -> AtlassianAccountSummary? {
         summaries.first { $0.site == site }
     }
 
-    /// The stored credential for `site` (reads the secret), for the
-    /// fetchers that need one (`EmojiResolvers`). Callers keep it only as
-    /// long as the fetcher they build with it.
+    /// The stored credential for `site` (reads the token from the store),
+    /// for the fetchers that need one (`EmojiResolvers`, `DemoMedia`'s live
+    /// media fetch); never shown or logged. Callers keep it only as long as
+    /// the fetcher they build with it.
     func credential(for site: AtlassianSite) throws -> AtlassianCredential? {
         try store.load(site: site)
     }
@@ -71,12 +76,14 @@ final class AccountStore {
         checked.cloudId = result.cloudId
         try checked.validate()
         try store.save(checked)
+        changeCount += 1
         reload()
         return checked.summary
     }
 
     func remove(site: AtlassianSite) throws {
         try store.remove(site: site)
+        changeCount += 1
         reload()
     }
 

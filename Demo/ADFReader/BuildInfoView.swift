@@ -17,8 +17,9 @@ import SwiftUI
 /// own counts (`MockSmartLinkResolver`) and the text-leaf body and TextKit 2
 /// conversion and layout totals, and last of all the smart-link resolution
 /// mode with its scroll and nearby counters, where the reader's custom
-/// emoji images come from (`EmojiResolvers`), and after them the demo media
-/// fetch's counts (`MockMediaFetch`, via `DemoMedia.shared`). The checksum lets a screen recording be
+/// emoji images come from (`EmojiResolvers`), and after them the open
+/// document's media mode and its fetch's counts (`MockMediaFetch` or
+/// `LiveMediaFetch`, via `DemoMedia.shared`). The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -32,6 +33,9 @@ struct BuildInfoView: View {
     /// Where the reader's custom emoji images come from
     /// (`EmojiResolvers.Choice.summary`); `nil` hides the row.
     var emojiSource: String? = nil
+    /// The open document's media (`DemoMedia.resolve(for:)`); `nil` shows
+    /// the section as off.
+    var media: DemoMedia.Resolution? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var executableSHA256: String?
@@ -83,8 +87,11 @@ struct BuildInfoView: View {
     @State private var textKit2Conversions: Int?
     @State private var textKit2Layouts: Int?
     /// The demo media fetch's counts (`DemoMedia.shared.mock`), polled
-    /// likewise; `nil` until the first read and under `-media off`.
+    /// likewise; `nil` until the first read and while no document got it.
     @State private var mediaCounts: MockMediaFetch.Counts?
+    /// The live fetch's counts for the open document's site, polled
+    /// likewise; `nil` unless the document loads live.
+    @State private var liveMediaCounts: LiveMediaFetch.Counts?
 
     var body: some View {
         NavigationStack {
@@ -231,6 +238,9 @@ struct BuildInfoView: View {
                     textKit2Conversions = stats.conversionCount
                     textKit2Layouts = stats.layoutCount
                     mediaCounts = DemoMedia.shared.mock?.snapshot
+                    if case .live(let site) = media?.fetch {
+                        liveMediaCounts = DemoMedia.shared.liveFetch(for: site)?.snapshot
+                    }
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }
@@ -365,36 +375,84 @@ struct BuildInfoView: View {
         }
     }
 
-    /// The demo media fetch's view since launch (`MockMediaFetch`): every
-    /// fetch the provider made (memory and disk hits make none), how many
-    /// it cancelled, how many are waiting now, and how many returned bytes
-    /// or threw. Each value is its own element (`media-calls`,
-    /// `-cancelled`, `-in-flight`, `-fetched`, `-failed`) for a UI test to
-    /// read, and the footer (`media-config`) gives the delay, failure rate,
-    /// disk limit, decode scale and whether the disk cache started cold;
-    /// `media-off` under `-media off`.
+    /// The open document's media: its mode (`media-mode`: the fetch it got
+    /// and why, e.g. "Mock (bundled document)"), then that fetch's view
+    /// since launch (`MockMediaFetch` or `LiveMediaFetch`): every fetch the
+    /// provider made (memory and disk hits make none), how many it
+    /// cancelled, how many are waiting now, and how many returned bytes or
+    /// threw. Each value is its own element (`media-calls`, `-cancelled`,
+    /// `-in-flight`, `-fetched`, `-failed`) for a UI test to read; live adds
+    /// the last failure (`media-last-failure`) and, after a 401/403, a
+    /// one-line token hint (`media-scope-hint`). The footer (`media-config`)
+    /// gives the mock's delay and failure rate, the disk limit, decode scale
+    /// and whether the disk caches started cold; `media-off` when off.
     @ViewBuilder
     private var mediaSection: some View {
-        let media = DemoMedia.shared
-        if media.mock != nil {
+        let shared = DemoMedia.shared
+        let fetch = media?.fetch ?? .none
+        switch fetch {
+        case .mock, .live:
+            let counts = mediaCountValues(fetch)
             Section {
-                countRow("Calls", mediaCounts?.calls, id: "media-calls")
-                countRow("Cancelled", mediaCounts?.cancelled, id: "media-cancelled")
-                countRow("In Flight", mediaCounts?.inFlight, id: "media-in-flight")
-                countRow("Fetched", mediaCounts?.fetched, id: "media-fetched")
-                countRow("Failed", mediaCounts?.failed, id: "media-failed")
+                modeRow
+                countRow("Calls", counts?.calls, id: "media-calls")
+                countRow("Cancelled", counts?.cancelled, id: "media-cancelled")
+                countRow("In Flight", counts?.inFlight, id: "media-in-flight")
+                countRow("Fetched", counts?.fetched, id: "media-fetched")
+                countRow("Failed", counts?.failed, id: "media-failed")
+                if case .live = fetch, let live = liveMediaCounts {
+                    if let lastFailure = live.lastFailure {
+                        Text(verbatim: lastFailure)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("media-last-failure")
+                    }
+                    if live.refused > 0 {
+                        Text("Refused images? Tokens created before image support lack the attachment scopes: re-create the token (adf-auth rotate, or Add Manually).")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("media-scope-hint")
+                    }
+                }
             } header: {
-                Text("Media (Mock Fetch, Cache First)")
+                Text(fetch == .mock ? "Media (Mock Fetch, Cache First)" : "Media (Atlassian Fetch, Cache First)")
             } footer: {
-                Text(verbatim: media.summary)
+                Text(verbatim: shared.configSummary(for: fetch))
                     .accessibilityIdentifier("media-config")
             }
-        } else {
+        case .none:
             Section("Media") {
-                Text(verbatim: media.summary)
+                Text(verbatim: media?.summary ?? "Off")
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("media-off")
             }
+        }
+    }
+
+    /// "Mode" and the open document's media summary.
+    private var modeRow: some View {
+        HStack(spacing: 8) {
+            Text("Mode")
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(verbatim: media?.summary ?? "Off")
+                .multilineTextAlignment(.trailing)
+                .accessibilityIdentifier("media-mode")
+        }
+    }
+
+    /// The counts of the fetch `fetch` names, as the mock's fields.
+    private func mediaCountValues(_ fetch: DemoMedia.Resolution.Fetch) -> MockMediaFetch.Counts? {
+        switch fetch {
+        case .mock:
+            return mediaCounts
+        case .live:
+            return liveMediaCounts.map {
+                MockMediaFetch.Counts(calls: $0.calls, cancelled: $0.cancelled, inFlight: $0.inFlight,
+                                      fetched: $0.fetched, failed: $0.failed)
+            }
+        case .none:
+            return nil
         }
     }
 

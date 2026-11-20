@@ -202,21 +202,37 @@ import UIKit
 ///   About This Build names the reader's source (`build-emoji-source`).
 ///   The fixture made for it is `-fixture emoji-custom`; `list-dense` has
 ///   80 custom emoji.
-/// - Media: by default every reader gets one shared media provider
-///   (`DemoMedia.shared`): `CacheFirstMediaProvider` — decoded images in
-///   memory, encoded bytes in a 200 MB disk cache under
-///   `Caches/ADFReaderMedia` — over `MockMediaFetch`, which returns a
-///   deterministic gradient JPEG per media id or URL, no network. About
-///   This Build shows the mock's calls, cancellations, fetches in flight,
-///   fetched and failed counts since launch (only cache misses reach it).
-///   - `-media off` passes no provider: media shows its placeholder box and
-///     nothing loads. `-media mock` (or no flag) is the default.
+/// - Media: each reader gets its media provider from `DemoMedia.shared`,
+///   chosen when the document opens by the persisted "Images" setting
+///   (reader menu and Settings; `MediaModePreference`): Off, Mock, or
+///   Atlassian (the default). Every provider is a `CacheFirstMediaProvider`
+///   (decoded images in memory, encoded bytes in a 200 MB disk cache), and
+///   there is one per fetch for the whole launch:
+///   - Mock: `MockMediaFetch`, a deterministic gradient JPEG per media id
+///     or URL, no network; disk cache `Caches/ADFReaderMedia/mock`.
+///   - Atlassian: a remote page whose site (`AppConfig.confluenceSite`) has
+///     a saved account loads real images (`LiveMediaFetch`:
+///     `AtlassianMediaFetcher` with that account's credential for `.file`
+///     media, a plain HTTPS GET for `.external`); disk cache
+///     `Caches/ADFReaderMedia/<site host>`. Bundled fixtures, and remote
+///     pages with no account for their site, get the mock.
+///   - Off: no provider; media shows its placeholder box and nothing loads.
+///   About This Build shows the open document's mode and its fetch's
+///   calls, cancellations, fetches in flight, fetched and failed counts
+///   since launch (only cache misses reach a fetch).
+///   - `-media off|mock|live` sets the Images setting for this launch (the
+///     `-smartLinkResolution` pattern: written with an automation mark,
+///     removed on the next launch without the flag; `-rendererReset`
+///     resets it to Atlassian): `mock` gives every
+///     document the mock, remote pages too; `live` is the Atlassian mode;
+///     `off` passes no provider. An unknown value is ignored.
 ///   - `-mediaDelay <seconds>` (default 0.3, clamped to 0…3600): how long
 ///     each mock fetch takes. It is a `Task.sleep`, so a fetch the provider
 ///     cancels ends at once.
-///   - `-mediaCache cold` empties the disk cache at launch, before the
-///     first lookup, so UI tests and perf runs start with no disk hits
-///     (memory starts empty on every launch anyway).
+///   - `-mediaCache cold` empties every media disk cache (the whole
+///     `Caches/ADFReaderMedia` folder: mock and each site) at launch,
+///     before the first lookup, so UI tests and perf runs start with no
+///     disk hits in any mode (memory starts empty on every launch anyway).
 ///   - `-mediaProbe` (UI tests only) shows `MediaProbe`: one line,
 ///     identifier `media-probe`, with the document's media coordinator
 ///     counters and the mock fetch's, polled every 250 ms — one consistent
@@ -261,9 +277,9 @@ struct LaunchOptions: Sendable {
     var identifyRenderer = false
 
     // Media (see `DemoMedia.shared`).
-    /// `-media off` passes no media provider; `-media mock` (or no flag)
-    /// passes the cache-first provider over `MockMediaFetch`.
-    var mediaEnabled = true
+    /// `-media off|mock|live`: the Images setting for this launch
+    /// (`MediaModePreference` validates and applies it).
+    var mediaMode: String?
     /// `-mediaDelay <seconds>`: each mock fetch's duration.
     var mediaDelay = 0.3
     /// `-mediaCache cold`: empty the media disk cache at launch.
@@ -338,7 +354,7 @@ struct LaunchOptions: Sendable {
             // Media
             case "-media" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
-                mediaEnabled = arguments[index].lowercased() != "off"
+                mediaMode = arguments[index]
             case "-mediaDelay" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 if let seconds = Double(arguments[index]), seconds.isFinite {
@@ -363,12 +379,16 @@ struct ADFReaderApp: App {
     @State private var accountStore: AccountStore
 
     init() {
-        _accountStore = State(initialValue: AccountStore.live())
+        let accountStore = AccountStore.live()
+        _accountStore = State(initialValue: accountStore)
+        // Live media loads each site's credential through it.
+        DemoMedia.accountStore = accountStore
         // Before the scene builds: `ReaderView` reads the renderer key through
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)
         SmartLinkResolutionPreference.apply(options)
         RendererIdentityPreference.apply(options)
+        MediaModePreference.apply(options)
         RebuildControl.picksLeft = options.rebuildControlPicks ?? 0
         RebuildControl.configured = options.rebuildControlPicks != nil
         InteractionProbe.enabled = options.interactionProbe

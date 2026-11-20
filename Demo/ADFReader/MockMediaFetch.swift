@@ -13,14 +13,13 @@ import ADFResolvers
 /// linear gradient: a stable FNV-1a hash of the media id / URL picks the
 /// hues, so the same document always shows the same images.
 ///
-/// This is the plug point for a real fetch. `CacheFirstMediaProvider` takes
-/// any `@Sendable (MediaAttrs) async throws -> Data` closure; a real app
-/// passes one that resolves Atlassian media — for `.file(id:collection:)`,
-/// the media REST API with the account's credential (`ADFAtlassianAuth`);
-/// for `.external(url:)`, the URL itself — and returns the encoded bytes.
-/// The provider does the rest: memory and disk caching, joining concurrent
-/// requests, decoding and downsampling. The real Atlassian adapter is a
-/// separate task and is not merged yet.
+/// `CacheFirstMediaProvider` takes any `@Sendable (MediaAttrs) async throws
+/// -> Data` closure; this is the one for tests, fixtures and the "Mock"
+/// Images setting. Remote pages under the "Atlassian" setting use
+/// `LiveMediaFetch` instead (`AtlassianMediaFetcher` for `.file` media, the
+/// URL itself for `.external`); `DemoMedia` picks one per document. The
+/// provider does the rest: memory and disk caching, joining concurrent
+/// requests, decoding and downsampling.
 ///
 /// `fetch(_:)` returns encoded JPEG bytes, not a decoded image, because the
 /// provider decodes and downsamples them to the size each view needs. The
@@ -250,101 +249,5 @@ final class MockMediaFetch: Sendable {
         case 4: return [t, p, brightness]
         default: return [brightness, p, q]
         }
-    }
-}
-
-// MARK: - The demo's media provider
-
-/// The demo's media setup for this launch, built once from the process
-/// arguments (`-media`, `-mediaDelay`, `-mediaCache`; see `LaunchOptions`)
-/// like `MockSmartLinkResolver.shared`, so every reader shares one provider
-/// — one memory cache, one disk cache, one set of in-flight fetches — and
-/// About This Build's counts cover the whole launch.
-///
-/// - `-media mock` (or no flag): `CacheFirstMediaProvider` over a 200 MB
-///   disk cache in `Caches/ADFReaderMedia`, fetching from `MockMediaFetch`.
-/// - `-media off`: no provider. Media shows its placeholder box and
-///   nothing loads.
-/// - `-mediaCache cold`: the disk cache starts empty.
-struct DemoMedia: Sendable {
-    enum Mode: String, Sendable {
-        case off
-        case mock
-    }
-
-    let mode: Mode
-    /// What `ReaderView` passes to `ADFDocumentView`; `nil` under `-media off`.
-    let provider: (any ADFMediaProvider)?
-    /// The fetch behind `provider`, for its counters; `nil` under `-media off`.
-    let mock: MockMediaFetch?
-    /// Whether this launch emptied the disk cache (`-mediaCache cold`).
-    let startedCold: Bool
-    /// Pixels per point the provider decodes for.
-    let scale: CGFloat
-
-    static let cacheDirectory = URL.cachesDirectory
-        .appending(path: "ADFReaderMedia", directoryHint: .isDirectory)
-    static let diskByteLimit = 200 << 20
-
-    /// Main-actor isolated because it reads the display scale from the
-    /// window scene; the first reader builds it.
-    @MainActor static let shared = DemoMedia(options: LaunchOptions(), scale: currentDisplayScale())
-
-    init(options: LaunchOptions, scale: CGFloat) {
-        self.scale = scale
-        startedCold = options.mediaCacheCold
-        if options.mediaCacheCold {
-            // The same as `DiskCache.removeAll()`, but done before the cache
-            // exists, so it is finished before the first lookup: a
-            // `DiskCache` reads its directory on first use, and here finds
-            // it empty. `removeAll()` is actor-isolated and async, so a
-            // call from here could run after the first lookup.
-            try? FileManager.default.removeItem(at: Self.cacheDirectory)
-        }
-        guard options.mediaEnabled else {
-            mode = .off
-            provider = nil
-            mock = nil
-            return
-        }
-        let mockFetch = MockMediaFetch(configuration: MockMediaFetch.Configuration(
-            delay: .milliseconds(Int((options.mediaDelay * 1_000).rounded()))
-        ))
-        mode = .mock
-        mock = mockFetch
-        provider = CacheFirstMediaProvider(
-            disk: DiskCache(directory: Self.cacheDirectory, byteLimit: Self.diskByteLimit),
-            scale: scale,
-            fetch: { try await mockFetch.fetch($0) }
-        )
-    }
-
-    /// The window scene's display scale; 3 (2 on Mac Catalyst) when no
-    /// scene reports one yet.
-    @MainActor static func currentDisplayScale() -> CGFloat {
-        let sceneScale = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.traitCollection.displayScale }
-            .first { $0 > 0 }
-        let scale = sceneScale ?? UITraitCollection.current.displayScale
-        if scale > 0 {
-            return scale
-        }
-        #if targetEnvironment(macCatalyst)
-        return 2
-        #else
-        return 3
-        #endif
-    }
-
-    /// One line for About This Build, e.g. `Delay 0.3 s · failure rate 0 % ·
-    /// disk 200 MB · @3x · cold start`.
-    var summary: String {
-        guard let mock else { return "Off (-media off)" }
-        let scaleText = Double(scale).formatted(.number.precision(.fractionLength(0 ... 2)))
-        var parts = [mock.configuration.summary, "disk \(Self.diskByteLimit >> 20) MB", "@\(scaleText)x"]
-        if startedCold {
-            parts.append("cold start")
-        }
-        return parts.joined(separator: " · ")
     }
 }
