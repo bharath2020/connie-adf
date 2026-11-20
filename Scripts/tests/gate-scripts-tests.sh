@@ -834,12 +834,49 @@ for selector in switch lists code containers; do
     expect_has "… and reads the expected digest from the runner environment" "$file" '"ADF_EXPECTED_BUILD_SHA256"'
 done
 
-# Every K3 field the report's crossing rows read (D-R5, N2) is one K3
-# records, so a renamed key fails here, not silently in a candidate run.
-for key in regular_width crossed_boundary rotation_crossable crossed_rotation rotation_textkit2_leaves \
-    in_window_rows_rotation release_at_top release_off_window; do
-    expect_has "K3 records $key" "$UITESTS/LifecycleUITests.swift" "\"$key\":"
-    expect_has "... and the agent's crossing rows read it" "$SCRIPTS/lifecycle_agent.py" "arm.get(\"$key\")"
+# Each K3 field the report's crossing rows read (D-R5, N2) decides its row:
+# the passing iPad and Pro Max records beside a phone K3, with that one
+# field of the textkit2 arm spoiled, fail the row that reads it.
+k3_record "$WORK/k3-keys-phone" "$(k3_arm swiftui false false false false '[0, 0, 0]')" \
+    "$(k3_arm textkit2 false false false false '[4, 4, 4]')"
+k3_report() {   # <name> <ipad dir> <promax dir>: the agent's report on a phone K3 record into <name>/lifecycle.md; status in $STATUS
+    mkdir -p "$WORK/$1"
+    python3 -I "$SCRIPTS/lifecycle_agent.py" report --results "$WORK/k3-keys-phone/results.jsonl" \
+        --out "$WORK/$1/lifecycle.md" --crossing-results "$2/results.jsonl" --crossing-results "$3/results.jsonl" \
+        >"$WORK/$1.report.out" 2>&1
+    STATUS=$?
+}
+k3_report k3-keys-control "$WORK/n2-ipad" "$WORK/n2-promax"
+expect_eq "K3 fields: the unspoiled iPad and Pro Max records pass the report" "$STATUS" "0"
+expect_eq "... on the column row" "$(row_verdict k3-keys-control "K3 column")" "PASS"
+expect_eq "... and the rotation row" "$(row_verdict k3-keys-control "K3 rotation")" "PASS"
+IPAD_SWIFTUI="$(k3_arm swiftui true true false false '[0, 0, 0]')"
+PROMAX_SWIFTUI="$(k3_arm swiftui false false true true '[0, 0, 0]')"
+for spoiled in \
+    "regular_width|column|$(k3_arm textkit2 false true false false '[0, 0, 0]')" \
+    "crossed_boundary|column|$(k3_arm textkit2 true false false false '[0, 0, 0]')" \
+    "rotation_crossable|rotation|$(k3_arm textkit2 false false false true '[4, 0, 4]' '[40, 8, 40]' true 0)" \
+    "crossed_rotation|rotation|$(k3_arm textkit2 false false true false '[4, 0, 4]' '[40, 8, 40]' true 0)" \
+    "rotation_textkit2_leaves|rotation|$(k3_arm textkit2 false false true true '[4, 4, 4]' '[40, 8, 40]' true 0)" \
+    "in_window_rows_rotation|rotation|$(k3_arm textkit2 false false true true '[4, 0, 4]' '[40, 8, 47]' true 0)" \
+    "release_at_top|rotation|$(k3_arm textkit2 false false true true '[4, 0, 4]' '[40, 8, 40]' false 0)" \
+    "release_off_window|rotation|$(k3_arm textkit2 false false true true '[4, 0, 4]' '[40, 8, 40]' true 5)"; do
+    key="${spoiled%%|*}"
+    rest="${spoiled#*|}"
+    row="${rest%%|*}"
+    arm="${rest#*|}"
+    ipad="$WORK/n2-ipad"
+    promax="$WORK/n2-promax"
+    if [ "$row" = column ]; then
+        ipad="$WORK/k3-keys-$key-crossing"
+        k3_record "$ipad" "$IPAD_SWIFTUI" "$arm"
+    else
+        promax="$WORK/k3-keys-$key-crossing"
+        k3_record "$promax" "$PROMAX_SWIFTUI" "$arm"
+    fi
+    k3_report "k3-keys-$key" "$ipad" "$promax"
+    expect_eq "K3 field $key: spoiled on the textkit2 arm, the report fails" "$STATUS" "1"
+    expect_eq "... on the $row row" "$(row_verdict "k3-keys-$key" "K3 $row")" "FAIL"
 done
 
 # Every request kind a UI test sends is one the agent answers.

@@ -1,146 +1,6 @@
+#if canImport(UIKit)
 import Foundation
 import Testing
-
-/// The renderer choice is set in exactly three places (Fable F4): the
-/// document row (`DocumentRow`: top-level `.richText`, `.listRows` and
-/// `.codeBlock`, and the container kinds the container allow list holds),
-/// the list row's trailing-block boundary (`ListRowView`) and the
-/// container child boundary (`View.adfContainerChild`, in
-/// `TextKit2ContainerBoundary.swift`, used by the five container views). A
-/// fourth setter, such as a container passing it on by itself, would leak
-/// TextKit 2 into an excluded subtree. A code block only reads the choice
-/// (`TextKit2CodeScopeTests`, UIKit only). The same scan pins the writers
-/// of the values beside it: the owner kind (`adfTextOwnerKind`) is set only
-/// by the list row and the code block, the container context
-/// (`adfTextContainerContext`) and the inherited foreground
-/// (`adfTextForeground`, the caption leaf) only by the boundary file, the
-/// width bound (`adfTextWidthBound`) by the document row and the boundary,
-/// and no library source writes the container allow list's environment
-/// value (`adfContainerChildKinds`), which only a test host may widen.
-/// Source scan, so it runs on every platform.
-@Suite("TextKit 2 list scope: renderer setters")
-struct TextKit2RendererSetterTests {
-    /// `line` up to its first `//` outside a string literal (a URL in a
-    /// string is code, not a comment).
-    static func code(_ line: String) -> String {
-        var result = ""
-        var inString = false
-        var escaped = false
-        var previous: Character?
-        for character in line {
-            if inString {
-                if escaped {
-                    escaped = false
-                } else if character == "\\" {
-                    escaped = true
-                } else if character == "\"" {
-                    inString = false
-                }
-                result.append(character)
-                previous = nil
-                continue
-            }
-            if character == "/", previous == "/" {
-                result.removeLast()
-                return result
-            }
-            if character == "\"" { inString = true }
-            result.append(character)
-            previous = character
-        }
-        return result
-    }
-
-    /// Whether `code` writes `key`: an `.environment(\.<key>, …)` or
-    /// `.environment(\EnvironmentValues.<key>, …)`, a
-    /// `transformEnvironment(\.<key>` (either key path form), or an
-    /// assignment `….<key> = …` with or without spaces (not `==`). Reads
-    /// are `@Environment(\.<key>)` and `values.<key>` on the right.
-    static func writes(_ code: String, key: String) -> Bool {
-        let k = NSRegularExpression.escapedPattern(for: key)
-        let patterns = [
-            #"\\(EnvironmentValues)?\.\#(k)\s*,"#,
-            #"transformEnvironment\(\s*\\(EnvironmentValues)?\.\#(k)\b"#,
-            #"\.\#(k)\s*=(?!=)"#,
-        ]
-        return patterns.contains { code.range(of: $0, options: .regularExpression) != nil }
-    }
-
-    /// Every write of `<key>` under `Sources` (`writes(_:key:)`), as
-    /// `<file>:<line>`; comments are skipped.
-    static func writes(of keys: [String]) throws -> (writes: [String: [String]], scanned: Int) {
-        var sources = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { sources.deleteLastPathComponent() } // …/Tests/ADFRenderingTests/TextKit2 → repo root
-        sources.appendPathComponent("Sources")
-        let enumerator = try #require(FileManager.default.enumerator(atPath: sources.path))
-        var writes = Dictionary(uniqueKeysWithValues: keys.map { ($0, [String]()) })
-        var scanned = 0
-        while let path = enumerator.nextObject() as? String {
-            guard path.hasSuffix(".swift") else { continue }
-            scanned += 1
-            let source = try String(contentsOf: sources.appendingPathComponent(path), encoding: .utf8)
-            for (index, line) in source.components(separatedBy: .newlines).enumerated() {
-                let code = Self.code(line)
-                for key in keys where Self.writes(code, key: key) {
-                    writes[key, default: []].append("\((path as NSString).lastPathComponent):\(index + 1)")
-                }
-            }
-        }
-        return (writes, scanned)
-    }
-
-    static func files(_ sites: [String]) -> Set<Substring> {
-        Set(sites.map { $0.prefix { $0 != ":" } })
-    }
-
-    @Test("the scan sees every write form (both key path spellings, assignment without spaces) and no read or comment, and keeps a // inside a string literal")
-    func scanSeesEveryWriteForm() {
-        let key = "adfTextRenderer"
-        for line in [
-            ".environment(\\.adfTextRenderer, .textKit2)",
-            ".environment(\\EnvironmentValues.adfTextRenderer, renderer)",
-            ".transformEnvironment(\\.adfTextRenderer) { $0 = .swiftUI }",
-            ".transformEnvironment(\\EnvironmentValues.adfTextRenderer) { _ in }",
-            "values.adfTextRenderer = .textKit2",
-            "values.adfTextRenderer=.textKit2",
-            "let url = \"https://example.com\"; values.adfTextRenderer = .swiftUI",
-        ] {
-            #expect(Self.writes(Self.code(line), key: key), "\(line)")
-        }
-        for line in [
-            "@Environment(\\.adfTextRenderer) private var renderer",
-            "if values.adfTextRenderer == .textKit2 {",
-            "// .environment(\\.adfTextRenderer, .textKit2)",
-            "let x = 1 // values.adfTextRenderer = .swiftUI",
-            "let rendererCopy = environment.adfTextRenderer",
-        ] {
-            #expect(!Self.writes(Self.code(line), key: key), "\(line)")
-        }
-        #expect(Self.code("let s = \"a // b\" // comment") == "let s = \"a // b\" ")
-    }
-
-    @Test("the renderer environment key is set in exactly three places; the owner kind, the container context, the inherited foreground, the width bound and the allow list have their pinned writers")
-    func threeSetters() throws {
-        let keys = ["adfTextRenderer", "adfTextOwnerKind", "adfTextContainerContext", "adfContainerChildKinds", "adfTextForeground", "adfTextWidthBound"]
-        let (writes, scanned) = try Self.writes(of: keys)
-        #expect(scanned > 50, "scanned \(scanned) source files")
-        let setters = writes["adfTextRenderer"] ?? []
-        #expect(setters.count == 3, "setters: \(setters)")
-        #expect(Self.files(setters) == ["ADFDocumentView.swift", "ListBlockView.swift", "TextKit2ContainerBoundary.swift"], "setters: \(setters)")
-        let ownerKind = writes["adfTextOwnerKind"] ?? []
-        #expect(Self.files(ownerKind) == ["CodeBlockView.swift", "ListBlockView.swift"], "owner kind writers: \(ownerKind)")
-        let context = writes["adfTextContainerContext"] ?? []
-        #expect(Self.files(context) == ["TextKit2ContainerBoundary.swift"], "container context writers: \(context)")
-        let allowList = writes["adfContainerChildKinds"] ?? []
-        #expect(allowList.isEmpty, "container allow list writers: \(allowList)")
-        let foreground = writes["adfTextForeground"] ?? []
-        #expect(foreground.count == 1 && Self.files(foreground) == ["TextKit2ContainerBoundary.swift"], "inherited foreground writers: \(foreground)")
-        let widthBound = writes["adfTextWidthBound"] ?? []
-        #expect(widthBound.count == 2 && Self.files(widthBound) == ["ADFDocumentView.swift", "TextKit2ContainerBoundary.swift"], "width bound writers: \(widthBound)")
-    }
-}
-
-#if canImport(UIKit)
 import SwiftUI
 import UIKit
 import ADFModel
@@ -268,6 +128,134 @@ struct TextKit2ListScopeTests {
         host.rootView = ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .swiftUI)
         try await TextKit2DiagnosticsTests.settle(window)
         #expect(TextKit2DiagnosticsTests.identifiers(in: host.view).isEmpty)
+    }
+}
+/// What a plugin block reads from the environment the views above it
+/// wrote: a plugin sets no renderer and reads no text, so it sees exactly
+/// what its document row, list row and container boundaries passed down.
+private struct ScopeEnvironment: Equatable {
+    var renderer: ADFTextRenderer
+    var ownerKind: TextKit2OwnerKind
+    var context: TextKit2ContainerContext
+    var foreground: Color?
+    var childKinds: Set<TextKit2BlockKind>
+    var widthBound: TextKit2WidthBound
+}
+
+@MainActor
+private final class ScopeEnvironmentRecorder {
+    var observed: [String: ScopeEnvironment] = [:]
+}
+
+/// Claims every `blockCard` whose URL is `env:<name>` and records the
+/// environment it is drawn in under `<name>`.
+private struct ScopeEnvironmentProbe: ADFCustomBlockRenderer {
+    let rendererID = "test.scope-environment-probe"
+    let recorder: ScopeEnvironmentRecorder
+
+    func claim(for node: ADFNode) -> ADFCustomBlockClaim? {
+        guard case .blockCard(let url, _) = node.kind, let url, url.hasPrefix("env:") else { return nil }
+        return ADFCustomBlockClaim(String(url.dropFirst("env:".count)), sizing: .reflowingText)
+    }
+
+    @MainActor
+    func content(for value: String, context: ADFCustomBlockContext) -> some View {
+        ScopeEnvironmentProbeView(name: value, recorder: recorder)
+    }
+}
+
+private struct ScopeEnvironmentProbeView: View {
+    let name: String
+    let recorder: ScopeEnvironmentRecorder
+    @Environment(\.adfTextRenderer) private var renderer
+    @Environment(\.adfTextOwnerKind) private var ownerKind
+    @Environment(\.adfTextContainerContext) private var context
+    @Environment(\.adfTextForeground) private var foreground
+    @Environment(\.adfContainerChildKinds) private var childKinds
+    @Environment(\.adfTextWidthBound) private var widthBound
+
+    var body: some View {
+        let observed = ScopeEnvironment(
+            renderer: renderer, ownerKind: ownerKind, context: context, foreground: foreground,
+            childKinds: childKinds, widthBound: widthBound
+        )
+        Color.clear
+            .frame(height: 12)
+            .onChange(of: observed, initial: true) { _, observed in recorder.observed[name] = observed }
+    }
+}
+
+/// Through the real document view on both renderers: what a block reads
+/// at the root, in a list row, in each container and in a container in a
+/// list row or in another container. The owner kind is `.list` only below
+/// a list row; the context is `.container` only below a container's child
+/// boundary; no view outside a caption sets an inherited foreground; no
+/// view changes the container allow list, so every block reads the
+/// production list; a plugin block never gets TextKit 2; and on SwiftUI
+/// no container passes its width arithmetic to its children (`.pending`).
+@Suite("TextKit 2 list scope: environment a block reads", .serialized)
+@MainActor
+struct TextKit2ScopeEnvironmentTests {
+    static func probe(_ name: String) -> String { "{\"type\":\"blockCard\",\"attrs\":{\"url\":\"env:\(name)\"}}" }
+    static func panel(_ content: String) -> String { "{\"type\":\"panel\",\"attrs\":{\"panelType\":\"info\"},\"content\":[\(content)]}" }
+    static func listItem(_ content: String) -> String {
+        TextKit2ListScopeTests.list("bulletList", TextKit2ListScopeTests.item(TextKit2ListScopeTests.t("Item"), content))
+    }
+
+    /// Each probe, and whether it sits below a list row and below a
+    /// container boundary.
+    static let sites: [(name: String, json: String, inList: Bool, inContainer: Bool)] = [
+        ("root", probe("root"), false, false),
+        ("list", listItem(probe("list")), true, false),
+        ("panel", panel(probe("panel")), false, true),
+        ("quote", "{\"type\":\"blockquote\",\"content\":[\(probe("quote"))]}", false, true),
+        ("expand", "{\"type\":\"expand\",\"attrs\":{\"title\":\"E\"},\"content\":[\(probe("expand"))]}", false, true),
+        ("extension", "{\"type\":\"bodiedExtension\",\"attrs\":{\"extensionKey\":\"k\",\"extensionType\":\"t\"},\"content\":[\(probe("extension"))]}", false, true),
+        ("column", "{\"type\":\"layoutSection\",\"content\":[{\"type\":\"layoutColumn\",\"attrs\":{\"width\":50},\"content\":[\(probe("column"))]},{\"type\":\"layoutColumn\",\"attrs\":{\"width\":50},\"content\":[\(TextKit2ListScopeTests.t("Beside"))]}]}", false, true),
+        ("listPanel", listItem(panel(probe("listPanel"))), true, true),
+        ("quotePanel", "{\"type\":\"blockquote\",\"content\":[\(panel(probe("quotePanel")))]}", false, true),
+    ]
+
+    @Test("each block reads the owner kind, context, foreground and allow list its position gives, on both renderers", arguments: ADFTextRenderer.allCases)
+    func environmentByPosition(renderer: ADFTextRenderer) async throws {
+        let recorder = ScopeEnvironmentRecorder()
+        let model = ADFDocumentModel(customRenderers: [ScopeEnvironmentProbe(recorder: recorder)])
+        model.load(data: Data("{\"version\":1,\"type\":\"doc\",\"content\":[\(Self.sites.map(\.json).joined(separator: ","))]}".utf8))
+        for _ in 0..<500 where model.phase != .ready {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(model.phase == .ready)
+        for block in model.blocks {
+            if case .expand = block.kind { model.expandedBlocks.insert(block.id) }
+        }
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 2_000))
+        let host = UIHostingController(rootView: ADFDocumentView(
+            model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: renderer
+        ).environment(\.horizontalSizeClass, .compact))
+        window.rootViewController = host
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        for _ in 0..<250 where recorder.observed.count < Self.sites.count {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await TextKit2DiagnosticsTests.settle(window)
+        #expect(Set(recorder.observed.keys) == Set(Self.sites.map(\.name)), "probes drawn: \(recorder.observed.keys.sorted())")
+        for site in Self.sites {
+            guard let observed = recorder.observed[site.name] else { continue }
+            let label = "\(renderer) \(site.name)"
+            #expect(observed.ownerKind == (site.inList ? .list : .root), "\(label): owner kind \(observed.ownerKind)")
+            #expect(observed.context == (site.inContainer ? .container : .none), "\(label): context \(observed.context)")
+            #expect(observed.foreground == nil, "\(label): foreground \(String(describing: observed.foreground))")
+            #expect(observed.childKinds == TextKit2Scope.containerChildKinds, "\(label): allow list \(observed.childKinds)")
+            #expect(observed.renderer == .swiftUI, "\(label): renderer \(observed.renderer)")
+            if renderer == .swiftUI, site.inContainer {
+                #expect(observed.widthBound == .pending, "\(label): width bound \(observed.widthBound)")
+            }
+        }
     }
 }
 #endif
