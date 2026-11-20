@@ -164,7 +164,7 @@ every sample:
 | List window: app code + TextKit CPU | The same, over the list window only. | **gated**, +10 % / +15 % |
 | Main-thread CPU | All main-thread CPU. | report-only |
 | of which app code, of which TextKit | The two shares of the renderer CPU, apart. | report-only |
-| Burst time ≥ 12 ms, ≥ 8 ms; burst count | A busy stretch is a run of main-thread samples with no gap longer than 1.5 sample intervals. Burst time is the whole length of the stretches of at least 12 ms (or 8 ms), per second of scroll. | report-only |
+| Burst time ≥ 12 ms | A busy stretch is a run of main-thread samples with no gap longer than 1.5 sample intervals. Burst time is the whole length of the stretches of at least 12 ms, per second of scroll. | report-only |
 | List window: renderer CPU, burst time ≥ 12 ms | The same, over the list window only. | report-only |
 | Hitch time ratio, longest hitch, hitch count | Trace-derived hitches: a busy stretch longer than 16.67 ms is a hitch, and its excess counts toward the ratio. | report-only |
 | App hitch ratio, app dropped frames | The app's own `CADisplayLink` figures from `SCROLL_METRICS`. | report-only |
@@ -185,11 +185,14 @@ move of work.
 
 Two rules guard against a busy host:
 
-- **Host-starved runs are excluded.** The scroll is paced by sleeps, so its
-  length is fixed by the document. A run whose scroll window is more than
-  1.2 × the median window was starved by the host, and it measures the
-  host rather than the app. The analyzer excludes it and names it in the
-  summary.
+- **Host-starved base runs are excluded.** The scroll is paced by sleeps,
+  so its length is fixed by the document. A base run whose scroll window
+  is more than 1.2 × the base arm's median window was starved by the
+  host, and it measures the host rather than the app. The analyzer
+  excludes it and names it in the summary. Candidate runs are never
+  excluded for a long window: a candidate that keeps the main thread busy
+  also slows its own scroll, and that is a regression to catch, not host
+  noise.
 - **Too few runs is INVALID.** If an arm has fewer than 2 usable runs, the
   result is INVALID; re-run, ideally on a quieter host.
 
@@ -309,7 +312,7 @@ gate. It does not replace `Scripts/perf-gate.sh`:
 | Document | stress-5k, list-dense, ... (up to 8.5 min of scroll each) | perf-mixed (~59 s) |
 | Measures | app `CADisplayLink` frames, memory | Time Profiler: renderer and app code + TextKit CPU (gated); main-thread CPU, bursts, trace-derived hitches (report-only) |
 | Time per PR | 40–110 min, plus waiting for a quiet host | ~13–20 min |
-| Busy host | must wait for quiet | tolerated; starved runs are excluded |
+| Busy host | must wait for quiet | tolerated; starved base runs are excluded |
 | Sees GPU and render-server stalls | partly (frame drops) | no (simulator); yes on a device, later |
 
 To run on a real iPhone later, swap `--device` to the phone and add the

@@ -168,11 +168,13 @@ FIXTURE_SHA="$(shasum -a 256 "$FIXTURE_FILE" | cut -c1-12)"
 # ------------------------------------------------------------------ builds
 # build_app <sha> -> path of the cached .app (without the fixture).
 build_app() {
-    local sha="$1" dir="$CACHE/$1" src log t0
+    local sha="$1" dir="$CACHE/$1" src dd stage log t0
     if [[ -x "$dir/ADFReader.app/ADFReader" ]]; then
         echo "$dir/ADFReader.app"; return 0
     fi
     src="$CACHE/src-$sha.$$"
+    dd="$CACHE/dd-$sha.$$"
+    stage="$CACHE/stage-$sha.$$"
     log="$OUT/logs/build-${sha:0:7}.log"
     t0="$(now)"
     say "building ${sha:0:7} (Release, simulator; log $log)" >&2
@@ -182,17 +184,21 @@ build_app() {
         || { tail -20 "$log" >&2; die "xcodegen failed for ${sha:0:7}"; }
     xcodebuild build -project "$src/Demo/ADFReader.xcodeproj" -scheme ADFReader \
         -configuration Release -destination 'generic/platform=iOS Simulator' \
-        -derivedDataPath "$CACHE/dd-$sha" ARCHS=arm64 \
+        -derivedDataPath "$dd" ARCHS=arm64 \
         CODE_SIGNING_ALLOWED=NO >> "$log" 2>&1 \
         || { tail -30 "$log" >&2; die "build failed for ${sha:0:7}"; }
-    mkdir -p "$dir"
-    ditto "$CACHE/dd-$sha/Build/Products/Release-iphonesimulator/ADFReader.app" \
-        "$dir/ADFReader.app"
-    shasum -a 256 "$dir/ADFReader.app/ADFReader" | cut -d' ' -f1 > "$dir/sha256.txt"
+    rm -rf "$stage"
+    mkdir -p "$stage"
+    ditto "$dd/Build/Products/Release-iphonesimulator/ADFReader.app" \
+        "$stage/ADFReader.app"
+    shasum -a 256 "$stage/ADFReader.app/ADFReader" | cut -d' ' -f1 > "$stage/sha256.txt"
+    [[ -x "$dir/ADFReader.app/ADFReader" ]] || rm -rf "$dir"
+    python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$stage" "$dir" \
+        2>/dev/null || rm -rf "$stage"
     echo "build ${sha:0:7}: $(( $(now) - t0 ))s" >> "$OUT/logs/timings.txt"
     say "built ${sha:0:7} in $(( $(now) - t0 ))s" >&2
     # The export and derived data are only needed to build; the .app is cached.
-    rm -rf "$src" "$CACHE/dd-$sha"
+    rm -rf "$src" "$dd"
     echo "$dir/ADFReader.app"
 }
 
@@ -349,7 +355,7 @@ record() {
             if [ "$waited" -ge $(( TIME_LIMIT + 120 )) ]; then
                 say "$arm run $run: xctrace still running after ${waited}s; stopping it"
                 echo "watchdog $arm-$run: xctrace stopped after ${waited}s" >> "$OUT/logs/timings.txt"
-                kill -TERM "$xpid" 2>/dev/null; sleep 10; kill -KILL "$xpid" 2>/dev/null
+                kill -TERM "$xpid" 2>/dev/null || true; sleep 10; kill -KILL "$xpid" 2>/dev/null || true
                 break
             fi
             sleep 5; waited=$(( waited + 5 ))

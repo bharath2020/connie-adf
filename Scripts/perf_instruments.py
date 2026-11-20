@@ -67,8 +67,6 @@ METRICS (all from the Time Profiler, main thread, inside the window)
                        whole stretch, not just the excess over a frame), ms
                        per second of scroll. Catches row materialisation
                        bursts such as GitHub issue 10 (TextKit 2 list rows).
-    burst8_ms_s        the same for stretches >= 8 ms.
-    burst_count        stretches >= 12 ms.
     tk_app_ms_s        main-thread CPU in samples tagged app code OR TextKit.
     list_renderer_ms_s / list_burst_ms_s / list_tk_app_ms_s
                        renderer CPU, burst time (>= 12 ms) and app+TextKit
@@ -112,11 +110,12 @@ DROPPED_RE = re.compile(r"\bdropped=(\d+)")
 READY_RE = re.compile(r"^READY fixture=")
 SETTLE_NS = 500_000_000
 BURST_MS = 12.0
-BURST8_MS = 8.0
 # The scroll is paced by sleeps, so its length is fixed by the document
-# (~30 s for perf-mixed). A run whose window is this much longer than the
-# median window was starved by the host (its sleeps overran) and measures
-# the host, not the app: it is excluded and reported.
+# (~30 s for perf-mixed). A base run whose window is this much longer than
+# the base arm's median window was starved by the host (its sleeps overran)
+# and measures the host, not the app: it is excluded and reported. Only base
+# runs are judged: a candidate that blocks the main thread also lengthens
+# its own window, and that is a regression to catch, not host noise.
 STARVED_FACTOR = 1.2
 MIN_RUNS = 2
 
@@ -147,8 +146,6 @@ LIMITS = [
     # main vs main, so its limits are wider. Burst times did not separate
     # issue 10 from noise and stay report-only.
     ("burst_ms_s", "Burst time, stretches >= 12 ms", "ms/s", "rel", 8.0, 15.0, False),
-    ("burst8_ms_s", "Burst time, stretches >= 8 ms", "ms/s", "rel", 8.0, 15.0, False),
-    ("burst_count", "Burst count, stretches >= 12 ms", "", "abs", 10.0, 25.0, False),
     ("tk_app_ms_s", "App code + TextKit CPU", "ms/s", "rel", 10.0, 15.0, True),
     ("list_renderer_ms_s", "List window: renderer CPU", "ms/s", "rel", 8.0, 15.0, False),
     ("list_burst_ms_s", "List window: burst time >= 12 ms", "ms/s", "rel", 8.0, 15.0, False),
@@ -315,8 +312,6 @@ def analyze_files(tp, stdout, arm, run, budget_ms=16.67, list_window_s=0.0):
         "app_dropped": dropped,
         # Appended keys (older results.jsonl lack them; summarize shows n/a).
         "burst_ms_s": burst_ms_s(durs, BURST_MS, window_s),
-        "burst8_ms_s": burst_ms_s(durs, BURST8_MS, window_s),
-        "burst_count": sum(1 for d in durs if d >= BURST_MS * 1_000_000),
         "tk_app_ms_s": cpu(samples, TAG_APP | TAG_TEXTKIT, window_s),
         "list_window_s": round(min(list_window_s, window_s), 3) if list_window_s > 0 else 0,
     })
@@ -442,9 +437,10 @@ def summarize(args):
     done = [r for r in rows if not r.get("error") and r.get("completed") == 1
             and r.get("arm") in by_arm]
     errors = [r for r in rows if r not in done and r.get("arm") in by_arm]
-    nominal = statistics.median(r["window_s"] for r in done) if done else 0
+    base_windows = [r["window_s"] for r in done if r["arm"] == args.base]
+    nominal = statistics.median(base_windows) if base_windows else 0
     for r in done:
-        if r["window_s"] > STARVED_FACTOR * nominal:
+        if r["arm"] == args.base and r["window_s"] > STARVED_FACTOR * nominal:
             starved.append(r)
         else:
             by_arm[r["arm"]].append(r)
@@ -489,8 +485,8 @@ def summarize(args):
                                   "verdict": verdict, "gated": gated}
     if starved:
         lines.append("")
-        lines.append(f"{len(starved)} run(s) excluded as host-starved (scroll window over "
-                     f"{STARVED_FACTOR:g} x the {nominal:.1f} s median): "
+        lines.append(f"{len(starved)} {args.base} run(s) excluded as host-starved (scroll window over "
+                     f"{STARVED_FACTOR:g} x the {nominal:.1f} s {args.base} median): "
                      + ", ".join(f"{r['arm']}#{r['run']} ({r['window_s']:.1f} s)" for r in starved))
     if errors:
         lines.append("")
