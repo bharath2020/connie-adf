@@ -95,13 +95,13 @@ The hardest element; four separate decisions, three of them measurement-driven.
 
 Measured reversal: the id-binding writes the top-visible ID back on every frame, and that writeback cost grew with the number of materialized rows — a progressive slowdown the deeper the user scrolled in stress-5k. `ScrollViewReader` costs nothing at rest. Cons: `scrollTo` is fire-and-forget (no restoration state), so scroll restoration would need separate handling if ever required. Scroll-target observation was also scoped to a leaf view so an `@Observable` write doesn't invalidate the whole document view.
 
-## 9. Media: injected provider protocol + visibility-gated structured tasks
+## 9. Media: injected provider protocol + coordinator-fed loads
 
-**Chosen:** `ADFMediaProvider` protocol (host supplies bytes; Confluence media needs authenticated resolution the library cannot own), `.task(id:)`-scoped fetches that cancel on scroll-away, aspect-ratio boxes reserved from schema `width`/`height` attrs *before* any load, decoded images dropped when rows leave the viewport.
+**Chosen:** `ADFMediaProvider` protocol (host supplies bytes; Confluence media needs authenticated resolution the library cannot own), loads run by a per-document `MediaCoordinator` that starts them when media is on screen and cancels them on scroll-away (§24; until 2026-11 each media view ran its own visibility-gated `.task(id:)` with `@State` images), aspect-ratio boxes reserved from schema `width`/`height` attrs *before* any load, decoded images dropped shortly after their media leaves the viewport.
 
-- Alternative — built-in `URLSession`/`AsyncImage` loading: zero setup for demos, but bakes auth policy into the library and `AsyncImage` offers no downsampling or cancellation control. The protocol keeps the demo offline-capable (deterministic CoreGraphics gradients) and the host in charge of caching.
+- Alternative — built-in `URLSession`/`AsyncImage` loading: zero setup for demos, but bakes auth policy into the library and `AsyncImage` offers no downsampling or cancellation control. The protocol keeps the demo offline-capable (deterministic CoreGraphics gradients) and the host in charge of caching (`CacheFirstMediaProvider` in ADFResolvers is the ready-made memory + disk cache a host can use, §24).
 - The reserved-box rule exists for scrolling, not aesthetics: unknown image heights are the primary cause of `LazyVStack` estimated-height jumpiness. media-gallery (300 images) scrolls at **0.00 ms/s** hitch.
-- The image-eviction rule was a review-confirmed defect, not a nicety: `@State` held decoded images forever; a long gallery would accumulate every bitmap ever displayed. Off-screen rows now hold only the media ref.
+- The image-eviction rule was a review-confirmed defect, not a nicety: `@State` held decoded images forever; a long gallery would accumulate every bitmap ever displayed. Off-screen media now holds only the media ref: the coordinator releases a decoded image 1 s after nothing showing it is on screen (§24).
 
 ## 10. Document loading: streamed preparation via `AsyncStream`
 
@@ -294,6 +294,31 @@ The extension is MV3 with no build step (`pako`/`qrcode-generator` vendored; CSP
 ---
 
 ## 24. Media: coordinator-fed loads, memory and disk cache in ADFResolvers
+
+**Context.** Until 2026-11 each media view (`MediaBlockView`, a strip's `MediaThumbnailView`) loaded itself: a `ScrollVisibilityGate` bound `onScrollVisibilityChange` to an `@State isVisible`, and `.task(id: isVisible)` called the provider and kept the decoded image in `@State` (§9). That is the shape §16/§20 forbid in lazy rows (a visibility callback writing view state; two captured livelocks), it had no cap on concurrent calls, two views of one image made two calls, and the demo's `PlaceholderMediaProvider` drew gradients in memory, so nothing exercised a cache. Smart links (§22) had meanwhile proved a per-document coordinator fed by leaf visibility.
+
+**Chosen (2026-11-19):** the §22 pattern for media, plus a reusable cache-first provider in ADFResolvers.
+
+- **`MediaCoordinator`, one per document** (`ADFDocumentModel.media`, reset by `load`), reached by the media views through `\.adfMedia`. `ADFDocumentView` hands it the host's provider; without a provider it injects no coordinator, so media views show the placeholder box, attach nothing and add no visibility feed.
+- **Demand per load key.** A key is the source plus the reserved box size in points (rounded), so two views of one image at one size share one call and one entry, and a block and its thumbnail are separate loads (the provider decodes to the size asked). A view is a *viewer*: it attaches on appear and detaches on disappear (the backstop), and reports its own visibility with `onScrollVisibilityChange(threshold: 0.01)` (iOS 18 / macOS 15). Demand is attached viewers that are visible; unknown visibility counts as not visible, so a prefetched or render-region row never loads. Before iOS 18 / macOS 15 (no feed) an attached viewer counts as visible.
+- **Dwell, four slots, cancel.** A key that gains demand dwells 150 ms (a fling past a gallery starts nothing), then waits for one of four slots, in the order its dwell ended. Losing all demand drops the dwell or the queue place, or cancels the running call. A cancelled call keeps its slot until its task really ends, so a provider slow to stop never pushes the coordinator past four calls or two calls for one key. A failure is terminal for the key until `load` bumps the generation (late results from an older generation never land; block IDs repeat across documents).
+- **Release after 1 s.** A loaded image whose demand drops to zero is released 1 s later unless demand comes back first (then nothing is asked again), so a small scroll back and forth neither redraws nor reloads, and the coordinator never holds decoded images nobody sees (§9's eviction rule). The provider's memory cache keeps the long-term copy, so a return is fast.
+- **Per-key `@Observable` `MediaEntry`.** The only observable state: the image and a failed flag, written only when an image lands, is released or fails, never per visibility crossing. Each media view reads only its own key's entry, so a landing redraws exactly the views showing that key. The coordinator itself is a plain `@MainActor` class; visibility and attach callbacks write its dictionaries.
+- **No landing hold.** Unlike a smart-link title (§22), an image never changes layout: the box is fixed from the attrs before any load (§9), so results land at once, mid-scroll too.
+- **Group visibility for strips.** A thumbnail's feed only sees its strip's horizontal scroll view, so the strip (`MediaStripView`) reports its own visibility in the document (`mediaGroupVisibility`); a thumbnail counts as visible only when it and its strip are.
+- **The lightbox bypasses the coordinator.** It calls the provider directly at full size: one load the reader asked for, never deduplicated with (or released like) the downsampled in-document loads.
+- **`CacheFirstMediaProvider` (ADFResolvers).** Three tiers: memory (decoded images, keyed by source and pixel bucket — a request rounds its longest side up to one of 64…4096 px, so nearby sizes share one decode; 64 MB of bitmaps by default) → disk (`DiskCache`: encoded bytes keyed by the source only, so one download serves every size; byte-limited, least recently used evicted first) → network. Built from two chained `CacheFirstLoader`s, so concurrent requests for one image share one decode and for one source one fetch; failures are not cached; a fetch is cancelled when every request waiting on it is. `ImageDownsampler` decodes with ImageIO straight to the bucket size.
+- **The app supplies the fetch.** The provider takes any `@Sendable (MediaAttrs) async throws -> Data` closure returning encoded bytes. The demo passes `MockMediaFetch` (`DemoMedia.shared`: deterministic gradient JPEGs, a `Task.sleep` delay so cancellation ends a fetch at once, counters for About This Build and `MediaProbe`; flags `-media off|mock`, `-mediaDelay`, `-mediaCache cold`, `-mediaProbe`). It is the plug point for the real Atlassian adapter (`.file` via the media REST API with the account credential, `.external` via its URL) — a separate task, not merged yet.
+
+**Rules (the §16/§20 lessons, restated for media):**
+
+- No `@State` bound to visibility: the feeds write only the coordinator's non-observable state.
+- No `if #available` at a row position: the feed's `#available` branch sits on the media view (`MediaAttachment`, `MediaGroupVisibility`), inside its row, and the `if let coordinator` branch is constant for a document view.
+- No `model.apply` for results: a landing writes only its `MediaEntry`; it never re-prepares blocks, writes `blocks` or clears collapsed heights.
+
+**Diagnostics** (`@_spi(ADFDiagnostics)`): `ADFDocumentModel.mediaCounters` — `started`, `finished`, `cancelled`, `failed`, `released`, `maxRunning`, `running`; `started == finished + failed + cancelled + running`.
+
+**Verified (2026-11-19):** `MediaCoordinatorTests` (14: laziness and dwell, dedup, the four slots, cancel keeping its slot, release delay, terminal failure, reset generations, strip groups, no-feed fallback, early visibility reports, key moves, overlapping appear/disappear), `CacheFirstMediaProviderTests` (10) and `DiskCacheTests` (6). `MediaUITests` on the demo (`-media mock -mediaDelay 0.2 -mediaCache cold -mediaProbe`): media-gallery loads its first screen with at most four calls at once and no failure, a run of fast swipes starts far fewer than its 300 images and never more than four at once, and back at the top the first images load again from the provider's caches (fewer new mock calls than new provider calls); stress-5k loads the media in block 95's expand and stays responsive; `-media off` starts nothing. Perf gates (autoscroll, fling CPU settle, scene thrash, idle soak) are still to run in a quiet slot.
 
 ---
 
