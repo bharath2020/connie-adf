@@ -98,7 +98,10 @@ MIN_RUNS = 2
 # but never change the verdict.
 LIMITS = [
     ("renderer_cpu_ms_s", "Renderer CPU (main thread)", "ms/s", "rel", 8.0, 15.0, True),
-    ("main_cpu_ms_s", "Main-thread CPU", "ms/s", "rel", 8.0, 15.0, True),
+    # Report-only: non-renderer main-thread work (UIKit update-cycle
+    # scheduling, mach_msg) varied by up to ~22 % within one arm in the
+    # 2026-11-20 quiet slot, wider than the fail limit.
+    ("main_cpu_ms_s", "Main-thread CPU", "ms/s", "rel", 8.0, 15.0, False),
     ("app_code_ms_s", "  of which app code", "ms/s", "rel", 8.0, 15.0, False),
     ("textkit_ms_s", "  of which TextKit", "ms/s", "rel", 8.0, 15.0, False),
     ("hitch_ms_s", "Hitch time ratio (trace)", "ms/s", "abs", 3.0, 6.0, False),
