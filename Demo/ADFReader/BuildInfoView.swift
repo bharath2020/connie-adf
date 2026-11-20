@@ -16,7 +16,8 @@ import SwiftUI
 /// counters (`ADFDocumentModel.smartLinkStats`), the mock resolver's
 /// own counts (`MockSmartLinkResolver`) and the text-leaf body and TextKit 2
 /// conversion and layout totals, and last of all the smart-link resolution
-/// mode with its scroll and nearby counters. The checksum lets a screen recording be
+/// mode with its scroll and nearby counters, and where the reader's custom
+/// emoji images come from (`EmojiResolvers`). The checksum lets a screen recording be
 /// tied to one exact binary — `Scripts/e2e-video.sh` compares what the test
 /// saw on screen against the `.app` it built and the one it installed.
 struct BuildInfoView: View {
@@ -27,6 +28,9 @@ struct BuildInfoView: View {
     var model: ADFDocumentModel? = nil
     /// The reader's smart-link resolution mode (the menu's choice).
     var smartLinkResolution: ADFSmartLinkResolution = .whileScrolling
+    /// Where the reader's custom emoji images come from
+    /// (`EmojiResolvers.Choice.summary`); `nil` hides the row.
+    var emojiSource: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var executableSHA256: String?
@@ -172,6 +176,13 @@ struct BuildInfoView: View {
                 // read them top to bottom).
                 if model != nil {
                     smartLinkResolutionSection
+                }
+                // After everything UI tests read, so it moves none of it.
+                if let emojiSource {
+                    Section("Custom Emoji Images") {
+                        Text(emojiSource)
+                            .accessibilityIdentifier("build-emoji-source")
+                    }
                 }
             }
             .navigationTitle("About This Build")

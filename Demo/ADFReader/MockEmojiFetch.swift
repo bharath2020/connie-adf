@@ -4,18 +4,19 @@ import Foundation
 import ImageIO
 import ADFRendering
 
-/// The demo's custom-emoji settings, from the launch flags:
+/// The demo's custom-emoji launch flags (`EmojiResolvers` applies them):
 ///
-/// - `-emoji off|mock` (default `mock`): `mock` gives readers a
-///   `CacheFirstEmojiResolver` over `MockEmojiFetch`, so custom emoji draw
-///   as images with no network. `off` passes no resolver: custom emoji show
-///   their short name as text and the library does no lookup work. Any
-///   other value is ignored (the default stays).
+/// - `-emoji off|mock`: `mock` gives readers a `CacheFirstEmojiResolver`
+///   over `MockEmojiFetch`, so custom emoji draw as images with no network.
+///   `off` passes no resolver: custom emoji show their short name as text
+///   and the library does no lookup work. Any other value is ignored (as
+///   if the flag were absent).
 /// - `-emojiDelay <ms>` (default 400, clamped to 0…3_600_000): how long each
 ///   mock fetch takes. A non-number is ignored.
 ///
-/// Mock is the default because the demo shows the mock fetch first (the
-/// real Atlassian fetch is a later task); `-emoji off` is the opt-out.
+/// Without `-emoji` the mode is `mock` but not `isExplicit`: fixtures still
+/// get the mock, while Confluence pages follow the Atlassian emoji setting
+/// (see `EmojiResolvers.resolver(for:accounts:)`).
 struct MockEmojiOptions: Sendable, Equatable {
     enum Mode: String, Sendable {
         /// No resolver: custom emoji show their short name.
@@ -25,6 +26,9 @@ struct MockEmojiOptions: Sendable, Equatable {
     }
 
     var mode: Mode = .mock
+    /// Whether `-emoji` named the mode. An explicit mode applies to every
+    /// reader; without it Confluence pages follow the reader setting.
+    var isExplicit = false
     /// How long each mock fetch waits before it returns.
     var delay: Duration = .milliseconds(400)
 
@@ -39,6 +43,7 @@ struct MockEmojiOptions: Sendable, Equatable {
                 index = next
                 if let mode = Mode(rawValue: arguments[index]) {
                     self.mode = mode
+                    isExplicit = true
                 }
             case "-emojiDelay" where next < arguments.endIndex:
                 index = next
@@ -84,9 +89,9 @@ struct MockEmojiOptions: Sendable, Equatable {
 ///
 /// Plug point for a real fetch: `CacheFirstEmojiResolver(fetch:)` takes any
 /// `@Sendable (ADFEmojiReference) async throws -> Data` that returns image
-/// bytes. A real app passes a closure that loads its Atlassian credential
-/// and calls the emoji API there, in place of `MockEmojiFetch.make(_:)`;
-/// that adapter is a separate task (the token has no emoji scope yet).
+/// bytes. `EmojiResolvers` passes `AtlassianEmojiFetcher.emojiFetch` there
+/// for Confluence pages when the reader setting is on, in place of
+/// `MockEmojiFetch.make(_:)`.
 enum MockEmojiFetch {
     struct Failure: Error, Equatable {
         let shortName: String

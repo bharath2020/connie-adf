@@ -41,6 +41,13 @@ final class AccountStore {
         summaries.first { $0.site == site }
     }
 
+    /// The stored credential for `site` (reads the secret), for the
+    /// fetchers that need one (`EmojiResolvers`). Callers keep it only as
+    /// long as the fetcher they build with it.
+    func credential(for site: AtlassianSite) throws -> AtlassianCredential? {
+        try store.load(site: site)
+    }
+
     /// For a handed-off credential's confirmation: reloads, then returns the
     /// stored account's email when the same site is stored under a
     /// different email (saving would replace it), else nil.

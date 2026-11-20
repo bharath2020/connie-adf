@@ -5,12 +5,15 @@ enum SettingsRoute: Hashable {
     case accounts
 }
 
-/// The Settings sheet, opened from the space list's gear button. Starts at
+/// The Settings sheet, opened from the space list's gear button: Atlassian
+/// accounts and the reader's Atlassian custom-emoji setting. Starts at
 /// `initialPath` — `[.accounts]` under `-openAccounts`, so automation lands
 /// on Atlassian Accounts without tapping through.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var path: [SettingsRoute]
+    /// "Load Custom Emoji from Atlassian" (`AtlassianEmojiPreference`).
+    @AppStorage(AtlassianEmojiPreference.key) private var atlassianEmoji = false
 
     init(initialPath: [SettingsRoute] = []) {
         _path = State(initialValue: initialPath)
@@ -24,6 +27,17 @@ struct SettingsView: View {
                         Label("Atlassian Accounts", systemImage: "person.crop.circle")
                     }
                     .accessibilityIdentifier("settings-accounts")
+                }
+                Section {
+                    Toggle("Load Custom Emoji from Atlassian", isOn: $atlassianEmoji)
+                        .accessibilityIdentifier("settings-atlassian-emoji")
+                } header: {
+                    Text("Reader")
+                } footer: {
+                    Text("Shows site and Atlassian emoji on Confluence pages as images, through the "
+                        + "emoji service Atlassian's own editor uses (not a documented API; it may "
+                        + "stop working). Uses the first saved account's site. Off: they show their "
+                        + ":short-name:. Applies to the next page you open.")
                 }
             }
             .navigationTitle("Settings")
