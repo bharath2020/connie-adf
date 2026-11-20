@@ -5,10 +5,23 @@ library only; run with `python3 -I`). See docs/Perf-Instruments.md.
 SUBCOMMANDS
     analyze --tp <time-profile.xml> --stdout <stdouterr.xml>
             --arm <label> --run <n> [--budget-ms 16.67]
+            [--list-window-s SECS]
         Reads one recording's `xctrace export` tables (Time Profiler
         samples and the stdout/stderr instrument's lines) and prints one
         JSON object with the run's metrics, measured over the autoscroll
         window only (launch, document load and exit are excluded).
+
+    reanalyze --dir <results-dir> [--list-window-s SECS] [--keep-exports]
+              [--budget-ms 16.67]
+        Re-runs `analyze` offline on every recording of an existing
+        perf-instruments.sh results folder, re-exporting the tables from
+        traces/<arm>-<n>.trace with `xcrun xctrace export` where
+        exports/<arm>-<n>.{time-profile,stdout}.xml are missing (the shell
+        script drops the large time-profile export after analysis;
+        re-exported ones are dropped again unless --keep-exports). Saves
+        the old results.jsonl as results.prev.jsonl, rewrites results.jsonl,
+        then summary.md / summary.json (base vs cand). Without
+        --list-window-s it uses env.txt's "list window:" line, else 0.
 
     summarize --results <results.jsonl> --base <label> --cand <label>
               [--md <out.md>] [--json <out.json>]
@@ -50,6 +63,19 @@ METRICS (all from the Time Profiler, main thread, inside the window)
                        the app's own CADisplayLink figures from
                        SCROLL_METRICS. On a simulator they mostly measure
                        the host (frame delivery), so they are report-only.
+    burst_ms_s         main-thread time in busy stretches of >= 12 ms (the
+                       whole stretch, not just the excess over a frame), ms
+                       per second of scroll. Catches row materialisation
+                       bursts such as GitHub issue 10 (TextKit 2 list rows).
+    burst8_ms_s        the same for stretches >= 8 ms.
+    burst_count        stretches >= 12 ms.
+    tk_app_ms_s        main-thread CPU in samples tagged app code OR TextKit.
+    list_renderer_ms_s / list_burst_ms_s / list_tk_app_ms_s
+                       renderer CPU, burst time (>= 12 ms) and app+TextKit
+                       CPU over the first --list-window-s seconds of the
+                       scroll window only: perf-mixed's list section (from
+                       list-dense) comes first. Absent when the list window
+                       is 0 (disabled).
 
     The Animation Hitches template and the graphics instruments (Hitches,
     Frame Lifetimes, Display, Core Animation FPS) refuse to record on an
@@ -62,8 +88,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import statistics
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
@@ -83,6 +111,8 @@ SCROLL_RE = re.compile(r"SCROLL_METRICS .*?hitchRatioMsPerS=([0-9.]+).*?"
 DROPPED_RE = re.compile(r"\bdropped=(\d+)")
 READY_RE = re.compile(r"^READY fixture=")
 SETTLE_NS = 500_000_000
+BURST_MS = 12.0
+BURST8_MS = 8.0
 # The scroll is paced by sleeps, so its length is fixed by the document
 # (~30 s for perf-mixed). A run whose window is this much longer than the
 # median window was starved by the host (its sleeps overran) and measures
@@ -109,6 +139,15 @@ LIMITS = [
     ("hitch_count", "Hitch count (trace)", "", "abs", 10.0, 25.0, False),
     ("app_hitch_ms_s", "App hitch ratio (CADisplayLink)", "ms/s", "abs", 5.0, 10.0, False),
     ("app_dropped", "App dropped frames (CADisplayLink)", "", "abs", 20.0, 40.0, False),
+    # Burst and list-window metrics (GitHub issue 10). Report-only with
+    # placeholder limits until calibration runs pick the gates.
+    ("burst_ms_s", "Burst time, stretches >= 12 ms", "ms/s", "rel", 8.0, 15.0, False),
+    ("burst8_ms_s", "Burst time, stretches >= 8 ms", "ms/s", "rel", 8.0, 15.0, False),
+    ("burst_count", "Burst count, stretches >= 12 ms", "", "abs", 10.0, 25.0, False),
+    ("tk_app_ms_s", "App code + TextKit CPU", "ms/s", "rel", 8.0, 15.0, False),
+    ("list_renderer_ms_s", "List window: renderer CPU", "ms/s", "rel", 8.0, 15.0, False),
+    ("list_burst_ms_s", "List window: burst time >= 12 ms", "ms/s", "rel", 8.0, 15.0, False),
+    ("list_tk_app_ms_s", "List window: app code + TextKit CPU", "ms/s", "rel", 8.0, 15.0, False),
 ]
 
 
@@ -231,19 +270,24 @@ def cpu(samples, mask, window_s):
     return round(sum(w for _, w, tags in samples if tags & mask) / 1e6 / window_s, 2)
 
 
-def analyze(args):
-    out = {"arm": args.arm, "run": args.run}
-    sm = parse_stdout(args.stdout)
+def burst_ms_s(durs, min_ms, window_s):
+    floor = min_ms * 1_000_000
+    return round(sum(d for d in durs if d >= floor) / 1e6 / window_s, 2)
+
+
+def analyze_files(tp, stdout, arm, run, budget_ms=16.67, list_window_s=0.0):
+    """-> (metrics dict, exit status)"""
+    out = {"arm": arm, "run": run}
+    sm = parse_stdout(stdout)
     if sm is None:
         out["error"] = "no SCROLL_METRICS line in the trace's stdout table"
-        print(json.dumps(out))
-        return 2
+        return out, 2
     t_print, scroll_ms, completed, app_hitch, dropped, ready_ns = sm
     end_ns = t_print - SETTLE_NS
     start_ns = end_ns - scroll_ms * 1_000_000
     window_s = scroll_ms / 1000.0
-    samples = main_thread_samples(args.tp, start_ns, end_ns)
-    budget_ns = args.budget_ms * 1_000_000
+    samples = main_thread_samples(tp, start_ns, end_ns)
+    budget_ns = budget_ms * 1_000_000
     durs = stretches(samples)
     over = [d for d in durs if d > budget_ns]
     out.update({
@@ -264,9 +308,113 @@ def analyze(args):
         "hitch_count": len(over),
         "app_hitch_ms_s": app_hitch,
         "app_dropped": dropped,
+        # Appended keys (older results.jsonl lack them; summarize shows n/a).
+        "burst_ms_s": burst_ms_s(durs, BURST_MS, window_s),
+        "burst8_ms_s": burst_ms_s(durs, BURST8_MS, window_s),
+        "burst_count": sum(1 for d in durs if d >= BURST_MS * 1_000_000),
+        "tk_app_ms_s": cpu(samples, TAG_APP | TAG_TEXTKIT, window_s),
+        "list_window_s": round(min(list_window_s, window_s), 3) if list_window_s > 0 else 0,
     })
+    if list_window_s > 0:
+        lw_s = min(list_window_s, window_s)
+        lw_end = start_ns + lw_s * 1e9
+        lsamples = [x for x in samples if x[0] <= lw_end]
+        ldurs = stretches(lsamples)
+        out.update({
+            "list_renderer_ms_s": cpu(lsamples, TAG_APP | TAG_TEXTKIT | TAG_SWIFTUI, lw_s),
+            "list_burst_ms_s": burst_ms_s(ldurs, BURST_MS, lw_s),
+            "list_tk_app_ms_s": cpu(lsamples, TAG_APP | TAG_TEXTKIT, lw_s),
+        })
+    return out, (0 if completed == 1 else 2)
+
+
+def analyze(args):
+    out, rc = analyze_files(args.tp, args.stdout, args.arm, args.run,
+                            args.budget_ms, args.list_window_s)
     print(json.dumps(out))
-    return 0 if completed == 1 else 2
+    return rc
+
+
+XPATH = '/trace-toc/run[@number="1"]/data/table[@schema="{}"]'
+
+
+def xctrace_export(trace, schema, dest):
+    tmp = dest + ".part"
+    with open(tmp, "wb") as f:
+        rc = subprocess.run(["xcrun", "xctrace", "export", "--input", trace,
+                             "--xpath", XPATH.format(schema)],
+                            stdout=f, stderr=subprocess.PIPE).returncode
+    if rc != 0:
+        os.unlink(tmp)
+        raise RuntimeError(f"xctrace export {schema} failed for {trace} (rc {rc})")
+    os.replace(tmp, dest)
+
+
+def env_list_window(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"list window:\s*([0-9.]+)", line)
+                if m:
+                    return float(m.group(1))
+    except OSError:
+        pass
+    return 0.0
+
+
+def reanalyze(args):
+    d = os.path.abspath(args.dir)
+    results = os.path.join(d, "results.jsonl")
+    lw = (args.list_window_s if args.list_window_s is not None
+          else env_list_window(os.path.join(d, "env.txt")))
+    runs = []
+    if os.path.exists(results):
+        with open(results, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    r = json.loads(line)
+                    runs.append((r.get("arm"), int(r.get("run", 0))))
+    tdir = os.path.join(d, "traces")
+    if os.path.isdir(tdir):
+        for name in sorted(os.listdir(tdir)):
+            m = re.match(r"^(.+)-(\d+)\.trace$", name)
+            if m and (m.group(1), int(m.group(2))) not in runs:
+                runs.append((m.group(1), int(m.group(2))))
+    if not runs:
+        print(f"reanalyze: no recordings in {d}", file=sys.stderr)
+        return 2
+    os.makedirs(os.path.join(d, "exports"), exist_ok=True)
+    lines = []
+    for arm, run in runs:
+        trace = os.path.join(tdir, f"{arm}-{run}.trace")
+        tp = os.path.join(d, "exports", f"{arm}-{run}.time-profile.xml")
+        so = os.path.join(d, "exports", f"{arm}-{run}.stdout.xml")
+        made_tp = False
+        try:
+            if not os.path.exists(so):
+                xctrace_export(trace, "stdouterr-output", so)
+            if not os.path.exists(tp):
+                xctrace_export(trace, "time-profile", tp)
+                made_tp = True
+            out, _ = analyze_files(tp, so, arm, run, args.budget_ms, lw)
+        except (RuntimeError, OSError, ET.ParseError) as e:
+            out = {"arm": arm, "run": run, "error": f"reanalyze failed: {e}"}
+        finally:
+            if made_tp and not args.keep_exports and os.path.exists(tp):
+                os.unlink(tp)
+        line = json.dumps(out)
+        print(line, file=sys.stderr)
+        lines.append(line)
+    if os.path.exists(results):
+        os.replace(results, os.path.join(d, "results.prev.jsonl"))
+    with open(results, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    env = os.path.join(d, "env.txt")
+    return summarize(argparse.Namespace(
+        results=results, base="base", cand="cand",
+        md=os.path.join(d, "summary.md"), json=os.path.join(d, "summary.json"),
+        env=env if os.path.exists(env) else None))
 
 
 def fmt(v, unit):
@@ -351,8 +499,13 @@ def summarize(args):
     text = "\n".join(lines)
     print(text)
     if args.md:
+        header = ""
+        if getattr(args, "env", None):
+            # Shas, fixture and each arm's launch args, as an indented block.
+            with open(args.env, encoding="utf-8") as f:
+                header = "".join("    " + l for l in f) + "\n"
         with open(args.md, "w", encoding="utf-8") as f:
-            f.write(text + "\n")
+            f.write(header + text + "\n")
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=1)
@@ -368,14 +521,23 @@ def main(argv):
     a.add_argument("--arm", required=True)
     a.add_argument("--run", type=int, required=True)
     a.add_argument("--budget-ms", type=float, default=16.67)
+    a.add_argument("--list-window-s", type=float, default=0.0,
+                   help="list-section window from the scroll start (0 = off)")
+    r = sub.add_parser("reanalyze")
+    r.add_argument("--dir", required=True)
+    r.add_argument("--list-window-s", type=float, default=None)
+    r.add_argument("--budget-ms", type=float, default=16.67)
+    r.add_argument("--keep-exports", action="store_true")
     s = sub.add_parser("summarize")
     s.add_argument("--results", required=True)
     s.add_argument("--base", required=True)
     s.add_argument("--cand", required=True)
     s.add_argument("--md")
     s.add_argument("--json")
+    s.add_argument("--env", help="env.txt to put at the top of --md")
     args = p.parse_args(argv)
-    return analyze(args) if args.cmd == "analyze" else summarize(args)
+    return {"analyze": analyze, "reanalyze": reanalyze,
+            "summarize": summarize}[args.cmd](args)
 
 
 if __name__ == "__main__":

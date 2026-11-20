@@ -4,11 +4,25 @@ profile check (Scripts/perf-instruments.sh, docs/Perf-Instruments.md).
 
     python3 -I Tools/make-perf-mixed.py
 
-perf-mixed is one performance-heavy document of a few hundred rows that a
-~30 s autoscroll crosses end to end. It is composed, deterministically and
-without randomness, from blocks of the generated fixtures already in
-Fixtures/ (so it renders on every ref that can render those) plus a few
-hand-built smart-link blocks. Every section mixes the expensive families:
+perf-mixed is one performance-heavy document that a ~60 s autoscroll
+crosses end to end. It is composed, deterministically and without
+randomness, from blocks of the generated fixtures already in Fixtures/ (so
+it renders on every ref that can render those) plus a few hand-built
+smart-link blocks. It has two parts, in this order:
+
+1. The list section comes FIRST: a level-1 heading, then list-dense.json's
+   top-level blocks [LIST_START, LIST_START + LIST_BLOCKS) verbatim. That is
+   8 whole cycles of list-dense's 20-block pattern (7 bullet, 6 ordered,
+   4 task, 3 decision), so the mix matches the full fixture, and the blocks
+   are the TextKit 2-eligible list rows of GitHub issue 10. list-dense's
+   600 blocks scroll in ~116 s at 1,200 pt/s, so this section scrolls in
+   ~31 s and occupies the start of the scroll window; perf_instruments.py
+   measures it with --list-window-s (perf-instruments.sh default
+   LIST_WINDOW_S, a little under the estimate so the window ends before
+   the mixed sections' rows start to materialise).
+
+2. The mixed sections (unchanged since the first version), where every
+   section mixes the expensive families:
 
     heading, 2 mixed-mark paragraphs (text-dense)
     8 dense list blocks: bullet, ordered, task, decision (list-dense)
@@ -31,6 +45,14 @@ the old document: compare refs that bundle the same perf-mixed.json
 import json
 import os
 import sys
+
+LIST_START = 0
+LIST_BLOCKS = 160
+# Measured: list-dense's 600 top-level blocks scroll in ~116 s at 1,200 pt/s.
+LIST_DENSE_BLOCKS = 600
+LIST_DENSE_SCROLL_S = 116.0
+# Scripts/perf-instruments.sh --list-window-s default; keep the two in step.
+LIST_WINDOW_S = 28
 
 SECTIONS = 7
 LISTS_PER_SECTION = 8
@@ -95,11 +117,19 @@ def build():
             if n < len(families[family]):
                 mixed_lists.append(families[family][n])
 
-    header, rows = table["content"][0], table["content"][1:]
+    # The list section comes first, so it fills the start of the scroll
+    # window (perf_instruments.py --list-window-s).
     content = [{
         "type": "heading", "attrs": {"level": 1},
-        "content": [text("Perf mixed: lists, tables, code, media, links")],
+        "content": [text("Perf mixed: dense lists")],
     }]
+    content += lists[LIST_START:LIST_START + LIST_BLOCKS]
+
+    header, rows = table["content"][0], table["content"][1:]
+    content.append({
+        "type": "heading", "attrs": {"level": 1},
+        "content": [text("Perf mixed: lists, tables, code, media, links")],
+    })
     for s in range(SECTIONS):
         content.append({"type": "heading", "attrs": {"level": 2},
                         "content": [text(f"Section {s + 1}")]})
@@ -130,7 +160,12 @@ def main():
     with open(out, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=1, sort_keys=True)
         f.write("\n")
+    est = LIST_DENSE_SCROLL_S * LIST_BLOCKS / LIST_DENSE_BLOCKS
     print(f"wrote {out}: {len(doc['content'])} top-level blocks")
+    print(f"list section FIRST: blocks 0-{LIST_BLOCKS} (heading + list-dense "
+          f"[{LIST_START}, {LIST_START + LIST_BLOCKS})), ~{est:.0f} s of scroll; "
+          f"perf-instruments.sh --list-window-s default {LIST_WINDOW_S}")
+    print(f"mixed sections: blocks {LIST_BLOCKS + 1}-{len(doc['content']) - 1}")
     return 0
 
 

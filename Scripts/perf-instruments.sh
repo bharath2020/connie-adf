@@ -9,6 +9,14 @@
 #   --runs N            recordings per arm, interleaved (default 3)
 #   --fixture NAME      Fixtures/<NAME>.json (default perf-mixed)
 #   --app-args "ARGS"   extra launch arguments for both arms, e.g. "-textkit2"
+#   --base-args "ARGS"  extra launch arguments for the base arm only, after
+#   --cand-args "ARGS"  --app-args (and likewise for the candidate arm). One
+#                       build with TextKit 2 off vs on:
+#                         --cand-args -textkit2 a76736f a76736f
+#   --list-window-s S   also measure the first S seconds of the scroll window
+#                       on their own (list_* metrics): perf-mixed's dense
+#                       list section comes first and scrolls for ~31 s.
+#                       Default 28 for perf-mixed, 0 (off) for other fixtures
 #   --out DIR           results folder (default: a new folder under
 #                       ${TMPDIR}perf-instruments/)
 #   --cache DIR         built apps, one per commit (default:
@@ -41,17 +49,21 @@
 #      then one traced base run is recorded and discarded.
 #   3. Per run, alternating base,cand / cand,base: reinstalls the arm's
 #      app, then `xctrace record --template 'Time Profiler' --instrument
-#      'stdout/stderr' --launch -- <bundle> -fixture <NAME> -autoscroll`.
+#      'stdout/stderr' --launch -- <bundle> -fixture <NAME> -autoscroll
+#      <app-args> <arm-args>` (warm-up launches use the same arm args).
 #      The demo AutoScroller scrolls the document once at 1,200 pt/s and
 #      the app exits, which ends the recording.
 #   4. Exports the time-profile and stdout tables and has
 #      Scripts/perf_instruments.py measure the scroll window, then prints
-#      the base/candidate table and the verdict.
+#      the base/candidate table and the verdict. The time-profile export is
+#      dropped after analysis; `perf_instruments.py reanalyze --dir <out>`
+#      re-exports it from traces/ to re-run the analysis offline.
 #
 # OUTPUT (<out>/)
 #   summary.md / summary.json   table and verdict
 #   results.jsonl               one line of metrics per recording
-#   env.txt                     shas, fixture sha, device, Xcode, load, timings
+#   env.txt                     shas, fixture sha, each arm's launch args,
+#                               list window, device, Xcode, load, timings
 #   traces/<arm>-<n>.trace      open in Instruments to dig in
 #   logs/                       xctrace and build logs
 #
@@ -74,6 +86,9 @@ ANALYZE_PY="$SCRIPT_DIR/perf_instruments.py"
 RUNS=3
 FIXTURE="perf-mixed"
 APP_ARGS=""
+BASE_ARGS=""
+CAND_ARGS=""
+LIST_WINDOW_S=""
 OUT=""
 CACHE="$HOME/Library/Caches/connie-adf-perf-instruments"
 UDID=""
@@ -95,6 +110,9 @@ while [[ $# -gt 0 ]]; do
         --runs) RUNS="$2"; shift 2 ;;
         --fixture) FIXTURE="$2"; shift 2 ;;
         --app-args) APP_ARGS="$2"; shift 2 ;;
+        --base-args) BASE_ARGS="$2"; shift 2 ;;
+        --cand-args) CAND_ARGS="$2"; shift 2 ;;
+        --list-window-s) LIST_WINDOW_S="$2"; shift 2 ;;
         --out) OUT="$2"; shift 2 ;;
         --cache) CACHE="$2"; shift 2 ;;
         --udid) UDID="$2"; shift 2 ;;
@@ -110,6 +128,14 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ${#POSITIONAL[@]} -eq 2 ]] || usage
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || die "--runs must be a positive integer"
+if [[ -z "$LIST_WINDOW_S" ]]; then
+    # Tools/make-perf-mixed.py LIST_WINDOW_S: the list section's ~31 s of
+    # scroll, less a margin so the mixed sections' rows are not counted.
+    if [[ "$FIXTURE" == "perf-mixed" ]]; then LIST_WINDOW_S=28; else LIST_WINDOW_S=0; fi
+fi
+[[ "$LIST_WINDOW_S" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "--list-window-s must be a number of seconds"
+BASE_ARGV="$APP_ARGS${BASE_ARGS:+ $BASE_ARGS}"
+CAND_ARGV="$APP_ARGS${CAND_ARGS:+ $CAND_ARGS}"
 BASE_REF="${POSITIONAL[0]}"
 CAND_REF="${POSITIONAL[1]}"
 
@@ -175,8 +201,10 @@ BASE_CACHED="$(build_app "$BASE_SHA")"
 CAND_CACHED="$(build_app "$CAND_SHA")"
 BUILD_S=$(( $(now) - T_BUILD ))
 
-# Per-run copies with the shared fixture injected (an unsigned simulator
-# app reads bundle resources without a signature check).
+# Per-arm copies with the shared fixture injected (an unsigned simulator
+# app reads bundle resources without a signature check). The cache is keyed
+# by sha, so equal base and candidate refs share one build but still get
+# their own copies here.
 APP_BASE="$OUT/apps/base/ADFReader.app"
 APP_CAND="$OUT/apps/cand/ADFReader.app"
 for pair in "$BASE_CACHED:$APP_BASE" "$CAND_CACHED:$APP_CAND"; do
@@ -274,12 +302,13 @@ install_arm() {
 
 # Untraced launch until the document is READY (a cold simulator can take
 # minutes), so first-launch caches (fonts, shaders, dyld) are warm.
+# warm_up <app> <arm> <launch args>
 # shellcheck disable=SC2086
 warm_up() {
     local log="$OUT/logs/warmup-$2.log" pid waited=0
     install_arm "$1"
     xcrun simctl launch --console-pty "$UDID" "$BUNDLE_ID" -fixture "$FIXTURE" \
-        $APP_ARGS > "$log" 2>&1 &
+        $3 > "$log" 2>&1 &
     pid=$!
     while ! grep -q '^READY fixture=' "$log" 2>/dev/null; do
         kill -0 "$pid" 2>/dev/null || break
@@ -295,10 +324,10 @@ warm_up() {
     grep -q '^READY fixture=' "$log" || die "warm-up: $2 app never printed READY (see $log)"
 }
 
-# record <arm> <run> <app>
+# record <arm> <run> <app> <launch args>
 # shellcheck disable=SC2086
 record() {
-    local arm="$1" run="$2" app="$3" trace log t0 rc=0
+    local arm="$1" run="$2" app="$3" argv="$4" trace log t0 rc=0
     trace="$OUT/traces/$arm-$run.trace"
     log="$OUT/logs/$arm-$run.xctrace.log"
     local attempt
@@ -311,7 +340,7 @@ record() {
         xcrun xctrace record --device "$UDID" --template 'Time Profiler' \
             --instrument 'stdout/stderr' --time-limit "${TIME_LIMIT}s" --no-prompt \
             --output "$trace" \
-            --launch -- "$BUNDLE_ID" -fixture "$FIXTURE" -autoscroll $APP_ARGS \
+            --launch -- "$BUNDLE_ID" -fixture "$FIXTURE" -autoscroll $argv \
             > "$log" 2>&1 || rc=$?
         # A simulator that is booted but not yet serving logs makes the
         # stdout/stderr instrument fail before the app runs; wait and retry.
@@ -332,7 +361,7 @@ record() {
         > "$so" 2>>"$log" || rc=$?
     local line
     line="$(python3 -I "$ANALYZE_PY" analyze --tp "$tp" --stdout "$so" \
-        --arm "$arm" --run "$run" 2>>"$log")" || true
+        --arm "$arm" --run "$run" --list-window-s "$LIST_WINDOW_S" 2>>"$log")" || true
     [[ -n "$line" ]] || line="{\"arm\": \"$arm\", \"run\": $run, \"error\": \"analysis failed (xctrace rc=$rc), see $log\"}"
     echo "$line" >> "$OUT/results.jsonl"
     echo "record $arm-$run: ${rec_s}s, export+analyze $(( $(now) - t0 ))s" >> "$OUT/logs/timings.txt"
@@ -345,7 +374,9 @@ record() {
     echo "base:       $BASE_REF $BASE_SHA ($(cat "$(dirname "$BASE_CACHED")/sha256.txt" 2>/dev/null | cut -c1-12))"
     echo "candidate:  $CAND_REF $CAND_SHA ($(cat "$(dirname "$CAND_CACHED")/sha256.txt" 2>/dev/null | cut -c1-12))"
     echo "fixture:    $FIXTURE ($FIXTURE_SRC, sha256 $FIXTURE_SHA)"
-    echo "app args:   -fixture $FIXTURE -autoscroll $APP_ARGS"
+    echo "base args:  -fixture $FIXTURE -autoscroll $BASE_ARGV"
+    echo "cand args:  -fixture $FIXTURE -autoscroll $CAND_ARGV"
+    echo "list window: $LIST_WINDOW_S s from the scroll start (0 = off)"
     echo "runs:       $RUNS per arm, interleaved"
     echo "device:     $(sim_device_field "$UDID" name) $UDID $(sim_device_field "$UDID" runtime)"
     echo "xcode:      $(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
@@ -355,19 +386,19 @@ record() {
 
 say "warming up both apps"
 T_WARM="$(now)"
-warm_up "$APP_BASE" base
-warm_up "$APP_CAND" cand
+warm_up "$APP_BASE" base "$BASE_ARGV"
+warm_up "$APP_CAND" cand "$CAND_ARGV"
 # One traced, discarded run: the first recording on a device pays for
 # xctrace/os_log start-up and runs slow.
-record warmup 0 "$APP_BASE"
+record warmup 0 "$APP_BASE" "$BASE_ARGV"
 echo "warm-up: $(( $(now) - T_WARM ))s" >> "$OUT/logs/timings.txt"
 
 T_REC="$(now)"
 for run in $(seq 1 "$RUNS"); do
     if (( run % 2 == 1 )); then
-        record base "$run" "$APP_BASE"; record cand "$run" "$APP_CAND"
+        record base "$run" "$APP_BASE" "$BASE_ARGV"; record cand "$run" "$APP_CAND" "$CAND_ARGV"
     else
-        record cand "$run" "$APP_CAND"; record base "$run" "$APP_BASE"
+        record cand "$run" "$APP_CAND" "$CAND_ARGV"; record base "$run" "$APP_BASE" "$BASE_ARGV"
     fi
 done
 REC_S=$(( $(now) - T_REC ))
@@ -384,7 +415,8 @@ sed 's/^/    /' "$OUT/env.txt"
 echo
 rc=0
 python3 -I "$ANALYZE_PY" summarize --results "$OUT/results.jsonl" \
-    --base base --cand cand --md "$OUT/summary.md" --json "$OUT/summary.json" || rc=$?
+    --base base --cand cand --md "$OUT/summary.md" --json "$OUT/summary.json" \
+    --env "$OUT/env.txt" || rc=$?
 echo
 echo "results: $OUT"
 exit "$rc"
