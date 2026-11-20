@@ -67,12 +67,13 @@ public struct ADFDocumentView: View {
     ///     at any time.
     ///   - emojiResolver: Looks up the images of custom emoji (emoji with
     ///     no unicode text; see `ADFEmojiResolver`) as they come on screen.
-    ///     While one is installed a custom emoji takes a square of the line
-    ///     height, blank until its image lands in it; a failed lookup shows
-    ///     the short name. `nil`: every custom emoji shows its short name
-    ///     and no lookup work is done. Handed to the model's per-document
-    ///     coordinator here, which is not observable, so passing it
-    ///     invalidates nothing; it may be installed before or after `load`.
+    ///     While one is installed a custom emoji takes a square of the
+    ///     font's ascent, on the baseline, blank until its image lands in
+    ///     it; a failed lookup shows the short name. `nil`: every custom
+    ///     emoji shows its short name and no lookup work is done. Handed to
+    ///     the model's per-document coordinator here, which is not
+    ///     observable, so passing it invalidates nothing; it may be
+    ///     installed before or after `load`.
     ///     Installing or removing one rebuilds the text leaves with custom
     ///     emoji once.
     ///   - identifiesRenderer: Makes the renderer identify itself: every

@@ -109,7 +109,7 @@ enum TextKit2TextBuilder {
     /// Displayed custom emoji (`EmojiDisplay`): a short name is an ordinary
     /// run (its secondary colour is its prepared foreground); a box or an
     /// image (one U+FFFC each) becomes an `NSTextAttachment` with square
-    /// bounds of the run font's line height (`emojiAttachment`).
+    /// bounds of the run font's ascent, on the baseline (`emojiAttachment`).
     static func attributedString(for inputs: TextKit2RenderInputs, linkColor: UIColor) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let scale = baselineScale(for: inputs.sizeCategory)

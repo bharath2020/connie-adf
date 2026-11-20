@@ -31,7 +31,7 @@ public struct CacheFirstEmojiResolver: ADFEmojiResolver {
     /// an Atlassian emoji in body text. A decoded image's `scale` makes its
     /// longest side this many points (a 60 px image gets scale 3, a 20 px
     /// image scale 1). Renderers fit the image into a square box of the
-    /// line height anyway; the scale keeps the image's own point size
+    /// font's ascent anyway; the scale keeps the image's own point size
     /// meaningful and independent of the source's pixel size.
     public static let nominalPointSize: CGFloat = 20
 

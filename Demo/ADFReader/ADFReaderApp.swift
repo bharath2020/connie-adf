@@ -185,8 +185,8 @@ import UIKit
 ///   - `-emoji mock` gives every reader (fixtures, beamed documents and
 ///     Confluence pages) one shared `CacheFirstEmojiResolver` over
 ///     `MockEmojiFetch` — a coloured square per emoji, no network — so a
-///     custom emoji is a blank square of the line height while its lookup
-///     runs, then its image in that square. A short name containing
+///     custom emoji is a blank square of the font's ascent, on the
+///     baseline, while its lookup runs, then its image in that square. A short name containing
 ///     `fail` (any case) throws, so it ends as its `:short-name:` text.
 ///   - `-emoji off` passes no resolver anywhere: custom emoji show their
 ///     `:short-name:` and the library does no lookup work. It also
