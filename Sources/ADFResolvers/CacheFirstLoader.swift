@@ -8,7 +8,9 @@ public actor CacheFirstLoader<Key: Hashable & Sendable, Value: Sendable> {
     private let cache: any ResolverCache<Key, Value>
     private let fetch: @Sendable (Key) async throws -> Value
 
-    /// One running fetch per key, with the requests waiting on it.
+    /// The current fetch per key, with the requests waiting on it. A fetch
+    /// whose waiters all cancelled is removed here at once, though its
+    /// task may still be running.
     private var flights: [Key: Flight] = [:]
     private var nextFlightID: UInt64 = 0
 
@@ -23,9 +25,14 @@ public actor CacheFirstLoader<Key: Hashable & Sendable, Value: Sendable> {
     /// - Parameters:
     ///   - cache: Checked before each fetch, and given each fetched value.
     ///   - fetch: Loads the value for a key that is not in `cache`. Called
-    ///     at most once at a time per key, off this actor. It is cancelled
-    ///     when every request waiting on it is cancelled, so it should
-    ///     honour task cancellation.
+    ///     off this actor. Concurrent requests for a key share one call,
+    ///     but calls for one key can overlap: when every request waiting
+    ///     on a call is cancelled, the loader cancels that call and forgets
+    ///     it at once, so a new request for the key starts a fresh call
+    ///     while the cancelled one may still be running. The cancelled
+    ///     call's result reaches no request, but a value it returns is
+    ///     still stored in `cache`. Honour task cancellation promptly to
+    ///     keep that overlap short.
     public init(cache: any ResolverCache<Key, Value>,
                 fetch: @escaping @Sendable (Key) async throws -> Value) {
         self.cache = cache
