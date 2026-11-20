@@ -84,7 +84,8 @@ public actor CacheFirstLoader<Key: Hashable & Sendable, Value: Sendable> {
             } catch {
                 result = .failure(error)
             }
-            await self.finish(key: key, flightID: flightID, result: result)
+            // The task inherits this actor, so it finishes the flight here.
+            self.finish(key: key, flightID: flightID, result: result)
         }
         return Flight(id: flightID, task: task)
     }
