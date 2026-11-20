@@ -41,6 +41,16 @@ final class AccountStore {
         summaries.first { $0.site == site }
     }
 
+    /// For a handed-off credential's confirmation: reloads, then returns the
+    /// stored account's email when the same site is stored under a
+    /// different email (saving would replace it), else nil.
+    func replacedEmail(by credential: AtlassianCredential) -> String? {
+        reload()
+        return summary(for: credential.site).flatMap {
+            $0.email.caseInsensitiveCompare(credential.email) == .orderedSame ? nil : $0.email
+        }
+    }
+
     /// Checks the token with the site's GraphQL gateway (one harmless
     /// `AdfAuthCheck` query), fills in the cloud ID it returns, and saves
     /// the credential — replacing any stored one for the same site (that is
@@ -77,6 +87,8 @@ final class AccountStore {
         case let error as HandoffError:
             return error.message
         case let error as PairingLink.ParseError:
+            return error.message
+        case let error as PhoneHandoffError:
             return error.message
         case let error as KeychainError:
             return error.message

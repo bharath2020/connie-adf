@@ -726,8 +726,8 @@ struct TextKit2ContainerCoverageTests {
         "captions-parity": (1, 0), "code-dense": (0, 0), "code-parity": (1, 0), "code-tall": (0, 0),
         "containers-dense": (40, 0), "containers-expand": (7, 0), "containers-parity": (5, 1), "giant-table": (0, 0),
         "kitchen-sink": (1, 0), "list-dense": (0, 0), "list-tall": (0, 0), "lists-links": (0, 0), "lists-parity": (1, 0),
-        "long-paragraph": (0, 0), "media-gallery": (0, 0), "stress-1k": (100, 0), "stress-5k": (500, 0),
-        "text-dense": (0, 0), "youtube-dense": (0, 0), "youtube": (1, 0),
+        "long-paragraph": (0, 0), "media-gallery": (0, 0), "smart-links": (6, 0), "stress-1k": (100, 0),
+        "stress-5k": (500, 0), "text-dense": (0, 0), "youtube-dense": (0, 0), "youtube": (1, 0),
     ]
 
     /// Container list leaves per fixture with the production list, hand

@@ -118,12 +118,17 @@ struct TextKit2TextRow: View {
     var ownerKind: TextKit2OwnerKind = .root
     var context: TextKit2ContainerContext = .none
 
+    /// While the document identifies its renderer, the row reports itself
+    /// (`View.rendererIdentityFeed`; the row view marks itself). `nil`, the
+    /// default, adds nothing.
+    @Environment(\.adfRendererIdentity) private var rendererIdentity
+
     var body: some View {
         // A handle per evaluation, not view state (the TK2 sources hold
         // none, `TextKit2RowViewTests`): the alignment guides query the
         // live row view's layout cache through it.
         let handle = TextKit2RowHandle()
-        TextKit2RowRepresentable(
+        let row = TextKit2RowRepresentable(
             text: text, style: style, ownerID: ownerID, ownerKind: ownerKind, containerContext: context, handle: handle
         )
             .alignmentGuide(.firstTextBaseline) { dimensions in
@@ -134,6 +139,13 @@ struct TextKit2TextRow: View {
                 let size = CGSize(width: dimensions.width, height: dimensions.height)
                 return MainActor.assumeIsolated { handle.lastBaseline(placedAt: size) } ?? dimensions.height
             }
+        if let rendererIdentity, let ownerID {
+            // The engine is read from the live row view when the report is
+            // published, so a row that turns TextKit 1-backed reports it.
+            row.rendererIdentityFeed(rendererIdentity, key: "t:" + ownerID, ownerID: ownerID) { handle.engine }
+        } else {
+            row
+        }
     }
 }
 
@@ -152,6 +164,11 @@ final class TextKit2RowHandle {
 
     func lastBaseline(placedAt size: CGSize) -> CGFloat? {
         view?.placedResult(for: size).lastBaseline
+    }
+
+    /// The engine the live row view reports (`.textKit2` before it exists).
+    var engine: ADFTextEngine {
+        view?.engine ?? .textKit2
     }
 }
 
@@ -188,6 +205,9 @@ struct TextKit2RowRepresentable: UIViewRepresentable {
             colorScheme: context.environment.colorScheme,
             ownerID: ownerID
         )
+        // After `apply`: the mark depends on whether the text made the row
+        // TextKit 1-backed.
+        view.rendererIdentity = context.environment.adfRendererIdentity
         let action = context.environment.openURL
         view.openURL = { url in action(url) }
     }

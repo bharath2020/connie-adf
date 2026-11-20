@@ -70,6 +70,9 @@ extension NSAttributedString.Key {
     /// A link's destination. Kept out of `.link`, which makes TextKit
     /// restyle the run with its own link colour and underline.
     static let adfLink = NSAttributedString.Key("adf.link")
+    /// A resolved smart link's title (`SmartLinkShown`), on its icon, space
+    /// and title: the row names the link's VoiceOver action by it.
+    static let adfLinkTitle = NSAttributedString.Key("adf.linkTitle")
 }
 
 /// Converts a prepared SwiftUI `AttributedString` into the
@@ -96,6 +99,12 @@ enum TextKit2TextBuilder {
     /// a link run, `linkColor` (`Text` colours links with the tint, which a
     /// foreground style does not override); then the inherited foreground
     /// (`inputs.inheritedForeground`); else `.label`.
+    ///
+    /// Displayed smart links (`SmartLinkDisplay`, the input the leaf hands
+    /// over): a resolving run is an ordinary run whose dimmed colour is its
+    /// prepared foreground; a resolved link's icon character becomes an
+    /// `NSTextAttachment` (`smartLinkIcon`), and its runs carry the title
+    /// for the row's link action (`adfLinkTitle`).
     static func attributedString(for inputs: TextKit2RenderInputs, linkColor: UIColor) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let scale = baselineScale(for: inputs.sizeCategory)
@@ -137,6 +146,16 @@ enum TextKit2TextBuilder {
             if let offset = run.baselineOffset {
                 attributes[.baselineOffset] = offset * scale
             }
+            if case .resolved(_, let title)? = run[SmartLinkShownAttribute.self]?.kind {
+                attributes[.adfLinkTitle] = title
+            }
+            if let icon = run[SmartLinkIconAttribute.self], let font = attributes[.font] as? UIFont,
+               let image = smartLinkIcon(icon, font: font, color: attributes[.foregroundColor] as? UIColor ?? linkColor) {
+                let attachment = NSMutableAttributedString(attachment: image)
+                attachment.addAttributes(attributes, range: NSRange(location: 0, length: attachment.length))
+                result.append(attachment)
+                continue
+            }
             result.append(NSAttributedString(string: string, attributes: attributes))
         }
 
@@ -156,6 +175,23 @@ enum TextKit2TextBuilder {
         paragraph.lineBreakStrategy = lineBreakStrategy
         result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
         return result
+    }
+
+    /// A resolved smart link's icon: the kind's SF Symbol at the run's font
+    /// (point size and weight, as `Text(Image(systemName:))` sizes it from
+    /// the font), tinted with the link colour, its baseline on the text's
+    /// baseline. `nil` if the symbol is missing (the icon character then
+    /// draws nothing visible).
+    static func smartLinkIcon(_ icon: ADFSmartLinkMetadata.Icon, font: UIFont, color: UIColor) -> NSTextAttachment? {
+        let configuration = UIImage.SymbolConfiguration(font: font)
+        guard let symbol = UIImage(systemName: SmartLinkDisplay.symbolName(icon), withConfiguration: configuration) else {
+            return nil
+        }
+        let image = symbol.withTintColor(color, renderingMode: .alwaysOriginal)
+        let attachment = NSTextAttachment(image: image)
+        let baseline = image.baselineOffsetFromBottom ?? 0
+        attachment.bounds = CGRect(x: 0, y: -baseline, width: image.size.width, height: image.size.height)
+        return attachment
     }
 
     /// Measured, not assumed (`TextKit2LineBreakParityTests`; plan §4.2):

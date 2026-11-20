@@ -13,10 +13,19 @@ public struct SearchIndexer: Sendable {
     /// that fires at render time but not at index time (or vice versa)
     /// desynchronizes block IDs from the corpus.
     public let customPreparers: [any ADFCustomBlockPreparer]
+    /// Must match the document's preparer too, for the same reason: whether
+    /// inline cards were prepared as smart-link runs or chips
+    /// (`DocumentPreparer.init(theme:customPreparers:inlineCardsAsSmartLinks:)`).
+    package let inlineCardsAsSmartLinks: Bool
 
     public init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = []) {
+        self.init(theme: theme, customPreparers: customPreparers, inlineCardsAsSmartLinks: false)
+    }
+
+    package init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = [], inlineCardsAsSmartLinks: Bool) {
         self.theme = theme
         self.customPreparers = customPreparers
+        self.inlineCardsAsSmartLinks = inlineCardsAsSmartLinks
     }
 
     /// Units for a batch of TOP-LEVEL blocks, in document order.
@@ -98,7 +107,9 @@ public struct SearchIndexer: Sendable {
             // IDs and segment shapes match what the expanded view renders.
             let root = ADFNode(id: "expand", type: "doc", kind: .doc(bodyNodes))
             let document = ADFDocument(version: 1, root: root, issues: [])
-            let bodyBlocks = DocumentPreparer(theme: theme, customPreparers: customPreparers)
+            let bodyBlocks = DocumentPreparer(
+                theme: theme, customPreparers: customPreparers, inlineCardsAsSmartLinks: inlineCardsAsSmartLinks
+            )
                 .prepare(document)
             let chain = expandAncestorIDs + [block.id]
             for child in bodyBlocks {

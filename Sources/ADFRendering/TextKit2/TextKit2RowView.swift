@@ -54,7 +54,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
 
     private(set) var inputs: TextKit2RenderInputs?
     private(set) var attributed = NSAttributedString()
-    private var links: [(range: NSRange, url: URL)] = []
+    private var links: [(range: NSRange, url: URL, title: String?)] = []
     /// Lays out and draws text containing a link (`textKit1Result`,
     /// `drawTextKit1`); nil otherwise.
     private var textKit1: TextKit1Stack? {
@@ -62,10 +62,32 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             guard (textKit1 != nil) != isTextKit1Backed else { return }
             isTextKit1Backed = textKit1 != nil
             TextKit2Diagnostics.shared.row(textKit1Backed: isTextKit1Backed)
+            if let rendererIdentity {
+                applyIdentity()
+                rendererIdentity.engineChanged()
+            }
         }
     }
     /// Whether the row's TextKit 1 stack lays out and draws its text.
     private(set) var isTextKit1Backed = false
+    /// The engine that draws the row's text, as the row reports it.
+    var engine: ADFTextEngine { isTextKit1Backed ? .textKit1 : .textKit2 }
+    /// The document's identity registry while it identifies its renderer
+    /// (`ADFDocumentView(identifiesRenderer:)`), set by the representable.
+    /// The row then marks what it draws with its engine: the fill behind
+    /// its text, a label over its top trailing corner (`engineLabel`, a
+    /// subview outside the layout) and the engine's name as its
+    /// accessibility value; a change of engine (its text gained or lost a
+    /// link) re-marks it and tells the registry. `nil`, the default: clear
+    /// background, no label, no value.
+    weak var rendererIdentity: RendererIdentityRegistry? {
+        didSet {
+            guard (rendererIdentity != nil) != (oldValue != nil) else { return }
+            applyIdentity()
+        }
+    }
+    /// Present only while the row identifies its engine.
+    private var engineLabel: UILabel?
     /// Whose text the row draws, set by the representable. The row counts
     /// itself by it (`TextKit2Diagnostics.liveListRowCount`,
     /// `liveCodeRowCount`, `codeNativeDrawCount`, and for code the
@@ -159,6 +181,55 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    // MARK: Renderer identity
+
+    /// Marks the row with its engine, or clears the mark. Never animated,
+    /// like the clear background set at creation.
+    private func applyIdentity() {
+        let identifying = rendererIdentity != nil
+        let engine = engine
+        UIView.performWithoutAnimation {
+            backgroundColor = identifying ? engine.fillUIColor : .clear
+            if identifying {
+                let label = engineLabel ?? Self.makeEngineLabel()
+                if engineLabel == nil {
+                    engineLabel = label
+                    addSubview(label)
+                }
+                label.text = engine.displayName
+                label.backgroundColor = engine.uiColor
+                placeEngineLabel()
+            } else {
+                engineLabel?.removeFromSuperview()
+                engineLabel = nil
+            }
+        }
+        accessibilityValue = identifying ? engine.displayName : nil
+    }
+
+    /// The UIKit twin of `EngineLabel`: the same font, padding, colours and
+    /// rise.
+    private static func makeEngineLabel() -> UILabel {
+        let label = UILabel()
+        label.font = .systemFont(ofSize: EngineLabel.fontSize, weight: .bold)
+        label.textColor = .white
+        label.textAlignment = .center
+        label.layer.cornerRadius = 3
+        label.clipsToBounds = true
+        label.isAccessibilityElement = false
+        label.isUserInteractionEnabled = false
+        return label
+    }
+
+    /// Over the top trailing corner, straddling the top edge.
+    private func placeEngineLabel() {
+        guard let label = engineLabel else { return }
+        let fitted = label.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude))
+        let size = CGSize(width: ceil(fitted.width) + 6, height: ceil(fitted.height) + 2)
+        let x = inputs?.layoutDirection == .rightToLeft ? bounds.minX : bounds.maxX - size.width
+        label.frame = CGRect(x: x, y: bounds.minY - EngineLabel.rise, width: size.width, height: size.height)
+    }
+
     deinit {
         let backed = isTextKit1Backed
         let kind = ownerKind
@@ -210,8 +281,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         guard newInputs != inputs else { return }
         inputs = newInputs
         rebuildText()
-        accessibilityLabel = String(newInputs.text.characters)
-        accessibilityValue = nil
+        // The text as shown, a displayed smart link spoken by its kind and
+        // title (`SmartLinkDisplay.accessibilityText`).
+        accessibilityLabel = SmartLinkDisplay.accessibilityText(of: newInputs.text)
+        accessibilityValue = rendererIdentity != nil ? engine.displayName : nil
         accessibilityTraits = newInputs.isHeading ? [.staticText, .header] : [.staticText]
     }
 
@@ -662,6 +735,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         syncToBounds()
+        placeEngineLabel()
     }
 
     /// Re-syncs the layout manager to the layout SwiftUI placed this row
@@ -787,9 +861,11 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     // MARK: Links
 
     private func rebuildLinks() {
-        var found: [(range: NSRange, url: URL)] = []
+        var found: [(range: NSRange, url: URL, title: String?)] = []
         attributed.enumerateAttribute(.adfLink, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
-            if let url = value as? URL { found.append((range, url)) }
+            guard let url = value as? URL else { return }
+            let title = attributed.attribute(.adfLinkTitle, at: range.location, effectiveRange: nil) as? String
+            found.append((range, url, title))
         }
         links = found
         if found.isEmpty, let recognizer = tapRecognizer {
@@ -803,7 +879,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
             tapRecognizer = recognizer
         }
         accessibilityCustomActions = found.isEmpty ? nil : found.map { link in
-            UIAccessibilityCustomAction(name: Self.linkActionName(link.url)) { [weak self] _ in
+            UIAccessibilityCustomAction(name: Self.linkActionName(link.url, title: link.title)) { [weak self] _ in
                 guard let self, let openURL = self.openURL else { return false }
                 openURL(link.url)
                 return true
@@ -811,9 +887,10 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    /// VoiceOver custom action name for a link.
-    static func linkActionName(_ url: URL) -> String {
-        "Open link \(url.host ?? url.absoluteString)"
+    /// VoiceOver custom action name for a link: its host, or a resolved
+    /// smart link's title (`SmartLinkDisplay.linkActionName`).
+    static func linkActionName(_ url: URL, title: String? = nil) -> String {
+        SmartLinkDisplay.linkActionName(url, title: title)
     }
 
     /// Only a touch that starts on a link's glyphs begins the tap, so taps

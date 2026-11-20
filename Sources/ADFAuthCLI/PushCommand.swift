@@ -2,7 +2,9 @@
 import ADFAtlassianAuth
 import Foundation
 
-/// `adf-auth push`: one-time QR handoff of a saved account to the phone.
+/// `adf-auth push`: one-time handoff of a saved account to the phone, either
+/// as a QR code the phone scans (the Mac listens) or, with `--to`, by
+/// connecting out to the phone (the phone listens).
 @MainActor
 enum PushCommand {
     static let spec = CommandSpec("push", options: [
@@ -10,6 +12,7 @@ enum PushCommand {
         OptionSpec("--host", value: "ipv4"),
         OptionSpec("--port", value: "n"),
         OptionSpec("--timeout", value: "seconds"),
+        OptionSpec("--to", value: "ipv4:port"),
     ])
 
     static let defaultTimeout = 120
@@ -29,6 +32,9 @@ enum PushCommand {
         if parsed.helpRequested {
             Terminal.out(Help.push)
             return ExitCode.success
+        }
+        if parsed.value("--to") != nil {
+            return try await ToPhone.run(parsed)
         }
         var options = Options()
         if let site = parsed.value("--site") { options.site = try Context.site(site, command: spec.name) }
@@ -69,15 +75,8 @@ enum PushCommand {
             Terminal.err(notLocalNetworkWarning)
         }
 
-        // The only secret read. May show a macOS keychain prompt after a rebuild.
-        guard let credential = try Context.keychain({ try store.load(site: site) }) else {
-            throw CLIError.failure("No saved account for \(site.host). Run: adf-auth login --site \(site.host)")
-        }
-        do {
-            try credential.validate()
-        } catch {
-            throw CLIError.failure("The saved account for \(site.host) is unusable: \(error.message) Run: adf-auth login --site \(site.host)")
-        }
+        // The only secret read.
+        let credential = try loadCredential(site, store: store)
 
         // The session ID and key are fixed now; the port is known after start().
         let draft = PairingLink.generate(host: host)
@@ -165,6 +164,80 @@ enum PushCommand {
                 return false
             }
         }
+    }
+
+    // MARK: --to (the phone listens)
+
+    /// `push --to <ipv4:port>`: connect out to ADFReader's
+    /// "Mac connects to phone" screen. For Macs that block incoming connections.
+    @MainActor
+    enum ToPhone {
+        static let defaultTimeout = Int(PhoneHandoffSender.defaultTimeout.components.seconds)
+        static let maxTimeout = 300
+
+        static func run(_ parsed: ParsedArguments) async throws -> Int32 {
+            let command = spec.name
+            if parsed.value("--host") != nil || parsed.value("--port") != nil {
+                throw CLIError.usage("--to replaces --host and --port: give the phone's address as --to <ipv4:port>.", command: command)
+            }
+            let address: PhoneHandoffAddress
+            do {
+                address = try PhoneHandoffAddress(parsing: parsed.value("--to") ?? "")
+            } catch {
+                throw CLIError.usage("--to: \(error.message)", command: command)
+            }
+            guard Terminal.stdinIsTerminal else {
+                throw CLIError.usage("stdin is not a terminal, so adf-auth can't prompt for the code shown on your phone. Run push --to in a terminal.", command: command)
+            }
+            let site = try parsed.value("--site").map { try Context.site($0, command: command) }
+            let timeout = try ArgumentParser.integer(parsed, "--timeout", in: 5...maxTimeout, default: defaultTimeout, command: command)
+
+            let store = Context.store()
+            let summary = try Context.savedSite(explicit: site, store: store, command: command)
+            let credential = try loadCredential(summary.site, store: store)
+
+            Terminal.out("Account:   \(summary.site.host) (\(summary.email))")
+            Terminal.out("Phone:     \(address)")
+            let pairingCode = try askForCode(command: command)
+            Terminal.out("Connecting to the phone…")
+            do {
+                try await PhoneHandoffSender.send(credential, to: address, code: pairingCode, timeout: .seconds(timeout))
+            } catch {
+                throw CLIError.failure(error.message)
+            }
+            Terminal.out("Sent \(summary.site.host) (\(summary.email)). Confirm on your phone: tap Add.")
+            return ExitCode.success
+        }
+
+        /// Prompts until the code parses: the only way to enter the code. It
+        /// is echoed (it is shown on the phone anyway) but stays out of `ps`
+        /// and the shell history.
+        static func askForCode(command: String) throws(CLIError) -> PhonePairingCode {
+            while true {
+                guard let line = Terminal.prompt("Code shown on your phone: ") else {
+                    throw .usage("no code given; type the code shown on your phone.", command: command)
+                }
+                do {
+                    return try PhonePairingCode(parsing: line)
+                } catch {
+                    Terminal.err(error.message)
+                }
+            }
+        }
+    }
+
+    /// Reads and validates the saved credential (the only secret read).
+    static func loadCredential(_ site: AtlassianSite, store: KeychainCredentialStore) throws(CLIError) -> AtlassianCredential {
+        // May show a macOS keychain prompt after a rebuild.
+        guard let credential = try Context.keychain({ try store.load(site: site) }) else {
+            throw .failure("No saved account for \(site.host). Run: adf-auth login --site \(site.host)")
+        }
+        do {
+            try credential.validate()
+        } catch {
+            throw .failure("The saved account for \(site.host) is unusable: \(error.message) Run: adf-auth login --site \(site.host)")
+        }
+        return credential
     }
 
     nonisolated static func makeEventHandler(promptLine: PromptLine) -> @Sendable (HandoffServer.Event) -> Void {

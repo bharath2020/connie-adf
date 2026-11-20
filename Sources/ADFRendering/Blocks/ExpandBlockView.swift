@@ -115,7 +115,8 @@ struct ExpandBlockView: View {
             theme: theme,
             customPreparers: model?.customRenderers.preparers
                 ?? customRenderers?.preparers
-                ?? []
+                ?? [],
+            inlineCardsAsSmartLinks: model?.inlineCardsAsSmartLinks ?? false
         )
         var blocks: [RenderBlock] = []
         for await chunk in preparer.prepareStream(document, chunkSize: 50) {

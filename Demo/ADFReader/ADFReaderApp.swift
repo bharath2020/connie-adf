@@ -48,6 +48,20 @@ import UIKit
 /// - `-rendererReset` removes that key first, so a UI test always starts on
 ///   SwiftUI regardless of what a previous run left behind. With both flags
 ///   the reset applies first, then `-textkit2`.
+/// - `-identifyRenderer` turns on the renderer menu's "Identify Renderer"
+///   switch for this launch (`ADFDocumentView(identifiesRenderer: true)`):
+///   every text block marks itself with the engine that actually drew it
+///   (`ADFTextEngine`: an orange fill and "SwiftUI" label, green
+///   "TextKit 2", blue "TextKit 1" for a TextKit 2 row whose links
+///   TextKit 1 lays out), so the text the
+///   TextKit 2 renderer leaves on SwiftUI shows as SwiftUI. The toolbar
+///   badge then shows the renderer's own report
+///   (`ADFDocumentModel.rendererReport`): the engine that drew the text on
+///   screen, and how many SwiftUI blocks are on screen beside TextKit 2
+///   rows. It seeds the persisted switch (`adf.rendererIdentity.enabled`)
+///   the way `-textkit2` seeds the renderer: written with an automation
+///   mark and removed on the next launch without the flag;
+///   `-rendererReset` clears it too.
 /// - `-rendererStats` prints one `RENDERER_STATS …` line (active renderer,
 ///   live/cumulative TextKit 2 row counters, coverage counts) right
 ///   after READY and again right after `SCROLL_METRICS` — the perf gate's
@@ -132,6 +146,39 @@ import UIKit
 ///   to Atlassian Accounts (`AccountsView`), for UI tests and demo
 ///   recordings. Ignored with `-fixture` (the space list, which owns the
 ///   gear button, is not shown then).
+/// - Smart links: by default every reader (opened by `-fixture`, from the
+///   space list or from a beam) gets one shared `MockSmartLinkResolver` —
+///   titles derived from the URL, no network — so bare Atlassian links and
+///   inline cards turn into titled links once their rows are on screen.
+///   About This Build shows the mock's calls, cancellations, lookups in
+///   flight, resolved and failed counts since launch. The fixture made for
+///   it is `-fixture smart-links`.
+///   - `-smartLinks off` passes no resolver: every link stays as authored
+///     and the library does no lookup work. `-smartLinks on` (or no flag)
+///     is the default.
+///   - `-smartLinkDelay <seconds>` (default 0.8, clamped to 0…3600): how
+///     long each mock lookup takes. It is a `Task.sleep`, so a lookup the
+///     library cancels (its row left the screen) ends at once.
+///   - `-smartLinkFailureRate <0…1>` (default 0.1, clamped): the share of
+///     URLs whose lookup throws (`.unauthorized` or `.notFound`, about half
+///     each), picked by a stable hash of the URL — the same links fail on
+///     every launch and in every document.
+///   - `-smartLinkResolution <whileScrolling|afterScrolling|afterScrollingWithNearby>`:
+///     when links are looked up (`ADFSmartLinkResolution`, the renderer
+///     menu's "Smart Link Resolution" section): as they come on screen,
+///     also mid-scroll (the default); only once scrolling has stopped; or
+///     once it has stopped, plus small batches of the off-screen links
+///     nearest the screen. It seeds the persisted menu choice the way
+///     `-textkit2` seeds the renderer: written with an automation mark and
+///     removed on the next launch without the flag, so a manual launch
+///     after a test run starts on While Scrolling. `-rendererReset`
+///     resets it too. An unknown name is ignored.
+///   - `-smartLinkProbe` (UI tests only) shows `SmartLinkProbe`: one line,
+///     identifier `smartlink-probe`, with the document's smart-link
+///     counters (including the resolution mode's scroll and nearby
+///     counters), the mock's, the text-leaf body evaluations and the
+///     TextKit 2 conversions, layouts and live rows, polled every 250 ms —
+///     one consistent read for `SmartLinkUITests`.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -155,6 +202,21 @@ struct LaunchOptions: Sendable {
     var interactionProbe = false
     var captureGeometryHook = false
     var openAccounts = false
+    /// `-smartLinks off` turns the shared mock resolver off (see
+    /// `MockSmartLinkResolver.shared`).
+    var smartLinksEnabled = true
+    /// `-smartLinkDelay <seconds>`: each mock lookup's duration.
+    var smartLinkDelay = 0.8
+    /// `-smartLinkFailureRate <0…1>`: the share of URLs whose lookup fails.
+    var smartLinkFailureRate = 0.1
+    /// `-smartLinkProbe`: the reader shows `SmartLinkProbe` (UI tests only).
+    var smartLinkProbe = false
+    /// `-smartLinkResolution <name>`: an `ADFSmartLinkResolution` raw value
+    /// (`SmartLinkResolutionPreference` validates and applies it).
+    var smartLinkResolution: String?
+    /// `-identifyRenderer`: the renderer
+    /// identifies itself (`RendererIdentityPreference` applies it).
+    var identifyRenderer = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -183,6 +245,8 @@ struct LaunchOptions: Sendable {
                 textKit2 = true
             case "-rendererReset":
                 rendererReset = true
+            case "-identifyRenderer":
+                identifyRenderer = true
             case "-rendererStats":
                 rendererStats = true
             case "-switchDuringLoad":
@@ -200,6 +264,24 @@ struct LaunchOptions: Sendable {
                 captureGeometryHook = true
             case "-openAccounts":
                 openAccounts = true
+            case "-smartLinks" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                smartLinksEnabled = arguments[index].lowercased() != "off"
+            case "-smartLinkDelay" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                if let seconds = Double(arguments[index]), seconds.isFinite {
+                    smartLinkDelay = min(max(seconds, 0), 3_600)
+                }
+            case "-smartLinkProbe":
+                smartLinkProbe = true
+            case "-smartLinkResolution" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                smartLinkResolution = arguments[index]
+            case "-smartLinkFailureRate" where arguments.index(after: index) < arguments.endIndex:
+                index = arguments.index(after: index)
+                if let rate = Double(arguments[index]), rate.isFinite {
+                    smartLinkFailureRate = min(max(rate, 0), 1)
+                }
             default:
                 break
             }
@@ -218,6 +300,8 @@ struct ADFReaderApp: App {
         // Before the scene builds: `ReaderView` reads the renderer key through
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)
+        SmartLinkResolutionPreference.apply(options)
+        RendererIdentityPreference.apply(options)
         RebuildControl.picksLeft = options.rebuildControlPicks ?? 0
         RebuildControl.configured = options.rebuildControlPicks != nil
         InteractionProbe.enabled = options.interactionProbe

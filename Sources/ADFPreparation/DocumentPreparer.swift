@@ -17,10 +17,19 @@ public struct DocumentPreparer: Sendable {
     /// load, expand bodies, and search indexing — or a claimed node inside an
     /// expand renders differently from how it was indexed.
     public init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = []) {
+        self.init(theme: theme, customPreparers: customPreparers, inlineCardsAsSmartLinks: false)
+    }
+
+    /// `inlineCardsAsSmartLinks`: qualifying inline cards become smart-link
+    /// runs showing their host (`InlineComposer.inlineCardsAsSmartLinks`).
+    /// `ADFDocumentModel` sets it when a resolver is installed as a document
+    /// loads, and every preparer and indexer for that document uses the same
+    /// value; public callers keep the chip.
+    package init(theme: ADFTheme, customPreparers: [any ADFCustomBlockPreparer] = [], inlineCardsAsSmartLinks: Bool) {
         self.theme = theme
         self.engine = BlockPreparer(
             theme: theme,
-            composer: InlineComposer(theme: theme),
+            composer: InlineComposer(theme: theme, inlineCardsAsSmartLinks: inlineCardsAsSmartLinks),
             customPreparers: customPreparers
         )
     }
@@ -87,24 +96,28 @@ struct BlockPreparer: Sendable {
             return children.flatMap(blocks(for:))
 
         case .paragraph(let content, let marks):
+            let composed = composer.composeOwner(content)
             return [RenderBlock(
                 id: node.id,
                 kind: .richText(
-                    segments: composer.compose(content),
+                    segments: composed.segments,
                     style: textStyle(font: theme.body, isHeading: false, level: nil, marks: marks)
                 ),
-                breakout: blockBreakout(of: marks)
+                breakout: blockBreakout(of: marks),
+                smartLinkKeys: composed.smartLinkKeys
             )]
 
         case .heading(let level, let content, let marks):
             let font = theme.headingFont(level)
+            let composed = composer.composeOwner(content, baseFont: font, baseFontSpec: theme.headingFontSpec(level))
             return [RenderBlock(
                 id: node.id,
                 kind: .richText(
-                    segments: composer.compose(content, baseFont: font, baseFontSpec: theme.headingFontSpec(level)),
+                    segments: composed.segments,
                     style: textStyle(font: font, isHeading: true, level: level, marks: marks)
                 ),
-                breakout: blockBreakout(of: marks)
+                breakout: blockBreakout(of: marks),
+                smartLinkKeys: composed.smartLinkKeys
             )]
 
         case .blockquote(let children):
@@ -228,9 +241,13 @@ struct BlockPreparer: Sendable {
     }
 
     private func richTextBlock(for node: ADFNode, inline: [ADFNode]) -> [RenderBlock] {
-        let segments = composer.compose(inline)
-        guard !segments.isEmpty else { return [] }
-        return [RenderBlock(id: node.id, kind: .richText(segments: segments, style: bodyStyle))]
+        let composed = composer.composeOwner(inline)
+        guard !composed.segments.isEmpty else { return [] }
+        return [RenderBlock(
+            id: node.id,
+            kind: .richText(segments: composed.segments, style: bodyStyle),
+            smartLinkKeys: composed.smartLinkKeys
+        )]
     }
 
     private func textStyle(font: Font, isHeading: Bool, level: Int?, marks: [ADFMark]) -> TextBlockStyle {
@@ -264,12 +281,15 @@ struct BlockPreparer: Sendable {
     ) -> [RenderBlock] {
         var mediaNode: ADFNode?
         var caption: [InlineSegment]?
+        var captionSmartLinkKeys: [SmartLinkKey] = []
         for child in children {
             switch child.kind {
             case .media where mediaNode == nil:
                 mediaNode = child
             case .caption(let inline):
-                caption = composer.compose(inline)
+                let composed = composer.composeOwner(inline)
+                caption = composed.segments
+                captionSmartLinkKeys = composed.smartLinkKeys
             default:
                 break
             }
@@ -297,7 +317,8 @@ struct BlockPreparer: Sendable {
             pixelWidth: pixelWidth,
             caption: caption,
             borderHex: borderHex(of: marks),
-            linkHref: linkHref(of: marks)
+            linkHref: linkHref(of: marks),
+            captionSmartLinkKeys: captionSmartLinkKeys
         )
         return [RenderBlock(id: node.id, kind: .media(prepared))]
     }

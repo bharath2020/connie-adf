@@ -12,6 +12,8 @@ public struct ADFDocumentView: View {
     private let taskStates: [String: Bool]
     private let mentionContent: (@MainActor (String) -> AnyView)?
     private let textRenderer: ADFTextRenderer
+    private let identifiesRenderer: Bool
+    private let resolvesSmartLinks: Bool
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -40,18 +42,55 @@ public struct ADFDocumentView: View {
     ///     the text of top-level lists and the code of top-level code
     ///     blocks (see `ADFTextRenderer`); `.textKit2` is opt-in and falls
     ///     back to SwiftUI per text block for content it does not cover.
+    ///   - smartLinkResolver: Looks up the titles of smart links (bare
+    ///     `*.atlassian.net` links and inline cards) as they come on screen
+    ///     (see `ADFSmartLinkResolver`). `nil`: every link stays as authored
+    ///     (inline cards keep their chips), text leaves draw and speak it as
+    ///     a leaf without smart links does, and no lookup work is done.
+    ///     Installing or removing one rebuilds the text leaves once. Handed
+    ///     to the model's per-document coordinator here, which is not
+    ///     observable, so passing it invalidates nothing. Inline cards
+    ///     become smart links only in documents whose blocks are prepared
+    ///     after a resolver is installed (build the view before calling
+    ///     `load`, or in the same main-actor turn); in a document loaded
+    ///     earlier they keep their chips while bare links still resolve.
+    ///   - smartLinkResolution: When smart links are looked up (see
+    ///     `ADFSmartLinkResolution`): as they come on screen, also while
+    ///     scrolling (the default); only once scrolling has stopped; or
+    ///     once scrolling has stopped plus, at rest, small batches of the
+    ///     off-screen links nearest the screen. Handed to the same
+    ///     coordinator, so changing it invalidates no row, and it can change
+    ///     at any time.
+    ///   - identifiesRenderer: Makes the renderer identify itself: every
+    ///     text leaf marks itself with the engine that actually drew it
+    ///     (`ADFTextEngine`): a fill in the engine's colour behind its text,
+    ///     the engine's name on a label over its top trailing corner (an
+    ///     overlay, so layout does not change) and as its accessibility
+    ///     value. Under `.textKit2`, text the TextKit 2 renderer leaves on
+    ///     SwiftUI is marked SwiftUI. The leaves on screen are reported in
+    ///     `ADFDocumentModel.rendererReport`. Off (the default) adds nothing
+    ///     to any leaf. Turning it on or off rebuilds the text leaves once.
     public init(model: ADFDocumentModel,
                 mediaProvider: any ADFMediaProvider,
                 interactionHandler: (@MainActor (ADFInteraction) -> Void)? = nil,
                 taskStates: [String: Bool] = [:],
                 mentionContent: (@MainActor (String) -> AnyView)? = nil,
-                textRenderer: ADFTextRenderer = .swiftUI) {
+                textRenderer: ADFTextRenderer = .swiftUI,
+                smartLinkResolver: (any ADFSmartLinkResolver)? = nil,
+                smartLinkResolution: ADFSmartLinkResolution = .whileScrolling,
+                identifiesRenderer: Bool = false) {
         self.model = model
         self.mediaProvider = mediaProvider
         self.interactionHandler = interactionHandler
         self.taskStates = taskStates
         self.mentionContent = mentionContent
         self.textRenderer = textRenderer
+        model.smartLinks.resolver = smartLinkResolver
+        model.smartLinks.resolution = smartLinkResolution
+        self.resolvesSmartLinks = smartLinkResolver != nil
+        self.identifiesRenderer = identifiesRenderer
+        // Not observable: the report follows from a task.
+        model.rendererIdentity.isIdentifying = identifiesRenderer
     }
 
     /// TOC jumps use `ScrollViewReader.scrollTo` rather than writing the
@@ -79,6 +118,11 @@ public struct ADFDocumentView: View {
                     .frame(maxWidth: .infinity)
             }
             .scrollPosition(id: anchorBinding, anchor: .top)
+            // The scroll phase, for smart-link resolution modes that wait
+            // for the document to come to rest (design §8.2). Writes the
+            // non-observable coordinator only: a phase change invalidates
+            // no row and not this view.
+            .modifier(SmartLinkScrollPhaseFeed(coordinator: model.smartLinks))
             // The *sole* re-anchor authority: re-assert the reader's row by
             // identity whenever the content column changes width (rotation, iPad
             // Split View drag). `scrollPosition(id:)` above is tracking-only (its
@@ -142,6 +186,8 @@ public struct ADFDocumentView: View {
         .environment(\.adfTaskStates, taskStates)
         .environment(\.adfMentionContent, mentionContent)
         .environment(\.adfDocumentSearch, model.search)
+        .environment(\.adfSmartLinks, resolvesSmartLinks ? model.smartLinks : nil)
+        .environment(\.adfRendererIdentity, identifiesRenderer ? model.rendererIdentity : nil)
         .overlay { statusOverlay }
     }
 
@@ -496,6 +542,30 @@ extension TextKit2WidthBound {
     static func rowSeed(container: CGFloat, breakout: BlockBreakout?, margin: CGFloat) -> TextKit2WidthBound {
         guard container > 0 else { return .pending }
         return .atLeast(rowContentWidth(container: container, breakout: breakout, margin: margin))
+    }
+}
+
+/// Feeds the document scroll view's phase to the smart-link coordinator
+/// (`SmartLinkCoordinator.scrollPhaseChanged`): scrolling is any phase but
+/// idle — a drag, a fling's deceleration, an animated jump. The
+/// `#available` branch erases one view, the document's scroll view, never a
+/// lazy row (see `ADFDocumentView.rows`). Installed in every mode and with
+/// or without a resolver, so the view's structure never depends on either;
+/// the callback is a stored Bool and offset on a non-observable object and
+/// returns at once without a resolver. Before iOS 18 / macOS 15 there is no
+/// phase: the coordinator stays at rest and every mode behaves as
+/// `.whileScrolling`.
+private struct SmartLinkScrollPhaseFeed: ViewModifier {
+    let coordinator: SmartLinkCoordinator
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content.onScrollPhaseChange { [coordinator] _, phase, context in
+                coordinator.scrollPhaseChanged(scrolling: phase != .idle, offset: context.geometry.contentOffset.y)
+            }
+        } else {
+            content
+        }
     }
 }
 

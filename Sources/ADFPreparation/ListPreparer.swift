@@ -46,12 +46,14 @@ extension BlockPreparer {
             for item in items {
                 switch item.kind {
                 case .taskItem(let state, let inline):
+                    let composed = composer.composeOwner(inline)
                     rows.append(PreparedListRow(
                         id: item.id,
                         depth: depth,
                         marker: .task(id: item.id, done: state == .done),
-                        segments: composer.compose(inline),
-                        trailingBlocks: []
+                        segments: composed.segments,
+                        trailingBlocks: [],
+                        smartLinkKeys: composed.smartLinkKeys
                     ))
                 case .taskList:
                     // Schema nests task lists as siblings of task items.
@@ -67,12 +69,14 @@ extension BlockPreparer {
                 guard case .decisionItem(let inline) = item.kind else {
                     return itemRows(item, marker: .decision, depth: depth, nestedLevels: levels)
                 }
+                let composed = composer.composeOwner(inline)
                 return [PreparedListRow(
                     id: item.id,
                     depth: depth,
                     marker: .decision,
-                    segments: composer.compose(inline),
-                    trailingBlocks: []
+                    segments: composed.segments,
+                    trailingBlocks: [],
+                    smartLinkKeys: composed.smartLinkKeys
                 )]
             }
 
@@ -90,6 +94,7 @@ extension BlockPreparer {
     private func itemRows(_ item: ADFNode, marker: ListMarker, depth: Int, nestedLevels: ListLevels) -> [PreparedListRow] {
         var rows: [PreparedListRow] = []
         var segments: [InlineSegment] = []
+        var smartLinkKeys: [SmartLinkKey] = []
         var trailing: [RenderBlock] = []
         var emittedMarkerRow = false
         var continuationCount = 0
@@ -104,7 +109,8 @@ extension BlockPreparer {
                     depth: depth,
                     marker: marker,
                     segments: segments,
-                    trailingBlocks: trailing
+                    trailingBlocks: trailing,
+                    smartLinkKeys: smartLinkKeys
                 ))
                 emittedMarkerRow = true
             } else if !segments.isEmpty || !trailing.isEmpty {
@@ -114,10 +120,12 @@ extension BlockPreparer {
                     depth: depth,
                     marker: .continuation,
                     segments: segments,
-                    trailingBlocks: trailing
+                    trailingBlocks: trailing,
+                    smartLinkKeys: smartLinkKeys
                 ))
             }
             segments = []
+            smartLinkKeys = []
             trailing = []
         }
 
@@ -125,7 +133,9 @@ extension BlockPreparer {
         for child in item.children {
             switch child.kind {
             case .paragraph(let content, _) where isFirstChild:
-                segments = composer.compose(content)
+                let composed = composer.composeOwner(content)
+                segments = composed.segments
+                smartLinkKeys = composed.smartLinkKeys
             case .bulletList, .orderedList, .taskList, .decisionList:
                 flushRow()
                 rows.append(contentsOf: listRows(for: child, depth: depth + 1, levels: nestedLevels))

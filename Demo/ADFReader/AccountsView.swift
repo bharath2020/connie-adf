@@ -6,6 +6,8 @@ enum AccountsDestination: Hashable {
     /// The manual form; `prefill` replaces the token of an existing account.
     case addManually(prefill: AccountPrefill?)
     case scanFromMac
+    /// The phone listens and the Mac connects out (`adf-auth push --to`).
+    case macConnectsToPhone
 }
 
 /// Site and email carried into the manual form by "Replace Token".
@@ -15,7 +17,7 @@ struct AccountPrefill: Hashable {
 }
 
 /// Settings → Atlassian Accounts: the stored accounts (non-secret summaries
-/// only), an expiry banner, removal, and the two ways to add one.
+/// only), an expiry banner, removal, and the ways to add one.
 struct AccountsView: View {
     @Environment(AccountStore.self) private var accounts
     @State private var destination: AccountsDestination?
@@ -58,6 +60,12 @@ struct AccountsView: View {
                     Label("Scan from Mac", systemImage: "qrcode.viewfinder")
                 }
                 .accessibilityIdentifier("accounts-scan-mac")
+                Button {
+                    destination = .macConnectsToPhone
+                } label: {
+                    Label("Mac connects to phone", systemImage: "laptopcomputer.and.iphone")
+                }
+                .accessibilityIdentifier("accounts-mac-connects")
             }
         }
         .navigationTitle("Atlassian Accounts")
@@ -69,6 +77,8 @@ struct AccountsView: View {
                 AddAccountView(prefill: prefill)
             case .scanFromMac:
                 PairScanView()
+            case .macConnectsToPhone:
+                PhoneListenView()
             }
         }
         .confirmationDialog(
@@ -100,6 +110,7 @@ struct AccountsView: View {
             Connect a Confluence site with a read-only API token.
             Add Manually: create the token at Atlassian, then paste it here.
             Scan from Mac: run adf-auth push on your Mac and scan its code.
+            Mac connects to phone: for a Mac that blocks incoming connections; run adf-auth push --to on the Mac.
             """)
         }
         .accessibilityIdentifier("accounts-empty")

@@ -376,9 +376,9 @@ REPO_ROOT="$(cd "$SCRIPTS/.." && pwd)"
 run fx-pass "$BASH" "$FIXCHECK"
 expect_eq "fixtures-check passes on this checkout" "$STATUS" "0"
 expect_has "… the generator regenerates and matches every generated fixture" "$WORK/fx-pass.out" \
-    "fixtures-check: generator: check: all 17 generated fixtures match Fixtures/ byte for byte"
+    "fixtures-check: generator: check: all 18 generated fixtures match Fixtures/ byte for byte"
 expect_has "… and every manifest digest matches" "$WORK/fx-pass.out" \
-    "fixtures-check: manifest: all 20 digests in Fixtures/SHA256SUMS match"
+    "fixtures-check: manifest: all 21 digests in Fixtures/SHA256SUMS match"
 # fx_copy <name>: a tree with this checkout's generator and fixtures.
 fx_copy() {
     mkdir -p "$WORK/$1/Tools"

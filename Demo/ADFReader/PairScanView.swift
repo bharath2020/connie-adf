@@ -213,38 +213,13 @@ struct PairScanView: View {
     }
 
     private func confirmation(_ credential: AtlassianCredential, replacingEmail: String?) -> some View {
-        VStack(spacing: 12) {
-            Text(verbatim: "Add \(credential.site.host) as \(credential.email)?")
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .accessibilityIdentifier("pair-confirm-title")
-            if let expiresAt = credential.expiresAt {
-                Text(verbatim: "Token expires \(expiresAt.formatted(date: .abbreviated, time: .omitted)).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            if let replacingEmail {
-                Label {
-                    Text(verbatim: "This replaces the account for \(credential.site.host) signed in as \(replacingEmail).")
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .accessibilityHidden(true)
-                }
-                .font(.callout)
-                .foregroundStyle(.orange)
-                .multilineTextAlignment(.center)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("pair-confirm-replace-warning")
-            }
-            HStack(spacing: 12) {
-                Button("Cancel", role: .cancel, action: cancelConfirmation)
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("pair-confirm-cancel")
-                Button("Add") { add(credential) }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("pair-confirm-add")
-            }
-        }
+        CredentialConfirmation(
+            credential: credential,
+            replacingEmail: replacingEmail,
+            identifierPrefix: "pair",
+            onCancel: cancelConfirmation,
+            onAdd: { add(credential) }
+        )
     }
 
     // MARK: - Payloads
@@ -295,12 +270,7 @@ struct PairScanView: View {
             // Served once: the Mac's listener has stopped.
             spentDigests.insert(digest)
             guard Task.isCancelled == false else { return }
-            accounts.reload()
-            let existing = accounts.summary(for: credential.site)
-            let replacingEmail = existing.flatMap {
-                $0.email.caseInsensitiveCompare(credential.email) == .orderedSame ? nil : $0.email
-            }
-            phase = .confirming(credential, replacingEmail: replacingEmail)
+            phase = .confirming(credential, replacingEmail: accounts.replacedEmail(by: credential))
         } catch {
             if error == .alreadyUsedOrExpired {
                 spentDigests.insert(digest)

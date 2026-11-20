@@ -67,9 +67,10 @@ struct ListRowView: View {
                 .frame(width: markerWidth, alignment: .trailing)
             VStack(alignment: .leading, spacing: theme.spacing * 0.5) {
                 if !row.segments.isEmpty {
-                    TextEngineLeaf(segments: row.segments, style: Self.leaderStyle(theme: theme), ownerID: row.id,
-                                   allowsTextKit2: keepsRenderer && TextKit2Scope.listTextFits(widthBound, inset: textColumnInset)) {
-                        SegmentedTextView(segments: row.segments, ownerID: row.id)
+                    SmartLinkTextLeaf(segments: row.segments, smartLinkKeys: row.smartLinkKeys,
+                                      style: Self.leaderStyle(theme: theme), ownerID: row.id,
+                                      allowsTextKit2: keepsRenderer && TextKit2Scope.listTextFits(widthBound, inset: textColumnInset)) {
+                        SegmentedTextView(segments: row.segments, ownerID: row.id, smartLinkKeys: row.smartLinkKeys)
                             .textSelection(.enabled)
                     }
                 }

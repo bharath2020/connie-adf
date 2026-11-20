@@ -36,10 +36,12 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: {}
         NSCameraUsageDescription: Scans ADF Beam QR codes to import documents, and the pairing code adf-auth shows on your Mac to add your Atlassian account.
-        # Scan from Mac fetches the sealed credential from `adf-auth push`
-        # over plain HTTP on the LAN (one GET; the payload is ChaChaPoly-sealed
-        # with a key that only travels in the QR fragment).
-        NSLocalNetworkUsageDescription: ADFReader fetches your Atlassian sign-in from the adf-auth command on your Mac over your local network, once, when you scan its pairing code.
+        # Both Mac handoffs use the LAN: Scan from Mac fetches the sealed
+        # credential from `adf-auth push` over plain HTTP (one GET; the payload
+        # is ChaChaPoly-sealed with a key that only travels in the QR
+        # fragment), and "Mac connects to phone" listens for
+        # `adf-auth push --to` (X25519 + code, one-shot, only while open).
+        NSLocalNetworkUsageDescription: ADFReader uses your local network only to receive your Atlassian sign-in from the adf-auth command on your Mac, once — when you scan its pairing code, or while the "Mac connects to phone" screen waits for your Mac to connect.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UISupportedInterfaceOrientations:
@@ -71,7 +73,7 @@ targets:
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "21"
+        CURRENT_PROJECT_VERSION: "23"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
         # The app defines no App Intents; skipping extraction silences the

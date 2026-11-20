@@ -37,3 +37,8 @@ dfe7a40ac7662590c4fdd056bf39a91d4f6d71d83df71d4b1faab5d5d692f3ef  captions-parit
 69d5cbe3444171189633fc3658e5a06375717edf013985d1c80db3d48c4f3fb8  containers-dense.json
 38cd67a65adc56b9e27354747836ac9686b315748d8b8bdeff642d2bc6ec77db  containers-expand.json
 528792d1aa4160b174cfe22f459962b5a4d6ed8b469ec614e5ca41c1c5a615be  containers-parity.json
+# main 33d549f
+# main's smart-links fixture (9b03ae4, Tools/make-fixtures.swift fixture 13),
+# listed when PR 4 merged main 33d549f; `swift Tools/make-fixtures.swift
+# --check` regenerates it byte for byte.
+66a1514bf3ca9eec58bc2dceb7e3dd585b26d9bc639a0c430c1f42888a5ef904  smart-links.json

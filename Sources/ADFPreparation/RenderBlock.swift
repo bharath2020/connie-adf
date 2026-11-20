@@ -16,11 +16,22 @@ public struct RenderBlock: Identifiable, Hashable, Sendable {
     /// Carried on the block itself so every kind that can legally hold the
     /// mark (codeBlock, layoutSection, expand, …) widens uniformly.
     public let breakout: BlockBreakout?
+    /// The smart links in this block's own inline text (a paragraph's or a
+    /// heading's), de-duplicated in document order: empty for every other
+    /// kind (a container's children, list rows and captions carry their
+    /// own) and for nearly every paragraph, so a text leaf's smart-link gate
+    /// is one `isEmpty` check. Package-internal (`SmartLinkKey`).
+    package let smartLinkKeys: [SmartLinkKey]
 
     public init(id: String, kind: Kind, breakout: BlockBreakout? = nil) {
+        self.init(id: id, kind: kind, breakout: breakout, smartLinkKeys: [])
+    }
+
+    package init(id: String, kind: Kind, breakout: BlockBreakout? = nil, smartLinkKeys: [SmartLinkKey]) {
         self.id = id
         self.kind = kind
         self.breakout = breakout
+        self.smartLinkKeys = smartLinkKeys
     }
 
     public indirect enum Kind: Hashable, Sendable {
@@ -93,13 +104,24 @@ public struct PreparedListRow: Sendable, Hashable {
     public let marker: ListMarker
     public let segments: [InlineSegment]
     public let trailingBlocks: [RenderBlock]
+    /// The smart links in the row's leader (`segments`), de-duplicated in
+    /// document order (see `RenderBlock.smartLinkKeys`).
+    package let smartLinkKeys: [SmartLinkKey]
 
     public init(id: String, depth: Int, marker: ListMarker, segments: [InlineSegment], trailingBlocks: [RenderBlock]) {
+        self.init(id: id, depth: depth, marker: marker, segments: segments, trailingBlocks: trailingBlocks, smartLinkKeys: [])
+    }
+
+    package init(
+        id: String, depth: Int, marker: ListMarker, segments: [InlineSegment], trailingBlocks: [RenderBlock],
+        smartLinkKeys: [SmartLinkKey]
+    ) {
         self.id = id
         self.depth = depth
         self.marker = marker
         self.segments = segments
         self.trailingBlocks = trailingBlocks
+        self.smartLinkKeys = smartLinkKeys
     }
 }
 
@@ -181,6 +203,9 @@ public struct PreparedMedia: Sendable, Hashable {
     public let caption: [InlineSegment]?
     public let borderHex: String?
     public let linkHref: String?
+    /// The smart links in `caption`, de-duplicated in document order (see
+    /// `RenderBlock.smartLinkKeys`).
+    package let captionSmartLinkKeys: [SmartLinkKey]
 
     public init(
         id: String,
@@ -192,6 +217,23 @@ public struct PreparedMedia: Sendable, Hashable {
         borderHex: String?,
         linkHref: String?
     ) {
+        self.init(
+            id: id, attrs: attrs, layout: layout, widthFraction: widthFraction, pixelWidth: pixelWidth,
+            caption: caption, borderHex: borderHex, linkHref: linkHref, captionSmartLinkKeys: []
+        )
+    }
+
+    package init(
+        id: String,
+        attrs: MediaAttrs,
+        layout: ADFMediaLayout,
+        widthFraction: Double?,
+        pixelWidth: Double?,
+        caption: [InlineSegment]?,
+        borderHex: String?,
+        linkHref: String?,
+        captionSmartLinkKeys: [SmartLinkKey]
+    ) {
         self.id = id
         self.attrs = attrs
         self.layout = layout
@@ -200,6 +242,7 @@ public struct PreparedMedia: Sendable, Hashable {
         self.caption = caption
         self.borderHex = borderHex
         self.linkHref = linkHref
+        self.captionSmartLinkKeys = captionSmartLinkKeys
     }
 }
 

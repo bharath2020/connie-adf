@@ -118,6 +118,30 @@
 //                       and short (`// CT-SEQ-1` … `// CT-SEQ-8`), to
 //                       read how many near-limit canvases are live at
 //                       once. 12 top-level nodes.
+//   smart-links.json    the smart-links demo and UI-test fixture
+//                       (`-fixture smart-links`). An intro screen
+//                       (`SL-INTRO`) with five Atlassian smart links on
+//                       screen at launch (four bare links, one inline
+//                       card) beside a labeled link that must stay
+//                       plain; a two-screen plain-text gap (`SL-GAP`);
+//                       then 52 sections `SL-S01`…`SL-S52` mixing bare
+//                       links in paragraphs, headings, bullet, ordered,
+//                       task and decision lists, small tables, panels,
+//                       expands and blockquotes, and inline cards; a
+//                       links-in-cells table (`SL-TABLE`); a negatives
+//                       section (`SL-NEG`: labeled links, non-Atlassian
+//                       and lookalike hosts, the apex host, a wrong
+//                       scheme, a code-marked link, a non-Atlassian
+//                       inline card, a block card, a URL in a code
+//                       block); bare-by-normalisation cases and the same
+//                       page twice in one paragraph (`SL-EDGE`); and a
+//                       last row (`SL-LAST`) whose URL appears nowhere
+//                       else, so a lookup for it before the reader
+//                       scrolls to the end means a never-shown row
+//                       resolved. Popular pages repeat throughout (one
+//                       lookup per URL). Confluence page, blog and Jira
+//                       (`/browse/KEY-n`) URLs on two tenants. The
+//                       generator prints its emission tally.
 //   containers-parity.json  hand-authored (no RNG, except the seeded code
 //                       text) compact container fixture for the TextKit 2
 //                       container stage: panels in every palette and
@@ -2717,6 +2741,582 @@ func makeCodeTall() -> CodeFixture {
     return CodeFixture(document: doc(blocks), records: records)
 }
 
+// MARK: - Fixture 13: smart-links.json
+
+/// What the smart-links generator emitted, counted at emission time
+/// (independently of the preparer's qualification); printed by the emit
+/// step. A *positive* is a run the smart-links design (§1) upgrades: a
+/// `link` mark whose text equals its href (bare) or an `inlineCard`, with
+/// an `http(s)` URL on a `*.atlassian.net` host. `edgeBareLinks` are bare
+/// only after §1's normalisation (no scheme or a trailing slash in the
+/// text, an upper-case host, a trailing-dot host).
+struct SmartLinksTally {
+    var bareLinks = 0
+    var edgeBareLinks = 0
+    var inlineCards = 0
+    /// Positives in the intro blocks (`SL-INTRO` and the five link lines).
+    var firstScreen = 0
+    /// Canonical URL (lower-case scheme and host, no fragment) → positives.
+    var keys: [String: Int] = [:]
+    /// Top-level block kind holding each positive → positives.
+    var containers: [String: Int] = [:]
+    /// Negative kind → runs that must stay plain.
+    var negatives: [String: Int] = [:]
+
+    var positives: Int { bareLinks + edgeBareLinks + inlineCards }
+}
+
+struct SmartLinkTarget {
+    let url: String
+    /// `page`, `blog`, `issue` or `space`.
+    let kind: String
+}
+
+enum SmartLinksSpec {
+    static let seed: UInt64 = 0x5EED_5111
+    static let sectionCount = 52
+    static let gapParagraphs = 10
+    static let spaces = ["ENG", "MOBILE", "DESIGN", "OPS", "PRODUCT", "DATA", "SEC", "PEOPLE"]
+    /// Linked from many places: one lookup each however often they appear.
+    static let popularTitles = [
+        "Q3 Roadmap", "Engineering Onboarding", "Architecture Overview",
+        "Release Checklist", "Incident Runbook", "Team Directory",
+    ]
+    static let pageTitles = [
+        "API Design Guidelines", "Mobile Release Process", "Design System Tokens",
+        "Accessibility Checklist", "Performance Budget", "Code Review Guidelines",
+        "On-call Handbook", "Postmortem Template", "Data Retention Policy",
+        "Security Review Process", "Feature Flag Playbook", "Localization Guide",
+        "Analytics Event Catalog", "Customer Feedback Summary", "Quarterly Planning Notes",
+        "Hiring Loop Guide", "Interview Rubric", "Offsite Agenda",
+        "Retro Notes Sprint 42", "Search Ranking Experiments", "Offline Sync Design",
+        "Push Notification Spec", "Payments Integration", "Dark Mode Audit",
+        "Crash Triage Guide", "Build Pipeline", "Test Strategy",
+        "Dependency Upgrade Plan", "Swift Concurrency Migration", "TextKit 2 Adoption",
+        "Table Rendering Notes", "Media Caching Design", "Deep Link Routing",
+        "Error Handling Conventions", "Logging Standards", "Privacy Manifest Checklist",
+        "App Store Submission Steps", "Beta Feedback Triage", "Support Escalation Path",
+        "SLA Definitions", "Capacity Planning 2027", "Vendor Evaluation",
+        "Budget Review FY27", "Brand Guidelines", "Icon Library",
+        "Writing Style Guide", "Glossary", "Meeting Notes Index",
+        "Decision Log", "Risk Register", "Launch Plan",
+        "Pricing FAQ", "Partner Onboarding", "Content Migration Plan",
+        "Search Index Rebuild", "Rendering Benchmarks", "Smart Links Design",
+        "Lazy Rows Explained",
+    ]
+    static let blogTitles = [
+        "Release Notes 2.4", "Release Notes 2.5", "Why We Moved to TextKit 2",
+        "Q3 Engineering Highlights", "Welcome New Starters", "Hack Week Recap",
+        "Design Crit Takeaways", "Holiday Freeze Schedule",
+    ]
+    static let issueProjects = ["MOB", "WEB", "OPS", "ABC"]
+    static let issueCount = 24
+    static let topics = [
+        "Release planning", "Onboarding", "Incident review", "Design review",
+        "Performance", "Accessibility", "Search", "Offline sync", "Payments",
+        "Localization", "Security", "Analytics", "Hiring", "Support",
+        "Data platform", "Mobile releases", "Build tooling", "Content migration",
+        "Partner integrations", "Quarterly goals",
+    ]
+    static let fillerSentences = [
+        "The team reviewed the proposal on Tuesday and agreed to revisit the open questions next sprint.",
+        "Most of the remaining work is polish: copy changes, empty states and a few accessibility labels.",
+        "Numbers in this section are rounded and refreshed every Monday morning.",
+        "If something here looks out of date, leave a comment rather than editing the page directly.",
+        "The rollout is staged by region, starting with a small internal cohort.",
+        "We keep the decision history on the page so new readers can see why things changed.",
+        "Owners rotate each quarter; the current owner is listed at the top of the linked page.",
+        "Nothing in this section blocks the release, but each item has a target date.",
+        "Feedback from the beta group was mostly positive, with two recurring requests.",
+        "Treat the linked pages as the source of truth; this summary may lag behind them.",
+        "Questions about scope go to the planning channel, questions about dates go to the program lead.",
+        "The checklist is short on purpose: anything optional lives in the appendix.",
+        "Older revisions are archived, not deleted, and stay searchable.",
+        "Each milestone has an owner, a date and a short definition of done.",
+    ]
+    /// (before, after) around one link.
+    static let linkSentences = [
+        ("See ", " for the full write-up."),
+        ("The latest status lives on ", ", updated weekly."),
+        ("Background reading: ", "."),
+        ("Decisions so far are recorded in ", "."),
+        ("The open questions moved to ", ", which the owners keep current."),
+        ("Start with ", " if you are new to this area."),
+    ]
+    static let labels = ["the roadmap", "this page", "the runbook", "design notes", "the release checklist", "the owners' page"]
+    static let nonAtlassian = [
+        "https://example.com/blog/rendering-notes",
+        "https://www.example.org/specs/adf",
+        "https://docs.example.net/guide/getting-started",
+    ]
+    /// (url, negative kind): hosts and schemes §1 must reject.
+    static let lookalikes = [
+        ("https://atlassian.net.example.com/wiki/spaces/ENG/pages/1001/Lookalike+Host", "lookalikeHost"),
+        ("https://evilatlassian.net/wiki/spaces/ENG/pages/1002/No+Dot+Before+Suffix", "lookalikeHost"),
+        ("https://acme.atlassian.net.example.org/wiki/spaces/ENG/pages/1003/Suffix+Then+More", "lookalikeHost"),
+        ("https://atlassian.net/wiki/spaces/ENG/pages/1004/Apex+Host", "apexHost"),
+    ]
+}
+
+func smartLinkSlug(_ title: String) -> String {
+    title.split(separator: " ").joined(separator: "+")
+}
+
+/// The design's dedup key: lower-case scheme and host, fragment removed.
+func smartLinkKey(_ url: String) -> String {
+    guard var components = URLComponents(string: url) else { return url }
+    components.fragment = nil
+    components.scheme = components.scheme?.lowercased()
+    components.host = components.host?.lowercased()
+    return components.string ?? url
+}
+
+/// Builds smart-links.json and tallies what it emits. A class so the many
+/// small builders share one RNG and one tally without `inout` threading.
+final class SmartLinksBuilder {
+    var rng = LCG(seed: SmartLinksSpec.seed)
+    var tally = SmartLinksTally()
+    /// Top-level block kind the next positive is counted under.
+    var container = "paragraph"
+    var inFirstScreen = false
+    var popular: [SmartLinkTarget] = []
+    var pages: [SmartLinkTarget] = []
+    var blogs: [SmartLinkTarget] = []
+    var issues: [SmartLinkTarget] = []
+    let spaceOverviews = [
+        SmartLinkTarget(url: "https://acme.atlassian.net/wiki/spaces/ENG/overview", kind: "space"),
+        SmartLinkTarget(url: "https://globex.atlassian.net/wiki/spaces/DATA/overview", kind: "space"),
+    ]
+    private var usedIDs: Set<Int> = []
+
+    init() {
+        let spaces = SmartLinksSpec.spaces
+        for (i, title) in SmartLinksSpec.popularTitles.enumerated() {
+            popular.append(page(tenant: "acme", space: spaces[i % spaces.count], title: title))
+        }
+        for title in SmartLinksSpec.pageTitles {
+            let tenant = rng.oneIn(6) ? "globex" : "acme"
+            pages.append(page(tenant: tenant, space: rng.pick(spaces), title: title))
+        }
+        for title in SmartLinksSpec.blogTitles {
+            let month = rng.int(9 ..< 12)
+            let day = rng.int(1 ..< 29)
+            let url = "https://acme.atlassian.net/wiki/spaces/\(rng.pick(spaces))/blog/2026/"
+                + "\(pad2(month))/\(pad2(day))/\(freshID())/\(smartLinkSlug(title))"
+            blogs.append(SmartLinkTarget(url: url, kind: "blog"))
+        }
+        var issueKeys: Set<String> = []
+        while issues.count < SmartLinksSpec.issueCount {
+            let key = "\(rng.pick(SmartLinksSpec.issueProjects))-\(rng.int(10 ..< 2_000))"
+            guard issueKeys.insert(key).inserted else { continue }
+            issues.append(SmartLinkTarget(url: "https://acme.atlassian.net/browse/\(key)", kind: "issue"))
+        }
+    }
+
+    func freshID() -> Int {
+        while true {
+            let id = rng.int(1_000_000 ..< 9_000_000)
+            if usedIDs.insert(id).inserted { return id }
+        }
+    }
+
+    func page(tenant: String, space: String, title: String) -> SmartLinkTarget {
+        let url = "https://\(tenant).atlassian.net/wiki/spaces/\(space)/pages/\(freshID())/\(smartLinkSlug(title))"
+        return SmartLinkTarget(url: url, kind: "page")
+    }
+
+    func popularPage(_ title: String) -> SmartLinkTarget {
+        popular.first { $0.url.hasSuffix("/" + smartLinkSlug(title)) }!
+    }
+
+    func namedPage(_ title: String) -> SmartLinkTarget {
+        pages.first { $0.url.hasSuffix("/" + smartLinkSlug(title)) }!
+    }
+
+    /// 30 % popular pages, 10 % blog posts, 15 % Jira issues, 5 % space
+    /// overviews, 40 % the other pages.
+    func pickTarget() -> SmartLinkTarget {
+        switch rng.int(0 ..< 20) {
+        case 0 ..< 6: return rng.pick(popular)
+        case 6 ..< 8: return rng.pick(blogs)
+        case 8 ..< 11: return rng.pick(issues)
+        case 11: return rng.pick(spaceOverviews)
+        default: return rng.pick(pages)
+        }
+    }
+
+    func pickPage() -> SmartLinkTarget {
+        rng.oneIn(3) ? rng.pick(popular) : rng.pick(pages)
+    }
+
+    // Runs
+
+    func t(_ text: String) -> [String: Any] { textNode(text) }
+
+    private func countPositive(_ url: String, _ field: WritableKeyPath<SmartLinksTally, Int>) {
+        tally[keyPath: field] += 1
+        tally.keys[smartLinkKey(url), default: 0] += 1
+        tally.containers[container, default: 0] += 1
+        if inFirstScreen { tally.firstScreen += 1 }
+    }
+
+    private func countNegative(_ kind: String) {
+        tally.negatives[kind, default: 0] += 1
+    }
+
+    /// Positive: a link whose text is its URL.
+    func bare(_ target: SmartLinkTarget) -> [String: Any] {
+        bare(url: target.url)
+    }
+
+    func bare(url: String) -> [String: Any] {
+        countPositive(url, \.bareLinks)
+        return textNode(url, marks: [linkMark(url)])
+    }
+
+    /// Positive: bare only after §1's normalisation of `text` and `href`.
+    func edgeBare(text: String, href: String) -> [String: Any] {
+        countPositive(href, \.edgeBareLinks)
+        return textNode(text, marks: [linkMark(href)])
+    }
+
+    /// Positive: an `inlineCard` to an Atlassian URL.
+    func card(_ target: SmartLinkTarget) -> [String: Any] {
+        countPositive(target.url, \.inlineCards)
+        return ["type": "inlineCard", "attrs": ["url": target.url]]
+    }
+
+    /// Negative: an Atlassian link with author-written text.
+    func labeled(_ text: String, _ target: SmartLinkTarget) -> [String: Any] {
+        countNegative("labeledLink")
+        return textNode(text, marks: [linkMark(target.url)])
+    }
+
+    /// Negative: text equals href, but the URL does not qualify.
+    func plainBare(_ url: String, kind: String) -> [String: Any] {
+        countNegative(kind)
+        return textNode(url, marks: [linkMark(url)])
+    }
+
+    // Blocks
+
+    func para(_ content: [String: Any]...) -> [String: Any] { paragraph(content) }
+    func li(_ content: [String: Any]...) -> [String: Any] { listItemNode(content) }
+
+    func filler(_ count: Int) -> String {
+        (0 ..< count).map { _ in rng.pick(SmartLinksSpec.fillerSentences) }.joined(separator: " ")
+    }
+
+    func linkSentence(_ link: [String: Any]) -> [[String: Any]] {
+        let (before, after) = rng.pick(SmartLinksSpec.linkSentences)
+        return [t(before), link, t(after)]
+    }
+
+    func intro() -> [[String: Any]] {
+        inFirstScreen = true
+        container = "heading"
+        var blocks: [[String: Any]] = [headingNode(level: 1, "Smart links")]
+        container = "paragraph"
+        let roadmap = popularPage("Q3 Roadmap")
+        blocks.append(para(
+            t("SL-INTRO Bare links to Confluence pages and Jira issues turn into titles once they are on screen. A labeled link such as "),
+            labeled("the Q3 roadmap", roadmap),
+            t(" keeps its words.")
+        ))
+        blocks.append(para(t("Roadmap: "), bare(roadmap)))
+        blocks.append(para(t("Onboarding: "), bare(popularPage("Engineering Onboarding"))))
+        blocks.append(para(t("Release blog: "), bare(blogs[0])))
+        blocks.append(para(t("Tracking issue: "), bare(issues[0])))
+        blocks.append(para(t("As an inline card: "), card(namedPage("Design System Tokens"))))
+        inFirstScreen = false
+        return blocks
+    }
+
+    /// Plain text only, so the rows the lazy stack prefetches below the
+    /// first screen hold no smart links.
+    func gap() -> [[String: Any]] {
+        var blocks: [[String: Any]] = [headingNode(level: 2, "SL-GAP Background")]
+        for _ in 0 ..< SmartLinksSpec.gapParagraphs {
+            blocks.append(para(t(filler(3))))
+        }
+        return blocks
+    }
+
+    func section(_ n: Int) -> [[String: Any]] {
+        let label = "SL-S" + pad2(n)
+        let topic = SmartLinksSpec.topics[(n - 1) % SmartLinksSpec.topics.count]
+        var blocks: [[String: Any]] = []
+
+        container = "heading"
+        if n % 4 == 0 {
+            blocks.append([
+                "type": "heading",
+                "attrs": ["level": 3],
+                "content": [t("\(label) \(topic): "), bare(pickTarget())],
+            ])
+        } else {
+            blocks.append(headingNode(level: 2, "\(label) \(topic)"))
+        }
+
+        container = "paragraph"
+        var opening = linkSentence(bare(pickTarget()))
+        opening.append(t(" " + filler(1)))
+        if rng.oneIn(2) {
+            opening.append(t(" "))
+            opening += linkSentence(bare(pickTarget()))
+        }
+        if rng.oneIn(4) {
+            opening += [t(" Also see "), labeled(rng.pick(SmartLinksSpec.labels), pickPage()), t(".")]
+        }
+        blocks.append(paragraph(opening))
+
+        blocks += recipe(n % 9, n: n, label: label)
+
+        container = "paragraph"
+        blocks.append(para(t(filler(3))))
+        return blocks
+    }
+
+    func recipe(_ recipe: Int, n: Int, label: String) -> [[String: Any]] {
+        switch recipe {
+        case 0:
+            container = "paragraph"
+            return [
+                para(t("Before the review, skim "), bare(pickTarget()), t(" and "), bare(pickTarget()),
+                     t(". " + filler(1))),
+                paragraph(linkSentence(bare(pickTarget())) + [t(" " + filler(1))]),
+            ]
+        case 1:
+            container = "bulletList"
+            return [bulletListNode([
+                li(para(t("Owner: "), bare(pickPage()))),
+                li(para(t("Spec: "), bare(pickTarget()), t(" (draft)"))),
+                li(para(t(filler(1)))),
+                li(para(t("Related:")), bulletListNode([
+                    li(para(bare(pickTarget()))),
+                    li(para(t("Tracking: "), bare(rng.pick(issues)))),
+                ])),
+            ])]
+        case 2:
+            container = "orderedList"
+            return [orderedListNode([
+                li(para(t("Read "), bare(pickPage()), t(" first."))),
+                li(para(t("Then work through "), bare(pickTarget()), t("."))),
+                li(para(t("File anything you find against "), bare(rng.pick(issues)), t("."))),
+            ])]
+        case 3:
+            container = "paragraph"
+            var notes = [t("Design notes: "), card(pickPage()), t(" " + filler(1))]
+            if rng.oneIn(3) {
+                countNegative("nonAtlassianInlineCard")
+                notes += [t(" External reference: "),
+                          ["type": "inlineCard", "attrs": ["url": rng.pick(SmartLinksSpec.nonAtlassian)]]]
+            }
+            return [
+                para(t("Tracked in "), card(pickPage()), t(" and "), card(rng.pick(issues)), t(".")),
+                paragraph(notes),
+            ]
+        case 4:
+            container = "panel"
+            let panelType = ["info", "note", "tip", "warning", "success"][(n / 9) % 5]
+            return [[
+                "type": "panel",
+                "attrs": ["panelType": panelType],
+                "content": [
+                    para(t("Heads up: "), bare(pickTarget()), t(" changed this week.")),
+                    para(t("Summary card: "), card(pickPage())),
+                ],
+            ]]
+        case 5:
+            container = "expand"
+            return [[
+                "type": "expand",
+                "attrs": ["title": "\(label) More links"],
+                "content": [
+                    paragraph(linkSentence(bare(pickTarget()))),
+                    bulletListNode([
+                        li(para(bare(pickPage()))),
+                        li(para(t("Issue: "), bare(rng.pick(issues)))),
+                    ]),
+                ],
+            ]]
+        case 6:
+            container = "table"
+            var rows: [[String: Any]] = [tableRow(header: true, ["Item", "Link"].map { [para(t($0))] })]
+            for item in ["Spec", "Tracking", "Notes"] {
+                let link: [String: Any] = switch item {
+                case "Tracking": rng.oneIn(2) ? card(rng.pick(issues)) : bare(rng.pick(issues))
+                default: bare(pickTarget())
+                }
+                rows.append(tableRow(header: false, [[para(t(item))], [para(link)]]))
+            }
+            return [table(rows)]
+        case 7:
+            container = "taskList"
+            let tasks = taskListNode("sl-tasks-\(n)", [
+                taskItemNode("sl-task-\(n)-1", done: false, [t("Review "), bare(pickPage())]),
+                taskItemNode("sl-task-\(n)-2", done: true, [t("Sign off on "), bare(rng.pick(issues))]),
+                taskItemNode("sl-task-\(n)-3", done: false, [t(filler(1))]),
+            ])
+            container = "decisionList"
+            let decisions = decisionListNode("sl-decisions-\(n)", [
+                decisionItemNode("sl-decision-\(n)", [t("Agreed: follow "), bare(pickTarget())]),
+            ])
+            return [tasks, decisions]
+        default:
+            container = "blockquote"
+            let quote: [String: Any] = [
+                "type": "blockquote",
+                "content": [para(t("From "), bare(pickPage()), t(": \u{201C}\(filler(1))\u{201D}"))],
+            ]
+            container = "paragraph"
+            let (lookalike, kind) = rng.pick(SmartLinksSpec.lookalikes)
+            let external = para(
+                t("External: "), plainBare(rng.pick(SmartLinksSpec.nonAtlassian), kind: "nonAtlassian"),
+                t(". A lookalike that must stay plain: "), plainBare(lookalike, kind: kind), t(".")
+            )
+            return [quote, external]
+        }
+    }
+
+    /// `cells` holds each cell's block content; the link column is wider.
+    func tableRow(header: Bool, _ cells: [[[String: Any]]]) -> [String: Any] {
+        [
+            "type": "tableRow",
+            "content": cells.enumerated().map { column, content in
+                [
+                    "type": header ? "tableHeader" : "tableCell",
+                    "attrs": ["colwidth": [column == 0 ? 140 : 320]],
+                    "content": content,
+                ] as [String: Any]
+            },
+        ]
+    }
+
+    func table(_ rows: [[String: Any]]) -> [String: Any] {
+        ["type": "table", "attrs": ["isNumberColumnEnabled": false, "layout": "default"], "content": rows]
+    }
+
+    /// Ten rows, each linking a spec page and its tracking issue.
+    func ownershipTable() -> [[String: Any]] {
+        container = "heading"
+        var blocks: [[String: Any]] = [headingNode(level: 2, "SL-TABLE Ownership")]
+        container = "paragraph"
+        blocks.append(para(t("Every row links a spec page and its tracking issue; some cells use inline cards.")))
+        container = "table"
+        var rows: [[String: Any]] = [tableRow(header: true, ["Area", "Spec", "Tracking issue"].map { [para(t($0))] })]
+        for row in 0 ..< 10 {
+            let spec: [String: Any] = row % 3 == 2 ? card(pickPage()) : bare(pickPage())
+            let issue: [String: Any] = row % 4 == 3 ? card(rng.pick(issues)) : bare(rng.pick(issues))
+            rows.append(tableRow(header: false, [
+                [para(t(SmartLinksSpec.topics[row]))],
+                [para(spec)],
+                [para(issue)],
+            ]))
+        }
+        blocks.append(table(rows))
+        return blocks
+    }
+
+    /// Every run here must render exactly as authored, before and after
+    /// resolution.
+    func negatives() -> [[String: Any]] {
+        container = "heading"
+        var blocks: [[String: Any]] = [headingNode(level: 2, "SL-NEG Links that stay plain")]
+        container = "paragraph"
+        blocks.append(para(t("Each link in this section must render exactly as authored, before and after any lookup.")))
+        let roadmap = popularPage("Q3 Roadmap")
+        let runbook = popularPage("Incident Runbook")
+        countNegative("mismatchedURLText")
+        let mismatched = textNode(runbook.url, marks: [linkMark(roadmap.url)])
+        countNegative("wrongScheme")
+        let ftp = "ftp://acme.atlassian.net/wiki/spaces/ENG/pages/1005/Wrong+Scheme"
+        countNegative("codeMarkedLink")
+        let codeURL = popularPage("Architecture Overview").url
+        let codeMarked = textNode(codeURL, marks: [["type": "code"], linkMark(codeURL)])
+        var items: [[String: Any]] = [
+            li(para(t("Labeled: "), labeled("the Q3 roadmap", roadmap))),
+            li(para(t("URL text that is not its href: "), mismatched)),
+            li(para(t("Not Atlassian: "), plainBare(SmartLinksSpec.nonAtlassian[0], kind: "nonAtlassian"))),
+        ]
+        for (url, kind) in SmartLinksSpec.lookalikes {
+            items.append(li(para(t(kind == "apexHost" ? "Apex host: " : "Lookalike host: "), plainBare(url, kind: kind))))
+        }
+        items.append(li(para(t("Wrong scheme: "), textNode(ftp, marks: [linkMark(ftp)]))))
+        items.append(li(para(t("Code-marked: "), codeMarked)))
+        blocks.append(bulletListNode(items))
+        countNegative("nonAtlassianInlineCard")
+        blocks.append(para(t("A non-Atlassian inline card keeps its chip: "),
+                           ["type": "inlineCard", "attrs": ["url": SmartLinksSpec.nonAtlassian[1]]]))
+        countNegative("blockCard")
+        blocks.append(["type": "blockCard", "attrs": ["url": popularPage("Team Directory").url]])
+        countNegative("codeBlockText")
+        blocks.append(codeBlockNode(language: "text", text: "curl \(popularPage("Release Checklist").url)"))
+        return blocks
+    }
+
+    /// Bare by §1's normalisation, a fragment that dedups with the plain
+    /// URL, and the same page twice in one paragraph.
+    func edges() -> [[String: Any]] {
+        container = "heading"
+        var blocks: [[String: Any]] = [headingNode(level: 2, "SL-EDGE Bare after normalisation")]
+        container = "bulletList"
+        let glossary = namedPage("Glossary").url
+        let styleGuide = namedPage("Writing Style Guide").url
+        let decisionLog = namedPage("Decision Log").url
+        let riskRegister = namedPage("Risk Register").url
+        let launchPlan = namedPage("Launch Plan").url
+        blocks.append(bulletListNode([
+            li(para(t("No scheme in the text: "),
+                    edgeBare(text: String(glossary.dropFirst("https://".count)), href: glossary))),
+            li(para(t("Trailing slash in the text: "), edgeBare(text: styleGuide + "/", href: styleGuide))),
+            li(para(t("Upper-case host in the text: "),
+                    edgeBare(text: decisionLog.replacingOccurrences(of: "https://acme.", with: "https://ACME."),
+                             href: decisionLog))),
+            li(para(t("Trailing-dot host: "),
+                    edgeBare(text: riskRegister.replacingOccurrences(of: ".atlassian.net/", with: ".atlassian.net./"),
+                             href: riskRegister.replacingOccurrences(of: ".atlassian.net/", with: ".atlassian.net./")))),
+            li(para(t("With a fragment (same lookup as without): "), bare(url: launchPlan + "#timeline"))),
+            li(para(t("Plain http: "), bare(url: launchPlan.replacingOccurrences(of: "https://", with: "http://")))),
+        ]))
+        container = "paragraph"
+        let twice = popularPage("Release Checklist")
+        blocks.append(para(t("SL-TWICE The same page twice in one paragraph: "), bare(twice),
+                           t(" and again "), bare(twice), t(".")))
+        return blocks
+    }
+
+    func lastRow() -> [[String: Any]] {
+        container = "heading"
+        let heading = headingNode(level: 2, "SL-END End of the smart links fixture")
+        container = "paragraph"
+        let url = "https://acme.atlassian.net/wiki/spaces/ENG/pages/\(freshID())/Last+Row+Sentinel"
+        return [heading, para(t("SL-LAST Last row: "), bare(url: url))]
+    }
+
+    func build() -> [String: Any] {
+        var blocks = intro() + gap()
+        for n in 1 ... SmartLinksSpec.sectionCount {
+            blocks += section(n)
+            switch n {
+            case 10: blocks += negatives()
+            case 24: blocks += ownershipTable()
+            case 38: blocks += edges()
+            default: break
+            }
+        }
+        blocks += lastRow()
+        return doc(blocks)
+    }
+}
+
+func makeSmartLinks(tally: inout SmartLinksTally) -> [String: Any] {
+    let builder = SmartLinksBuilder()
+    let document = builder.build()
+    tally = builder.tally
+    return document
+}
+
 // MARK: - Container and caption fixtures: node builders
 
 /// A panel. `panelType` is one of the seven palettes; a custom panel may
@@ -4575,6 +5175,8 @@ let codeParity = makeCodeParity()
 var codeDenseSummary = CodeDenseSummary()
 let codeDense = makeCodeDense(summary: &codeDenseSummary)
 let codeTall = makeCodeTall()
+var smartLinksTally = SmartLinksTally()
+let smartLinks = makeSmartLinks(tally: &smartLinksTally)
 let containersParity = makeContainersParity()
 // Every version of the ladder is generated and checked against the band;
 // the one `ContainersDenseSpec.version` names is emitted.
@@ -4609,6 +5211,7 @@ let fixtures: [(name: String, document: [String: Any])] = [
     ("code-parity.json", codeParity.document),
     ("code-dense.json", codeDense.document),
     ("code-tall.json", codeTall.document),
+    ("smart-links.json", smartLinks),
     ("containers-parity.json", containersParity),
     ("containers-dense.json", containersDense),
     ("containers-expand.json", containersExpand),
@@ -4708,6 +5311,12 @@ print("  leaders: \(sortedTally(listDenseTally.leaders))")
 print("  extra paragraphs: \(sortedTally(listDenseTally.extraParagraphs))")
 print("  continuation paragraphs: \(sortedTally(listDenseTally.continuationParagraphs))")
 print("  trailing headings: \(listDenseTally.trailingHeadings)")
+
+print("smart-links tally (emitted runs, not preparer output):")
+print("  positives: \(smartLinksTally.positives) (bare links \(smartLinksTally.bareLinks), bare after normalisation \(smartLinksTally.edgeBareLinks), inline cards \(smartLinksTally.inlineCards)); in the intro screen: \(smartLinksTally.firstScreen)")
+print("  unique canonical URLs: \(smartLinksTally.keys.count); repeated: \(smartLinksTally.keys.values.filter { $0 > 1 }.count); most repeated: \(smartLinksTally.keys.values.max() ?? 0)")
+print("  by top-level block: \(sortedTally(smartLinksTally.containers))")
+print("  negatives (must stay plain): \(smartLinksTally.negatives.values.reduce(0, +)): \(sortedTally(smartLinksTally.negatives))")
 
 // MARK: - Code fixture summaries
 

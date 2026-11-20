@@ -30,7 +30,9 @@ struct MediaBlockView: View {
         VStack(alignment: stackAlignment, spacing: theme.spacing * 0.75) {
             mediaBox
             if let caption = media.caption, !caption.isEmpty {
-                Self.caption(caption, ownerID: media.id, layout: media.layout, theme: theme)
+                Self.caption(
+                    caption, ownerID: media.id, layout: media.layout, theme: theme, smartLinkKeys: media.captionSmartLinkKeys
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: frameAlignment)
@@ -56,12 +58,21 @@ struct MediaBlockView: View {
     /// whose runs carry a run background (the caption verdict,
     /// `TextKit2Scope.captionRunsKeepRenderer`). No selection: the caption
     /// has none on either engine.
-    static func caption(_ segments: [InlineSegment], ownerID: String, layout: ADFMediaLayout, theme: ADFTheme) -> some View {
-        TextEngineLeaf(
-            segments: segments, style: captionStyle(theme: theme), ownerID: ownerID,
+    ///
+    /// Smart links (`PreparedMedia.captionSmartLinkKeys`): the leaf is a
+    /// `SmartLinkTextLeaf`, as a paragraph's is, so a TextKit 2 caption row
+    /// draws the displayed stage as its input, the SwiftUI text reads the
+    /// stages itself, and the leaf attaches to the coordinator and feeds it
+    /// its visibility. With no keys or no resolver it adds nothing.
+    static func caption(
+        _ segments: [InlineSegment], ownerID: String, layout: ADFMediaLayout, theme: ADFTheme,
+        smartLinkKeys: [SmartLinkKey] = []
+    ) -> some View {
+        SmartLinkTextLeaf(
+            segments: segments, smartLinkKeys: smartLinkKeys, style: captionStyle(theme: theme), ownerID: ownerID,
             allowsTextKit2: TextKit2Scope.captionLayoutKeepsRenderer(layout)
         ) {
-            SegmentedTextView(segments: segments, ownerID: ownerID)
+            SegmentedTextView(segments: segments, ownerID: ownerID, smartLinkKeys: smartLinkKeys)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

@@ -16,7 +16,7 @@ enum Help {
         Commands:
           login            Create a read-only Confluence API token, check it, save it in the keychain
           list             List saved accounts and when their tokens expire
-          push             Show a one-time QR code that sends a saved account to ADFReader
+          push             Send a saved account to ADFReader once (QR code, or --to the phone)
           rotate <site>    Replace a site's token, send it to the phone, revoke the old one
           remove <site>    Delete a saved account from the keychain
           probe-graphql    Look up page titles over GraphQL with a saved account
@@ -29,7 +29,7 @@ enum Help {
         The token is read with echo off (or as one line of stdin with --token-stdin).
         It is never printed, logged, taken as an argument, or written anywhere except
         your login keychain ("ADFReader – <site>" items). The QR code holds a one-time
-        key for a sealed copy, not the token.
+        key for a sealed copy, not the token; push --to sends only a sealed copy.
 
         Install:
           swift build -c release --product adf-auth
@@ -84,18 +84,32 @@ enum Help {
     static let push = """
         Usage: adf-auth push [--site <site>] [--host <ipv4>] [--port <n>]
                              [--timeout <seconds>]
+               adf-auth push --to <ipv4:port> [--site <site>] [--timeout <seconds>]
 
         Sends a saved account to ADFReader on your phone over the local network,
-        once. Shows a QR code; in ADFReader open Settings → Atlassian Accounts →
-        Scan from Mac.
+        once. Two directions:
 
-        The QR code holds the Mac's address, a session ID and a one-time key. The
-        Mac serves one sealed (ChaChaPoly) copy of the credential at that session's
-        path, asks you to confirm each request ("send? [y/N]": only y or yes sends;
-        keys typed before the question appears are discarded), then stops. Every
-        other request gets 404 and a warning. If the phone gives up before you
-        answer, nothing is sent and the code stays valid. Nothing is sent after the
-        timeout. The QR code is drawn only when stdout is a terminal.
+        QR code (the Mac listens). In ADFReader open Settings → Atlassian Accounts →
+        Scan from Mac. The QR code holds the Mac's address, a session ID and a
+        one-time key. The Mac serves one sealed (ChaChaPoly) copy of the credential
+        at that session's path, asks you to confirm each request ("send? [y/N]":
+        only y or yes sends; keys typed before the question appears are discarded),
+        then stops. Every other request gets 404 and a warning. If the phone gives
+        up before you answer, nothing is sent and the code stays valid. Nothing is
+        sent after the timeout. The QR code is drawn only when stdout is a terminal.
+
+        --to (the phone listens). For a Mac that blocks incoming connections (for
+        example a company-managed Mac). In ADFReader open Settings → Atlassian
+        Accounts → Mac connects to phone; it shows the command with its address and
+        a one-time code (XXXX-XXXX-XXXX-XXXX). Run that command in a terminal and
+        type the code at the prompt (it is never taken as an argument, so it stays
+        out of ps and your shell history). The phone first
+        proves it knows the code; only then does the Mac send a copy sealed with a
+        fresh X25519 key. The code itself never crosses the network. A wrong code
+        sends nothing. Success is reported only after the phone's acknowledgement,
+        authenticated with the session key, checks out. If the phone says it is
+        busy, wait a few seconds and run the command again. Confirm on the phone to
+        save the account.
 
         Reading the saved token may show a macOS keychain prompt after a rebuild.
 
@@ -105,8 +119,12 @@ enum Help {
                                 The phone only accepts private-network addresses
                                 (10/8, 172.16/12, 192.168/16, 100.64/10).
           --port <n>            The port (default 0: any free port)
-          --timeout <seconds>   How long the code stays valid (5-120, default 120; the
-                                phone waits at most 130 s for your answer)
+          --timeout <seconds>   QR: how long the code stays valid (5-120, default 120; the
+                                phone waits at most 130 s for your answer).
+                                --to: limit for connecting and sending (5-300, default 30)
+          --to <ipv4:port>      Connect to the phone at this address instead of showing a
+                                QR code (private-network addresses only; not with
+                                --host or --port)
           -h, --help            Show this help
         """
 
@@ -117,6 +135,12 @@ enum Help {
         Replaces the token for a saved site: runs login with the saved email, offers
         to push the new token to your phone, then opens Atlassian's token page so
         you can revoke the old token.
+
+        The offered push shows a QR code (the Mac listens, like adf-auth push). On a
+        Mac that blocks incoming connections (for example a company-managed Mac),
+        answer no and run adf-auth push --to <ipv4:port> afterwards (ADFReader →
+        Settings → Atlassian Accounts → Mac connects to phone): the new token is
+        already saved.
 
         Options:
           --expiry-days <n>   The expiry you pick on Atlassian's page (1-365, default \(AtlassianTokenScopes.defaultExpiryDays))
