@@ -79,10 +79,13 @@ final class EmojiUITests: XCTestCase {
 
         // 1. Loading.
         let loadingFrames = (load.frame, below.frame)
+        // EM-LOAD and EM-BELOW are adjacent one-line paragraphs: the
+        // distance between their centres is one paragraph's band.
+        let pitch = below.frame.midY - load.frame.midY
         // The failed emoji's paragraph and the rows below it.
         let failingFrames = (fail.frame, pair.frame, list.frame)
-        let loadingShot = try capture(load)
-        let failLoadingShot = try capture(fail)
+        let loadingShot = try capture(load, pitch: pitch)
+        let failLoadingShot = try capture(fail, pitch: pitch)
         let during = probe(reader)
         note("\(arm) loading probe: \(during)")
         attach(reader.app, "\(arm)-loading")
@@ -111,7 +114,7 @@ final class EmojiUITests: XCTestCase {
         XCTAssertEqual(ended.stats["emCalls"], 5, "one lookup per key: \(ended.stats)")
         reader.pause(0.5)
         attach(reader.app, "\(arm)-loaded")
-        let loadedShot = try capture(load)
+        let loadedShot = try capture(load, pitch: pitch)
         let loadedText = Self.recognize(loadedShot)
         let saturated = Self.saturatedPixels(loadedShot)
         note("\(arm) loaded EM-LOAD text \(loadedText.map(\.text)), saturated \(saturated)")
@@ -143,7 +146,7 @@ final class EmojiUITests: XCTestCase {
         XCTAssertTrue(load.label.contains("ld custom 6"), "spoken name missing once loaded: \(load.label)")
 
         // 3. Failed.
-        let failShot = try capture(fail)
+        let failShot = try capture(fail, pitch: pitch)
         let failText = Self.joined(Self.recognize(failShot))
         note("\(arm) failed EM-FAIL text \"\(failText)\", saturated \(Self.saturatedPixels(failShot))")
         XCTAssertTrue(failText.contains(":fail-emoji:"), "the failed emoji does not show its short name: \(failText)")
@@ -174,8 +177,10 @@ final class EmojiUITests: XCTestCase {
         let reader = ReaderDriver(launching: arguments)
         reader.waitForRenderer(textKit2 ? "TextKit 2" : "SwiftUI")
         let load = leaf("EM-LOAD", reader, textKit2: textKit2)
+        let below = leaf("EM-BELOW", reader, textKit2: textKit2)
         let fail = leaf("EM-FAIL", reader, textKit2: textKit2)
         XCTAssertTrue(load.waitForExistence(timeout: 20), "the EM-LOAD paragraph never appeared")
+        let pitch = below.frame.midY - load.frame.midY
         // Longer than a dwell plus a default mock fetch: any lookup would
         // have started by now.
         reader.pause(2)
@@ -185,7 +190,7 @@ final class EmojiUITests: XCTestCase {
         attach(reader.app, "\(arm)-no-resolver")
         // Text recognition reads the "l" of "ld" as "I"; the rest is exact.
         for (element, name) in [(load, "d-custom-6:"), (fail, ":fail-emoji:")] {
-            let shot = try capture(element)
+            let shot = try capture(element, pitch: pitch)
             let text = Self.joined(Self.recognize(shot))
             note("\(arm) no resolver text \"\(text)\", saturated \(Self.saturatedPixels(shot))")
             XCTAssertTrue(text.contains(name), "\(name) is not shown as text: \(text)")
@@ -201,8 +206,23 @@ final class EmojiUITests: XCTestCase {
         textKit2 ? reader.textKit2Row(labelPrefix: prefix) : reader.element(labelPrefix: prefix)
     }
 
-    private func capture(_ element: XCUIElement) throws -> CGImage {
-        try XCTUnwrap(element.screenshot().image.cgImage, "no screenshot of \(element)")
+    /// The element's own line: its screenshot, cut to a band `pitch`
+    /// points tall around the frame's vertical centre (no cut when the
+    /// frame is not taller than that). On iOS 27 a SwiftUI text
+    /// element's frame is outset about 12 pt above and below its line,
+    /// so its plain screenshot also holds half of each neighbouring
+    /// paragraph (and their emoji images): `EM-FAIL` then counted the
+    /// coloured squares of `EM-PAIR` below it. TextKit 2 rows and iOS 26
+    /// frames are not outset; there the cut changes nothing.
+    private func capture(_ element: XCUIElement, pitch: CGFloat) throws -> CGImage {
+        let frame = element.frame
+        let image = try XCTUnwrap(element.screenshot().image.cgImage, "no screenshot of \(element)")
+        guard pitch > 0, frame.height > pitch else { return image }
+        let scale = CGFloat(image.height) / frame.height
+        let band = (pitch * scale).rounded()
+        let top = ((CGFloat(image.height) - band) / 2).rounded()
+        let rect = CGRect(x: 0, y: top, width: CGFloat(image.width), height: band)
+        return try XCTUnwrap(image.cropping(to: rect), "could not cut \(element) to its line")
     }
 
     private func assertSameFrame(_ frame: CGRect, _ reference: CGRect, _ message: String) {
