@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "ADFSearchBench", targets: ["ADFSearchBench"]),
         .library(name: "ADFAtlassianAuth", targets: ["ADFAtlassianAuth"]),
         .library(name: "ADFResolvers", targets: ["ADFResolvers"]),
+        .library(name: "ADFAtlassianMedia", targets: ["ADFAtlassianMedia"]),
         .executable(name: "adf-auth", targets: ["ADFAuthCLI"]),
     ],
     targets: [
@@ -32,5 +33,10 @@ let package = Package(
         .testTarget(name: "ADFAtlassianAuthTests", dependencies: ["ADFAtlassianAuth"]),
         .target(name: "ADFResolvers", dependencies: ["ADFRendering"]),
         .testTarget(name: "ADFResolversTests", dependencies: ["ADFResolvers"]),
+        // The only module that joins Atlassian credentials to ADF media. The
+        // renderer and resolvers never import ADFAtlassianAuth; they take the
+        // fetcher's `mediaFetch` closure instead.
+        .target(name: "ADFAtlassianMedia", dependencies: ["ADFAtlassianAuth", "ADFModel"]),
+        .testTarget(name: "ADFAtlassianMediaTests", dependencies: ["ADFAtlassianMedia", "ADFAtlassianAuth", "ADFModel"]),
     ]
 )

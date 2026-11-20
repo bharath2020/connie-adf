@@ -3,6 +3,8 @@
 How ADFReader gets a read-only Atlassian API token. Code: `Sources/ADFAtlassianAuth`
 (shared module), `Sources/ADFAuthCLI` (`adf-auth`; help text in `Help.swift`),
 `Demo/ADFReader/{AccountStore,AccountsView,AddAccountView,PairScanView,SettingsView}.swift`.
+Using the token to load images (attachments) in pages:
+[Atlassian-Media-Fetch.md](Atlassian-Media-Fetch.md) (`Sources/ADFAtlassianMedia`).
 
 ## 1. What it is
 
@@ -57,11 +59,16 @@ before it reads a saved token. Signing with a stable identity stops that.
 
 - Exit status: 0 success, 1 failure, 2 usage error, 3 scoped token rejected
   (`probe-graphql`). The token is never taken as an argument (`--token` exits 2).
-- **Scopes** (app "Confluence", exactly these): `read:page:confluence`,
+- **Scopes** (app "Confluence", exactly these, all read-only): `read:page:confluence`,
   `read:space:confluence`, `read:blogpost:confluence`,
-  `read:content.metadata:confluence` (the last one is for page-title emoji).
+  `read:content.metadata:confluence` (page-title emoji),
+  `read:attachment:confluence` and `readonly:content.attachment:confluence`
+  (images in pages: list and download attachments; see
+  [Atlassian-Media-Fetch.md](Atlassian-Media-Fetch.md)).
   Default expiry 90 days
   (`--expiry-days` 1–365). Scopes can't be added to a token; a new one means a new token.
+  **Tokens created before the two attachment scopes were added still work for
+  titles but can't show images; re-create them (`adf-auth rotate`).**
 - **Token page:** `https://id.atlassian.com/manage-profile/security/api-tokens?autofillToken&expiryDays=<n>&appId=confluence&selectedScopes=<percent-encoded JSON array>`.
   Atlassian does not document these preselection parameters, so they are
   unverified. `login` always prints the seven manual steps and the scope list.
@@ -271,7 +278,7 @@ Only `probe-graphql` runs `AdfProbePages` today; the app does not look up titles
 |---|---|
 | "scoped" (or API/container token, not on a 401) in an HTTP 401/403 body or a GraphQL error; checked first | `scopedTokenRejected(field:detail:)`; `probe-graphql` exits 3 |
 | HTTP 401, or GraphQL status 401 / unauthorized | `unauthorized` (wrong email or token, or not a Confluence token) |
-| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the four scopes) |
+| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the six scopes) |
 | HTTP 404, `CloudIdNotFoundException`, or no matching tenant | `siteNotFound` |
 | HTTP 429 | `rateLimited` (`Retry-After` seconds or HTTP date) |
 | 200 with pages and errors | Normal result, errors listed verbatim; a `metadata` error only marks the emoji unavailable. Errors are mapped only when no pages come back. |

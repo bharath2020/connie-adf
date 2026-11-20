@@ -2,19 +2,32 @@ import Foundation
 
 /// The scopes ADFReader asks for when the user creates a scoped API token.
 public enum AtlassianTokenScopes {
-    /// Read pages, spaces, blog posts and content metadata (title emoji).
-    /// Nothing else.
+    /// Read pages, spaces, blog posts, content metadata (title emoji) and
+    /// attachment files (images in pages). Nothing else: no write scopes.
     public static let required: [String] = [
         "read:page:confluence",
         "read:space:confluence",
         "read:blogpost:confluence",
         contentMetadata,
+        attachment,
+        attachmentDownload,
     ]
 
     /// The scope that guards `ConfluencePage.metadata` (title emoji). It is in
     /// ``required``; a token created without it gets the emoji reported as
     /// unavailable by the probe.
     public static let contentMetadata = "read:content.metadata:confluence"
+
+    /// The granular scope for listing a page's attachments
+    /// (`GET /wiki/api/v2/pages/{id}/attachments`). It is in ``required``.
+    public static let attachment = "read:attachment:confluence"
+
+    /// The classic scope the v1 attachment download
+    /// (`GET /wiki/rest/api/content/{id}/child/attachment/{attachmentId}/download`)
+    /// lists as current; the granular ``attachment`` scope is only "beta" there.
+    /// It is in ``required``. Tokens created before it was added can list
+    /// attachments but not download them; they need re-creating.
+    public static let attachmentDownload = "readonly:content.attachment:confluence"
 
     /// Default token lifetime ADFReader suggests.
     public static let defaultExpiryDays = 90
@@ -54,7 +67,7 @@ public enum AtlassianTokenPage {
             "Click “Create API token with scopes”.",
             "Name it “ADFReader” and set it to expire in \(expiryDays) days, then click Next.",
             "Choose the app “Confluence”, then click Next.",
-            "Tick these scopes: \(AtlassianTokenScopes.required.joined(separator: ", ")). Search for “read:” to find them. Click Next.",
+            "Tick these scopes: \(AtlassianTokenScopes.required.joined(separator: ", ")). Search for “read” to find them (\(AtlassianTokenScopes.attachmentDownload) is a classic scope and may be listed apart from the others). Click Next.",
             "Check the summary and click “Create token”.",
             "Click “Copy” to copy the token. Atlassian shows it only once.",
         ]
