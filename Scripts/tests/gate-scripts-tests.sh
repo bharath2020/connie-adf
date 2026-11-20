@@ -395,7 +395,7 @@ fx_copy fx-hand
 printf ' ' >>"$WORK/fx-hand/Fixtures/kitchen-sink.json"
 run fx-hand "$BASH" "$FIXCHECK" --repo "$WORK/fx-hand"
 expect_eq "a hand-authored fixture with one byte added fails (exit 1): the generator does not make it" "$STATUS" "1"
-expect_has "… the generator step still passes" "$WORK/fx-hand.out" "fixtures-check: generator: check: all 17"
+expect_has "… the generator step still passes" "$WORK/fx-hand.out" "fixtures-check: generator: check: all 18"
 expect_has "… the manifest names the file" "$WORK/fx-hand.out" "kitchen-sink.json: FAILED"
 fx_copy fx-extra
 printf '{}' >"$WORK/fx-extra/Fixtures/unlisted.json"
