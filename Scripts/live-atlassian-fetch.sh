@@ -18,6 +18,7 @@
 # ENVIRONMENT (all optional)
 #   ADF_LIVE_SITE   site name or host; default mycompany
 #   ADF_LIVE_PAGE   page ID with at least one image; default 229377
+#   ADF_LIVE_EMOJI_IDS  comma-separated emoji IDs to fetch besides the page's emoji
 #
 # The test reads the credential itself through KeychainCredentialStore at run
 # time (macOS may ask to allow keychain access). This script only checks that

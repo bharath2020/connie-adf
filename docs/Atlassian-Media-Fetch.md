@@ -3,7 +3,8 @@
 How ADFReader loads the images (Confluence attachments) that ADF `media`
 nodes reference, using the scoped API token from
 [Atlassian-Auth.md](Atlassian-Auth.md). Code: `Sources/ADFAtlassianMedia`
-(`AtlassianMediaFetcher`, `AtlassianMediaError`, `AtlassianAttachment`).
+(`AtlassianMediaFetcher`, `AtlassianMediaError`, `AtlassianAttachment`;
+emoji: `AtlassianEmojiFetcher`, `AtlassianEmojiError`).
 Research notes: ADF-RES5, 2026-11-19.
 
 ## TL;DR
@@ -21,7 +22,9 @@ Research notes: ADF-RES5, 2026-11-19.
 - The download 302s to the media host. `Authorization` is stripped on any
   other host, and a non-HTTPS redirect is refused.
 - Custom (site) emoji are **not** reachable through any official API or scope.
-  Status: pending a decision (section 6).
+  Decision (option A): `AtlassianEmojiFetcher` uses Atlassian's undocumented
+  emoji service behind its own app setting (default **off**), with
+  `:shortName:` text as the fallback (section 6).
 - Plug point: `AtlassianMediaFetcher(credential:).mediaFetch`, a
   `@Sendable (MediaAttrs) async throws -> Data`. It returns raw bytes;
   downsampling is the resolver's job.
@@ -93,7 +96,7 @@ per-task delegate (`session.data(for:delegate:)`, `AuthRedirectGuard`):
 | Redirect target | Result |
 |---|---|
 | `https`, same host as the original request | followed, headers unchanged |
-| `https`, any other host (the media host) | followed, `Authorization` removed |
+| `https`, any other host (the media host) | followed, `Authorization` and `X-Client-Id` removed |
 | not `https` | refused; the fetch throws `insecureRedirect` |
 
 The redirect target is unverified (expected `api.media.atlassian.com` or
@@ -142,35 +145,134 @@ let fetch: @Sendable (MediaAttrs) async throws -> Data = fetcher.mediaFetch
   around `store.load(site:)` (today it only exposes summaries), to build the
   fetcher.
 
-## 6. Custom emoji (pending decision)
+## 6. Custom emoji
 
-ADF `emoji` nodes for site (custom) emoji carry an `id` but no image
-(`ADFModel` keeps only `shortName` and `text` today). Findings:
+ADF `emoji` nodes carry `attrs.{id, shortName, text}` but no image
+(`ADFModel` keeps only `shortName` and `text`; the ID is read from raw JSON
+where needed). Custom panel icons carry the same ID in `panel.attrs.panelIconId`.
 
-- **No official route.** The OAuth/scoped-token scopes list has no emoji or
-  media scope
-  ([scopes reference](https://developer.atlassian.com/cloud/confluence/scopes-for-oauth-2-3LO-and-forge-apps/)).
-  The public GraphQL schema has no emoji query (only
-  `ConfluenceContentTitleEmoji` and reaction `emojiId`); the media-token fields
-  need the internal scope `confluence:atlassian-external`.
-- **Open feature request** CONFCLOUD-73225 ("no way to download image behind
-  this emoji id"), Gathering Interest since 2021; ECO-1375 says `imagePath` has
-  no documented usable URL.
-- **Undocumented emoji service** (used by Atlassian's own editor), which
-  answers without auth and ignores Basic auth:
-  `GET https://api.atlassian.com/emoji/{cloudId}/{emojiId}` →
-  `representation.{imagePath, mediaFileId, width, height}`;
-  `GET https://api.atlassian.com/emoji/{cloudId}/site/token/read` → an
-  anonymous read token (`clientId`, `jwt`, ~1 h); then `GET imagePath` with
-  `Authorization: Bearer <jwt>` + `X-Client-Id` → PNG. Verified end to end on
-  the public `ecosystem.atlassian.net` (108 custom emoji). On the test site the
-  anonymous list came back empty: either no custom emoji or the private site
-  blocks anonymous listing (unverified).
-- **Official fallback:** render `attrs.text` / `shortName`.
+**No official route.** The OAuth/scoped-token scopes list has no emoji or
+media scope
+([scopes reference](https://developer.atlassian.com/cloud/confluence/scopes-for-oauth-2-3LO-and-forge-apps/)).
+The public GraphQL schema has no emoji query (only `ConfluenceContentTitleEmoji`
+and reaction `emojiId`); the media-token fields need the internal scope
+`confluence:atlassian-external`. Feature request CONFCLOUD-73225 ("no way to
+download image behind this emoji id") is Gathering Interest since 2021;
+ECO-1375 says `imagePath` has no documented usable URL. Going through the
+scoped-token gateway (`api.atlassian.com/ex/confluence/{cloudId}/…emoji…`)
+returns 401 "scope does not match".
 
-Status: **pending a decision** on whether to depend on the undocumented
-service. There is no emoji fetch code; the live test only counts `emoji`
-nodes (marked TODO).
+### Decision (option A, 2026-11-19)
+
+- Use the **undocumented emoji service** that Atlassian's own editor uses
+  (`@atlaskit/emoji` 73.7.0: `SiteEmojiResource.findEmoji`, `TokenManager`,
+  `MediaImageLoader`). It may change without notice.
+- Keep it behind **its own app setting** (for example "Load custom emoji
+  images from Atlassian", separate from the media/attachment setting),
+  **default off** until a real site emoji on the user's site is verified
+  (see the probe results: not yet). The setting lives in the app, not in
+  this module.
+- Whenever the setting is off or the fetcher throws, render the
+  `:shortName:` / `attrs.text` fallback.
+
+### Flow (`AtlassianEmojiFetcher`)
+
+```text
+emoji(id?, shortName)
+  -> cloudId: credential.cloudId, else GET https://<site>/_edge/tenant_info (no auth), cached
+  -> id:  GET {api}/emoji/{cloudId}/{id}?preferredRepresentation=IMAGE         (no auth, cached by id)
+     no id, or 404 -> shortName in GET {api}/emoji/{cloudId}/site?preferredRepresentation=IMAGE
+                      (no auth; cached, one in flight; a miss refetches a list older than 60 s)
+  -> representation.imagePath
+     https + host *.atl-paas.net / *.atlassian.com  (standard, Atlassian emoji) -> GET, no credentials
+     https + api.media.atlassian.com or <site>/media-api/…  (site emoji)        -> GET with
+        Authorization: Bearer <jwt>, X-Client-Id: <clientId>, Accept: image/*
+        token: meta.mediaApiToken of any service response, else
+               GET {api}/emoji/{cloudId}/site/token/read (no auth)
+               cached until expiresAt - 60 s, one refresh in flight,
+               refreshed once on 401/403 and the image retried
+     anything else -> unsupportedHost / insecureURL, nothing sent
+  -> raw bytes (2xx); redirects: https only, Authorization + X-Client-Id dropped on another host
+api = https://api.atlassian.com   (https://<site>/gateway/api answers identically)
+```
+
+The service answers **without credentials and ignores Basic auth** (same
+bodies and headers with and without it), so the scoped API token is never
+sent: the credential only supplies the site and cloud ID. The read token
+(`aud: media`, `access: {"urn:filestore:collection:emoji-site-<cloudId>": ["read"]}`,
+`anonId: anon-user`, 59 min) is anonymous and goes only to the media hosts.
+
+| Endpoint | Response |
+|---|---|
+| `GET /emoji/{cloudId}/{id}` | `{emojis:[{id, shortName, type: STANDARD/ATLASSIAN/SITE, category, representation:{imagePath, mediaFileId?, width, height}}], meta:{mediaApiToken}}`; unknown ID → 404, empty body |
+| `GET /emoji/{cloudId}/site` | same shape, the site's custom emoji |
+| `GET /emoji/{cloudId}/site/token/read` | `{clientId, jwt, collectionName: "emoji-site-<cloudId>", url: "https://<site>/media-api", expiresAt (s), expiresIn (ms), maxFileSizeInBytes}` |
+| `GET /emoji/standard`, `/emoji/atlassian`, `/emoji/{cloudId}/` | full lists (1 890 standard, 590 Atlassian; the last is all of them); list form uses sprite sheets unless `preferredRepresentation=IMAGE` |
+| `GET imagePath` (site emoji) | `https://<site>/media-api/file/<mediaFileId>/image?collection=emoji-site-<cloudId>&width=32&height=32&max-age=31536000`; also served by `api.media.atlassian.com` with the same path |
+
+`altScale=XHDPI` (sent by the editor) made no difference; the `?ids=` bulk form
+is not a filter (`/emoji/{cloudId}/?ids=…` returns the full list).
+
+### Probe results (2026-11-19)
+
+Saved under `firstmate/data/adf-res5-atlassian-fetch/emoji/`: `requests.tsv`
+(one line per request: name, auth mode, URL, status, size, type),
+`responses/NN-*.json` and `*.headers.txt` (JWTs and cookies redacted),
+`images/*.png`.
+
+| Route (test site `mycompany`, cloudId `94525a37-…`) | anon | Basic (scoped token) |
+|---|---|---|
+| `api.atlassian.com/emoji/{c}/0b885b7f-…` (`:Growth_purple:` panel icon, page 196704) | 404 (01) | 404 (01) |
+| `<site>/gateway/api/emoji/{c}/0b885b7f-…` | 404 (02) | 404 (02) |
+| same + `?altScale=XHDPI`; `/emoji/atlassian/…`, `/emoji/standard/…` | 404 (12–14) | — |
+| `…/emoji/{c}/1f600` (both hosts) | 200, CDN `imagePath` (03, 04) | 200, identical |
+| `…/emoji/{c}/site` (both hosts) | 200, **0 emoji** (05, 06, 50, 53; re-listed at the end) | 200, 0 emoji (05, 06, 51, 54) |
+| `…/emoji/{c}/site/token/read` (both hosts) | 200 token (07, 08) | 200 token |
+| `api.atlassian.com/ex/confluence/{c}/…emoji…` | — | 401 "scope does not match" (15, 16) |
+| standard CDN PNG `…atl-paas.net/…/1f600.png` | 200 `image/png` 1 315 B (44, `images/standard-1f600.png`) | — |
+
+Control on the public `ecosystem.atlassian.net` (109 site emoji, anonymous
+access allowed): by-ID lookup 200 with `mediaFileId` (31), token 200 (33),
+image with Bearer + `X-Client-Id` → 200 `image/png` 2 070 B, 32×32, from both
+`<site>/media-api` (40) and `api.media.atlassian.com` (41); without a token →
+404 (42); with another site's token → 401 (43).
+
+**Verdict.** The flow works end to end on a site whose emoji service shares
+site emoji anonymously. On the private test site the `:Growth_purple:` image
+was **not** fetchable: its ID is unknown to the service and the site list is
+empty with or without Basic auth, so either the site has no custom emoji
+(the icon may come from a template on another site) or a private site only
+shows them to a signed-in browser session, which a scoped token cannot get.
+Unverified; hence the default-off setting.
+
+### Plug point
+
+```swift
+let emoji = AtlassianEmojiFetcher(credential: credential)   // one per account
+let fetch: @Sendable (String?, String) async throws -> Data = emoji.emojiFetch
+// resolver design closure, once ADFEmojiReference {id: String?, shortName: String} lands:
+let resolverFetch: @Sendable (ADFEmojiReference) async throws -> Data = { try await emoji.emojiFetch($0.id, $0.shortName) }
+```
+
+Returns raw bytes (PNG; 32×32 observed); downsampling is the resolver's job.
+Keep one fetcher per account: it caches the cloud ID, emoji by ID, the site
+list and the read token.
+
+### Errors
+
+`AtlassianEmojiError` (`Equatable`, `Sendable`, user-facing `message`, never
+a token):
+
+| Case | When |
+|---|---|
+| `notFound` | 404, empty `emojis`, unknown short name, or neither ID nor short name |
+| `unauthorized` | 401/403 from the service, or from the media host after one token refresh |
+| `invalidResponse` | undecodable body or token, emoji without `imagePath`, non-HTTP response |
+| `insecureURL` | `imagePath` or a redirect that is not `https` |
+| `unsupportedHost` | `imagePath` outside the allow-list (also a non-default port or user info) |
+| `http(status:)` | any other non-2xx |
+
+`URLError` and `CancellationError` are rethrown unchanged.
 
 ## 7. Testing
 
@@ -185,6 +287,17 @@ nodes (marked TODO).
   `Authorization`, same host keeps it, `http` is refused; concurrent fetches
   make one list call and one `tenant_info` call; `.external` is unsupported;
   redaction. Run `swift test --filter AtlassianMediaFetcherTests`.
+- `Tests/ADFAtlassianMediaTests/AtlassianEmojiFetcherTests.swift`: offline,
+  synthetic read tokens, the same stub plus an injected clock. Covers the
+  lookup URL (ID percent-encoded, `preferredRepresentation=IMAGE`), no Basic
+  auth / email / API token on any request, standard (CDN, no headers) vs site
+  (Bearer + `X-Client-Id`, site `/media-api` and `api.media.atlassian.com`),
+  token from `meta` vs `token/read`, caching, the 60 s expiry margin,
+  coalesced concurrent refreshes, one refresh-and-retry on 401/403, short-name
+  lookup (with/without colons, cached list, stale-list refetch, ID 404 →
+  short name), error mapping, the host allow-list, cross-host redirect
+  dropping `Authorization` and `X-Client-Id`, `http` refusal, `tenant_info`,
+  `emojiFetch`, redaction. Run `swift test --filter AtlassianEmojiFetcherTests`.
 - **Live check** (opt-in, real site), `LiveAtlassianMediaTests.swift`: skipped
   unless `ADF_LIVE_SITE` is set and adf-auth has saved an account for that
   site; it loads that credential at run time through `KeychainCredentialStore`
@@ -193,8 +306,12 @@ nodes (marked TODO).
   `body.atlas_doc_format.value` is a JSON string holding the ADF), parses it
   with `ADFParser`, collects every `.file` media node (whole tree, including
   `mediaSingle`/`mediaGroup`), requires at least one, fetches each and checks
-  image attachments decode with ImageIO. It prints only counts, sizes and media
-  types.
+  image attachments decode with ImageIO. A second test reads the raw ADF JSON
+  (ADFModel has no emoji ID), collects `emoji` nodes with an `id` plus any IDs
+  in `ADF_LIVE_EMOJI_IDS` (comma-separated), fetches each through
+  `AtlassianEmojiFetcher` and checks it decodes; with none it prints a note and
+  skips the assertion. Custom panel icons are fetched and reported but not
+  asserted. It prints only counts, sizes, media types and short names.
 
   ```sh
   # once: create the token from the prefilled link with all six scopes;
