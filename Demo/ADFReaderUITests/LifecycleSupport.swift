@@ -218,10 +218,67 @@ struct ReaderDriver {
 
     // MARK: About This Build
 
+    /// Two section headers of the renderer menu: `aboutMenuItem` drags from
+    /// the lower one to the upper one (the menu's first row). A header
+    /// takes no tap, so a drag that does not scroll starts and ends on
+    /// nothing a touch could pick.
+    static let menuScrollHandle = "Smart Link Resolution"
+    static let menuScrollTarget = "Text Renderer"
+
+    /// The open renderer menu's About item, scrolled into reach, waiting up
+    /// to `timeout` for the menu. The menu is a collection view as tall as
+    /// its content where the window allows; in a phone's landscape (440 pt
+    /// and less) it is shorter than its items since main 33d549f added
+    /// "Identify Renderer" and the Smart Link Resolution section, it
+    /// scrolls, and About, its last item, is below the fold and not in the
+    /// accessibility tree (K3's landscape read failed there, quiet window
+    /// 2). So while the menu is open (its `menuScrollHandle` header exists)
+    /// and About is missing for 0.5 s (or listed, as a row just below the
+    /// fold is, but not hittable for 1.5 s), this drags the menu
+    /// up from that header to the first one, at most `maxSwipes` times (by
+    /// 60 to 220 pt where the first has scrolled away), and checks again
+    /// after each drag (a slow drag can fall short on a loaded host).
+    /// Polled with `exists`: `waitForExistence` checks about once a second.
+    /// Where the menu shows About at once (portrait, an iPad) nothing is
+    /// dragged. The caller asserts the returned element exists.
+    func aboutMenuItem(timeout: TimeInterval = 5, maxSwipes: Int = 5) -> XCUIElement {
+        let about = menuItem(identifier: Identifier.about, label: "About This Build…")
+        let handle = app.collectionViews.staticTexts[Self.menuScrollHandle].firstMatch
+        let target = app.collectionViews.staticTexts[Self.menuScrollTarget].firstMatch
+        let deadline = Date().addingTimeInterval(timeout)
+        var swipes = 0
+        var unreachableSince: Date?
+        while true {
+            let listed = about.exists
+            if listed, about.isHittable { return about }
+            if swipes < maxSwipes, handle.exists {
+                let now = Date()
+                if let since = unreachableSince, now.timeIntervalSince(since) >= (listed ? 1.5 : 0.5) {
+                    let frame = handle.frame
+                    let top = target.exists ? target.frame.midY : app.windows.firstMatch.frame.minY + 30
+                    let distance = max(60, min(220, frame.midY - top))
+                    let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                    start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
+                                withVelocity: .slow, thenHoldForDuration: 0.3)
+                    swipes += 1
+                    unreachableSince = nil
+                    print("ABOUT_MENU_SWIPE n=\(swipes) from_y=\(Int(frame.midY)) by=\(Int(distance)) "
+                        + "about_exists=\(about.exists)")
+                    pause(0.3)
+                    continue
+                }
+                if unreachableSince == nil { unreachableSince = now }
+            } else if Date() >= deadline {
+                return about
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
     func openAbout() {
         openRendererMenu()
-        let about = menuItem(identifier: Identifier.about, label: "About This Build…")
-        XCTAssertTrue(about.waitForExistence(timeout: 5), "About This Build… missing from the menu")
+        let about = aboutMenuItem()
+        XCTAssertTrue(about.exists, "About This Build… missing from the menu")
         about.tap()
         XCTAssertTrue(
             app.staticTexts[Identifier.buildVersion].waitForExistence(timeout: 5), "About This Build did not open"

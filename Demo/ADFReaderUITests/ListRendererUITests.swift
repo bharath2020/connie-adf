@@ -650,8 +650,8 @@ private struct ListUIDriver {
 
     func openAbout() {
         reader.openRendererMenu()
-        let about = app.descendants(matching: .any).matching(identifier: ReaderDriver.Identifier.about).firstMatch
-        XCTAssertTrue(about.waitForExistence(timeout: Self.aboutTimeout), "About This Build… missing from the menu")
+        let about = reader.aboutMenuItem(timeout: Self.aboutTimeout)
+        XCTAssertTrue(about.exists, "About This Build… missing from the menu")
         about.tap()
         XCTAssertTrue(app.staticTexts[ReaderDriver.Identifier.buildVersion].waitForExistence(timeout: Self.aboutTimeout),
                       "About This Build did not open")
