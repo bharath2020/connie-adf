@@ -134,16 +134,22 @@ let fetch: @Sendable (MediaAttrs) async throws -> Data = fetcher.mediaFetch
 ```
 
 - Module boundary: `ADFAtlassianMedia` depends on `ADFAtlassianAuth` and
-  `ADFModel` only. `ADFRendering` and the future `ADFResolvers` never import
+  `ADFModel` only. `ADFRendering` and `ADFResolvers` never import
   `ADFAtlassianAuth`; they only see the closure.
 - Keep one fetcher per account for the reader session: it caches the cloud ID
   and each page's attachment list, and coalesces concurrent requests (one
   list chain per page, one `tenant_info` call).
-- Not wired into the Demo yet. `ReaderView` waits for the resolver Step 0
-  contracts (adf-res2) and Lane B. The Demo also needs
+- Not wired into the Demo yet. The resolver Step 0 contracts are on main
+  (`ADFEmojiReference`/`ADFEmojiResolver` in `ADFRendering`, `CacheFirstLoader`
+  in `ADFResolvers`, `emojiResolver = nil` in `ReaderView`), but the code that
+  consumes a fetch closure (the cache-first emoji resolver and media provider
+  with their mock fetches and `-emoji`/`-media` launch settings) belongs to
+  Lanes A and B and has not landed. When it does, the live closures go where
+  the mock ones are passed, behind the same settings, with the mock kept for
+  tests and fixtures. The Demo also needs
   `AccountStore.credential(for: site) -> AtlassianCredential?`, a thin wrapper
   around `store.load(site:)` (today it only exposes summaries), to build the
-  fetcher.
+  fetchers.
 
 ## 6. Custom emoji
 
@@ -250,7 +256,7 @@ Unverified; hence the default-off setting.
 ```swift
 let emoji = AtlassianEmojiFetcher(credential: credential)   // one per account
 let fetch: @Sendable (String?, String) async throws -> Data = emoji.emojiFetch
-// resolver design closure, once ADFEmojiReference {id: String?, shortName: String} lands:
+// the resolver contract's closure shape (ADFEmojiReference is in ADFRendering):
 let resolverFetch: @Sendable (ADFEmojiReference) async throws -> Data = { try await emoji.emojiFetch($0.id, $0.shortName) }
 ```
 
