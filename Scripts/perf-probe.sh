@@ -79,7 +79,9 @@
 #      files, so per-slot builds (<root>/dd/<slot>-<config>, <root>/spm/<slot>)
 #      stay incremental.
 #   2. xcodebuild build-for-testing (scheme ADFKit-Package) per slot;
-#      `swift build --build-tests` per slot for the parse tier.
+#      `swift build --build-tests` per slot for the parse tier. The
+#      candidate builds first: a Perf/ suite that then fails to compile
+#      only in the base is SKIPPED, not an error.
 #   3. Boots the simulator, runs one throwaway pass (warm-up rule), then
 #      xcodebuild test-without-building -only-testing:ADFRenderingTests/
 #      PerfProbeTests per pass, TEST_RUNNER_PERF_PROBE_* passing the knobs
@@ -527,7 +529,9 @@ fi
 
 wait_quiet "the builds"
 phase "build"
-for slot in "${SLOTS[@]}"; do
+BUILD_ORDER=(base)
+[[ -z "$CAND_REF" ]] || BUILD_ORDER=(cand base)
+for slot in "${BUILD_ORDER[@]}"; do
     [[ $WANT_RENDER -eq 0 ]] || build_render "$slot"
     [[ $WANT_PARSE -eq 0 ]] || build_parse "$slot"
 done

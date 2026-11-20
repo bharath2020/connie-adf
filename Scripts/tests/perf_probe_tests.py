@@ -144,26 +144,30 @@ def run_runtime_case(case: tuple) -> tuple[bool, str]:
 
 STUB_SWIFT = """#!/bin/sh
 echo "Building for debugging..."
-echo "$PWD/{path}:12:5: error: cannot find 'TextKit2RowView' in scope"
-exit 1
+case "$PWD" in
+    */src/{slots}) echo "$PWD/{path}:12:5: error: cannot find 'TextKit2RowView' in scope"; exit 1 ;;
+esac
+exit 0
 """
+SUITE = "Tests/ADFPreparationTests/Perf/ParsePreparePerfTests.swift"
 
-# (name, file the stub compiler error names, exit, wanted stdout prefix or None for "no SKIPPED")
+# (name, slots whose build fails (shell pattern), file the stub compiler error names, exit,
+#  wanted stdout prefix or None for "no SKIPPED")
 SCRIPT_CASES = [
-    ("the base cannot build the overlaid probe suite: SKIPPED",
-     "Tests/ADFPreparationTests/Perf/ParsePreparePerfTests.swift", 0,
+    ("the base cannot build the overlaid probe suite: SKIPPED", "base", SUITE, 0,
      "T0 work probe SKIPPED: base {sha} cannot build the current probe suite "
-     "(Tests/ADFPreparationTests/Perf/ParsePreparePerfTests.swift:12:5: error: cannot find 'TextKit2RowView' in scope)"),
-    ("the base fails to build outside the probe suite: error", "Sources/ADFParser/ADFParser.swift", 2, None),
+     f"({SUITE}:12:5: error: cannot find 'TextKit2RowView' in scope)"),
+    ("the base fails to build outside the probe suite: error", "base", "Sources/ADFParser/ADFParser.swift", 2, None),
+    ("the candidate cannot build its own probe suite either: error", "*", SUITE, 2, None),
 ]
 
 
 def run_script_case(workdir: str, index: int, case: tuple) -> tuple[bool, str]:
-    name, path, want_exit, want_prefix = case
+    name, slots, path, want_exit, want_prefix = case
     folder = os.path.join(workdir, f"script-{index}")
     stubs = os.path.join(folder, "bin")
     os.makedirs(stubs, exist_ok=True)
-    for tool, body in (("swift", STUB_SWIFT.format(path=path)), ("xcodebuild", "#!/bin/sh\nexit 0\n")):
+    for tool, body in (("swift", STUB_SWIFT.format(slots=slots, path=path)), ("xcodebuild", "#!/bin/sh\nexit 0\n")):
         stub = os.path.join(stubs, tool)
         with open(stub, "w", encoding="utf-8") as handle:
             handle.write(body)

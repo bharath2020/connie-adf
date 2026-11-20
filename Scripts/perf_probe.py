@@ -53,7 +53,11 @@ RULES (thresholds from the budgets file; defaults in DEFAULT_BUDGETS)
                    product counter) is listed, never CHANGED. A counter
                    whose reps disagreed (counts_unstable) is listed apart.
     ratio          render tier, candidate TextKit 2 ÷ SwiftUI instructions
-                   per fixture <= ratio_budgets[fixture]. Over it: FAIL when
+                   per fixture <= ratio_budgets[fixture], each side's ratio
+                   the smaller of the median-rep and the min-rep ratio
+                   (extra work in some reps only adds instructions; a
+                   median ratio over the budget the min-rep ratio is not
+                   is noted). Over it: FAIL when
                    the base is within it, or when the candidate ratio is
                    more than ratio_rise_fail_pct (2) above the base ratio;
                    otherwise WARN (the base is over too: recalibrate).
