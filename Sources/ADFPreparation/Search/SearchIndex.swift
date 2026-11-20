@@ -15,7 +15,8 @@ public struct SearchTextUnit: Sendable, Hashable {
     /// Expand blocks (outermost first) that must be open for this unit's
     /// content to be on screen. Empty for content outside expands.
     public let expandAncestorIDs: [String]
-    /// Concatenated plain text: `String(text.characters)` for text segments,
+    /// Concatenated plain text: `String(text.characters)` for text segments
+    /// (each custom emoji spelled by its short name), and
     /// `InlineComposer.fallbackText` for atoms, in segment order.
     public let plainText: String
     /// Ordered, gap-free composition map from `plainText` Character offsets
@@ -34,10 +35,22 @@ public struct SearchTextUnit: Sendable, Hashable {
         public let source: Source
         /// This part's contribution as Character offsets in `plainText`.
         public let range: Range<Int>
+        /// Where this part starts inside its text segment, in Characters: 0
+        /// unless a custom emoji splits the segment into several parts.
+        public let segmentOffset: Int
+        /// `nil`: the part maps Character for Character onto its segment
+        /// from `segmentOffset`. Otherwise the whole part stands for this
+        /// many segment Characters from `segmentOffset`: a custom emoji is
+        /// one U+FFFC in its segment but is spelled by its short name in
+        /// `plainText`, so a match touching any of the name paints that
+        /// one character.
+        public let segmentLength: Int?
 
-        public init(source: Source, range: Range<Int>) {
+        public init(source: Source, range: Range<Int>, segmentOffset: Int = 0, segmentLength: Int? = nil) {
             self.source = source
             self.range = range
+            self.segmentOffset = segmentOffset
+            self.segmentLength = segmentLength
         }
     }
 

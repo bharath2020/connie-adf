@@ -87,8 +87,17 @@ public enum SearchMatcher {
                 }
                 switch part.source {
                 case .textSegment(let segmentIndex):
-                    let lower = max(range.lowerBound, part.range.lowerBound) - part.range.lowerBound
-                    let upper = min(range.upperBound, part.range.upperBound) - part.range.lowerBound
+                    if let length = part.segmentLength {
+                        // A custom emoji's short name: the whole emoji.
+                        textSpans.append(SearchHighlightSpan(
+                            segmentIndex: segmentIndex,
+                            range: part.segmentOffset..<(part.segmentOffset + length)
+                        ))
+                        partIndex += 1
+                        continue
+                    }
+                    let lower = max(range.lowerBound, part.range.lowerBound) - part.range.lowerBound + part.segmentOffset
+                    let upper = min(range.upperBound, part.range.upperBound) - part.range.lowerBound + part.segmentOffset
                     if lower < upper {
                         textSpans.append(SearchHighlightSpan(
                             segmentIndex: segmentIndex,

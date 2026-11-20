@@ -34,7 +34,8 @@ struct SegmentedTextView: View {
     /// The owner's custom emoji (`RenderBlock.emojiKeys`,
     /// `PreparedListRow.emojiKeys`). `nil`: not handed over by the caller (a
     /// media caption), so the leaf finds them in `segments`
-    /// (`EmojiDisplay.keys(in:)`).
+    /// (`EmojiDisplay.keys(in:)`) and, since such a caller does not feed
+    /// them to the emoji coordinator, shows their short names.
     var emojiKeys: [EmojiKey]? = nil
 
     /// Gap between wrapped lines, scaled with Dynamic Type so line rhythm
@@ -49,6 +50,7 @@ struct SegmentedTextView: View {
 
     @Environment(\.adfDocumentSearch) private var search
     @Environment(\.adfSmartLinks) private var smartLinks
+    @Environment(\.adfEmoji) private var emojiCoordinator
     @Environment(\.adfTheme) private var theme
     /// The document's identity registry while it identifies its renderer
     /// (`ADFDocumentView(identifiesRenderer:)`); `nil`, the default, adds
@@ -116,12 +118,16 @@ struct SegmentedTextView: View {
         emojiKeys ?? EmojiDisplay.keys(in: segments)
     }
 
-    /// The stages of the owner's custom emoji, `nil` without a resolver
-    /// (every emoji shows its short name). No resolver is wired yet: the
-    /// emoji coordinator slice reads the entries for exactly `keys` here,
-    /// as `smartLinkStages` does.
+    /// The stages of the owner's custom emoji: the coordinator's entries for
+    /// exactly `keys` (the leaf's observation dependency on them, as
+    /// `smartLinkStages`), or `nil` (every emoji shows its short name)
+    /// without a resolver, or when the caller handed no `emojiKeys`. Such
+    /// a caller (a media caption) does not attach the leaf to the emoji
+    /// coordinator, so its emoji would never be asked for and would stay
+    /// blank boxes; they show their short names instead.
     private func emojiStages(for keys: [EmojiKey]) -> [EmojiKey: EmojiStage]? {
-        nil
+        guard emojiKeys != nil, let emojiCoordinator else { return nil }
+        return emojiCoordinator.displayStages(for: keys, owner: ownerID)
     }
 
     // MARK: Smart links
