@@ -9,12 +9,15 @@ import ADFAtlassianAuth
 /// Transport failures (`URLError`) and `CancellationError` are not wrapped:
 /// ``AtlassianMediaFetcher`` rethrows them unchanged.
 public enum AtlassianMediaError: Error, Equatable, Sendable {
-    /// The media node's collection is not `contentId-<digits>` and no page ID
-    /// was given, so there is no page to list attachments for.
+    /// The media node's collection is not `contentId-<digits>`, so there is
+    /// no page to list attachments for.
     case missingPageId(collection: String?)
     /// The page has no attachment whose `fileId` matches (after one refetch
-    /// of a cached list).
+    /// of a cached list older than a minute).
     case attachmentNotFound(fileId: String)
+    /// The attachment is listed with this media type, not `image/*`, so it
+    /// is not downloaded.
+    case unsupportedMediaType(String)
     /// HTTP 401: the email or token is wrong, revoked or expired.
     case unauthorized
     /// HTTP 403: most likely the token lacks the attachment scopes.
@@ -61,6 +64,9 @@ public enum AtlassianMediaError: Error, Equatable, Sendable {
             return "Atlassian returned HTTP \(status) while loading an image. Try again later."
         case .invalidResponse:
             return "Unexpected response from Atlassian while loading an image."
+        case .unsupportedMediaType(let mediaType):
+            let shown = mediaType.isEmpty ? "no media type" : mediaType
+            return "This attachment is not an image (\(shown)), so it is not downloaded."
         case .unsupportedSource:
             return "This image is not a Confluence attachment, so the Atlassian media fetcher does not load it."
         case .insecureRedirect:

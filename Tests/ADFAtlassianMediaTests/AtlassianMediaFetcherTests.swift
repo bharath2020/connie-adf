@@ -28,8 +28,9 @@ struct AtlassianMediaFetcherTests {
         }
     }
 
-    func makeFetcher(_ stub: MediaStubProtocol.Stub, cloudId: String? = MediaFixture.cloudId) -> AtlassianMediaFetcher {
-        AtlassianMediaFetcher(credential: MediaFixture.credential(cloudId: cloudId), session: stub.session)
+    func makeFetcher(_ stub: MediaStubProtocol.Stub, cloudId: String? = MediaFixture.cloudId, clock: EmojiTestClock = EmojiTestClock()) -> AtlassianMediaFetcher {
+        AtlassianMediaFetcher(credential: MediaFixture.credential(cloudId: cloudId), session: stub.session,
+                              apiBase: AtlassianMediaFetcher.defaultAPIBase, now: { clock.now })
     }
 
     func media(_ fileId: String, collection: String = MediaFixture.collection) -> MediaAttrs {
@@ -58,7 +59,7 @@ struct AtlassianMediaFetcherTests {
     @Test("a file is matched by fileId and downloaded through the v1 attachment endpoint")
     func downloadRequestShape() async throws {
         let stub = makeStub()
-        let data = try await makeFetcher(stub).data(fileId: MediaFixture.fileB, collection: MediaFixture.collection, pageId: nil)
+        let data = try await makeFetcher(stub).data(fileId: MediaFixture.fileB, collection: MediaFixture.collection)
         #expect(data == MediaFixture.imageBytes)
         #expect(stub.requests.count == 2)
         let download = try #require(stub.requests.last)
@@ -78,11 +79,19 @@ struct AtlassianMediaFetcherTests {
         #expect(stub.requests.count == 3)
     }
 
-    @Test("an explicit page ID wins over the collection")
-    func explicitPageId() async throws {
-        let stub = makeStub()
-        _ = try await makeFetcher(stub).data(fileId: MediaFixture.fileA, collection: "contentId-999", pageId: MediaFixture.pageId)
-        #expect(stub.requests.first?.url?.absoluteString == MediaFixture.listURL)
+    @Test("a non-image attachment is refused before any download request")
+    func nonImageNotDownloaded() async {
+        let video = "6a8d1f0e-4444-4c2b-9e3a-dddddddddddd"
+        let stub = makeStub { request in
+            guard request.url?.path() == MediaFixture.listPath else { return nil }
+            return .json(MediaFixture.listJSON([(id: "att2004", fileId: video, title: "clip.mp4", mediaType: "video/mp4")]))
+        }
+        await #expect(throws: AtlassianMediaError.unsupportedMediaType("video/mp4")) {
+            try await makeFetcher(stub).data(fileId: video, collection: MediaFixture.collection)
+        }
+        #expect(stub.requests(path: MediaFixture.listPath).count == 1)
+        #expect(stub.requests(path: MediaFixture.downloadPath(attachmentId: "att2004")).isEmpty)
+        #expect(stub.requests.count == 1)
     }
 
     // MARK: Cloud ID
@@ -142,7 +151,7 @@ struct AtlassianMediaFetcherTests {
     func missingPageId(collection: String?) async {
         let stub = makeStub()
         await #expect(throws: AtlassianMediaError.missingPageId(collection: collection)) {
-            try await makeFetcher(stub).data(fileId: MediaFixture.fileA, collection: collection, pageId: nil)
+            try await makeFetcher(stub).data(fileId: MediaFixture.fileA, collection: collection)
         }
         #expect(stub.requests.isEmpty)
     }
@@ -165,8 +174,9 @@ struct AtlassianMediaFetcherTests {
         #expect(stub.requests(path: MediaFixture.listPath).count == 1)
     }
 
-    @Test("a file ID missing from a cached list refetches the list once")
+    @Test("a file ID missing from a cached list refetches it once, only when the list is older than a minute")
     func refetchOnMiss() async throws {
+        let clock = EmojiTestClock()
         let calls = OSAllocatedUnfairLock(initialState: 0)
         let newFile = "6a8d1f0e-3333-4c2b-9e3a-cccccccccccc"
         let stub = makeStub { request in
@@ -174,13 +184,27 @@ struct AtlassianMediaFetcherTests {
             if calls.withLock({ $0 += 1; return $0 }) == 1 { return .json(MediaFixture.defaultList) }
             return .json(MediaFixture.listJSON([(id: "att2003", fileId: newFile, title: "new.png", mediaType: "image/png")]))
         }
-        let fetcher = makeFetcher(stub)
+        let fetcher = makeFetcher(stub, clock: clock)
         _ = try await fetcher.attachments(pageId: MediaFixture.pageId)
+        for _ in 0..<3 {
+            await #expect(throws: AtlassianMediaError.attachmentNotFound(fileId: newFile)) {
+                try await fetcher.data(fileId: newFile, collection: MediaFixture.collection)
+            }
+        }
+        #expect(stub.requests(path: MediaFixture.listPath).count == 1)
+
+        clock.advance(61)
         let data = try await fetcher.data(fileId: newFile, collection: MediaFixture.collection)
         #expect(data == MediaFixture.imageBytes)
         #expect(stub.requests(path: MediaFixture.listPath).count == 2)
         #expect(stub.requests.last?.url?.path() == MediaFixture.downloadPath(attachmentId: "att2003"))
 
+        await #expect(throws: AtlassianMediaError.attachmentNotFound(fileId: "still-missing")) {
+            try await fetcher.data(fileId: "still-missing", collection: MediaFixture.collection)
+        }
+        #expect(stub.requests(path: MediaFixture.listPath).count == 2)
+
+        clock.advance(61)
         await #expect(throws: AtlassianMediaError.attachmentNotFound(fileId: "still-missing")) {
             try await fetcher.data(fileId: "still-missing", collection: MediaFixture.collection)
         }

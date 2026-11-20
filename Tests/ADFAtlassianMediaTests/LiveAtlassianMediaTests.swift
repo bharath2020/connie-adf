@@ -39,16 +39,18 @@ struct LiveAtlassianMediaTests {
 
         var decodedImages = 0
         for (index, attrs) in scan.fileMedia.enumerated() {
-            let bytes = try await fetcher.data(for: attrs)
             guard case .file(let fileId, _) = attrs.source else { continue }
             let mediaType = mediaTypes[fileId] ?? "unknown"
+            guard mediaType.lowercased().hasPrefix("image/") else {
+                print("live: media #\(index + 1): \(mediaType), not an image; not downloaded")
+                continue
+            }
+            let bytes = try await fetcher.data(for: attrs)
             let frames = Self.imageFrameCount(bytes)
             print("live: media #\(index + 1): \(bytes.count) bytes, \(mediaType), \(frames) image frame(s)")
             #expect(!bytes.isEmpty)
-            if mediaType.hasPrefix("image/") || mediaType == "unknown" {
-                #expect(frames > 0, "media #\(index + 1) (\(mediaType)) did not decode as an image")
-                if frames > 0 { decodedImages += 1 }
-            }
+            #expect(frames > 0, "media #\(index + 1) (\(mediaType)) did not decode as an image")
+            if frames > 0 { decodedImages += 1 }
         }
         #expect(decodedImages > 0)
     }

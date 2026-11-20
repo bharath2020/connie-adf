@@ -34,7 +34,8 @@ media(id: <fileId>, collection: "contentId-<page>")
   -> cloudId: credential.cloudId, else GET https://<site>/_edge/tenant_info (no auth), cached
   -> GET  {gw}/wiki/api/v2/pages/<page>/attachments?limit=250    cached per page, one in-flight
           follow _links.next (page cap 40)                         request chain per page
-  -> attachment where fileId == media id (miss in a cached list -> refetch once)
+  -> attachment where fileId == media id (miss in a cached list older than 60 s -> refetch once)
+  -> mediaType must be image/*, else unsupportedMediaType, nothing downloaded
   -> GET  {gw}/wiki/rest/api/content/<page>/child/attachment/<att id>/download
           302 -> media host: Authorization stripped (other host), https only
   -> raw bytes (2xx)
@@ -111,8 +112,9 @@ the email, token or header):
 
 | Case | When |
 |---|---|
-| `missingPageId(collection:)` | collection is not `contentId-<digits>` and no `pageId` was given |
-| `attachmentNotFound(fileId:)` | no attachment with that `fileId`, also after one refetch of a cached list |
+| `missingPageId(collection:)` | collection is not `contentId-<digits>` (the page ID always comes from the collection) |
+| `attachmentNotFound(fileId:)` | no attachment with that `fileId`; a miss in a cached list refetches it once, at most once a minute (`attachmentListMinRefetchInterval`) |
+| `unsupportedMediaType(_:)` | the attachment's listed `mediaType` is not `image/*` (video, PDF, none); thrown before any download request |
 | `unauthorized` | HTTP 401 |
 | `forbidden` | HTTP 403: most likely the two attachment scopes are missing |
 | `notFound` | HTTP 404 (v1 also uses it when the account can't see the attachment) |
@@ -288,7 +290,8 @@ a token):
   followed request comes back through the stub and is recorded). Covers request
   URL, method and headers for list and download; cloud ID from the credential
   vs `tenant_info` (sent without `Authorization`); `fileId` matching and
-  refetch-once; pagination and next-link resolution; page ID parsing and the
+  refetch-once only for a list older than a minute (injected clock); non-image
+  attachments refused with no download request; pagination and next-link resolution; page ID parsing and the
   missing-page-ID error; 401/403/404/other mapping; cross-host redirect strips
   `Authorization`, same host keeps it, `http` is refused; concurrent fetches
   make one list call and one `tenant_info` call; `.external` is unsupported;

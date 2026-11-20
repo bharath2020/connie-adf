@@ -11,7 +11,7 @@ import ADFModel
 ///   -> cloudId (credential, else GET https://<site>/_edge/tenant_info, no auth)
 ///   -> GET  /wiki/api/v2/pages/<page>/attachments?limit=250   (cached per page,
 ///                                                              follows _links.next)
-///   -> match attachment.fileId == media id
+///   -> match attachment.fileId == media id; only image/* is downloaded
 ///   -> GET  /wiki/rest/api/content/<page>/child/attachment/<att id>/download
 ///      302 -> media host (Authorization stripped on any other host)
 /// ```
@@ -32,16 +32,19 @@ public actor AtlassianMediaFetcher {
     /// At most this many list pages are read for one page (250 × 40 = 10 000
     /// attachments); the rest are ignored.
     static let maxListPages = 40
+    /// A file-ID miss refetches a cached attachment list at most this often.
+    static let attachmentListMinRefetchInterval: TimeInterval = 60
     static let userAgent = "adf-media/1"
 
     public nonisolated let site: AtlassianSite
     public nonisolated let apiBase: URL
     private let credential: AtlassianCredential
     private let session: URLSession
+    private let now: @Sendable () -> Date
 
     private var cachedCloudId: String?
     private var cloudIdTask: Task<String, any Error>?
-    private var attachmentCache: [String: [AtlassianAttachment]] = [:]
+    private var attachmentCache: [String: (attachments: [AtlassianAttachment], fetchedAt: Date)] = [:]
     private var listTasks: [String: Task<[AtlassianAttachment], any Error>] = [:]
 
     /// - Parameters:
@@ -50,10 +53,16 @@ public actor AtlassianMediaFetcher {
     ///   - session: Override only for stub sessions in tests.
     ///   - apiBase: Override only for stub servers in tests.
     public init(credential: AtlassianCredential, session: URLSession = .shared, apiBase: URL = AtlassianMediaFetcher.defaultAPIBase) {
+        self.init(credential: credential, session: session, apiBase: apiBase, now: { Date() })
+    }
+
+    /// Tests inject the clock.
+    init(credential: AtlassianCredential, session: URLSession, apiBase: URL, now: @escaping @Sendable () -> Date) {
         self.site = credential.site
         self.apiBase = apiBase
         self.credential = credential
         self.session = session
+        self.now = now
         if let cloudId = credential.cloudId, !cloudId.isEmpty {
             self.cachedCloudId = cloudId
         }
@@ -73,22 +82,23 @@ public actor AtlassianMediaFetcher {
         switch attrs.source {
         case .file(let id, let collection):
             guard !id.isEmpty else { throw AtlassianMediaError.attachmentNotFound(fileId: id) }
-            return try await data(fileId: id, collection: collection.isEmpty ? nil : collection, pageId: nil)
+            return try await data(fileId: id, collection: collection.isEmpty ? nil : collection)
         case .external:
             throw AtlassianMediaError.unsupportedSource
         }
     }
 
-    /// The bytes of the attachment with media file ID `fileId`.
-    ///
-    /// - Parameters:
-    ///   - collection: The ADF media collection, `contentId-<page id>`.
-    ///   - pageId: Wins over `collection` when given.
-    public func data(fileId: String, collection: String? = nil, pageId: String? = nil) async throws -> Data {
-        guard let page = Self.resolvePageId(explicit: pageId, collection: collection) else {
+    /// The bytes of the attachment with media file ID `fileId`, on the page
+    /// named by `collection` (`contentId-<page id>`). Only attachments listed
+    /// as `image/*` are downloaded.
+    public func data(fileId: String, collection: String?) async throws -> Data {
+        guard let page = collection.flatMap(Self.pageId(fromCollection:)) else {
             throw AtlassianMediaError.missingPageId(collection: collection)
         }
         let match = try await findAttachment(fileId: fileId, pageId: page)
+        guard match.mediaType.lowercased().hasPrefix("image/") else {
+            throw AtlassianMediaError.unsupportedMediaType(match.mediaType)
+        }
         let cloudId = try await resolvedCloudId()
         let path = "/wiki/rest/api/content/\(Self.pathSegment(page))/child/attachment/\(Self.pathSegment(match.id))/download"
         let url = try Self.makeURL(gatewayBase(cloudId: cloudId) + path)
@@ -100,14 +110,14 @@ public actor AtlassianMediaFetcher {
     /// Every attachment of the page, across all list pages. Cached per page;
     /// concurrent calls for the same page share one request chain.
     public func attachments(pageId: String) async throws -> [AtlassianAttachment] {
-        if let cached = attachmentCache[pageId] { return cached }
+        if let cached = attachmentCache[pageId] { return cached.attachments }
         if let running = listTasks[pageId] { return try await running.value }
         let task = Task { try await self.fetchAttachmentList(pageId: pageId) }
         listTasks[pageId] = task
         do {
             let list = try await task.value
             listTasks[pageId] = nil
-            attachmentCache[pageId] = list
+            attachmentCache[pageId] = (list, now())
             return list
         } catch {
             listTasks[pageId] = nil
@@ -115,14 +125,15 @@ public actor AtlassianMediaFetcher {
         }
     }
 
-    /// Looks `fileId` up in the page's list; a miss in a list that was already
-    /// cached refetches it once (the page may have gained the attachment).
+    /// Looks `fileId` up in the page's list; a miss in a cached list older
+    /// than ``attachmentListMinRefetchInterval`` refetches it once (the page
+    /// may have gained the attachment).
     private func findAttachment(fileId: String, pageId: String) async throws -> AtlassianAttachment {
-        let wasCached = attachmentCache[pageId] != nil
+        let cachedAt = attachmentCache[pageId]?.fetchedAt
         if let match = try await attachments(pageId: pageId).first(where: { $0.fileId == fileId }) {
             return match
         }
-        if wasCached {
+        if let cachedAt, now().timeIntervalSince(cachedAt) >= Self.attachmentListMinRefetchInterval {
             attachmentCache[pageId] = nil
             if let match = try await attachments(pageId: pageId).first(where: { $0.fileId == fileId }) {
                 return match
@@ -224,15 +235,6 @@ public actor AtlassianMediaFetcher {
     }
 
     // MARK: Pure helpers (internal for tests)
-
-    /// The page ID from an explicit value, else from a `contentId-<digits>`
-    /// collection.
-    static func resolvePageId(explicit: String?, collection: String?) -> String? {
-        if let explicit = explicit?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
-            return explicit
-        }
-        return collection.flatMap(pageId(fromCollection:))
-    }
 
     /// `contentId-229377` → `229377`; anything else → nil.
     static func pageId(fromCollection collection: String) -> String? {
