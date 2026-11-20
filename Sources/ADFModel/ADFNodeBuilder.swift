@@ -254,12 +254,11 @@ struct ADFNodeBuilder {
                 shortName = ""
                 issues.append(ADFParseIssue(path: path, message: "Emoji missing 'shortName'"))
             }
+            let id = attrs?["id"]?.stringValue
             kind = .emoji(
                 shortName: shortName,
-                text: Self.normalizedEmojiText(
-                    text: attrs?["text"]?.stringValue,
-                    id: attrs?["id"]?.stringValue
-                )
+                id: id,
+                text: Self.normalizedEmojiText(text: attrs?["text"]?.stringValue, id: id)
             )
 
         case "date":
@@ -438,7 +437,7 @@ struct ADFNodeBuilder {
     }
 
     /// "1f5d3" or "1f468-200d-1f4bb" → the character; nil for non-hex ids
-    /// (custom workspace emojis), which fall back to the `:shortName:` atom.
+    /// (custom workspace emojis), which keep `text == nil` and their `id`.
     private static func emojiString(hexCodepoints id: String) -> String? {
         let parts = id.split(separator: "-")
         let scalars = parts.compactMap { UInt32($0, radix: 16).flatMap(Unicode.Scalar.init) }

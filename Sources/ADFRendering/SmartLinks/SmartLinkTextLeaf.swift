@@ -17,12 +17,20 @@ import ADFPreparation
 /// - It attaches the leaf to the coordinator while it is materialised and
 ///   reports the leaf's own viewport visibility (`smartLinkAttachment`).
 ///
+/// - Custom emoji (`emojiKeys`): under `.textKit2` the row's input shows
+///   each emoji as its stage draws it (`EmojiDisplay.apply`, after the smart
+///   links), with or without a resolver, so the row never draws a raw
+///   U+FFFC; the SwiftUI `fallback` does the same itself.
+///
 /// With no smart links (`smartLinkKeys` empty — nearly every owner) or no
-/// resolver (no `adfSmartLinks`) it reads nothing and adds no modifier: the
-/// leaf is `TextEngineLeaf` as before.
+/// resolver (no `adfSmartLinks`), and no custom emoji, it reads nothing and
+/// adds no modifier: the leaf is `TextEngineLeaf` as before.
 struct SmartLinkTextLeaf<Fallback: View>: View {
     let segments: [InlineSegment]
     let smartLinkKeys: [SmartLinkKey]
+    /// The owner's custom emoji; `nil`: found in `segments`
+    /// (`SegmentedTextView.emojiKeys`).
+    let emojiKeys: [EmojiKey]?
     let style: TextBlockStyle
     let ownerID: String?
     var allowsTextKit2 = true
@@ -36,11 +44,13 @@ struct SmartLinkTextLeaf<Fallback: View>: View {
     @Environment(\.adfTheme) private var theme
 
     init(
-        segments: [InlineSegment], smartLinkKeys: [SmartLinkKey], style: TextBlockStyle, ownerID: String?,
+        segments: [InlineSegment], smartLinkKeys: [SmartLinkKey], emojiKeys: [EmojiKey]? = nil,
+        style: TextBlockStyle, ownerID: String?,
         allowsTextKit2: Bool = true, widthInset: CGFloat = 0, @ViewBuilder fallback: () -> Fallback
     ) {
         self.segments = segments
         self.smartLinkKeys = smartLinkKeys
+        self.emojiKeys = emojiKeys
         self.style = style
         self.ownerID = ownerID
         self.allowsTextKit2 = allowsTextKit2
@@ -59,13 +69,31 @@ struct SmartLinkTextLeaf<Fallback: View>: View {
     }
 
     /// The segments the TextKit 2 arm judges and draws: the displayed text
-    /// when the switch is ON and a stage changes the display, else the
-    /// prepared segments untouched (no copy).
+    /// when the switch is ON and a smart-link stage changes the display or
+    /// the owner has custom emoji, else the prepared segments untouched (no
+    /// copy).
     private var textKit2Segments: [InlineSegment] {
-        guard !smartLinkKeys.isEmpty, renderer == .textKit2, allowsTextKit2, let smartLinks else { return segments }
-        let stages = smartLinks.displayStages(for: smartLinkKeys, owner: ownerID)
-        guard !stages.isEmpty else { return segments }
-        return SmartLinkDisplay.apply(stages, to: segments, theme: theme)
+        guard renderer == .textKit2, allowsTextKit2 else { return segments }
+        var displayed = segments
+        if !smartLinkKeys.isEmpty, let smartLinks {
+            let stages = smartLinks.displayStages(for: smartLinkKeys, owner: ownerID)
+            if !stages.isEmpty {
+                displayed = SmartLinkDisplay.apply(stages, to: displayed, theme: theme)
+            }
+        }
+        let emoji = emojiKeys ?? EmojiDisplay.keys(in: segments)
+        if !emoji.isEmpty {
+            displayed = EmojiDisplay.apply(emojiStages(for: emoji), to: displayed)
+        }
+        return displayed
+    }
+
+    /// The stages of the owner's custom emoji, `nil` without a resolver
+    /// (every emoji shows its short name). No resolver is wired yet: the
+    /// emoji coordinator slice reads the entries for exactly `keys` here,
+    /// as `SegmentedTextView` does on the SwiftUI arm.
+    private func emojiStages(for keys: [EmojiKey]) -> [EmojiKey: EmojiStage]? {
+        nil
     }
 }
 

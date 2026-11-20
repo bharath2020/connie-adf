@@ -567,7 +567,7 @@ public final class ADFDocumentModel {
         for segment in segments {
             switch segment {
             case .text(let text):
-                title += String(text.characters)
+                title += InlineComposer.plainText(of: text)
             case .atom(let atom, _):
                 title += atom.fallbackText
             }

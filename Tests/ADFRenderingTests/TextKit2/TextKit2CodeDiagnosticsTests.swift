@@ -89,10 +89,10 @@ struct TextKit2CodeCoverageTests {
             blocks: 5_000, eligibleCode: 400, fallbackCode: 0, eligibleRoots: 2_400, eligibleTextLeaves: 9_943, fallbackTextLeaves: 0
         ),
         "lists-parity": TK2CodeCoveragePin(
-            blocks: 21, eligibleCode: 0, fallbackCode: 0, eligibleRoots: 8, eligibleTextLeaves: 48, fallbackTextLeaves: 6
+            blocks: 21, eligibleCode: 0, fallbackCode: 0, eligibleRoots: 8, eligibleTextLeaves: 49, fallbackTextLeaves: 5
         ),
         "list-dense": TK2CodeCoveragePin(
-            blocks: 600, eligibleCode: 0, fallbackCode: 0, eligibleRoots: 0, eligibleTextLeaves: 3_537, fallbackTextLeaves: 395
+            blocks: 600, eligibleCode: 0, fallbackCode: 0, eligibleRoots: 0, eligibleTextLeaves: 3_617, fallbackTextLeaves: 315
         ),
     ]
 

@@ -20,6 +20,9 @@ struct RichTextBlockView: View {
     /// The block's smart links (`RenderBlock.smartLinkKeys`): both arms draw
     /// their displayed stage (`SmartLinkTextLeaf`, `SegmentedTextView`).
     var smartLinkKeys: [SmartLinkKey] = []
+    /// The block's custom emoji (`RenderBlock.emojiKeys`); `nil`: found in
+    /// `segments`. Both arms draw their displayed stage.
+    var emojiKeys: [EmojiKey]? = nil
 
     @Environment(\.adfTheme) private var theme
 
@@ -35,14 +38,15 @@ struct RichTextBlockView: View {
         // The leaf sits inside `body`'s indentation padding, so the
         // under-1-pt guard measures what is left of the width bound.
         SmartLinkTextLeaf(
-            segments: segments, smartLinkKeys: smartLinkKeys, style: style, ownerID: ownerID, widthInset: indentationPadding
+            segments: segments, smartLinkKeys: smartLinkKeys, emojiKeys: emojiKeys, style: style, ownerID: ownerID,
+            widthInset: indentationPadding
         ) {
             swiftUIText
         }
     }
 
     private var swiftUIText: some View {
-        SegmentedTextView(segments: segments, ownerID: ownerID, smartLinkKeys: smartLinkKeys)
+        SegmentedTextView(segments: segments, ownerID: ownerID, smartLinkKeys: smartLinkKeys, emojiKeys: emojiKeys)
             .multilineTextAlignment(textAlignment)
             .textSelection(.enabled)
     }

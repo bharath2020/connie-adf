@@ -330,9 +330,13 @@ struct ListsParityPreparationTests {
         let rows = try listRows(blocks.first { $0.id == "0.8" })
         #expect(rows.map(\.id) == (0 ... 12).map { "0.8.\($0)" })
         #expect(rows.allSatisfy { $0.depth == 0 && $0.marker == .bullet(depth: 0) })
-        // Mention, status, date and the text-less emoji are atoms; the
-        // Unicode row's emoji node has a text form and stays text.
-        #expect(rows.filter { hasAtom($0.segments) }.map(\.id) == ["0.8.7", "0.8.8", "0.8.9", "0.8.10"])
+        // Mention, status and date are atoms; the Unicode row's emoji node
+        // has a text form and stays text, and the text-less (custom) emoji
+        // is one U+FFFC in the text run, keyed on its row.
+        #expect(rows.filter { hasAtom($0.segments) }.map(\.id) == ["0.8.7", "0.8.8", "0.8.9"])
+        #expect(rows.filter { !$0.emojiKeys.isEmpty }.map(\.id) == ["0.8.10"])
+        #expect(rows[10].emojiKeys == [EmojiKey(id: nil, shortName: ":lp-custom:")])
+        #expect(leaderText(rows[10].segments) == "LP-ATOM-EMOJI custom \u{FFFC}")
         #expect(rows.filter { hasLink($0.segments) }.map(\.id) == ["0.8.2"])
         #expect(rows.filter { $0.segments.isEmpty }.map(\.id) == ["0.8.11", "0.8.12"])
         #expect(leaderText(rows[4].segments).hasSuffix("🚀 text emoji"))

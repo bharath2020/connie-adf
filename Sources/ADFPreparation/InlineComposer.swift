@@ -8,7 +8,6 @@ public enum InlineAtom: Sendable, Hashable {
     case mention(text: String)
     case status(text: String, color: ADFStatusColor)
     case date(timestampMS: Double)
-    case emoji(shortName: String)
     case inlineCard(url: String?)
     case mediaInline(MediaAttrs)
     case inlineExtension(name: String)
@@ -46,8 +45,9 @@ public struct InlineComposer: Sendable {
     }
 
     /// Composes inline nodes using the theme body font as the base.
-    /// Adjacent text runs (including hard breaks and text-representable
-    /// emoji) merge into a single `AttributedString` segment. When the
+    /// Adjacent text runs (including hard breaks and emoji: unicode emoji as
+    /// their characters, custom emoji as one U+FFFC carrying `adfEmoji`)
+    /// merge into a single `AttributedString` segment. When the
     /// sequence contains atoms, text runs are pre-split into word-level
     /// chunks here — at preparation time — so the view layer's wrapping
     /// layout never scans or slices attributed strings inside `body` (§5.3).
@@ -71,16 +71,22 @@ public struct InlineComposer: Sendable {
     }
 
     /// One text owner's composed content (a paragraph's, a heading's, a
-    /// list leader's or a caption's) and the smart links in it.
+    /// list leader's or a caption's) and the smart links and custom emoji in
+    /// it.
     package struct ComposedInline: Sendable {
         package var segments: [InlineSegment]
         /// The keys of the smart-link runs in `segments`, de-duplicated, in
         /// document order. Empty for the overwhelming majority of owners, so
         /// every renderer gate is one `isEmpty` check.
         package var smartLinkKeys: [SmartLinkKey]
+        /// The keys of the custom emoji in `segments` (emoji with no unicode
+        /// text, each one U+FFFC carrying `adfEmoji`), de-duplicated, in
+        /// document order. Empty for nearly every owner: the renderer's
+        /// emoji gate is one `isEmpty` check, as for smart links.
+        package var emojiKeys: [EmojiKey] = []
     }
 
-    /// `compose(_:)` plus the owner's smart-link keys.
+    /// `compose(_:)` plus the owner's smart-link and custom-emoji keys.
     package func composeOwner(_ inline: [ADFNode]) -> ComposedInline {
         composeOwner(inline, baseFont: theme.body, baseFontSpec: theme.bodyFontSpec)
     }
@@ -88,10 +94,13 @@ public struct InlineComposer: Sendable {
     /// `compose(_:baseFont:baseFontSpec:)` plus the owner's smart-link keys:
     /// qualifying bare links (and, with `inlineCardsAsSmartLinks`, inline
     /// cards; `SmartLinkQualification`) are composed as link text runs
-    /// carrying `adfSmartLink`.
+    /// carrying `adfSmartLink`. Custom emoji (no unicode text) are composed
+    /// as one U+FFFC carrying `adfEmoji`, whether or not the host installed
+    /// an emoji resolver, and their keys collected per owner.
     package func composeOwner(_ inline: [ADFNode], baseFont: Font, baseFontSpec: ADFFontSpec?) -> ComposedInline {
         var segments: [InlineSegment] = []
         var pending = AttributedString()
+        var emojiKeys: [EmojiKey] = []
         let smartLinks = Self.smartLinkPlacements(in: inline, inlineCards: inlineCardsAsSmartLinks)
 
         func flush() {
@@ -132,12 +141,23 @@ public struct InlineComposer: Sendable {
                 pending.append(attributedRun("\n", marks: [], baseFont: baseFont, baseFontSpec: baseFontSpec))
             case .mention(_, let text, _):
                 appendAtom(.mention(text: text), id: node.id)
-            case .emoji(let shortName, let text):
+            case .emoji(let shortName, let id, let text):
                 if let text, !text.isEmpty {
                     // Unicode representation exists — keep it in the text run.
                     pending.append(attributedRun(text, marks: [], baseFont: baseFont, baseFontSpec: baseFontSpec))
                 } else {
-                    appendAtom(.emoji(shortName: shortName), id: node.id)
+                    // A custom emoji: one U+FFFC in the text run, carrying
+                    // its key, which the renderer replaces with the short
+                    // name, a fixed box or the image (`EmojiDisplay`). Not
+                    // an atom: its paragraph is not word-chunked for it and
+                    // stays eligible for TextKit 2 (design §4.7).
+                    let key = EmojiKey(id: id, shortName: shortName)
+                    var run = attributedRun(
+                        String(EmojiKey.character), marks: [], baseFont: baseFont, baseFontSpec: baseFontSpec
+                    )
+                    run.adfEmoji = key
+                    pending.append(run)
+                    if !emojiKeys.contains(key) { emojiKeys.append(key) }
                 }
             case .date(let timestampMS):
                 appendAtom(.date(timestampMS: timestampMS), id: node.id)
@@ -167,7 +187,8 @@ public struct InlineComposer: Sendable {
         }
         return ComposedInline(
             segments: containsAtom ? Self.splitForWrappingLayout(segments) : segments,
-            smartLinkKeys: smartLinks.keys
+            smartLinkKeys: smartLinks.keys,
+            emojiKeys: emojiKeys
         )
     }
 
@@ -366,13 +387,14 @@ public struct InlineComposer: Sendable {
     }
 
     /// Fully text-only composition: atoms are replaced by plain-text
-    /// fallbacks. Used for accessibility labels and simple contexts.
+    /// fallbacks, and custom emoji by their short names. Used for
+    /// accessibility labels and simple contexts.
     public func plainAttributed(_ inline: [ADFNode]) -> AttributedString {
         var result = AttributedString()
         for segment in compose(inline) {
             switch segment {
             case .text(let text):
-                result.append(text)
+                result.append(Self.replacingEmoji(in: text))
             case .atom(let atom, _):
                 result.append(attributedRun(
                     Self.fallbackText(atom), marks: [], baseFont: theme.body, baseFontSpec: theme.bodyFontSpec
@@ -506,6 +528,38 @@ public struct InlineComposer: Sendable {
         return run
     }
 
+    // MARK: - Custom emoji as text
+
+    /// `text` with each custom emoji character (U+FFFC carrying `adfEmoji`)
+    /// replaced by the emoji's short name as authored (no `adfEmoji` on
+    /// it), every other attribute kept. Returns the input untouched when it holds none.
+    package static func replacingEmoji(in text: AttributedString) -> AttributedString {
+        guard text.runs[AttributeScopes.ADFAttributes.EmojiAttribute.self].contains(where: { $0.0 != nil }) else {
+            return text
+        }
+        var result = AttributedString()
+        for (key, range) in text.runs[AttributeScopes.ADFAttributes.EmojiAttribute.self] {
+            guard let key else {
+                result.append(text[range])
+                continue
+            }
+            var attributes = text[range].runs.first?.attributes ?? AttributeContainer()
+            attributes[AttributeScopes.ADFAttributes.EmojiAttribute.self] = nil
+            let count = text[range].characters.count
+            for _ in 0..<count {
+                result.append(AttributedString(key.shortName, attributes: attributes))
+            }
+        }
+        return result
+    }
+
+    /// The characters of prepared text with each custom emoji spelled as
+    /// its short name (`replacingEmoji`): titles (the table of contents)
+    /// and other plain-text uses of prepared text.
+    package static func plainText(of text: AttributedString) -> String {
+        String(replacingEmoji(in: text).characters)
+    }
+
     // MARK: - Atom fallbacks
 
     static func extensionName(_ attrs: ExtensionAttrs) -> String {
@@ -524,8 +578,6 @@ public struct InlineComposer: Sendable {
         case .date(let timestampMS):
             let date = Date(timeIntervalSince1970: timestampMS / 1000)
             return date.formatted(date: .abbreviated, time: .omitted)
-        case .emoji(let shortName):
-            return ":\(shortName):"
         case .inlineCard(let url):
             return url ?? "link"
         case .mediaInline(let attrs):

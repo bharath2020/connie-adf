@@ -104,7 +104,8 @@ struct BlockPreparer: Sendable {
                     style: textStyle(font: theme.body, isHeading: false, level: nil, marks: marks)
                 ),
                 breakout: blockBreakout(of: marks),
-                smartLinkKeys: composed.smartLinkKeys
+                smartLinkKeys: composed.smartLinkKeys,
+                emojiKeys: composed.emojiKeys
             )]
 
         case .heading(let level, let content, let marks):
@@ -117,7 +118,8 @@ struct BlockPreparer: Sendable {
                     style: textStyle(font: font, isHeading: true, level: level, marks: marks)
                 ),
                 breakout: blockBreakout(of: marks),
-                smartLinkKeys: composed.smartLinkKeys
+                smartLinkKeys: composed.smartLinkKeys,
+                emojiKeys: composed.emojiKeys
             )]
 
         case .blockquote(let children):
@@ -246,7 +248,8 @@ struct BlockPreparer: Sendable {
         return [RenderBlock(
             id: node.id,
             kind: .richText(segments: composed.segments, style: bodyStyle),
-            smartLinkKeys: composed.smartLinkKeys
+            smartLinkKeys: composed.smartLinkKeys,
+            emojiKeys: composed.emojiKeys
         )]
     }
 
@@ -282,6 +285,7 @@ struct BlockPreparer: Sendable {
         var mediaNode: ADFNode?
         var caption: [InlineSegment]?
         var captionSmartLinkKeys: [SmartLinkKey] = []
+        var captionEmojiKeys: [EmojiKey] = []
         for child in children {
             switch child.kind {
             case .media where mediaNode == nil:
@@ -290,6 +294,7 @@ struct BlockPreparer: Sendable {
                 let composed = composer.composeOwner(inline)
                 caption = composed.segments
                 captionSmartLinkKeys = composed.smartLinkKeys
+                captionEmojiKeys = composed.emojiKeys
             default:
                 break
             }
@@ -318,7 +323,8 @@ struct BlockPreparer: Sendable {
             caption: caption,
             borderHex: borderHex(of: marks),
             linkHref: linkHref(of: marks),
-            captionSmartLinkKeys: captionSmartLinkKeys
+            captionSmartLinkKeys: captionSmartLinkKeys,
+            captionEmojiKeys: captionEmojiKeys
         )
         return [RenderBlock(id: node.id, kind: .media(prepared))]
     }

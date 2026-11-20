@@ -17,6 +17,12 @@ import ADFPreparation
 /// an "Open link …" action per link (`SmartLinkSpeech`, view-level, so the
 /// callers' `textSelection(.enabled)` keeps it; in an atom paragraph each
 /// word chunk holding a link does), word for word what a TextKit 2 row says.
+///
+/// Custom emoji (`emojiKeys`, the owner's prepared keys): the leaf replaces
+/// each emoji's U+FFFC with what its stage shows (`EmojiDisplay`) after the
+/// smart-link substitution, with or without a resolver (no resolver: the
+/// short name), and speaks the emoji's name through the same
+/// `SmartLinkSpeech`. Owners without custom emoji do nothing.
 struct SegmentedTextView: View {
     let segments: [InlineSegment]
     /// ID search highlights are keyed by (`RenderBlock.id`, list-row id, or
@@ -25,6 +31,11 @@ struct SegmentedTextView: View {
     /// The owner's smart links (`RenderBlock.smartLinkKeys`,
     /// `PreparedListRow.smartLinkKeys`, `PreparedMedia.captionSmartLinkKeys`).
     var smartLinkKeys: [SmartLinkKey] = []
+    /// The owner's custom emoji (`RenderBlock.emojiKeys`,
+    /// `PreparedListRow.emojiKeys`). `nil`: not handed over by the caller (a
+    /// media caption), so the leaf finds them in `segments`
+    /// (`EmojiDisplay.keys(in:)`).
+    var emojiKeys: [EmojiKey]? = nil
 
     /// Gap between wrapped lines, scaled with Dynamic Type so line rhythm
     /// tracks the text size it separates.
@@ -51,22 +62,27 @@ struct SegmentedTextView: View {
         let _ = TextLeafDiagnostics.countSegmentedBody()
         let _ = smartLinks?.noteLeafBody(ownerID, engine: false)
         let stages = smartLinkStages
-        let displayed = displayedSegments(smartLinks: stages)
+        let emoji = ownerEmojiKeys
+        let displayed = displayedSegments(smartLinks: stages, emoji: emoji)
+        // An owner with custom emoji always shows them substituted (a
+        // constant for the leaf, as `smartLinkKeys` is).
+        let showsEmoji = !emoji.isEmpty
         let composesSmartLinks = !stages.isEmpty
+        let composes = composesSmartLinks || showsEmoji
         let merged = Self.mergedText(displayed)
         Group {
-            if let merged, smartLinks == nil || smartLinkKeys.isEmpty {
+            if let merged, smartLinks == nil || smartLinkKeys.isEmpty, !showsEmoji {
                 Text(Self.scalingBaselineOffsets(in: merged, by: typeScale))
             } else if let merged {
-                // A leaf with smart links (a constant for the leaf, so the
-                // branch never flips with a stage): VoiceOver hears the
-                // stage through `SmartLinkSpeech`, whose inputs alone change.
+                // A leaf with smart links or custom emoji (a constant for
+                // the leaf, so the branch never flips with a stage):
+                // VoiceOver hears the stage through `SmartLinkSpeech`, whose
+                // inputs alone change.
                 let text = Self.scalingBaselineOffsets(in: merged, by: typeScale)
-                Self.text(text, composesSmartLinks: composesSmartLinks)
-                    .modifier(SmartLinkSpeech(text: text, showsStage: composesSmartLinks))
+                DisplayedText(text: text, composes: composes, showsStage: composes)
             } else {
                 WrappingInlineLayout(lineSpacing: lineSpacing) {
-                    ForEach(Self.tokens(for: displayed, composesSmartLinks: composesSmartLinks)) { token in
+                    ForEach(Self.tokens(for: displayed, composesSmartLinks: composes)) { token in
                         InlineTokenView(
                             token: token,
                             typeScale: typeScale,
@@ -81,11 +97,31 @@ struct SegmentedTextView: View {
     }
 
     /// One `Text` for the leaf's merged text: the attributed string as is,
-    /// or, when the owner shows a smart link, composed with its icon
-    /// (`SmartLinkDisplay.composedText`). Both are `Text`: no structural
-    /// branch. VoiceOver's text for it is the leaf's `SmartLinkSpeech`.
-    static func text(_ attributed: AttributedString, composesSmartLinks: Bool) -> Text {
-        composesSmartLinks ? SmartLinkDisplay.composedText(attributed) : Text(attributed)
+    /// or, when the owner shows a smart link or a custom emoji, composed with
+    /// its icons and emoji images (`SmartLinkDisplay.composedText`). Both
+    /// are `Text`: no structural branch. VoiceOver's text for it is the
+    /// leaf's `SmartLinkSpeech`.
+    @MainActor
+    static func text(
+        _ attributed: AttributedString, composesSmartLinks: Bool, metrics: EmojiDisplay.Metrics = .init()
+    ) -> Text {
+        composesSmartLinks ? SmartLinkDisplay.composedText(attributed, metrics: metrics) : Text(attributed)
+    }
+
+    // MARK: Custom emoji
+
+    /// The owner's custom emoji keys: as handed over, or found in the
+    /// segments when the caller handed none.
+    private var ownerEmojiKeys: [EmojiKey] {
+        emojiKeys ?? EmojiDisplay.keys(in: segments)
+    }
+
+    /// The stages of the owner's custom emoji, `nil` without a resolver
+    /// (every emoji shows its short name). No resolver is wired yet: the
+    /// emoji coordinator slice reads the entries for exactly `keys` here,
+    /// as `smartLinkStages` does.
+    private func emojiStages(for keys: [EmojiKey]) -> [EmojiKey: EmojiStage]? {
+        nil
     }
 
     // MARK: Smart links
@@ -101,11 +137,19 @@ struct SegmentedTextView: View {
 
     /// Search painting first, on the prepared segments its spans index;
     /// then the smart-link substitution, so a match inside a link
-    /// highlights its whole title.
-    private func displayedSegments(smartLinks stages: [SmartLinkKey: SmartLinkStage]) -> [InlineSegment] {
-        let painted = displayedSegments
-        guard !stages.isEmpty else { return painted }
-        return SmartLinkDisplay.apply(stages, to: painted, theme: theme)
+    /// highlights its whole title; then the custom emoji (`EmojiDisplay`),
+    /// for an owner with any.
+    private func displayedSegments(
+        smartLinks stages: [SmartLinkKey: SmartLinkStage], emoji: [EmojiKey]
+    ) -> [InlineSegment] {
+        var displayed = displayedSegments
+        if !stages.isEmpty {
+            displayed = SmartLinkDisplay.apply(stages, to: displayed, theme: theme)
+        }
+        if !emoji.isEmpty {
+            displayed = EmojiDisplay.apply(emojiStages(for: emoji), to: displayed)
+        }
+        return displayed
     }
 
     // MARK: Search highlighting
@@ -180,9 +224,9 @@ struct SegmentedTextView: View {
     /// happened at preparation time (`InlineComposer.splitForWrappingLayout`),
     /// so no character scanning or attributed-string slicing runs here — a
     /// standalone `"\n"` chunk becomes an explicit line break. Only when the
-    /// owner shows a smart link (`composesSmartLinks`) are chunks looked
-    /// into: one holding a displayed link becomes a `smartLinkText` token
-    /// with its spoken text.
+    /// owner shows a smart link or a custom emoji (`composesSmartLinks`) are
+    /// chunks looked into: one holding a displayed link or emoji becomes a
+    /// `smartLinkText` token with its spoken text.
     static func tokens(for segments: [InlineSegment], composesSmartLinks: Bool = false) -> [InlineToken] {
         var tokens: [InlineToken] = []
         tokens.reserveCapacity(segments.count)
@@ -193,7 +237,7 @@ struct SegmentedTextView: View {
             case .text(let text):
                 if isLineBreak(text) {
                     tokens.append(InlineToken(id: tokens.count, kind: .lineBreak))
-                } else if composesSmartLinks, text.runs[SmartLinkShownAttribute.self].contains(where: { $0.0 != nil }) {
+                } else if composesSmartLinks, Self.showsDisplayedPiece(text) {
                     let spoken = SmartLinkDisplay.accessibilityText(of: text)
                     tokens.append(InlineToken(id: tokens.count, kind: .smartLinkText(text, spoken: spoken)))
                 } else {
@@ -202,6 +246,12 @@ struct SegmentedTextView: View {
             }
         }
         return tokens
+    }
+
+    /// Whether a chunk holds a displayed smart link or custom emoji.
+    private static func showsDisplayedPiece(_ text: AttributedString) -> Bool {
+        text.runs[SmartLinkShownAttribute.self].contains(where: { $0.0 != nil })
+            || text.runs[EmojiShownAttribute.self].contains(where: { $0.0 != nil })
     }
 
     /// True for a chunk that is exactly one `"\n"` (O(1), no full scan).
@@ -275,9 +325,9 @@ extension ADFTextRenderer {
 struct InlineToken: Identifiable, Hashable {
     enum Kind: Hashable {
         case text(AttributedString)
-        /// A word chunk holding a displayed smart link, with the text
-        /// VoiceOver speaks for it: the link's whole spoken text on its
-        /// first chunk, nothing on a continuation chunk (hidden then).
+        /// A word chunk holding a displayed smart link or custom emoji, with
+        /// the text VoiceOver speaks for it: the link's whole spoken text on
+        /// its first chunk, nothing on a continuation chunk (hidden then).
         case smartLinkText(AttributedString, spoken: String)
         case atom(InlineAtom, id: String)
         case lineBreak
@@ -309,8 +359,7 @@ struct InlineTokenView: View {
             Text(SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale))
         case .smartLinkText(let text, let spoken):
             let scaled = SegmentedTextView.scalingBaselineOffsets(in: text, by: typeScale)
-            SmartLinkDisplay.composedText(scaled)
-                .modifier(SmartLinkSpeech(text: scaled, showsStage: true))
+            DisplayedText(text: scaled, composes: true, showsStage: true)
                 .accessibilityHidden(spoken.allSatisfy(\.isWhitespace))
         case .atom(let atom, _):
             AtomView(atom: atom)
@@ -334,6 +383,28 @@ struct InlineTokenView: View {
         case .current(dimmed: false):
             return theme.searchCurrentHighlight
         }
+    }
+}
+
+/// Displayed text with smart-link or custom-emoji pieces, as one `Text`
+/// (`SegmentedTextView.text`) with its `SmartLinkSpeech`: a leaf's merged
+/// text, or one word chunk of an atom paragraph. Its own view, so only such
+/// text reads the font environment an emoji box is sized in; every other
+/// leaf reads none of it.
+struct DisplayedText: View {
+    let text: AttributedString
+    /// Whether to compose icons and emoji images (`composedText`).
+    let composes: Bool
+    /// Whether VoiceOver speaks the displayed text (`SmartLinkSpeech`).
+    let showsStage: Bool
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.legibilityWeight) private var legibilityWeight
+
+    var body: some View {
+        let metrics = EmojiDisplay.Metrics(dynamicTypeSize: dynamicTypeSize, legibilityWeight: legibilityWeight)
+        SegmentedTextView.text(text, composesSmartLinks: composes, metrics: metrics)
+            .modifier(SmartLinkSpeech(text: text, showsStage: showsStage))
     }
 }
 

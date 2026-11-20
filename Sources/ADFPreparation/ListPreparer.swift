@@ -53,7 +53,8 @@ extension BlockPreparer {
                         marker: .task(id: item.id, done: state == .done),
                         segments: composed.segments,
                         trailingBlocks: [],
-                        smartLinkKeys: composed.smartLinkKeys
+                        smartLinkKeys: composed.smartLinkKeys,
+                        emojiKeys: composed.emojiKeys
                     ))
                 case .taskList:
                     // Schema nests task lists as siblings of task items.
@@ -76,7 +77,8 @@ extension BlockPreparer {
                     marker: .decision,
                     segments: composed.segments,
                     trailingBlocks: [],
-                    smartLinkKeys: composed.smartLinkKeys
+                    smartLinkKeys: composed.smartLinkKeys,
+                    emojiKeys: composed.emojiKeys
                 )]
             }
 
@@ -95,6 +97,7 @@ extension BlockPreparer {
         var rows: [PreparedListRow] = []
         var segments: [InlineSegment] = []
         var smartLinkKeys: [SmartLinkKey] = []
+        var emojiKeys: [EmojiKey] = []
         var trailing: [RenderBlock] = []
         var emittedMarkerRow = false
         var continuationCount = 0
@@ -110,7 +113,8 @@ extension BlockPreparer {
                     marker: marker,
                     segments: segments,
                     trailingBlocks: trailing,
-                    smartLinkKeys: smartLinkKeys
+                    smartLinkKeys: smartLinkKeys,
+                    emojiKeys: emojiKeys
                 ))
                 emittedMarkerRow = true
             } else if !segments.isEmpty || !trailing.isEmpty {
@@ -121,11 +125,13 @@ extension BlockPreparer {
                     marker: .continuation,
                     segments: segments,
                     trailingBlocks: trailing,
-                    smartLinkKeys: smartLinkKeys
+                    smartLinkKeys: smartLinkKeys,
+                    emojiKeys: emojiKeys
                 ))
             }
             segments = []
             smartLinkKeys = []
+            emojiKeys = []
             trailing = []
         }
 
@@ -136,6 +142,7 @@ extension BlockPreparer {
                 let composed = composer.composeOwner(content)
                 segments = composed.segments
                 smartLinkKeys = composed.smartLinkKeys
+                emojiKeys = composed.emojiKeys
             case .bulletList, .orderedList, .taskList, .decisionList:
                 flushRow()
                 rows.append(contentsOf: listRows(for: child, depth: depth + 1, levels: nestedLevels))

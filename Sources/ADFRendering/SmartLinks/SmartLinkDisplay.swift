@@ -241,16 +241,22 @@ enum SmartLinkDisplay {
     }
 
     /// Displayed text as VoiceOver reads it: every smart-link piece replaced
-    /// by its spoken text (a `continuation` piece by nothing), everything
-    /// else as shown. The label of a TextKit 2 row (`TextKit2RowView`), of a
-    /// SwiftUI leaf that shows a smart link and of each word chunk in an atom
-    /// paragraph (`SmartLinkSpeech`); text without a displayed smart link is
-    /// returned as its characters.
+    /// by its spoken text (a `continuation` piece by nothing), every custom
+    /// emoji by its spoken name (`EmojiDisplay.spokenName`, whatever it
+    /// shows), everything else as shown. The label of a TextKit 2 row
+    /// (`TextKit2RowView`), of a SwiftUI leaf that shows a smart link or a
+    /// custom emoji and of each such word chunk in an atom paragraph
+    /// (`SmartLinkSpeech`); text without either is returned as its
+    /// characters.
     static func accessibilityText(of text: AttributedString) -> String {
-        let pieces = text.runs[SmartLinkShownAttribute.self]
-        guard pieces.contains(where: { $0.0 != nil }) else { return String(text.characters) }
+        let pieces = text.runs[SmartLinkShownAttribute.self, EmojiShownAttribute.self]
+        guard pieces.contains(where: { $0.0 != nil || $0.1 != nil }) else { return String(text.characters) }
         var result = ""
-        for (shown, range) in pieces {
+        for (shown, emoji, range) in pieces {
+            if let emoji {
+                result += EmojiDisplay.spokenName(emoji.key.shortName)
+                continue
+            }
             let visible = String(text[range].characters)
             if let shown {
                 if !shown.continuation { result += spokenText(shown.kind, visibleText: visible) }
@@ -307,19 +313,30 @@ enum SmartLinkDisplay {
 
     // MARK: SwiftUI
 
-    /// Displayed text holding smart-link pieces as one `Text`: each resolved
-    /// piece is `Text(Image(systemName:))` concatenated with its title;
-    /// everything else is the attributed text as is. VoiceOver reads it
-    /// through `SmartLinkSpeech`, applied by the leaf: a `Text`-level label
-    /// here would be ignored once `textSelection(.enabled)` applies (call
-    /// #40), and SwiftUI reads the icon as U+FFFC.
-    static func composedText(_ attributed: AttributedString) -> Text {
+    /// Displayed text holding smart-link or custom-emoji pieces as one
+    /// `Text`: each resolved smart-link piece is `Text(Image(systemName:))`
+    /// concatenated with its title; each emoji box or image is
+    /// `EmojiDisplay.text(_:box:)`, sized by `metrics` for its run's font;
+    /// everything else (an emoji's short name too) is the attributed text
+    /// as is. VoiceOver reads it through `SmartLinkSpeech`, applied by the
+    /// leaf: a `Text`-level label here would be ignored once
+    /// `textSelection(.enabled)` applies (call #40), and SwiftUI reads an
+    /// icon or emoji image as U+FFFC.
+    @MainActor
+    static func composedText(_ attributed: AttributedString, metrics: EmojiDisplay.Metrics = .init()) -> Text {
         var composed: Text?
         func add(_ piece: Text) {
             composed = composed.map { $0 + piece } ?? piece
         }
-        for (shown, range) in attributed.runs[SmartLinkShownAttribute.self] {
+        for (shown, emoji, range) in attributed.runs[SmartLinkShownAttribute.self, EmojiShownAttribute.self] {
             let slice = attributed[range]
+            if let emoji, emoji.kind != .shortName, let image = EmojiDisplay.text(
+                emoji.kind, box: metrics.box(for: slice.runs.first?.adfFontSpec)
+            ) {
+                // One box or image per character (each is one U+FFFC).
+                for _ in slice.characters { add(image) }
+                continue
+            }
             guard shown != nil else {
                 add(Text(AttributedString(slice)))
                 continue
