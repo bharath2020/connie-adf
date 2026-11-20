@@ -223,13 +223,91 @@ struct EmojiDisplayTests {
         #expect(model.headings.map(\.title) == ["Launch :ld-custom-6:"])
     }
 
+    // MARK: Line metrics
+
+    /// A wrapping paragraph whose custom emoji sits on its second line, so
+    /// the first baseline, the line pitch below the emoji and the height
+    /// all show a line that grew.
+    private static let wrappingContent = [
+        text("The first line of this paragraph runs long enough to wrap, and then the second line holds"),
+        emoji(":ld-custom-6:"),
+        text(" before the third line closes the paragraph with several more words of plain text."),
+    ]
+
+    /// The SwiftUI leaf's merged text as `SegmentedTextView` draws it, at
+    /// width 300: size and baselines as the layout around it reads them.
+    private static func swiftUIMetrics(_ text: AttributedString) -> LeafMetrics {
+        let reading = LeafMetricsReading()
+        let layout = LeafMetricsProbe(reading: reading)
+        let probe = layout {
+            DisplayedText(text: text, composes: true, showsStage: true)
+        }
+        #if canImport(UIKit)
+        let host = UIHostingController(rootView: probe)
+        host.safeAreaRegions = []
+        _ = host.sizeThatFits(in: CGSize(width: 300, height: CGFloat.greatestFiniteMagnitude))
+        #else
+        let host = NSHostingController(rootView: probe)
+        _ = host.sizeThatFits(in: CGSize(width: 300, height: CGFloat.greatestFiniteMagnitude))
+        #endif
+        return reading.metrics
+    }
+
+    @Test("SwiftUI: a box or an image keeps the line's height and baselines, as the short name has them",
+          arguments: [false, true])
+    func swiftUILineMetrics(wraps: Bool) async throws {
+        let content = wraps ? Self.wrappingContent : [Self.text("Ship "), Self.emoji(":ld-custom-6:"), Self.text(" now")]
+        let composed = try await prepared(content.joined(separator: ","))
+        let shortName = Self.swiftUIMetrics(Self.merged(EmojiDisplay.apply(nil, to: composed.segments)))
+        #expect(shortName.height > 0)
+        for (name, stages) in [
+            ("pending", [Self.custom6: EmojiStage.pending]),
+            ("resolved", [Self.custom6: .resolved(Self.image(width: 64, height: 64))]),
+            ("failed", [Self.custom6: .failed]),
+        ] {
+            let shown = Self.swiftUIMetrics(Self.merged(EmojiDisplay.apply(stages, to: composed.segments)))
+            #expect(shown.height == shortName.height, "\(name): height \(shown) vs short name \(shortName)")
+            #expect(shown.firstBaseline == shortName.firstBaseline, "\(name): first baseline \(shown) vs \(shortName)")
+            #expect(shown.lastBaseline == shortName.lastBaseline, "\(name): last baseline \(shown) vs \(shortName)")
+        }
+    }
+
     // MARK: TextKit 2 attachment
 
     #if canImport(UIKit)
-    @Test("TextKit 2: a box or image is a square attachment of the line height from the descender; a short name is text")
+    @Test("TextKit 2 and SwiftUI: the same line height and baselines for the short name, the box and the image",
+          arguments: [false, true])
+    func textKit2LineMetrics(wraps: Bool) async throws {
+        let content = wraps ? Self.wrappingContent : [Self.text("Ship "), Self.emoji(":ld-custom-6:"), Self.text(" now")]
+        let composed = try await prepared(content.joined(separator: ","))
+        for (name, stages) in [
+            ("short name", nil),
+            ("pending", [Self.custom6: EmojiStage.pending]),
+            ("resolved", [Self.custom6: .resolved(Self.image(width: 64, height: 64))]),
+            ("failed", [Self.custom6: .failed]),
+        ] as [(String, [EmojiKey: EmojiStage]?)] {
+            let displayed = Self.merged(EmojiDisplay.apply(stages, to: composed.segments))
+            let row = TextKit2RowView()
+            row.apply(TextKit2RenderInputs(text: displayed, displayScale: TK2Parity.nativeScale))
+            let result = row.layoutResult(forProposedWidth: 300)
+            let swiftUI = Self.swiftUIMetrics(displayed)
+            let label = "\(name): TextKit 2 \(result.size.height)/\(result.firstBaseline)/\(result.lastBaseline) SwiftUI \(swiftUI)"
+            #expect(abs(result.size.height - swiftUI.height) < 0.01, "\(label)")
+            #expect(abs(result.firstBaseline - swiftUI.firstBaseline) < 0.01, "\(label)")
+            #expect(abs(result.lastBaseline - swiftUI.lastBaseline) < 0.01, "\(label)")
+            // Wrapped: several lines (5 at body Large on a 300 pt column),
+            // the emoji past the first, so a taller line would move later
+            // baselines.
+            #expect(wraps ? result.lineCount > 2 : result.lineCount == 1, "\(label): \(result.lineCount) lines")
+        }
+    }
+
+    @Test("TextKit 2: a box or image is a square attachment of the ascent on the baseline; a short name is text")
     func textKit2Attachment() async throws {
         let composed = try await prepared(Self.text("a "), Self.emoji(":ld-custom-6:"))
         let font = TextKit2FontResolver.font(for: ADFFontSpec(textStyle: .body), category: .large)
+        let side = (font.ascender * 6).rounded(.down) / 6
+        #expect(side > 0 && side <= font.ascender)
         for stages: [EmojiKey: EmojiStage] in [[:], [Self.custom6: .resolved(Self.image())]] {
             let displayed = Self.merged(EmojiDisplay.apply(stages, to: composed.segments))
             let built = TextKit2TextBuilder.attributedString(
@@ -238,9 +316,9 @@ struct EmojiDisplayTests {
             #expect(built.string == "a \u{FFFC}")
             let shown = try #require(Self.shown(displayed).first)
             let made = try #require(TextKit2TextBuilder.emojiAttachment(shown.kind, font: font))
-            #expect(made.bounds == CGRect(x: 0, y: font.descender, width: font.lineHeight, height: font.lineHeight), "made")
+            #expect(made.bounds == CGRect(x: 0, y: 0, width: side, height: side), "made")
             let attachment = try #require(built.attribute(.attachment, at: 2, effectiveRange: nil) as? NSTextAttachment)
-            #expect(attachment.bounds == CGRect(x: 0, y: font.descender, width: font.lineHeight, height: font.lineHeight), "built \(type(of: attachment)) \(String(describing: attachment.image?.size))")
+            #expect(attachment.bounds == CGRect(x: 0, y: 0, width: side, height: side), "built \(type(of: attachment)) \(String(describing: attachment.image?.size))")
         }
         let plain = Self.merged(EmojiDisplay.apply(nil, to: composed.segments))
         let built = TextKit2TextBuilder.attributedString(for: TextKit2RenderInputs(text: plain), linkColor: .systemBlue)
@@ -271,12 +349,12 @@ struct EmojiDisplayTests {
         return try TK2Parity.bitmap(of: window, width: width)
     }
 
-    @Test("a resolved image draws as a square of the line height on both engines")
+    @Test("a resolved image draws as a square of the ascent on both engines, in the same place")
     func resolvedImageDraws() async throws {
         let composed = try await prepared(Self.text("Ship "), Self.emoji(":ld-custom-6:"), Self.text(" now"))
         let image = Self.image(width: 64, height: 64)
         let displayed = Self.merged(EmojiDisplay.apply([Self.custom6: .resolved(image)], to: composed.segments))
-        let side = TextKit2FontResolver.font(for: ADFFontSpec(textStyle: .body), category: .large).lineHeight
+        let side = EmojiDisplay.box(for: TextKit2FontResolver.font(for: ADFFontSpec(textStyle: .body), category: .large)).side
 
         // TextKit 2: the row draws natively (no link), the attachment's image
         // included.
@@ -314,4 +392,38 @@ struct EmojiDisplayTests {
 private struct EmojiTestFailure: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
+}
+
+/// A text leaf's size and baselines as the layout around it reads them.
+private struct LeafMetrics: Equatable, CustomStringConvertible {
+    var height: CGFloat = 0
+    var firstBaseline: CGFloat = 0
+    var lastBaseline: CGFloat = 0
+
+    var description: String { "\(height)/\(firstBaseline)/\(lastBaseline)" }
+}
+
+private final class LeafMetricsReading: @unchecked Sendable {  // written and read on the main thread only
+    var metrics = LeafMetrics()
+}
+
+/// Lays out its one subview at the proposal and records what a parent
+/// reads of it: height and first and last text baselines.
+private struct LeafMetricsProbe: Layout {
+    let reading: LeafMetricsReading
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let dimensions = subview.dimensions(in: ProposedViewSize(width: proposal.width, height: nil))
+        reading.metrics = LeafMetrics(
+            height: dimensions.height,
+            firstBaseline: dimensions[VerticalAlignment.firstTextBaseline],
+            lastBaseline: dimensions[VerticalAlignment.lastTextBaseline]
+        )
+        return CGSize(width: dimensions.width, height: dimensions.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
 }

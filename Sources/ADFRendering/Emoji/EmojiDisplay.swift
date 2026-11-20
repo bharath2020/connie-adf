@@ -14,8 +14,8 @@ import AppKit
 /// all (`apply(nil, …)`): every custom emoji shows its short name.
 enum EmojiStage: Equatable, Sendable {
     /// Not landed yet (not asked, dwelling, queued or in flight): a blank
-    /// square the size of the line height, so nothing moves when the image
-    /// lands.
+    /// square the size of the font's ascent (`EmojiDisplay.Box`), so nothing
+    /// moves when the image lands.
     case pending
     /// The image, drawn in that same square.
     case resolved(ADFResolvedImage)
@@ -65,7 +65,7 @@ struct EmojiShown: Hashable, Sendable {
         /// The short name as authored (`":ld-custom-6:"`), in the secondary
         /// colour: no resolver, or the lookup failed.
         case shortName
-        /// A blank square the size of the line height (one U+FFFC): the
+        /// A blank square the size of the font's ascent (one U+FFFC): the
         /// lookup has not landed.
         case box
         /// The image in that square (one U+FFFC).
@@ -100,8 +100,9 @@ enum EmojiShownAttribute: AttributedStringKey, Sendable {
 /// - SwiftUI composes a box or image as `Text(Image(…))` in the leaf's
 ///   `Text` (`SmartLinkDisplay.composedText`, `text(_:box:)`).
 /// - The TextKit 2 builder makes each box or image an `NSTextAttachment`
-///   with square bounds of the line height, from the descender up
-///   (`TextKit2TextBuilder.emojiAttachment`).
+///   with square bounds of the font's ascent, on the baseline
+///   (`TextKit2TextBuilder.emojiAttachment`). Neither engine's line grows
+///   (`Box`).
 /// - The short name is ordinary text in both.
 enum EmojiDisplay {
     private typealias SUI = AttributeScopes.SwiftUIAttributes
@@ -205,19 +206,35 @@ enum EmojiDisplay {
 
     // MARK: The square box
 
-    /// The square a box or image fills: `side` is the line height of the
-    /// run's font, and it reaches `descent` below the baseline (the font's
-    /// descent), so it spans the line from the descender up and the line
-    /// grows by nothing.
+    /// The square a box or image fills: it sits on the baseline and its
+    /// side is the run font's ascent, so the line keeps its height and
+    /// baselines on both engines.
+    ///
+    /// Not the line height: `Text` counts an inline image's whole height as
+    /// ascent and ignores a baseline the image carries
+    /// (`UIImage.withBaselineOffset`), and `Text.baselineOffset` lowering it
+    /// adds the offset to the descent instead. Measured: a line-height square
+    /// lowered by the descent made a body line 4 pt taller on iOS 26.3 (6 pt
+    /// on macOS) and dropped its baseline, while TextKit 2 (which counts
+    /// only fonts, `TextKit2RowView.glyphMetrics`) kept it, so the two
+    /// engines disagreed and a failed lookup (box → short name) moved every
+    /// row below. A square no taller than the ascent changes neither
+    /// (`EmojiDisplayTests.swiftUILineMetrics`, `textKit2LineMetrics`).
     struct Box: Hashable, Sendable {
         let side: CGFloat
-        let descent: CGFloat
+
+        /// The box for a font's ascent, floored to a sixth of a point (a
+        /// whole pixel at 2x and 3x) so rounding never makes it taller than
+        /// the ascent.
+        init(ascent: CGFloat) {
+            side = (max(ascent, 0) * 6).rounded(.down) / 6
+        }
     }
 
     #if canImport(UIKit)
     /// The box for a resolved platform font (TextKit 2).
     static func box(for font: UIFont) -> Box {
-        Box(side: font.lineHeight, descent: -font.descender)
+        Box(ascent: font.ascender)
     }
     #endif
 
@@ -239,9 +256,9 @@ enum EmojiDisplay {
             ))
             #elseif canImport(AppKit)
             let font = NSFont.preferredFont(forTextStyle: EmojiDisplay.appKitTextStyle(spec.textStyle))
-            return Box(side: font.ascender - font.descender + font.leading, descent: -font.descender)
+            return Box(ascent: font.ascender)
             #else
-            return Box(side: 17, descent: 4)
+            return Box(ascent: 16)
             #endif
         }
     }
@@ -308,26 +325,12 @@ enum EmojiDisplay {
     // MARK: SwiftUI
 
     /// A box or image piece as a `Text`: the square bitmap scaled to the
-    /// box's side, reaching the box's descent below the baseline. `nil` for
-    /// a short-name piece (drawn as its attributed text).
-    ///
-    /// With UIKit the image carries its baseline (`withBaselineOffset`), so
-    /// `Text` sets it on the text baseline and the line keeps its height,
-    /// exactly as the TextKit 2 attachment draws it (measured on iOS 26.3:
-    /// same square, same place, `EmojiDisplayTests.resolvedImageDraws`).
-    /// `Text.baselineOffset` lowers the image but grows the line by the
-    /// descent (measured: 4 pt at body Large), so it is used only without
-    /// UIKit, where there is no TextKit 2 row to match.
+    /// box's side, on the baseline (`Box`), where the TextKit 2 attachment
+    /// draws it too. `nil` for a short-name piece (drawn as its attributed
+    /// text).
     static func text(_ kind: EmojiShown.Kind, box: Box) -> Text? {
         guard let bitmap = bitmap(kind), box.side > 0 else { return nil }
         let pixels = CGFloat(max(bitmap.width, bitmap.height))
-        #if canImport(UIKit)
-        let image = UIImage(cgImage: bitmap, scale: pixels / box.side, orientation: .up)
-            .withBaselineOffset(fromBottom: box.descent)
-        return Text(Image(uiImage: image))
-        #else
         return Text(Image(decorative: bitmap, scale: pixels / box.side))
-            .baselineOffset(-box.descent)
-        #endif
     }
 }

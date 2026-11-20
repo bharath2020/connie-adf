@@ -212,10 +212,10 @@ enum TextKit2TextBuilder {
 
     /// A displayed custom emoji's box or image (`EmojiShown.Kind`) as an
     /// attachment: the square bitmap (a transparent pixel for the box)
-    /// drawn in square bounds of the font's line height, from its descender
-    /// up (`EmojiDisplay.box(for:)`), so the line keeps its height and the
-    /// image lands in exactly the box's place. `nil` for a short name,
-    /// which is drawn as text.
+    /// drawn in square bounds of the font's ascent, on the baseline
+    /// (`EmojiDisplay.Box`), where SwiftUI's `Text` draws it, so the line
+    /// keeps its height and the image lands in exactly the box's place.
+    /// `nil` for a short name, which is drawn as text.
     static func emojiAttachment(_ kind: EmojiShown.Kind, font: UIFont) -> NSTextAttachment? {
         guard let bitmap = EmojiDisplay.bitmap(kind) else { return nil }
         let box = EmojiDisplay.box(for: font)
@@ -225,7 +225,7 @@ enum TextKit2TextBuilder {
         // private subclass whose `bounds` reads back as zero.
         let attachment = NSTextAttachment()
         attachment.image = UIImage(cgImage: bitmap, scale: scale, orientation: .up)
-        attachment.bounds = CGRect(x: 0, y: -box.descent, width: box.side, height: box.side)
+        attachment.bounds = CGRect(x: 0, y: 0, width: box.side, height: box.side)
         // A row without a link draws natively (TextKit 2): the layout
         // fragment draws the image itself only when the attachment asks
         // for no view (the row hosts no attachment views).
