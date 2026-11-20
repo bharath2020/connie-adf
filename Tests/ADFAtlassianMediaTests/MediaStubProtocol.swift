@@ -11,10 +11,18 @@ import ADFAtlassianAuth
 /// URLSession ask the task's delegate (`willPerformHTTPRedirection`). The
 /// proposed request copies every header of the current one (as CFNetwork
 /// does, `Authorization` included), so the delegate is what decides whether
-/// credentials travel. When the delegate accepts, URLSession starts a new
-/// load of the returned request, which comes back through this stub and is
-/// recorded; when it refuses, the task ends with the 3xx response (this
-/// load finishes right after reporting the redirect, so it never hangs).
+/// credentials travel.
+///
+/// After reporting the redirect, the stub also delivers the 3xx response and
+/// finishes, as CFNetwork's own HTTP loader does for a refused redirect.
+/// URLSession holds those calls until the delegate decides (checked with a
+/// 400 ms delay in the delegate):
+/// - accepted: it stops this load (`stopLoading`), drops the 3xx, and starts
+///   a new load of the returned request, which comes back through this stub
+///   and is recorded;
+/// - refused: the task ends with the 3xx response.
+/// Without the 3xx delivery a refused redirect hangs until the request
+/// timeout; finishing without any response makes `data(for:delegate:)` trap.
 final class MediaStubProtocol: URLProtocol, @unchecked Sendable {
     struct Response: Sendable {
         var status: Int = 200
@@ -86,6 +94,8 @@ final class MediaStubProtocol: URLProtocol, @unchecked Sendable {
                 redirected.httpMethod = request.httpMethod
                 for (name, value) in headers { redirected.setValue(value, forHTTPHeaderField: name) }
                 client?.urlProtocol(self, wasRedirectedTo: redirected, redirectResponse: http)
+                // Used only when the delegate refuses; see the type comment.
+                client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
                 client?.urlProtocolDidFinishLoading(self)
                 return
             }
