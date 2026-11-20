@@ -16,10 +16,12 @@ import XCTest
 /// 2. **Loaded: the image, nothing moved.** Once the probe shows every
 ///    lookup ended (4 resolved, 1 failed, 5 calls), `EM-LOAD` holds the
 ///    coloured square, and its frame, the next paragraph's (`EM-BELOW`)
-///    and the recognised position of the word after the emoji are where
-///    they were while loading.
+///    and the right and bottom edges of its text ink (the text after the
+///    emoji and the baseline) are where they were while loading.
 /// 3. **Failed: the short name.** `EM-FAIL` shows `:fail-emoji:` as text,
-///    with no doubled colons and no coloured pixel.
+///    with no doubled colons and no coloured pixel, and its line kept its
+///    place and height: the rows below it (`EM-PAIR`, `EM-LIST`) did not
+///    move.
 /// VoiceOver reads each emoji by its spoken name at every stage
 /// ("ld custom 6"). Under TextKit 2 the paragraphs are `tk2-row:`
 /// elements (custom emoji keep a paragraph on TextKit 2).
@@ -69,11 +71,16 @@ final class EmojiUITests: XCTestCase {
         let load = leaf("EM-LOAD", reader, textKit2: textKit2)
         let below = leaf("EM-BELOW", reader, textKit2: textKit2)
         let fail = leaf("EM-FAIL", reader, textKit2: textKit2)
+        let pair = leaf("EM-PAIR", reader, textKit2: textKit2)
+        let list = leaf("EM-LIST", reader, textKit2: textKit2)
         XCTAssertTrue(load.waitForExistence(timeout: 20), "the EM-LOAD paragraph never appeared")
-        XCTAssertTrue(below.exists && fail.exists, "EM-BELOW or EM-FAIL is missing")
+        XCTAssertTrue(below.exists && fail.exists && pair.exists && list.exists,
+                      "EM-BELOW, EM-FAIL, EM-PAIR or EM-LIST is missing")
 
         // 1. Loading.
         let loadingFrames = (load.frame, below.frame)
+        // The failed emoji's paragraph and the rows below it.
+        let failingFrames = (fail.frame, pair.frame, list.frame)
         let loadingShot = try capture(load)
         let failLoadingShot = try capture(fail)
         let during = probe(reader)
@@ -91,8 +98,8 @@ final class EmojiUITests: XCTestCase {
         let failLoadingText = Self.joined(Self.recognize(failLoadingShot))
         XCTAssertFalse(failLoadingText.lowercased().contains("emoji"),
                        "the failing emoji's short name shows while loading: \(failLoadingText)")
-        let afterWhileLoading = Self.wordBox("after", in: loadingText)
-        XCTAssertNotNil(afterWhileLoading, "\"after\" not recognised while loading: \(loadingText)")
+        let inkWhileLoading = Self.textInk(loadingShot)
+        XCTAssertNotNil(inkWhileLoading, "no text ink in EM-LOAD while loading")
         XCTAssertTrue(load.label.contains("ld custom 6"), "spoken name missing while loading: \(load.label)")
 
         // 2. Loaded.
@@ -112,11 +119,26 @@ final class EmojiUITests: XCTestCase {
         XCTAssertFalse(Self.joined(loadedText).lowercased().contains("custom"), "the short name shows: \(loadedText)")
         assertSameFrame(load.frame, loadingFrames.0, "EM-LOAD moved or resized when its emoji landed")
         assertSameFrame(below.frame, loadingFrames.1, "the paragraph below moved when the emoji landed")
-        if let before = afterWhileLoading, let after = Self.wordBox("after", in: loadedText) {
-            note("\(arm) word after the emoji: loading x \(before.minX), loaded x \(after.minX)")
-            XCTAssertEqual(after.minX, before.minX, accuracy: 6, "the text after the emoji moved (pixels)")
+        // A failure turns a box into the short name: wider, but the line
+        // must keep its height (on SwiftUI the first box grew the line by
+        // the descent, so every row below moved up when a lookup failed).
+        let failFrame = fail.frame
+        XCTAssertEqual(failFrame.minY, failingFrames.0.minY, accuracy: 0.5,
+                       "EM-FAIL moved when its lookup failed: \(failingFrames.0) -> \(failFrame)")
+        XCTAssertEqual(failFrame.height, failingFrames.0.height, accuracy: 0.5,
+                       "EM-FAIL changed height when its lookup failed: \(failingFrames.0) -> \(failFrame)")
+        assertSameFrame(pair.frame, failingFrames.1, "EM-PAIR (below the failed emoji) moved")
+        assertSameFrame(list.frame, failingFrames.2, "EM-LIST (below the failed emoji) moved")
+        // The text after the emoji ends where it ended, on the same
+        // baseline: the ink's right and bottom edges, in screenshot pixels
+        // (text recognition's word boxes shift a few pixels with the
+        // neighbouring image, so they are not used for this).
+        if let before = inkWhileLoading, let after = Self.textInk(loadedShot) {
+            note("\(arm) EM-LOAD text ink: loading \(before), loaded \(after)")
+            XCTAssertEqual(after.maxX, before.maxX, accuracy: 1, "the text after the emoji moved sideways")
+            XCTAssertEqual(after.maxY, before.maxY, accuracy: 1, "the text's baseline moved")
         } else {
-            XCTFail("\"after\" not recognised once loaded: \(loadedText)")
+            XCTFail("no text ink in EM-LOAD once loaded")
         }
         XCTAssertTrue(load.label.contains("ld custom 6"), "spoken name missing once loaded: \(load.label)")
 
@@ -225,12 +247,9 @@ final class EmojiUITests: XCTestCase {
         return (condition(stats), stats)
     }
 
-    /// Recognised lines of text with their boxes, in image pixels (origin
-    /// top left).
+    /// A recognised line of text.
     struct Line {
         let text: String
-        let candidate: VNRecognizedText
-        let imageSize: CGSize
     }
 
     static func recognize(_ image: CGImage) -> [Line] {
@@ -243,9 +262,8 @@ final class EmojiUITests: XCTestCase {
         } catch {
             return []
         }
-        let size = CGSize(width: image.width, height: image.height)
         return (request.results ?? []).compactMap { observation in
-            observation.topCandidates(1).first.map { Line(text: $0.string, candidate: $0, imageSize: size) }
+            observation.topCandidates(1).first.map { Line(text: $0.string) }
         }
     }
 
@@ -253,23 +271,39 @@ final class EmojiUITests: XCTestCase {
         lines.map(\.text).joined(separator: " ")
     }
 
-    /// The pixel box of the first occurrence of `word` among `lines`.
-    static func wordBox(_ word: String, in lines: [Line]) -> CGRect? {
-        for line in lines {
-            guard let range = line.text.range(of: word),
-                  let box = try? line.candidate.boundingBox(for: range)?.boundingBox else { continue }
-            return CGRect(x: box.minX * line.imageSize.width,
-                          y: (1 - box.maxY) * line.imageSize.height,
-                          width: box.width * line.imageSize.width,
-                          height: box.height * line.imageSize.height)
+    /// The right and bottom edges of the dark grey pixels (text ink, not
+    /// the coloured emoji) in `image`, in pixels; `nil` with none.
+    static func textInk(_ image: CGImage) -> (maxX: Int, maxY: Int)? {
+        guard let pixels = rgba(image) else { return nil }
+        let width = image.width
+        var maxX = -1, maxY = -1
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Int(pixels[index]), green = Int(pixels[index + 1]), blue = Int(pixels[index + 2])
+            let high = max(red, green, blue), low = min(red, green, blue)
+            guard red + green + blue < 300, high - low < 40 else { continue }
+            let pixel = index / 4
+            maxX = max(maxX, pixel % width)
+            maxY = max(maxY, pixel / width)
         }
-        return nil
+        return maxX < 0 ? nil : (maxX, maxY)
     }
 
     /// Pixels whose colour is clearly not grey: the mock emoji's square
     /// (saturation 0.6, brightness 0.8). Black, grey and white text and
     /// background have none.
     static func saturatedPixels(_ image: CGImage) -> Int {
+        guard let pixels = rgba(image) else { return -1 }
+        var count = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Int(pixels[index]), green = Int(pixels[index + 1]), blue = Int(pixels[index + 2])
+            let high = max(red, green, blue), low = min(red, green, blue)
+            if high > 80, high - low > 70 { count += 1 }
+        }
+        return count
+    }
+
+    /// `image` as RGBA bytes, row by row from the top.
+    static func rgba(_ image: CGImage) -> [UInt8]? {
         let width = image.width, height = image.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
@@ -281,14 +315,7 @@ final class EmojiUITests: XCTestCase {
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
-        guard drawn else { return -1 }
-        var count = 0
-        for index in stride(from: 0, to: pixels.count, by: 4) {
-            let red = Int(pixels[index]), green = Int(pixels[index + 1]), blue = Int(pixels[index + 2])
-            let high = max(red, green, blue), low = min(red, green, blue)
-            if high > 80, high - low > 70 { count += 1 }
-        }
-        return count
+        return drawn ? pixels : nil
     }
 
     /// The load averages (the simulator shares the host's kernel), logged
