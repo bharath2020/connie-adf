@@ -5,6 +5,10 @@ import ADFPreparation
 /// Tap-to-open lightbox: loads the media at full resolution (this is the
 /// only place full-res bytes are decoded) with pinch-to-zoom, pan while
 /// zoomed, and double-tap to toggle zoom.
+///
+/// It calls the provider directly and bypasses the `MediaCoordinator` on
+/// purpose: one full-size load the reader asked for, never deduplicated with
+/// (or evicted like) the downsampled in-document loads.
 struct LightboxView: View {
     let media: PreparedMedia
 

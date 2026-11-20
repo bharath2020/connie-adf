@@ -97,6 +97,9 @@ public struct ADFDocumentView: View {
                 identifiesRenderer: Bool = false) {
         self.model = model
         self.mediaProvider = mediaProvider
+        // Not observable: handing the provider to the coordinator
+        // invalidates nothing.
+        model.media.provider = mediaProvider
         self.interactionHandler = interactionHandler
         self.taskStates = taskStates
         self.mentionContent = mentionContent
@@ -200,6 +203,7 @@ public struct ADFDocumentView: View {
         .environment(\.adfTheme, model.theme)
         .environment(\.adfCustomRenderers, model.customRenderers)
         .environment(\.adfMediaProvider, mediaProvider)
+        .environment(\.adfMedia, mediaProvider == nil ? nil : model.media)
         .environment(\.adfTableScrollSync, tableScrollSync)
         .environment(\.adfInteractionHandler, interactionHandler)
         .environment(\.adfTaskStates, taskStates)

@@ -6,22 +6,22 @@ import ADFPreparation
 ///
 /// The aspect-ratio box is reserved from the ADF `width`/`height` attrs
 /// *before* any bytes load, so there is zero layout shift and the lazy stack
-/// gets correct estimated heights. The fetch is gated on scroll visibility
-/// (`.onScrollVisibilityChange` on iOS 18+, `.onAppear` fallback below) and
-/// runs through the injected `ADFMediaProvider` inside `.task(id:)`, so
-/// scrolling away cancels in-flight loads. Tapping a loaded image opens the
-/// zoomable lightbox; a `link` mark on the media routes the tap to the URL
-/// instead.
+/// gets correct estimated heights. Loading belongs to the document's
+/// `MediaCoordinator` (ADR §24): the box attaches as a viewer with its load
+/// key (source + measured box size) and its own scroll visibility
+/// (`mediaAttachment`), and draws the key's `MediaEntry` — the coordinator
+/// dwells, caps concurrent loads, cancels on scroll-away and releases the
+/// image once nothing shows it. No `@State` is bound to visibility. Without a
+/// provider (no coordinator) the box keeps its placeholder. Tapping a loaded
+/// image opens the zoomable lightbox; a `link` mark on the media routes the
+/// tap to the URL instead.
 struct MediaBlockView: View {
     let media: PreparedMedia
 
     @Environment(\.adfTheme) private var theme
-    @Environment(\.adfMediaProvider) private var provider
+    @Environment(\.adfMedia) private var coordinator
     @Environment(\.openURL) private var openURL
 
-    @State private var loadedImage: Image?
-    @State private var loadFailed = false
-    @State private var isVisible = false
     @State private var boxSize = CGSize.zero
     @State private var containerWidth = CGFloat.zero
     @State private var showsLightbox = false
@@ -106,15 +106,19 @@ struct MediaBlockView: View {
             } action: { size in
                 boxSize = size
             }
-            .modifier(ScrollVisibilityGate(isVisible: $isVisible))
-            .task(id: fetchKey) { await loadIfNeeded() }
+            .mediaAttachment(viewer: media.id, key: loadKey, attrs: media.attrs, group: nil)
             .onTapGesture { handleTap() }
             .accessibilityLabel(media.attrs.alt ?? "Image")
             .accessibilityAddTraits(.isImage)
     }
 
     private var boxContent: some View {
-        ZStack {
+        // Reads only this box's entry: a landing redraws only the views
+        // showing the same key.
+        let entry = self.entry
+        let loadedImage = entry?.image
+        let loadFailed = entry?.failed ?? false
+        return ZStack {
             RoundedRectangle(cornerRadius: theme.containerCornerRadius)
                 .fill(Color.gray.opacity(0.1))
             if let loadedImage {
@@ -192,49 +196,24 @@ struct MediaBlockView: View {
 
     // MARK: - Loading
 
-    private struct FetchKey: Equatable {
-        var isVisible: Bool
-        var width: CGFloat
-        var height: CGFloat
+    /// The load key: the source at the measured box size (rounded), so a box
+    /// that settles on a new size (rotation, Split View) moves to a new
+    /// load. `nil` until the box has been measured.
+    private var loadKey: MediaLoadKey? {
+        MediaLoadKey(source: media.attrs.source, size: boxSize)
     }
 
-    /// `.task(id:)` restarts (cancelling the previous fetch) when visibility
-    /// flips or the reserved box settles on a new size.
-    private var fetchKey: FetchKey {
-        FetchKey(
-            isVisible: isVisible,
-            width: boxSize.width.rounded(),
-            height: boxSize.height.rounded()
-        )
-    }
-
-    private func loadIfNeeded() async {
-        guard isVisible else {
-            // §6.5: off-screen rows drop their decoded image state, holding
-            // only the ref — lazy stacks keep rows alive, so without this
-            // eviction every bitmap ever loaded would stay resident.
-            // Re-approaching reloads (typically from the provider's cache).
-            loadedImage = nil
-            return
-        }
-        guard loadedImage == nil, !loadFailed,
-              boxSize.width > 0, boxSize.height > 0,
-              let provider else { return }
-        do {
-            loadedImage = try await provider.image(for: media.attrs, targetSize: boxSize)
-        } catch is CancellationError {
-            // Scrolled away mid-fetch; the next visibility change retries.
-        } catch {
-            if !Task.isCancelled {
-                loadFailed = true
-            }
-        }
+    /// This box's entry, or `nil` without a coordinator (no provider) or
+    /// before the box is measured: the placeholder.
+    private var entry: MediaEntry? {
+        guard let coordinator, let loadKey else { return nil }
+        return coordinator.entry(for: loadKey)
     }
 
     private func handleTap() {
         if let href = media.linkHref, let url = URL(string: href) {
             openURL(url)
-        } else if loadedImage != nil {
+        } else if entry?.image != nil {
             showsLightbox = true
         }
     }
@@ -254,26 +233,6 @@ struct MediaAspectBox: ViewModifier {
             content.aspectRatio(ratio, contentMode: .fit)
         } else {
             content.frame(height: fallbackHeight)
-        }
-    }
-}
-
-/// Flips `isVisible` as the view enters/leaves the visible scroll region:
-/// `.onScrollVisibilityChange` (iOS 18 / macOS 15) with a low threshold so
-/// fetches start as items approach; `.onAppear`/`.onDisappear` on the lazy
-/// row is the iOS 17 fallback.
-struct ScrollVisibilityGate: ViewModifier {
-    @Binding var isVisible: Bool
-
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, macOS 15.0, *) {
-            content.onScrollVisibilityChange(threshold: 0.01) { visible in
-                isVisible = visible
-            }
-        } else {
-            content
-                .onAppear { isVisible = true }
-                .onDisappear { isVisible = false }
         }
     }
 }
