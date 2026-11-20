@@ -217,6 +217,10 @@ import UIKit
 ///   - `-mediaCache cold` empties the disk cache at launch, before the
 ///     first lookup, so UI tests and perf runs start with no disk hits
 ///     (memory starts empty on every launch anyway).
+///   - `-mediaProbe` (UI tests only) shows `MediaProbe`: one line,
+///     identifier `media-probe`, with the document's media coordinator
+///     counters and the mock fetch's, polled every 250 ms — one consistent
+///     read for `MediaUITests`.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles
@@ -264,6 +268,8 @@ struct LaunchOptions: Sendable {
     var mediaDelay = 0.3
     /// `-mediaCache cold`: empty the media disk cache at launch.
     var mediaCacheCold = false
+    /// `-mediaProbe`: the reader shows `MediaProbe` (UI tests only).
+    var mediaProbe = false
 
     static let none = LaunchOptions(arguments: [])
 
@@ -341,6 +347,8 @@ struct LaunchOptions: Sendable {
             case "-mediaCache" where arguments.index(after: index) < arguments.endIndex:
                 index = arguments.index(after: index)
                 mediaCacheCold = arguments[index].lowercased() == "cold"
+            case "-mediaProbe":
+                mediaProbe = true
             default:
                 break
             }

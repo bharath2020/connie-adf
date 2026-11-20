@@ -128,6 +128,11 @@ struct ReaderView: View {
                     SmartLinkProbe(model: model)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if options.mediaProbe {
+                    MediaProbe(model: model)
+                }
+            }
             .overlay {
                 if let loadFailure {
                     ContentUnavailableView(
