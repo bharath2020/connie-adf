@@ -327,3 +327,15 @@ a token):
   from the repo root. The test itself reads the credential; neither prints the
   token or the email. The token must have been created with the six current
   scopes.
+
+### Live result (2026-11-20)
+
+`Scripts/live-atlassian-fetch.sh` with `ADF_LIVE_SITE=mycompany` against page
+229377 (version 2: one uploaded 320×200 PNG in a `mediaSingle`, one standard
+emoji `:grinning:`), using the read-only adf-auth token with the six scopes:
+both live tests passed. The media node (`collection: contentId-229377`)
+matched attachment `att425985` by `fileId` and downloaded through the v1
+redirect as 75,173 bytes of `image/png`, byte-for-byte the uploaded size; the
+emoji loaded from the public CDN (1,315 bytes). The site has no custom emoji
+of its own, so the custom-emoji path is proven only on a public site (see
+"Probe results"); on this site users see the `:shortName:` text fallback.
