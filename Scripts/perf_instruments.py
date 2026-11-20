@@ -111,7 +111,7 @@ READY_RE = re.compile(r"^READY fixture=")
 SETTLE_NS = 500_000_000
 BURST_MS = 12.0
 # The scroll is paced by sleeps, so its length is fixed by the document
-# (~30 s for perf-mixed). A base run whose window is this much longer than
+# (~59 s for perf-mixed). A base run whose window is this much longer than
 # the base arm's median window was starved by the host (its sleeps overran)
 # and measures the host, not the app: it is excluded and reported. Only base
 # runs are judged: a candidate that blocks the main thread also lengthens
