@@ -143,13 +143,30 @@ let fetch: @Sendable (MediaAttrs) async throws -> Data = fetcher.mediaFetch
   list chain per page, one `tenant_info` call).
 - Emoji is wired into the Demo (Lane A): `EmojiResolvers` passes
   `AtlassianEmojiFetcher.emojiFetch` to `CacheFirstEmojiResolver` for
-  Confluence pages behind its own setting, using
+  Confluence pages behind its own setting (Settings → Reader), using
   `AccountStore.credential(for:)`; the rule and the `-emoji` launch flag are
-  in `docs/Architecture-Decisions.md` §23. Media is not wired yet: the
-  cache-first media provider with its mock fetch and `-media` launch setting
-  belongs to Lane B. When it lands, the live closure goes where the mock one
-  is passed, behind the same setting, with the mock kept for tests and
-  fixtures.
+  in `docs/Architecture-Decisions.md` §23.
+- Media is wired into the Demo (Lane B): `DemoMedia`
+  (`Demo/ADFReader/DemoMedia.swift`) picks each document's provider when it
+  opens, from the persisted **Images** setting (reader menu "Images" section
+  and Settings → Reading; `MediaModePreference`): Off, Mock, or Atlassian
+  (the default). Under Atlassian, a remote page whose site
+  (`AppConfig.confluenceSite`, the site the Cloudflare snapshot was exported
+  from) has a saved account gets
+  `CacheFirstMediaProvider(disk: DiskCache(directory: Caches/ADFReaderMedia/<site host>, byteLimit: 200 MB), scale:, fetch:)`
+  over `LiveMediaFetch`: `.file` media through one `AtlassianMediaFetcher`
+  per account, built from `AccountStore.credential(for: site)` (a thin
+  wrapper around `store.load(site:)`, shared with the emoji fetch) and kept for the launch; `.external`
+  media through a plain HTTPS GET with no credentials. Bundled fixtures, and
+  remote pages with no account for their site, get the mock
+  (`MockMediaFetch`, disk cache `Caches/ADFReaderMedia/mock`). A connect or
+  remove reloads the credential on the next document: a rotated token gets
+  a new fetcher, a removed account stops `.file` fetches. A failed fetch
+  shows the box's failure chip; About This Build shows the document's mode,
+  the fetch's counts, the last failure and, after a 401/403, a re-create
+  the token hint. Launch flags: `-media off|mock|live` sets the setting for
+  that launch (`mock` = mock everywhere, `live` = Atlassian, `off` = no
+  provider); `-mediaCache cold` empties every media disk cache.
 
 ## 6. Custom emoji
 
