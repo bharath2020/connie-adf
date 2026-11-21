@@ -1,6 +1,7 @@
 # Atlassian Auth
 
-How ADFReader gets a read-only Atlassian API token. Code: `Sources/ADFAtlassianAuth`
+How ADFReader gets an Atlassian API token and uses it to read and write
+Confluence (section 6). Code: `Sources/ADFAtlassianAuth`
 (shared module), `Sources/ADFAuthCLI` (`adf-auth`; help text in `Help.swift`),
 `Demo/ADFReader/{AccountStore,AccountsView,AddAccountView,PairScanView,SettingsView}.swift`.
 Using the token to load images (attachments) in pages:
@@ -50,7 +51,7 @@ before it reads a saved token. Signing with a stable identity stops that.
 | Command | What it does |
 |---|---|
 | `login [--site <site>] [--email <email>] [--expiry-days <n>] [--token-stdin] [--no-open]` | Opens the token page, reads the token (`readpassphrase`, or one stdin line), offers to clear it from the clipboard, runs `AdfAuthCheck`, asks the expiry you picked, saves. Same site again replaces the token. It never prompts from a piped stdin: there `--site` and `--email` are required. |
-| `list` | Site, email, expiry, from the non-secret summary only. Suggests `rotate` at 14 days or fewer. |
+| `list` | Site, email, expiry, from the non-secret summary only. Suggests `rotate` at 14 days or fewer, and for a read-only token (one hint per site). |
 | `push [--site <site>] [--host <ipv4>] [--port <n>] [--timeout <seconds>]` | One-time QR handoff (section 4). Timeout 5–120 s, default 120; port 0 = any free port. The QR is drawn only on a terminal; with stdout piped, `push` exits 2. |
 | `push --to <ipv4:port> [--site <site>] [--timeout <seconds>]` | The phone listens, the Mac connects out (section 4, "Mac connects to phone"). For a Mac that blocks incoming connections. Prompts "Code shown on your phone: " (needs a terminal; the code is never taken as an argument, so it stays out of `ps` and shell history). Prints the account (site + email) and the result. Timeout 5–300 s, default 30, for connect + send. Not with `--host`/`--port`. |
 | `rotate <site> [--expiry-days <n>] [--token-stdin] [--no-open]` | `login` with the saved email, offers `push` (the QR code, Mac listens), then points to the token page to revoke the old token. On a Mac that blocks incoming connections, answer no and run `push --to <ipv4:port>` afterwards: the new token is already saved. Rotate says so before the question and whenever the token wasn't sent. |
@@ -59,16 +60,23 @@ before it reads a saved token. Signing with a stable identity stops that.
 
 - Exit status: 0 success, 1 failure, 2 usage error, 3 scoped token rejected
   (`probe-graphql`). The token is never taken as an argument (`--token` exits 2).
-- **Scopes** (app "Confluence", exactly these, all read-only): `read:page:confluence`,
+- **Scopes** (app "Confluence", exactly these 10, `AtlassianTokenScopes.required`
+  = `read` + `write`). Read: `read:page:confluence`,
   `read:space:confluence`, `read:blogpost:confluence`,
+  `read:comment:confluence` (the comment a comment write returns),
   `read:content.metadata:confluence` (page-title emoji),
   `read:attachment:confluence` and `readonly:content.attachment:confluence`
   (images in pages: list and download attachments; see
-  [Atlassian-Media-Fetch.md](Atlassian-Media-Fetch.md)).
-  Default expiry 90 days
+  [Atlassian-Media-Fetch.md](Atlassian-Media-Fetch.md)). Write:
+  `write:comment:confluence` (footer comments and replies),
+  `write:page:confluence` (create and edit pages), `write:blogpost:confluence`
+  (create blog posts). No delete scopes. Default expiry 90 days
   (`--expiry-days` 1–365). Scopes can't be added to a token; a new one means a new token.
   **Tokens created before the two attachment scopes were added still work for
   titles but can't show images; re-create them (`adf-auth rotate`).**
+  **Tokens created before write support are read-only** (no write scopes, no
+  `read:comment:confluence`): reading still works, every write fails before
+  sending anything, and `list` / `login` say so. `adf-auth rotate <site>` fixes it.
 - **Token page:** `https://id.atlassian.com/manage-profile/security/api-tokens?autofillToken&expiryDays=<n>&appId=confluence&selectedScopes=<percent-encoded JSON array>`.
   Atlassian does not document these preselection parameters, so they are
   unverified. `login` always prints the seven manual steps and the scope list.
@@ -278,13 +286,85 @@ Only `probe-graphql` runs `AdfProbePages` today; the app does not look up titles
 |---|---|
 | "scoped" (or API/container token, not on a 401) in an HTTP 401/403 body or a GraphQL error; checked first | `scopedTokenRejected(field:detail:)`; `probe-graphql` exits 3 |
 | HTTP 401, or GraphQL status 401 / unauthorized | `unauthorized` (wrong email or token, or not a Confluence token) |
-| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the six scopes) |
+| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the required scopes) |
 | HTTP 404, `CloudIdNotFoundException`, or no matching tenant | `siteNotFound` |
 | HTTP 429 | `rateLimited` (`Retry-After` seconds or HTTP date) |
 | 200 with pages and errors | Normal result, errors listed verbatim; a `metadata` error only marks the emoji unavailable. Errors are mapped only when no pages come back. |
 | Anything else | `graphQL(messages:)`, `server(status:)`, `invalidResponse`, `network` |
 
-## 6. Unverified until a real token is tried
+## 6. Writing (GraphQL)
+
+`ConfluenceWriteClient` (`GraphQL/ConfluenceWriteClient.swift`, documents in
+`GraphQL/ConfluenceWriteDocuments.swift`) writes through the same gateway, same
+auth, GraphQL only. Every write is a named mutation under
+`confluence(cloudId:)` and carries `X-ExperimentalApi: confluence-agg-beta`:
+all these fields are beta, and without the header the gateway answers HTTP 200
+with `errors[].extensions.classification` `BetaHeaderOptInException`
+(reported as `mutationFailed`). Field names, inputs and scopes come from schema
+introspection (2026-11-20).
+
+| Method | Operation → field | Scope(s) checked first |
+|---|---|---|
+| `createFooterComment(pageId:adf:)` | `AdfCreateFooterComment` → `createFooterCommentOnPage` | `write:comment` + `read:comment` |
+| `replyToComment(commentId:adf:)` | `AdfReplyToComment` → `replyToComment` | `write:comment` + `read:comment` |
+| `createPage(spaceId:title:adf:)` | `AdfCreatePage` → `createPage` (status `CURRENT`, top of the space) | `write:page` |
+| `updatePageBody(pageId:adf:title:expectedVersion:)` | `AdfPageVersion` query, then `AdfUpdatePage` → `updateCurrentPage` | `write:page` |
+| `createBlogPost(spaceId:title:adf:)` | `AdfCreateBlogPost` → `createBlogPost` (status `CURRENT`) | `write:blogpost` |
+
+- **Body:** `{"representation": "ATLAS_DOC_FORMAT", "value": <ADF JSON string>}`.
+  The client refuses (`invalidDocument`, nothing sent) anything that is not a
+  JSON object with `"type": "doc"`.
+- **IDs:** a plain page or comment ID becomes
+  `ari:cloud:confluence:<cloudId>:page/<id>` / `…:comment/<id>`; an ID that
+  already starts with `ari:` is sent unchanged. Space IDs are sent verbatim (use
+  the `space.id` the gateway returns, e.g. from `AdfProbePages`). A credential
+  without a cloudId can't make a client (`missingCloudId`).
+- **Version check:** `updateCurrentPage` takes no version number, so
+  `updatePageBody` first reads `latestVersion.number` (`pageVersion(pageId:)`)
+  and throws `versionConflict(expected:current:)` without sending the mutation
+  when it isn't `expectedVersion`. A 409 status, an error with `statusCode` 409,
+  or a "conflict" / "stale" / version-mismatch message from the mutation is
+  also `versionConflict` (`current` nil). **Race window:** an edit that lands
+  between the read and the write is not detected; the returned version is then
+  higher than `expectedVersion + 1`.
+- **Read-only tokens:** each write checks the stored credential's `scopes`
+  first and throws `readOnlyToken(host:missingScopes:)` with no request sent
+  (`AtlassianCredential.canWrite`, `AtlassianAccountSummary.readOnlyNote`).
+  The message says to run `adf-auth rotate <host>`.
+- **Out of scope:** delete, attachments, labels, inline comments, moving pages,
+  and any ADFReader UI. Nothing in the app calls the write client yet.
+
+| Gateway response | `ConfluenceWriteError` |
+|---|---|
+| Missing scope in the stored credential (before sending) | `readOnlyToken(host:missingScopes:)` |
+| HTTP 401, or an error with `statusCode` 401 | `unauthorized` |
+| "scoped" in an error message (or a scoped-token HTTP 401/403 body) | `scopedTokenRejected(field:detail:)` |
+| HTTP 403, or an error with `statusCode` 403 / forbidden / permission / "scope" | `missingScope(scopes:detail:)` (the operation's scope; `detail` = the gateway's message) |
+| HTTP 404, or an error with `statusCode` 404 / not found | `notFound` (the page, comment or space) |
+| Page update: 409 or conflict / stale wording | `versionConflict(pageId:expected:current:)` |
+| HTTP 429 (`Retry-After`, for the whole request), or an error with `statusCode` 429 | `rateLimited(retryAfter:)` |
+| `success: false` or GraphQL errors with no specific meaning (e.g. `BetaHeaderOptInException`) | `mutationFailed(field:messages:)` |
+| Other non-2xx | `server(status:)` |
+| Not JSON, or `success: true` without the comment / page / blog post | `invalidResponse` |
+| Transport failure | `network` (never includes headers) |
+
+Mutation-level failures come back as HTTP 200 with the payload's
+`success: false` and `errors[].extensions {statusCode, errorType}`; top-level
+`errors[]` are read the same way. Nothing is retried and there is no REST
+fallback.
+
+**Live check (opt-in, creates real content).** `Scripts/live-confluence-write.sh`
+runs `LiveConfluenceWriteTests` with the saved account for `ADF_LIVE_SITE`
+(needs `ADF_LIVE_WRITE=1`, which the script sets). It reads the anchor page
+`ADF_LIVE_PAGE` (default `229377`) only to find its space, refuses to write
+unless that is a personal space (key starts with `~`, and equals
+`ADF_LIVE_SPACE_KEY` when set), and never writes to the anchor page. In order:
+create a scratch page, comment on it, reply, update it at the read version,
+check a stale-version update throws `versionConflict` and changes nothing,
+create a blog post. It prints step names, IDs, versions and links only.
+Delete the scratch page and blog post by hand afterwards.
+
+## 7. Unverified until a real token is tried
 
 Introspection on 2026-11-15 showed `tenantContexts(hostNames: [String!])` and
 `confluence.pages(ids: [ID]!)` carry no `@scopedApiTokenUnavailable`, but how the
@@ -303,8 +383,14 @@ adf-auth probe-graphql --page <id>  # items 3-5 (--site <site> if several; --raw
 | 3 | Does `confluence.pages` accept a scoped token? | Exit 0 with titles = yes; exit 3 = no. |
 | 4 | Emoji: `ConfluenceContentMetadata` needs `read:content.metadata:confluence`, which `login` now asks for. Whether the gateway honours it for a scoped token is unverified. | Expect the emoji in the probe output. A token created without the scope shows `Emoji: not available` plus the scope error; replace it with `adf-auth rotate`. |
 | 5 | Batch cap for `pages(ids:)` | Repeat `--page` with 100, then 250 distinct IDs; look for a limit error. |
+| 6 | Does `createPage` accept a scoped token with `write:page:confluence` and the beta header? | `Scripts/live-confluence-write.sh` (section 6): the page is created and linked. |
+| 7 | `createFooterCommentOnPage` with `write:comment` + `read:comment` | Same run: the comment ID is printed. |
+| 8 | `replyToComment` on that comment | Same run: the reply ID is printed. |
+| 9 | `updateCurrentPage` makes version N+1 and the pre-read catches a stale version | Same run: the new version is N+1; the stale attempt throws `versionConflict` and the version is unchanged. |
+| 10 | `createBlogPost` with `write:blogpost:confluence` | Same run: the blog post is created and linked. |
+| 11 | Exact error shapes for write failures (`errorType` values, conflict wording) | Unverified: the mapping in section 6 is from the schema and the read-side gateway behaviour. |
 
-## 7. Export compliance
+## 8. Export compliance
 
 `ITSAppUsesNonExemptEncryption` stays `false` in `Demo/project.yml` (a comment
 there records why). This is the project's reasoning, not legal advice: all crypto
@@ -316,11 +402,13 @@ Category 5 Part 2 (Apple's "limited to authentication" and "only uses encryption
 within Apple's operating system" answers). Revisit if the app ever encrypts other
 data or ships its own crypto.
 
-## 8. Testing
+## 9. Testing
 
 - `Tests/ADFAtlassianAuthTests/`: site, credential and redaction, store, GraphQL
-  parsing and error mapping, pairing link, seal, handoff client and server. Only
-  synthetic tokens (`ATATT3xFfGF0-synthetic-…`), a `URLProtocol` stub
+  parsing and error mapping, the write client (`ConfluenceWriteClientTests.swift`:
+  request shape and variables, read-only tokens, every error per write, version
+  conflicts), pairing link, seal, handoff client and server. Only
+  synthetic tokens (`ATATT3xFfGF0-synthetic-…`, `test-token-not-real`), a `URLProtocol` stub
   (`AuthStubProtocol`) and `127.0.0.1` listeners; nothing calls Atlassian.
   Run `swift test --filter ADFAtlassianAuthTests`.
 - `PhoneHandoffTests.swift` (Mac connects to phone): code generate/format/parse,
@@ -344,6 +432,8 @@ data or ships its own crypto.
   (`PhoneHandoffAddress(loopbackForTestingPort:)`, the listener's
   `.loopbackForTesting` binding), never through parsing, and both are
   compiled only in debug builds (`#if DEBUG`).
+- Live writes: `LiveConfluenceWriteTests.swift`, opt-in only (`ADF_LIVE_WRITE=1`
+  + `ADF_LIVE_SITE` + a saved account; section 6). Skipped otherwise.
 - Real keychain round-trip: opt-in with `ADF_AUTH_KEYCHAIN_TESTS=1` (unique
   `com.connie.adfreader.atlassian.tests.<UUID>` service, cleaned up).
 - `Demo/ADFReaderUITests/AccountsUITests.swift`: offline, `-openAccounts` (opens

@@ -100,7 +100,7 @@ public struct AtlassianGraphQLClient: Sendable {
     // MARK: Requests
 
     /// The POST request for `operation`, with the Authorization header.
-    func makeRequest(_ operation: GraphQLOperation) -> URLRequest {
+    func makeRequest(_ operation: GraphQLOperation, extraHeaders: [String: String] = [:]) -> URLRequest {
         var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.httpBody = operation.body
@@ -109,16 +109,19 @@ public struct AtlassianGraphQLClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        for (name, value) in extraHeaders.sorted(by: { $0.key < $1.key }) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         return request
     }
 
-    private struct HTTPResult: Sendable {
+    struct HTTPResult: Sendable {
         let statusCode: Int
         let headerFields: [String: String]
     }
 
-    private func send(_ operation: GraphQLOperation) async throws(AtlassianAuthError) -> (HTTPResult, Data) {
-        let request = makeRequest(operation)
+    func send(_ operation: GraphQLOperation, extraHeaders: [String: String] = [:]) async throws(AtlassianAuthError) -> (HTTPResult, Data) {
+        let request = makeRequest(operation, extraHeaders: extraHeaders)
         let data: Data
         let response: URLResponse
         do {
