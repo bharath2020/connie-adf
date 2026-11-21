@@ -54,8 +54,8 @@ RULES (thresholds from the budgets file; defaults in DEFAULT_BUDGETS)
                    whose reps disagreed (counts_unstable) is listed apart.
     ratio          render tier, candidate TextKit 2 ÷ SwiftUI instructions
                    per fixture <= ratio_budgets[fixture], each side's ratio
-                   the smaller of the median-rep and the min-rep ratio
-                   (extra work in some reps only adds instructions; a
+                   taken from the minimum reps of both arms (extra work in
+                   some reps only adds instructions, in either arm; a
                    median ratio over the budget the min-rep ratio is not
                    is noted). Over it: FAIL when
                    the base is within it, or when the candidate ratio is
@@ -238,6 +238,10 @@ def instr_min(record):
     return stats.get("min")
 
 
+def instr_floor(record):
+    return instr_min(record) or instr_median(record)
+
+
 def compare(args):
     budgets = load_budgets(args.budgets)
     base = combine(load_lines(args.base))
@@ -325,10 +329,7 @@ def compare(args):
             sui = stat(side.get(("render", fixture, "swiftUI")))
             return tk2 / sui if tk2 and sui else None
 
-        def judged_ratio(side):
-            values = [v for v in (ratio(side, instr_median), ratio(side, instr_min)) if v is not None]
-            return min(values) if values else None
-        br, cr = judged_ratio(base), judged_ratio(cand)
+        br, cr = ratio(base, instr_floor), ratio(cand, instr_floor)
         cr_median = ratio(cand, instr_median)
         budget = (budgets.get("ratio_budgets") or {}).get(fixture)
         limit = budget.get("max") if isinstance(budget, dict) else budget
@@ -339,7 +340,7 @@ def compare(args):
             verdict = "uncalibrated"
         elif cr_median is not None and cr <= limit < cr_median:
             notes.append(f"- `{fixture}` TK2 ÷ SwiftUI median ratio {cr_median:.3f} is over the budget {limit:.3f}, "
-                         f"the minimum-rep ratio {cr:.3f} is not (disturbed reps); judged on the lower.")
+                         f"the minimum-rep ratio {cr:.3f} is not (disturbed reps); judged on the minimum.")
         elif cr > limit:
             verdict = "FAIL"
             if br is not None and br > limit and cr <= br * (1 + budgets["ratio_rise_fail_pct"] / 100.0):
@@ -427,8 +428,8 @@ def calibrate(args):
         for (tier, fixture, renderer), record in records.items():
             if tier != "render" or renderer != "textKit2":
                 continue
-            tk2 = instr_median(record)
-            sui = instr_median(records.get(("render", fixture, "swiftUI")))
+            tk2 = instr_floor(record)
+            sui = instr_floor(records.get(("render", fixture, "swiftUI")))
             if tk2 and sui:
                 ratios.setdefault(fixture, []).append(tk2 / sui)
     calibrated = {}

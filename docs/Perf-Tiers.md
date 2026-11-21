@@ -77,9 +77,9 @@ scratch root (`<root>/lock`); a second run waits for it. Rules
   at +45 %), which can lift a median but not the minimum. Such a line
   shows the smaller `min Δ` next to its verdict. Rep CV over 1 % is
   flagged `NOISY` (informational; the containers slice usually is).
-- **TK2 ÷ SwiftUI instruction ratio** per fixture (the lower of the
-  median-rep and minimum-rep ratios, so disturbed reps on a busy host do
-  not lift it), against budgets
+- **TK2 ÷ SwiftUI instruction ratio** per fixture (the ratio of the
+  minimum reps of both arms, so disturbed reps in either arm on a busy
+  host do not move it), against budgets
   calibrated from 10 main passes (max × 1.02; `--calibrate 10 main
   --write-budgets`, about 8 min). Current budgets: list-dense 1.216,
   stress-1k 1.291, kitchen-sink 1.128, code 1.188, giant-table 1.027,

@@ -54,6 +54,8 @@ CASES = [
     ("disturbed reps lift the candidate TK2 median over the budget, minimum flat",
      (1.15e9, 1.0e9), ((1.265e9, 1.15e9), 1.0e9), 0, "PASS", "PASS"),
     ("candidate over, base within", (1.18e9, 1.0e9), (1.18e9, 0.97e9), 1, "FAIL", "FAIL"),
+    ("disturbed reps lift the candidate SwiftUI median, minimum ratio over the budget",
+     (1.18e9, 1.0e9), (1.221e9, (1.1e9, 1.0e9)), 1, "FAIL", "FAIL"),
     ("base also over, candidate at the base ratio", (1.25e9, 1.0e9), (1.25e9, 1.0e9), 0, "WARN", "WARN"),
     ("base also over, candidate slightly above it", (1.25e9, 1.0e9), (1.255e9, 1.0e9), 0, "WARN", "WARN"),
     ("base also over, candidate clearly above it", (1.25e9, 1.0e9), (1.25e9, 0.96e9), 1, "FAIL", "FAIL"),
