@@ -27,6 +27,10 @@ private struct ADFTableScrollSyncKey: EnvironmentKey {
     static let defaultValue: TableScrollSync? = nil
 }
 
+private struct ADFTablePinnedHeaderKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// Media provider injected by `ADFDocumentView`; consumed by the media
     /// block views (Task 5).
@@ -49,5 +53,15 @@ extension EnvironmentValues {
     var adfTableScrollSync: TableScrollSync? {
         get { self[ADFTableScrollSyncKey.self] }
         set { self[ADFTableScrollSyncKey.self] = newValue }
+    }
+
+    /// `true` inside the document's pinned section header (a top-level
+    /// table's header slice). Such a slice must not carry the table's top
+    /// page spacing — it would pin as a blank band above the header — so
+    /// `ADFDocumentView` puts that gap in the preceding section's footer
+    /// instead.
+    var adfTablePinnedHeader: Bool {
+        get { self[ADFTablePinnedHeaderKey.self] }
+        set { self[ADFTablePinnedHeaderKey.self] = newValue }
     }
 }

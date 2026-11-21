@@ -69,7 +69,10 @@ extension RenderBlock.Kind {
             return 8
         case .tableSlice:
             // Slices of one table must abut seamlessly (a batched table is
-            // one visual unit), so slices carry no vertical padding.
+            // one visual unit), so slices carry no vertical padding here.
+            // The table's 8 pt page spacing is drawn by `TableSliceView`
+            // on its first and last slices only (and, above a pinned
+            // header slice, by the previous section's footer).
             return 0
         case .codeBlock, .panel, .quote, .media, .mediaStrip,
              .expand, .layoutColumns, .card, .extensionPlaceholder, .custom:

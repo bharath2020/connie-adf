@@ -547,6 +547,9 @@ public final class ADFDocumentModel {
     private static func append(_ store: DocumentBlockStore, to sections: inout [BlockSection]) {
         let block = store.block
         if case .tableSlice(_, _, isHeaderSlice: true) = block.kind {
+            if !sections.isEmpty {
+                sections[sections.count - 1].precedesTableHeader = true
+            }
             sections.append(BlockSection(id: store.id, header: store, blocks: []))
             return
         }
@@ -635,4 +638,7 @@ struct BlockSection: Identifiable {
     let id: String
     let header: DocumentBlockStore?
     var blocks: [DocumentBlockStore]
+    /// The next section opens with a table's pinned header slice: this
+    /// section's footer carries the table's 8 pt top page gap.
+    var precedesTableHeader = false
 }
