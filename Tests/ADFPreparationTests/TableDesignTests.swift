@@ -355,4 +355,83 @@ struct TableDesignTests {
         ])
         #expect(try #require(slices(wideFirst).first).layout.hasHeaderColumn == false)
     }
+
+    // MARK: - Demo fixture
+
+    /// Rows of each table in `Fixtures/table-design.json`, in document
+    /// order, rebuilt from its slices (a table ends once its slices hold
+    /// `layout.rowCount` rows).
+    private func fixtureTables() async throws -> [(layout: PreparedTableLayout, rows: [PreparedTableRow])] {
+        let doc = try await ADFParser().parse(try fixtureData("table-design.json"))
+        var tables: [(layout: PreparedTableLayout, rows: [PreparedTableRow])] = []
+        var current: [PreparedTableRow] = []
+        for slice in slices(doc) {
+            current += slice.rows
+            if current.count == slice.layout.rowCount {
+                tables.append((slice.layout, current))
+                current = []
+            }
+        }
+        #expect(current.isEmpty, "a table's slices did not add up to its row count")
+        return tables
+    }
+
+    @Test("table-design fixture: release table merges its rowspan and keeps later cells under their headers")
+    func fixtureReleaseTable() async throws {
+        let tables = try await fixtureTables()
+        try #require(tables.count == 2)
+        let (layout, rows) = tables[0]
+        #expect(layout.columnCount == 5)
+        #expect(layout.rowCount == 6)
+        #expect(layout.hasHeaderRow)
+        #expect(layout.hasHeaderColumn)
+        #expect(layout.columnWidths == nil)
+        // Only "Open bugs" is numeric (the API row's colspan cell is ignored).
+        #expect(layout.numericColumns == [false, false, false, true, false])
+        // Web: Sam Okafor spans two rows from column 1.
+        #expect(rows[3].cellColumns == [0, 1, 2, 3, 4])
+        #expect(rows[3].cells[1].rowspan == 2)
+        // API: column 1 is the continuation; the colspan cell starts at
+        // Status (2) and the empty Notes cell lands in column 4.
+        #expect(rows[4].cellColumns == [0, 2, 4])
+        #expect(rows[4].continuations.map(\.column) == [1])
+        #expect(rows[4].continuations.first?.originRow == 3)
+        #expect(rows[4].cells[1].colspan == 2)
+        // Docs row is back to five cells in order.
+        #expect(rows[5].cellColumns == [0, 1, 2, 3, 4])
+    }
+
+    @Test("table-design fixture: metrics table is numeric past the city column and pins it only when it scrolls")
+    func fixtureMetricsTable() async throws {
+        let tables = try await fixtureTables()
+        try #require(tables.count == 2)
+        let layout = tables[1].layout
+        #expect(layout.columnCount == 9)
+        #expect(layout.rowCount == 18)
+        #expect(layout.hasHeaderRow)
+        #expect(layout.hasHeaderColumn)
+        #expect(layout.numericColumns == [false] + Array(repeating: true, count: 8))
+
+        func resolved(_ width: Double) -> [Double] {
+            TableColumnSizing.columnWidths(
+                natural: layout.naturalColumnWidths,
+                numeric: layout.numericColumns,
+                authored: layout.columnWidths,
+                columnCount: layout.columnCount,
+                availableWidth: width,
+                scale: 1
+            )
+        }
+        // Phone width: wider than the slice, city column ≤ 40 % → pinned.
+        let phone = resolved(370)
+        #expect(phone.reduce(0, +) > 370)
+        #expect(TableColumnSizing.pinsHeaderColumn(
+            columnWidths: phone, gutterWidth: 0, containerWidth: 370, hasHeaderColumn: layout.hasHeaderColumn
+        ))
+        // Wide iPad width: it fits, so nothing pins.
+        let wide = resolved(1_200)
+        #expect(!TableColumnSizing.pinsHeaderColumn(
+            columnWidths: wide, gutterWidth: 0, containerWidth: 1_200, hasHeaderColumn: layout.hasHeaderColumn
+        ))
+    }
 }
