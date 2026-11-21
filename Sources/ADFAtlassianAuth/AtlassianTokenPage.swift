@@ -2,16 +2,45 @@ import Foundation
 
 /// The scopes ADFReader asks for when the user creates a scoped API token.
 public enum AtlassianTokenScopes {
-    /// Read pages, spaces, blog posts, content metadata (title emoji) and
-    /// attachment files (images in pages). Nothing else: no write scopes.
-    public static let required: [String] = [
+    /// Everything ADFReader asks for: ``read`` followed by ``write``.
+    public static let required: [String] = read + write
+
+    /// Read pages, spaces, blog posts, comments, content metadata (title
+    /// emoji, version numbers) and attachment files (images in pages).
+    public static let read: [String] = [
         "read:page:confluence",
         "read:space:confluence",
         "read:blogpost:confluence",
+        readComment,
         contentMetadata,
         attachment,
         attachmentDownload,
     ]
+
+    /// Create footer comments and replies, create and edit pages, create
+    /// blog posts. These are the granular scopes the gateway lists on
+    /// `confluence.createFooterCommentOnPage` / `replyToComment`,
+    /// `createPage` / `updateCurrentPage` and `createBlogPost`. No delete
+    /// scopes.
+    public static let write: [String] = [writeComment, writePage, writeBlogPost]
+
+    /// Guards `confluence.createFooterCommentOnPage` and `confluence.replyToComment`.
+    public static let writeComment = "write:comment:confluence"
+    /// Guards the `ConfluenceComment` those two mutations return (its ID is
+    /// needed to reply). It is in ``read``; tokens created before write
+    /// support lack it, so ``missingWriteScopes(in:)`` checks it too.
+    public static let readComment = "read:comment:confluence"
+    /// Guards `confluence.createPage` and `confluence.updateCurrentPage`.
+    public static let writePage = "write:page:confluence"
+    /// Guards `confluence.createBlogPost`.
+    public static let writeBlogPost = "write:blogpost:confluence"
+
+    /// The ``write`` scopes plus ``readComment`` missing from `scopes` (a
+    /// stored credential's scope list). Empty means the token can write.
+    public static func missingWriteScopes(in scopes: [String]) -> [String] {
+        let present = Set(scopes)
+        return (write + [readComment]).filter { !present.contains($0) }
+    }
 
     /// The scope that guards `ConfluencePage.metadata` (title emoji). It is in
     /// ``required``; a token created without it gets the emoji reported as
@@ -67,7 +96,7 @@ public enum AtlassianTokenPage {
             "Click “Create API token with scopes”.",
             "Name it “ADFReader” and set it to expire in \(expiryDays) days, then click Next.",
             "Choose the app “Confluence”, then click Next.",
-            "Tick these scopes: \(AtlassianTokenScopes.required.joined(separator: ", ")). Search for “read” to find them (\(AtlassianTokenScopes.attachmentDownload) is a classic scope and may be listed apart from the others). Click Next.",
+            "Tick these scopes: \(AtlassianTokenScopes.required.joined(separator: ", ")). Search for “read” and then “write” to find them (\(AtlassianTokenScopes.attachmentDownload) is a classic scope and may be listed apart from the others). Click Next.",
             "Check the summary and click “Create token”.",
             "Click “Copy” to copy the token. Atlassian shows it only once.",
         ]

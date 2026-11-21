@@ -213,3 +213,26 @@ extension Date {
         Date(timeIntervalSince1970: timeIntervalSince1970.rounded(.down))
     }
 }
+
+extension AtlassianCredential {
+    /// The write scopes this credential was not created with. A credential
+    /// saved before write support (read-only token) lists all of them.
+    public var missingWriteScopes: [String] { AtlassianTokenScopes.missingWriteScopes(in: scopes) }
+
+    /// True when the stored token was created with every write scope.
+    public var canWrite: Bool { missingWriteScopes.isEmpty }
+}
+
+extension AtlassianAccountSummary {
+    /// See ``AtlassianCredential/missingWriteScopes``.
+    public var missingWriteScopes: [String] { AtlassianTokenScopes.missingWriteScopes(in: scopes) }
+
+    /// See ``AtlassianCredential/canWrite``.
+    public var canWrite: Bool { missingWriteScopes.isEmpty }
+
+    /// Plain-language note for a read-only token, or nil when it can write.
+    public var readOnlyNote: String? {
+        guard !canWrite else { return nil }
+        return "The token for \(site.host) is read-only (no \(missingWriteScopes.joined(separator: ", "))). Writing needs a new token: run adf-auth rotate \(site.host)."
+    }
+}

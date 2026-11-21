@@ -6,7 +6,8 @@ import Foundation
 enum Help {
     static let version = "adf-auth 1.0.0 (pairing link v\(PairingLink.version))"
 
-    private static var scopes: String { AtlassianTokenScopes.required.joined(separator: ", ") }
+    private static var readScopes: String { AtlassianTokenScopes.read.joined(separator: ", ") }
+    private static var writeScopes: String { AtlassianTokenScopes.write.joined(separator: ", ") }
 
     static let main = """
         adf-auth — sign in to Atlassian for ADFReader and hand the sign-in to your phone
@@ -14,8 +15,8 @@ enum Help {
         Usage: adf-auth <command> [options]
 
         Commands:
-          login            Create a read-only Confluence API token, check it, save it in the keychain
-          list             List saved accounts and when their tokens expire
+          login            Create a read+write Confluence API token, check it, save it in the keychain
+          list             List saved accounts, when their tokens expire, and read-only tokens
           push             Send a saved account to ADFReader once (QR code, or --to the phone)
           rotate <site>    Replace a site's token, send it to the phone, revoke the old one
           remove <site>    Delete a saved account from the keychain
@@ -50,12 +51,15 @@ enum Help {
         Usage: adf-auth login [--site <site>] [--email <email>] [--expiry-days <n>]
                               [--token-stdin] [--no-open]
 
-        Creates a Confluence API token with read-only scopes, checks it against the
-        site's GraphQL gateway, and saves it in your login keychain.
+        Creates a Confluence API token with read and write scopes, checks it against
+        the site's GraphQL gateway, and saves it in your login keychain. The write
+        scopes create comments, replies, pages and blog posts and edit pages; there
+        are no delete scopes.
 
           1. Asks for the site and email unless given.
           2. Opens Atlassian's API token page and prints the click-by-click steps.
-             Scopes: \(scopes)
+             Read scopes: \(readScopes)
+             Write scopes: \(writeScopes)
           3. Reads the token with echo off (or one line of stdin with --token-stdin).
           4. Sends one GraphQL query (AdfAuthCheck) to get the site's cloud ID.
           5. Asks for the expiry you chose (terminal only) and saves the account.
@@ -75,7 +79,9 @@ enum Help {
         Usage: adf-auth list
 
         Lists the saved accounts: site, email and token expiry. Reads only the
-        non-secret summary of each keychain item, never a token.
+        non-secret summary of each keychain item, never a token. Suggests
+        adf-auth rotate for a token that expires soon, or one that is read-only
+        (created without the write scopes; scopes can't be added to a token).
 
         Options:
           -h, --help   Show this help
@@ -134,7 +140,8 @@ enum Help {
 
         Replaces the token for a saved site: runs login with the saved email, offers
         to push the new token to your phone, then opens Atlassian's token page so
-        you can revoke the old token.
+        you can revoke the old token. Rotate a read-only token to get the write
+        scopes.
 
         The offered push shows a QR code (the Mac listens, like adf-auth push). On a
         Mac that blocks incoming connections (for example a company-managed Mac),

@@ -107,7 +107,7 @@ struct AccountsView: View {
             Label("No Atlassian Accounts", systemImage: "person.crop.circle.badge.plus")
         } description: {
             Text("""
-            Connect a Confluence site with a read-only API token.
+            Connect a Confluence site with an API token.
             Add Manually: create the token at Atlassian, then paste it here.
             Scan from Mac: run adf-auth push on your Mac and scan its code.
             Mac connects to phone: for a Mac that blocks incoming connections; run adf-auth push --to on the Mac.

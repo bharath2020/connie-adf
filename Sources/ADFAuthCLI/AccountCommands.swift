@@ -23,10 +23,20 @@ enum ListCommand {
         var rows = [["SITE", "EMAIL", "TOKEN EXPIRES"]]
         rows += summaries.map { [$0.site.host, $0.email, Format.expiry($0, now: now)] }
         Format.table(rows).forEach { Terminal.out($0) }
-        let attention = summaries.filter { $0.expiryStatus(now: now).needsAttention }
-        for summary in attention {
-            Terminal.out()
-            Terminal.out("Replace the token for \(summary.site.host): adf-auth rotate \(summary.site.host)")
+        // One hint per site: rotate fixes both an expiring and a read-only token.
+        for summary in summaries {
+            let host = summary.site.host
+            let expiring = summary.expiryStatus(now: now).needsAttention
+            if expiring {
+                Terminal.out()
+                Terminal.out("Replace the token for \(host): adf-auth rotate \(host)")
+                if !summary.canWrite {
+                    Terminal.out("  It is also read-only; the new token adds the write scopes.")
+                }
+            } else if let note = summary.readOnlyNote {
+                Terminal.out()
+                Terminal.out(note)
+            }
         }
         return ExitCode.success
     }
