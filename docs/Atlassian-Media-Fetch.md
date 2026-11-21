@@ -342,7 +342,7 @@ a token):
   asserted. It prints only counts, sizes, media types and short names.
 
   ```sh
-  # once: create the token from the prefilled link with all six scopes;
+  # once: create the token from the prefilled link with every scope it lists;
   # adf-auth saves it in the login Keychain ("ADFReader – mycompany.atlassian.net")
   adf-auth login --site mycompany --no-open
   # each run (defaults: ADF_LIVE_SITE=mycompany, ADF_LIVE_PAGE=229377)
@@ -353,8 +353,8 @@ a token):
   never the secret), exits 0 with "no adf-auth account saved for … — skipping"
   when it is missing, and runs `swift test --filter LiveAtlassianMediaTests`
   from the repo root. The test itself reads the credential; neither prints the
-  token or the email. The token must have been created with the six current
-  scopes.
+  token or the email. The token needs the six read scopes this fetch uses (every token `adf-auth
+  login` asks for now includes them).
 
 ### Live result (2026-11-20)
 

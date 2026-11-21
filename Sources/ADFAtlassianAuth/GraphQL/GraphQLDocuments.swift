@@ -45,11 +45,16 @@ public struct GraphQLOperation: Sendable, Equatable {
     public let field: String
 
     init(operationName: String, query: String, variables: [String: [String]], field: String) {
+        self.init(operationName: operationName, query: query, jsonVariables: variables, field: field)
+    }
+
+    /// - Parameter jsonVariables: Only JSON values (strings, numbers, bools,
+    ///   arrays and dictionaries of them), which always serialize.
+    init(operationName: String, query: String, jsonVariables: [String: Any], field: String) {
         self.operationName = operationName
         self.query = query
         self.field = field
-        let object: [String: Any] = ["operationName": operationName, "query": query, "variables": variables]
-        // A dictionary of strings always serializes.
+        let object: [String: Any] = ["operationName": operationName, "query": query, "variables": jsonVariables]
         self.body = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
     }
 

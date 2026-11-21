@@ -141,7 +141,7 @@ struct ExpiryStatusTests {
 
 @Suite("Token page")
 struct TokenPageTests {
-    @Test("the create URL preselects Confluence, 90 days and exactly the six read scopes")
+    @Test("the create URL preselects Confluence, 90 days and exactly the seven read and three write scopes")
     func createURL() throws {
         let url = AtlassianTokenPage.createURL()
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
@@ -155,12 +155,14 @@ struct TokenPageTests {
         let scopesJSON = try #require(items.first { $0.name == "selectedScopes" }?.value)
         let scopes = try JSONDecoder().decode([String].self, from: Data(scopesJSON.utf8))
         #expect(scopes == [
-            "read:page:confluence", "read:space:confluence", "read:blogpost:confluence", "read:content.metadata:confluence",
-            "read:attachment:confluence", "readonly:content.attachment:confluence",
+            "read:page:confluence", "read:space:confluence", "read:blogpost:confluence", "read:comment:confluence",
+            "read:content.metadata:confluence", "read:attachment:confluence", "readonly:content.attachment:confluence",
+            "write:comment:confluence", "write:page:confluence", "write:blogpost:confluence",
         ])
-        // Read-only: no write, delete or manage scope sneaks in.
-        #expect(scopes.allSatisfy { $0.hasPrefix("read:") || $0.hasPrefix("readonly:") })
-        #expect(Set(scopes) == Set(AtlassianTokenScopes.required))
+        // Only read and the three create/edit write scopes: no delete or manage scope sneaks in.
+        #expect(scopes.allSatisfy { $0.hasPrefix("read:") || $0.hasPrefix("readonly:") || AtlassianTokenScopes.write.contains($0) })
+        #expect(!scopes.contains { $0.contains("delete") || $0.contains("manage") })
+        #expect(scopes == AtlassianTokenScopes.required)
         // The raw query is fully percent-encoded (no bare quotes or brackets).
         let rawQuery = try #require(components.percentEncodedQuery)
         #expect(!rawQuery.contains("\""))

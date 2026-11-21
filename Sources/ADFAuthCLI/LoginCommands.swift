@@ -49,7 +49,11 @@ enum LoginCommand {
         let email = try options.email ?? Context.askForEmail(command: command)
         let store = Context.store()
         if !options.rotating, let existing = try Context.keychain({ try store.summaries() }).first(where: { $0.site == site }) {
-            Terminal.out("A token for \(site.host) (\(existing.email)) is already saved; the new one will replace it.")
+            if existing.canWrite {
+                Terminal.out("A token for \(site.host) (\(existing.email)) is already saved; the new one will replace it.")
+            } else {
+                Terminal.out("A read-only token for \(site.host) (\(existing.email)) is already saved; the new one replaces it and adds the write scopes.")
+            }
         }
 
         printTokenPage(site: site, expiryDays: options.expiryDays, open: options.openBrowser)
@@ -129,8 +133,13 @@ enum LoginCommand {
             Terminal.out("  \(index + 1). \(step)")
         }
         Terminal.out("Scopes (exactly these \(AtlassianTokenScopes.required.count)):")
-        for scope in AtlassianTokenScopes.required {
-            Terminal.out("  - \(scope)")
+        Terminal.out("  Read:")
+        for scope in AtlassianTokenScopes.read {
+            Terminal.out("    - \(scope)")
+        }
+        Terminal.out("  Write (comments, pages, blog posts; no delete):")
+        for scope in AtlassianTokenScopes.write {
+            Terminal.out("    - \(scope)")
         }
         Terminal.out()
     }
