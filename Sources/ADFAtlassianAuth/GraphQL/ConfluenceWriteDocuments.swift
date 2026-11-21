@@ -84,7 +84,7 @@ extension GraphQLOperation {
         ["representation": "ATLAS_DOC_FORMAT", "value": adf]
     }
 
-    static func createFooterComment(cloudId: String, pageARI: String, adf: String) -> GraphQLOperation {
+    static func createFooterComment(pageARI: String, adf: String) -> GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.createFooterCommentOperationName,
             query: ConfluenceWriteDocuments.createFooterComment,
@@ -93,7 +93,7 @@ extension GraphQLOperation {
         )
     }
 
-    static func replyToComment(cloudId: String, parentCommentARI: String, adf: String) -> GraphQLOperation {
+    static func replyToComment(parentCommentARI: String, adf: String) -> GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.replyToCommentOperationName,
             query: ConfluenceWriteDocuments.replyToComment,
@@ -102,7 +102,7 @@ extension GraphQLOperation {
         )
     }
 
-    static func updatePage(cloudId: String, pageARI: String, title: String, adf: String) -> GraphQLOperation {
+    static func updatePage(pageARI: String, title: String, adf: String) -> GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.updatePageOperationName,
             query: ConfluenceWriteDocuments.updatePage,
@@ -111,7 +111,7 @@ extension GraphQLOperation {
         )
     }
 
-    static func createPage(cloudId: String, spaceId: String, title: String, adf: String) -> GraphQLOperation {
+    static func createPage(spaceId: String, title: String, adf: String) -> GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.createPageOperationName,
             query: ConfluenceWriteDocuments.createPage,
@@ -120,7 +120,7 @@ extension GraphQLOperation {
         )
     }
 
-    static func createBlogPost(cloudId: String, spaceId: String, title: String, adf: String) -> GraphQLOperation {
+    static func createBlogPost(spaceId: String, title: String, adf: String) -> GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.createBlogPostOperationName,
             query: ConfluenceWriteDocuments.createBlogPost,

@@ -204,7 +204,7 @@ public struct AtlassianGraphQLClient: Sendable {
             return .unauthorized
         }
         if errors.contains(where: { $0.statusCode == 403 || ($0.classification?.lowercased().contains("forbidden") ?? false) || ($0.classification?.lowercased().contains("permission") ?? false) }) {
-            return .forbidden(missingScopes: AtlassianTokenScopes.required)
+            return .forbidden(missingScopes: AtlassianTokenScopes.read)
         }
         if errors.contains(where: { $0.classification == "CloudIdNotFoundException" || (notFoundMeansSite && $0.statusCode == 404) }) {
             return .siteNotFound(host: host)
@@ -226,7 +226,7 @@ public struct AtlassianGraphQLClient: Sendable {
             return .unauthorized
         case 403:
             if mentionsScopedToken(bodyText) { return .scopedTokenRejected(field: field, detail: detail) }
-            return .forbidden(missingScopes: AtlassianTokenScopes.required)
+            return .forbidden(missingScopes: AtlassianTokenScopes.read)
         case 404:
             return .siteNotFound(host: host)
         case 429:

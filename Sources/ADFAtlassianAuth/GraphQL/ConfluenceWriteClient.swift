@@ -137,17 +137,13 @@ public struct ConfluenceWriteClient: Sendable {
     let graphQL: AtlassianGraphQLClient
     let scopes: [String]
 
-    /// - Parameters:
-    ///   - cloudId: Overrides `credential.cloudId`.
-    ///   - endpoint: Overrides the site's GraphQL endpoint. Only for stub
-    ///     servers in tests.
-    public init(credential: AtlassianCredential, cloudId: String? = nil, endpoint: URL? = nil, session: URLSession = .shared) throws(ConfluenceWriteError) {
-        guard let resolved = cloudId ?? credential.cloudId, !resolved.isEmpty else {
+    public init(credential: AtlassianCredential, session: URLSession = .shared) throws(ConfluenceWriteError) {
+        guard let cloudId = credential.cloudId, !cloudId.isEmpty else {
             throw .missingCloudId(host: credential.site.host)
         }
-        self.cloudId = resolved
+        self.cloudId = cloudId
         self.scopes = credential.scopes
-        self.graphQL = AtlassianGraphQLClient(credential: credential, endpoint: endpoint, session: session)
+        self.graphQL = AtlassianGraphQLClient(credential: credential, session: session)
     }
 
     var host: String { graphQL.site.host }
@@ -158,7 +154,7 @@ public struct ConfluenceWriteClient: Sendable {
     public func createFooterComment(pageId: String, adf: String) async throws(ConfluenceWriteError) -> ConfluenceWrittenComment {
         try requireScope(AtlassianTokenScopes.writeComment)
         try Self.validateDocument(adf)
-        let operation = GraphQLOperation.createFooterComment(cloudId: cloudId, pageARI: ari("page", pageId), adf: adf)
+        let operation = GraphQLOperation.createFooterComment(pageARI: ari("page", pageId), adf: adf)
         let payload = try await mutate(operation, payloadKey: "createFooterCommentOnPage", scope: AtlassianTokenScopes.writeComment, subject: "page \(pageId)")
         return try Self.parseComment(payload, field: operation.field)
     }
@@ -167,7 +163,7 @@ public struct ConfluenceWriteClient: Sendable {
     public func replyToComment(commentId: String, adf: String) async throws(ConfluenceWriteError) -> ConfluenceWrittenComment {
         try requireScope(AtlassianTokenScopes.writeComment)
         try Self.validateDocument(adf)
-        let operation = GraphQLOperation.replyToComment(cloudId: cloudId, parentCommentARI: ari("comment", commentId), adf: adf)
+        let operation = GraphQLOperation.replyToComment(parentCommentARI: ari("comment", commentId), adf: adf)
         let payload = try await mutate(operation, payloadKey: "replyToComment", scope: AtlassianTokenScopes.writeComment, subject: "comment \(commentId)")
         return try Self.parseComment(payload, field: operation.field)
     }
@@ -178,7 +174,7 @@ public struct ConfluenceWriteClient: Sendable {
     public func createPage(spaceId: String, title: String, adf: String) async throws(ConfluenceWriteError) -> ConfluenceWrittenContent {
         try requireScope(AtlassianTokenScopes.writePage)
         try Self.validateDocument(adf)
-        let operation = GraphQLOperation.createPage(cloudId: cloudId, spaceId: spaceId, title: title, adf: adf)
+        let operation = GraphQLOperation.createPage(spaceId: spaceId, title: title, adf: adf)
         let payload = try await mutate(operation, payloadKey: "createPage", scope: AtlassianTokenScopes.writePage, subject: "space \(spaceId)")
         return try Self.parseContent(payload, objectKey: "page", idKey: "pageId", field: operation.field)
     }
@@ -187,7 +183,7 @@ public struct ConfluenceWriteClient: Sendable {
     public func createBlogPost(spaceId: String, title: String, adf: String) async throws(ConfluenceWriteError) -> ConfluenceWrittenContent {
         try requireScope(AtlassianTokenScopes.writeBlogPost)
         try Self.validateDocument(adf)
-        let operation = GraphQLOperation.createBlogPost(cloudId: cloudId, spaceId: spaceId, title: title, adf: adf)
+        let operation = GraphQLOperation.createBlogPost(spaceId: spaceId, title: title, adf: adf)
         let payload = try await mutate(operation, payloadKey: "createBlogPost", scope: AtlassianTokenScopes.writeBlogPost, subject: "space \(spaceId)")
         return try Self.parseContent(payload, objectKey: "blogPost", idKey: "blogPostId", field: operation.field)
     }
@@ -218,7 +214,7 @@ public struct ConfluenceWriteClient: Sendable {
         guard current.number == expectedVersion else {
             throw .versionConflict(pageId: pageId, expected: expectedVersion, current: current.number)
         }
-        let operation = GraphQLOperation.updatePage(cloudId: cloudId, pageARI: ari("page", pageId), title: title ?? current.title ?? "", adf: adf)
+        let operation = GraphQLOperation.updatePage(pageARI: ari("page", pageId), title: title ?? current.title ?? "", adf: adf)
         let conflict = (pageId: pageId, expected: expectedVersion)
         let payload = try await mutate(operation, payloadKey: "updateCurrentPage", scope: AtlassianTokenScopes.writePage, subject: "page \(pageId)", conflict: conflict)
         return try Self.parseContent(payload, objectKey: "page", idKey: "pageId", field: operation.field)

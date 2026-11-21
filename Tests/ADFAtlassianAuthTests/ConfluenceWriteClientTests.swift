@@ -443,8 +443,16 @@ struct ConfluenceWriteClientTests {
         #expect(throws: ConfluenceWriteError.missingCloudId(host: WriteFixture.host)) {
             try ConfluenceWriteClient(credential: WriteFixture.credential(cloudId: ""), session: session)
         }
-        let override = try ConfluenceWriteClient(credential: WriteFixture.credential(cloudId: nil), cloudId: WriteFixture.cloudId, session: session)
-        #expect(override.cloudId == WriteFixture.cloudId)
+    }
+
+    @Test("plain IDs become ARIs with the credential's cloud ID")
+    func credentialCloudId() async throws {
+        let stub = WriteKind.footerComment.successStub()
+        let client = try WriteFixture.client(stub)
+        #expect(client.cloudId == WriteFixture.cloudId)
+        _ = try await client.createFooterComment(pageId: "123", adf: WriteFixture.adf)
+        let request = try #require(stub.requests.first)
+        #expect(try WriteFixture.input(request)["pageId"] as? String == "ari:cloud:confluence:\(WriteFixture.cloudId):page/123")
     }
 
     @Test("a body that isn't an ADF doc is refused before sending", arguments: WriteKind.allCases, [

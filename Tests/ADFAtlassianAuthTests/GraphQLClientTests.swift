@@ -89,7 +89,7 @@ struct GraphQLClientTests {
 
     @Test("HTTP statuses map to errors", arguments: [
         (401, AtlassianAuthError.unauthorized),
-        (403, .forbidden(missingScopes: AtlassianTokenScopes.required)),
+        (403, .forbidden(missingScopes: AtlassianTokenScopes.read)),
         (404, .siteNotFound(host: "acme.atlassian.net")),
         (500, .server(status: 500)),
         (503, .server(status: 503)),
@@ -137,7 +137,7 @@ struct GraphQLClientTests {
         (#"{"data":{"tenantContexts":null},"errors":[{"message":"Invalid API token","extensions":{"statusCode":401}}]}"#,
          .unauthorized),
         (#"{"data":{"tenantContexts":null},"errors":[{"message":"Permission denied","extensions":{"statusCode":403,"classification":"Forbidden"}}]}"#,
-         .forbidden(missingScopes: AtlassianTokenScopes.required)),
+         .forbidden(missingScopes: AtlassianTokenScopes.read)),
         (#"{"errors":[{"message":"Cloud id not found","extensions":{"classification":"CloudIdNotFoundException","statusCode":404}}]}"#,
          .siteNotFound(host: "acme.atlassian.net")),
     ])
