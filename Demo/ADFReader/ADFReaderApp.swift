@@ -206,8 +206,10 @@ import UIKit
 ///   chosen when the document opens by the persisted "Images" setting
 ///   (reader menu and Settings; `MediaModePreference`): Off, Mock, or
 ///   Atlassian (the default). Every provider is a `CacheFirstMediaProvider`
-///   (decoded images in memory, encoded bytes in a 200 MB disk cache), and
-///   there is one per fetch for the whole launch:
+///   (decoded images in memory, encoded bytes in a 200 MB disk cache; live
+///   ones wrapped in an `AccountMediaProvider`, which empties them when the
+///   site's account goes or changes), and there is one per fetch for the
+///   whole launch:
 ///   - Mock: `MockMediaFetch`, a deterministic gradient JPEG per media id
 ///     or URL, no network; disk cache `Caches/ADFReaderMedia/mock`.
 ///   - Atlassian: a remote page whose site (`AppConfig.confluenceSite`) has
@@ -381,8 +383,12 @@ struct ADFReaderApp: App {
     init() {
         let accountStore = AccountStore.live()
         _accountStore = State(initialValue: accountStore)
-        // Live media loads each site's credential through it.
+        // Live media loads each site's credential through it, and purges a
+        // site's media caches when its account goes or changes.
         DemoMedia.accountStore = accountStore
+        accountStore.didChange = { site, previousEmail, email in
+            DemoMedia.accountChanged(site: site, previousEmail: previousEmail, email: email)
+        }
         // Before the scene builds: `ReaderView` reads the renderer key through
         // `@AppStorage`, which must see the launch-argument override.
         RendererPreference.apply(options)

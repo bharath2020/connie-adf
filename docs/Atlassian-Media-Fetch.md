@@ -153,15 +153,19 @@ let fetch: @Sendable (MediaAttrs) async throws -> Data = fetcher.mediaFetch
   (the default). Under Atlassian, a remote page whose site
   (`AppConfig.confluenceSite`, the site the Cloudflare snapshot was exported
   from) has a saved account gets
-  `CacheFirstMediaProvider(disk: DiskCache(directory: Caches/ADFReaderMedia/<site host>, byteLimit: 200 MB), scale:, fetch:)`
+  `AccountMediaProvider(account: <email>, disk: DiskCache(directory: Caches/ADFReaderMedia/<site host>, byteLimit: 200 MB), scale:, fetch:)`
+  (a `CacheFirstMediaProvider` whose caches hold one account's images)
   over `LiveMediaFetch`: `.file` media through one `AtlassianMediaFetcher`
   per account, built from `AccountStore.credential(for: site)` (a thin
   wrapper around `store.load(site:)`, shared with the emoji fetch) and kept for the launch; `.external`
   media through a plain HTTPS GET with no credentials. Bundled fixtures, and
   remote pages with no account for their site, get the mock
   (`MockMediaFetch`, disk cache `Caches/ADFReaderMedia/mock`). A connect or
-  remove reloads the credential on the next document: a rotated token gets
-  a new fetcher, a removed account stops `.file` fetches. A failed fetch
+  remove reloads the credential at once: a rotated token gets a new
+  fetcher, a removed account stops `.file` fetches, and a removed account,
+  or one replaced by another email, empties the site's memory and disk
+  media caches before any later lookup, so no account is served images
+  another account downloaded. A failed fetch
   shows the box's failure chip; About This Build shows the document's mode,
   the fetch's counts, the last failure and, after a 401/403, a re-create
   the token hint. Launch flags: `-media off|mock|live` sets the setting for

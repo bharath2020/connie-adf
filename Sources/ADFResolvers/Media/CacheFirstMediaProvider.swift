@@ -5,35 +5,40 @@ import Foundation
 import SwiftUI
 
 /// The memory cache key of a decoded media image: the image's source and
-/// the pixel bucket it was decoded for.
+/// the pixel box it was decoded to fill.
 public struct MediaImageKey: Hashable, Sendable {
     public let source: MediaAttrs.Source
-    /// The longest side the image was decoded to, in pixels; one of
-    /// `CacheFirstMediaProvider.pixelBuckets`.
-    public let pixelBucket: Int
+    /// The box's width in pixels; one of `CacheFirstMediaProvider.pixelBuckets`.
+    public let widthBucket: Int
+    /// The box's height in pixels; one of `CacheFirstMediaProvider.pixelBuckets`.
+    public let heightBucket: Int
 
-    public init(source: MediaAttrs.Source, pixelBucket: Int) {
+    public init(source: MediaAttrs.Source, widthBucket: Int, heightBucket: Int) {
         self.source = source
-        self.pixelBucket = pixelBucket
+        self.widthBucket = widthBucket
+        self.heightBucket = heightBucket
     }
 }
 
 /// An `ADFMediaProvider` that loads cache first, in three tiers:
 ///
-/// 1. memory: decoded images, by source and pixel bucket;
+/// 1. memory: decoded images, by source and pixel box;
 /// 2. disk (optional): the encoded bytes, by source only, so one download
 ///    serves every size;
 /// 3. network: the `fetch` closure, whose bytes are then stored on disk.
 ///
-/// Requests round the size they need up to a pixel bucket, so nearby sizes
-/// share one decoded image instead of each decoding its own. Concurrent
+/// Requests round each side of the size they need up to a pixel bucket, so
+/// nearby sizes share one decoded image instead of each decoding its own.
+/// The image is decoded to fill that box when scaled to fill it, so an
+/// image whose aspect differs from the box is never scaled up. Concurrent
 /// requests for the same image share one decode, and concurrent requests
 /// for the same source share one fetch. Failures are not cached.
 ///
 /// Copies share their caches and in-flight work.
 public struct CacheFirstMediaProvider: ADFMediaProvider {
-    /// The longest sides, in pixels, that images are decoded to. A request
-    /// gets the smallest bucket that covers it, up to the largest.
+    /// The box sides, in pixels, that images are decoded to fill. Each side
+    /// of a request gets the smallest bucket that covers it, up to the
+    /// largest, which also caps the decoded image's longer side.
     public static let pixelBuckets = [64, 128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096]
 
     private let scale: CGFloat
@@ -69,14 +74,18 @@ public struct CacheFirstMediaProvider: ADFMediaProvider {
                 // The bytes may have arrived for other waiters; this one
                 // need not decode if its own waiters are gone.
                 try Task.checkCancellation()
-                let cgImage = try ImageDownsampler.downsample(data, maxPixelSize: request.key.pixelBucket)
+                let box = CGSize(width: request.key.widthBucket, height: request.key.heightBucket)
+                let cgImage = try ImageDownsampler.downsample(data, covering: box,
+                                                              maxPixelSize: Self.pixelBuckets[Self.pixelBuckets.count - 1])
                 return ADFResolvedImage(cgImage: cgImage, scale: scale)
             })
     }
 
     public func image(for attrs: MediaAttrs, targetSize: CGSize) async throws -> Image {
-        let bucket = Self.pixelBucket(forPointSize: max(targetSize.width, targetSize.height), scale: scale)
-        let request = ImageRequest(key: MediaImageKey(source: attrs.source, pixelBucket: bucket), attrs: attrs)
+        let key = MediaImageKey(source: attrs.source,
+                                widthBucket: Self.pixelBucket(forPointSize: targetSize.width, scale: scale),
+                                heightBucket: Self.pixelBucket(forPointSize: targetSize.height, scale: scale))
+        let request = ImageRequest(key: key, attrs: attrs)
         let resolved = try await images.value(for: request)
         return Image(decorative: resolved.cgImage, scale: resolved.scale)
     }

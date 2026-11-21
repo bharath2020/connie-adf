@@ -62,29 +62,64 @@ private func withTemporaryDirectory(_ body: (URL) async throws -> Void) async re
     try await body(directory)
 }
 
-/// The decoded image the memory tier holds for `bucket`.
+/// The decoded image the memory tier holds for the `width` × `height`
+/// pixel box.
 private func decoded(in memory: MemoryCache<MediaImageKey, ADFResolvedImage>,
-                     bucket: Int) async -> CGImage? {
-    await memory.value(for: MediaImageKey(source: attrs.source, pixelBucket: bucket))?.cgImage
+                     width: Int, height: Int,
+                     source: MediaAttrs.Source = attrs.source) async -> CGImage? {
+    await memory.value(for: MediaImageKey(source: source, widthBucket: width, heightBucket: height))?.cgImage
 }
 
 @Suite("CacheFirstMediaProvider")
 struct CacheFirstMediaProviderTests {
-    @Test("a miss fetches once and decodes no larger than the bucket")
+    @Test("a miss fetches once and decodes just large enough to fill the box")
     func networkMiss() async throws {
         let network = ScriptedFetch(.success(try pngData(width: 800, height: 600)))
         let memory = MemoryCache<MediaImageKey, ADFResolvedImage>()
         let provider = CacheFirstMediaProvider(memory: memory, scale: 2,
                                                fetch: { try await network.fetch($0) })
 
-        // 100 pt × 2 = 200 px → the 256 bucket.
+        // 100 × 80 pt × 2 = 200 × 160 px → the 256 × 256 box.
         _ = try await provider.image(for: attrs, targetSize: CGSize(width: 100, height: 80))
 
         #expect(await network.calls == 1)
-        let image = try #require(await decoded(in: memory, bucket: 256))
-        #expect(max(image.width, image.height) <= 256)
-        #expect(image.width == 256)
-        #expect(image.height == 192)
+        let image = try #require(await decoded(in: memory, width: 256, height: 256))
+        // 4:3 filling 256 × 256: the short side covers 256, give or take
+        // ImageIO's rounding of the other side.
+        #expect((256 ... 257).contains(image.height))
+        #expect((341 ... 342).contains(image.width))
+    }
+
+    @Test("an image whose aspect differs from its box still fills the box",
+          arguments: [(2_000, 500), (500, 2_000)])
+    func aspectMismatchFills(width: Int, height: Int) async throws {
+        // A panorama (or a tall strip) with no width/height attrs in a
+        // square 120 pt thumbnail at 3x: a 360 × 360 px box, the 384 bucket.
+        let network = ScriptedFetch(.success(try pngData(width: width, height: height)))
+        let memory = MemoryCache<MediaImageKey, ADFResolvedImage>()
+        let provider = CacheFirstMediaProvider(memory: memory, scale: 3,
+                                               fetch: { try await network.fetch($0) })
+        let external = MediaAttrs(source: .external(url: "https://example.com/wide.png"),
+                                  width: nil, height: nil, alt: nil, mediaType: "image")
+
+        _ = try await provider.image(for: external, targetSize: CGSize(width: 120, height: 120))
+
+        let image = try #require(await decoded(in: memory, width: 384, height: 384, source: external.source))
+        #expect(min(image.width, image.height) == 384)
+        #expect(max(image.width, image.height) == 1_536)
+    }
+
+    @Test("a fill larger than the cap keeps the longer side at 4096")
+    func fillIsCapped() async throws {
+        let network = ScriptedFetch(.success(try pngData(width: 4_800, height: 100)))
+        let memory = MemoryCache<MediaImageKey, ADFResolvedImage>()
+        let provider = CacheFirstMediaProvider(memory: memory, scale: 2,
+                                               fetch: { try await network.fetch($0) })
+
+        _ = try await provider.image(for: attrs, targetSize: CGSize(width: 200, height: 200))
+
+        let image = try #require(await decoded(in: memory, width: 512, height: 512))
+        #expect(image.width == 4_096)
     }
 
     @Test("a second request for the same size is a memory hit")
@@ -114,7 +149,7 @@ struct CacheFirstMediaProviderTests {
             _ = try await second.image(for: attrs, targetSize: CGSize(width: 100, height: 80))
 
             #expect(await network.calls == 1)
-            #expect(await decoded(in: memory, bucket: 256) != nil)
+            #expect(await decoded(in: memory, width: 256, height: 256) != nil)
         }
     }
 
@@ -129,24 +164,26 @@ struct CacheFirstMediaProviderTests {
                                                    fetch: { try await network.fetch($0) })
 
             _ = try await provider.image(for: attrs, targetSize: CGSize(width: 100, height: 80))
-            let small = try #require(await decoded(in: memory, bucket: 256))
-            // 110 pt → 220 px: still the 256 bucket, the same decoded image.
-            _ = try await provider.image(for: attrs, targetSize: CGSize(width: 50, height: 110))
-            let again = await decoded(in: memory, bucket: 256)
+            let small = try #require(await decoded(in: memory, width: 256, height: 256))
+            // 110 × 90 pt → 220 × 180 px: still the 256 × 256 box, the same
+            // decoded image.
+            _ = try await provider.image(for: attrs, targetSize: CGSize(width: 110, height: 90))
+            let again = await decoded(in: memory, width: 256, height: 256)
             #expect(again === small)
             #expect(await network.calls == 1)
 
-            // 300 pt → 600 px: the 768 bucket, decoded from the disk bytes.
+            // 300 × 200 pt → 600 × 400 px: the 768 × 512 box, decoded from
+            // the disk bytes.
             _ = try await provider.image(for: attrs, targetSize: CGSize(width: 300, height: 200))
-            let large = try #require(await decoded(in: memory, bucket: 768))
+            let large = try #require(await decoded(in: memory, width: 768, height: 512))
             #expect(large.width == 768)
             #expect(large.height == 576)
             #expect(await network.calls == 1)
 
-            // 1000 pt → the 2048 bucket: larger than the image, which keeps
-            // its own size.
+            // 1000 × 750 pt → the 2048 × 1536 box: larger than the image,
+            // which keeps its own size.
             _ = try await provider.image(for: attrs, targetSize: CGSize(width: 1_000, height: 750))
-            let full = try #require(await decoded(in: memory, bucket: 2048))
+            let full = try #require(await decoded(in: memory, width: 2048, height: 1536))
             #expect(full.width == 800)
             #expect(full.height == 600)
             #expect(await network.calls == 1)
@@ -212,11 +249,11 @@ struct CacheFirstMediaProviderTests {
         await #expect(throws: NetworkDown.self) {
             _ = try await provider.image(for: attrs, targetSize: CGSize(width: 100, height: 80))
         }
-        #expect(await decoded(in: memory, bucket: 256) == nil)
+        #expect(await decoded(in: memory, width: 256, height: 256) == nil)
 
         _ = try await provider.image(for: attrs, targetSize: CGSize(width: 100, height: 80))
         #expect(await network.calls == 2)
-        #expect(await decoded(in: memory, bucket: 256) != nil)
+        #expect(await decoded(in: memory, width: 256, height: 256) != nil)
     }
 
     @Test("bytes that are not an image throw and are not cached in memory")
@@ -228,7 +265,7 @@ struct CacheFirstMediaProviderTests {
         await #expect(throws: ImageDownsampler.Error.undecodable) {
             _ = try await provider.image(for: attrs, targetSize: CGSize(width: 100, height: 80))
         }
-        #expect(await decoded(in: memory, bucket: 256) == nil)
+        #expect(await decoded(in: memory, width: 256, height: 256) == nil)
     }
 
     @Test("disk keys depend on the source only")

@@ -58,7 +58,7 @@ struct ReaderView: View {
 
     /// This document's media provider, picked once when it opens by the
     /// Images setting (`DemoMedia.resolve(for:)`): the launch's shared
-    /// `CacheFirstMediaProvider` over `LiveMediaFetch` (a remote page whose
+    /// `AccountMediaProvider` over `LiveMediaFetch` (a remote page whose
     /// site has an account, under Atlassian) or `MockMediaFetch`; `nil`
     /// under Off, so media shows its placeholder box and nothing loads.
     /// `@State`, so a later pick applies to the next document, not this one.

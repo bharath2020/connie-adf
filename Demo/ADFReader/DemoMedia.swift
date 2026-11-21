@@ -26,7 +26,9 @@ import ADFResolvers
 ///
 /// Fixtures always get the mock (their file IDs resolve on no site). Live
 /// providers keep their encoded bytes in `Caches/ADFReaderMedia/<site
-/// host>`, the mock in `Caches/ADFReaderMedia/mock`; 200 MB each.
+/// host>`, the mock in `Caches/ADFReaderMedia/mock`; 200 MB each. A site's
+/// caches hold one account's images: removing the account, or replacing it
+/// with another email, empties them (`accountChanged`).
 /// `-mediaCache cold` empties the whole `ADFReaderMedia` folder at launch,
 /// so no mode starts with disk hits. Everything is built lazily: under Off
 /// nothing is, so `mock` stays nil (`MediaProbe` reports -1).
@@ -97,7 +99,16 @@ final class DemoMedia {
 
     /// Built by the first reader, which reads the display scale from the
     /// window scene.
-    static let shared = DemoMedia(options: LaunchOptions(), scale: currentDisplayScale())
+    static var shared: DemoMedia {
+        if let instance {
+            return instance
+        }
+        let media = DemoMedia(options: LaunchOptions(), scale: currentDisplayScale())
+        instance = media
+        return media
+    }
+
+    private static var instance: DemoMedia?
 
     static let rootDirectory = URL.cachesDirectory
         .appending(path: "ADFReaderMedia", directoryHint: .isDirectory)
@@ -119,7 +130,7 @@ final class DemoMedia {
 
     private struct LiveAccount {
         let fetch: LiveMediaFetch
-        let provider: CacheFirstMediaProvider
+        let provider: AccountMediaProvider<String>
         var hasCredential: Bool
     }
 
@@ -140,9 +151,26 @@ final class DemoMedia {
             // lookup: a `DiskCache` reads its directory on first use, and
             // here finds it empty.
             try? FileManager.default.removeItem(at: Self.rootDirectory)
-        } else {
-            Self.deleteLegacyRootFiles()
         }
+    }
+
+    /// After `AccountStore` connects or removes `site`'s account. A site
+    /// with a provider this launch reloads its credential now, which empties
+    /// its caches if the account went or changed; one without empties its
+    /// disk folder when the account went or changed, so no later provider
+    /// finds the previous account's bytes.
+    static func accountChanged(site: AtlassianSite, previousEmail: String?, email: String?) {
+        if let media = instance, media.live[site] != nil {
+            _ = media.liveAccount(for: site)
+        } else if identity(previousEmail) != identity(email) {
+            try? FileManager.default.removeItem(at: directory(for: site))
+        }
+    }
+
+    /// Who a site's cached media belongs to: the account's email, which
+    /// the app compares without case.
+    private static func identity(_ email: String?) -> String? {
+        email?.lowercased()
     }
 
     /// The provider for `source` under the current Images setting.
@@ -205,18 +233,21 @@ final class DemoMedia {
     /// One fetcher and provider per site for the launch. The credential is
     /// loaded on the first request and again after any account change: a
     /// rotated token gets a new fetcher, a removed account stops the live
-    /// fetch (open documents' `.file` loads fail; new ones get the mock).
+    /// fetch (open documents' `.file` loads fail; new ones get the mock), and
+    /// a removed or different account empties the site's caches.
     private func liveAccount(for site: AtlassianSite) -> LiveAccount? {
         guard let accounts = Self.accountStore else { return nil }
         if checkedAt[site] != accounts.changeCount {
             checkedAt[site] = accounts.changeCount
             let credential = try? accounts.credential(for: site)
             if let existing = live[site] {
+                existing.provider.use(Self.identity(credential?.email))
                 existing.fetch.use(credential)
                 live[site]?.hasCredential = credential != nil
             } else if let credential {
                 let fetch = LiveMediaFetch(credential: credential)
-                let provider = CacheFirstMediaProvider(
+                let provider = AccountMediaProvider(
+                    account: Self.identity(credential.email),
                     disk: DiskCache(directory: Self.directory(for: site), byteLimit: Self.diskByteLimit),
                     scale: scale,
                     fetch: { try await fetch.fetch($0) }
@@ -226,17 +257,6 @@ final class DemoMedia {
         }
         guard let account = live[site], account.hasCredential else { return nil }
         return account
-    }
-
-    /// Builds before the per-mode folders kept the mock's files directly in
-    /// `ADFReaderMedia`; nothing reads them any more.
-    private static func deleteLegacyRootFiles() {
-        let fileManager = FileManager.default
-        let urls = (try? fileManager.contentsOfDirectory(at: rootDirectory,
-                                                         includingPropertiesForKeys: [.isRegularFileKey])) ?? []
-        for url in urls where (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
-            try? fileManager.removeItem(at: url)
-        }
     }
 
     /// The window scene's display scale; 3 (2 on Mac Catalyst) when no
