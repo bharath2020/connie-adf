@@ -286,7 +286,7 @@ Only `probe-graphql` runs `AdfProbePages` today; the app does not look up titles
 |---|---|
 | "scoped" (or API/container token, not on a 401) in an HTTP 401/403 body or a GraphQL error; checked first | `scopedTokenRejected(field:detail:)`; `probe-graphql` exits 3 |
 | HTTP 401, or GraphQL status 401 / unauthorized | `unauthorized` (wrong email or token, or not a Confluence token) |
-| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the required scopes) |
+| HTTP 403, or GraphQL status 403 / forbidden / permission | `forbidden` (message lists the read scopes, `AtlassianTokenScopes.read`) |
 | HTTP 404, `CloudIdNotFoundException`, or no matching tenant | `siteNotFound` |
 | HTTP 429 | `rateLimited` (`Retry-After` seconds or HTTP date) |
 | 200 with pages and errors | Normal result, errors listed verbatim; a `metadata` error only marks the emoji unavailable. Errors are mapped only when no pages come back. |
