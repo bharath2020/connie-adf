@@ -63,15 +63,21 @@ struct ReaderView: View {
     /// `ADFDocumentView` does not know how titles are loaded, and a real app
     /// installs its own resolver.
     private let smartLinkResolver = MockSmartLinkResolver.shared
-    /// Custom emoji images (see `ADFEmojiResolver`). `nil`: custom emoji
-    /// show their short name.
-    private let emojiResolver: (any ADFEmojiResolver)? = nil
+    /// Custom emoji images (see `ADFEmojiResolver`) and how About This
+    /// Build names their source: the session's shared mock, the Atlassian
+    /// fetch or none (short names), by `EmojiResolvers`' rule. A Confluence
+    /// page under no `-emoji` flag may upgrade it once, in `load()`, before
+    /// its data loads.
+    @State private var emoji: EmojiResolvers.Choice
+    /// For the Atlassian emoji fetch's credential.
+    @Environment(AccountStore.self) private var accounts
     private let taskStore = TaskStateStore()
     private let fontSizeStore = FontSizeStore()
 
     init(source: DocumentSource, options: LaunchOptions) {
         self.source = source
         self.options = options
+        _emoji = State(initialValue: EmojiResolvers.initialChoice(for: source))
         // The HUD stays hidden during `-autoscroll` measurement runs: its
         // material-blur backdrop re-renders over the scrolling content and
         // would perturb the very frame pacing being measured. `FrameMetrics`
@@ -92,7 +98,7 @@ struct ReaderView: View {
                         textRenderer: activeRenderer,
                         smartLinkResolver: smartLinkResolver,
                         smartLinkResolution: smartLinkResolution,
-                        emojiResolver: emojiResolver,
+                        emojiResolver: emoji.resolver,
                         identifiesRenderer: identifiesRenderer)
             .modifier(InteractionProbe.Capture(enabled: InteractionProbe.enabled))
             .adfRebuildControl(rebuildControl)
@@ -126,7 +132,8 @@ struct ReaderView: View {
                 }
             }
             .sheet(isPresented: $buildInfoPresented) {
-                BuildInfoView(renderer: activeRenderer, model: model, smartLinkResolution: smartLinkResolution)
+                BuildInfoView(renderer: activeRenderer, model: model, smartLinkResolution: smartLinkResolution,
+                              emojiSource: emoji.summary)
             }
             .task { load() }
             .onChange(of: model.blocks.count) { _, count in
@@ -333,6 +340,12 @@ struct ReaderView: View {
         fontSizeStep = options.fontSizeStep ?? fontSizeStore.step(for: source.storageKey)
         if hudVisible {
             metrics.start()
+        }
+        if EmojiResolvers.usesAtlassianSetting(source),
+           let choice = EmojiResolvers.confluenceChoice(accounts: accounts) {
+            // Before the data loads, so the first prepared rows already
+            // draw boxes instead of short names (no rebuild).
+            emoji = choice
         }
         Task {
             do {

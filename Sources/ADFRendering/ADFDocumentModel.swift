@@ -46,6 +46,14 @@ public final class ADFDocumentModel {
     /// across documents). The resolver comes from `ADFDocumentView`.
     let smartLinks = SmartLinkCoordinator()
 
+    /// Custom-emoji lookups for this document: which emoji are on screen,
+    /// their lookups and their per-key stages (`EmojiCoordinator`). Not
+    /// observable itself; owned here so a returning row draws its image on
+    /// its first frame, and reset by `load`. The resolver comes from
+    /// `ADFDocumentView`; preparation does not depend on it, so it may be
+    /// installed before or after `load`.
+    let emoji = EmojiCoordinator()
+
     /// The text leaves that mark themselves while `ADFDocumentView`
     /// identifies its renderer register here (`RendererIdentityRegistry`,
     /// not observable); the report is published from it.
@@ -87,6 +95,13 @@ public final class ADFDocumentModel {
     /// can show that leaves without that link did not. Diagnostics only.
     @_spi(ADFDiagnostics)
     public var smartLinkLeafRefreshesByOwner: [String: Int] { smartLinks.leafRefreshesByOwner }
+
+    /// The custom-emoji counters of this model (resolver calls,
+    /// cancellations, calls in flight, resolved, failed, held outcomes,
+    /// emoji leaf redraws), cumulative across its loads except `inFlight`.
+    /// Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var emojiStats: ADFEmojiStats { emoji.stats }
 
     /// The top-level rows SwiftUI now reports at least 95 % inside the
     /// viewport (the visibility feed search navigation reads,
@@ -184,6 +199,7 @@ public final class ADFDocumentModel {
         expandedBlocks = []
         search.reset()
         smartLinks.reset()
+        emoji.reset()
         phase = .parsing
 
         let parser = self.parser
@@ -567,7 +583,7 @@ public final class ADFDocumentModel {
         for segment in segments {
             switch segment {
             case .text(let text):
-                title += String(text.characters)
+                title += InlineComposer.plainText(of: text)
             case .atom(let atom, _):
                 title += atom.fallbackText
             }

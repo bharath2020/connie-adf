@@ -178,7 +178,30 @@ import UIKit
 ///     counters (including the resolution mode's scroll and nearby
 ///     counters), the mock's, the text-leaf body evaluations and the
 ///     TextKit 2 conversions, layouts and live rows, polled every 250 ms —
-///     one consistent read for `SmartLinkUITests`.
+///     one consistent read for `SmartLinkUITests`. It also carries the
+///     document's custom-emoji counters (`em…` keys) for `EmojiUITests`.
+/// - Custom emoji (emoji with no unicode text; see `EmojiResolvers` for
+///   the full rule, parsed by `MockEmojiOptions`):
+///   - `-emoji mock` gives every reader (fixtures, beamed documents and
+///     Confluence pages) one shared `CacheFirstEmojiResolver` over
+///     `MockEmojiFetch` — a coloured square per emoji, no network — so a
+///     custom emoji is a blank square of the font's ascent, on the
+///     baseline, while its lookup runs, then its image in that square. A short name containing
+///     `fail` (any case) throws, so it ends as its `:short-name:` text.
+///   - `-emoji off` passes no resolver anywhere: custom emoji show their
+///     `:short-name:` and the library does no lookup work. It also
+///     overrides the Atlassian setting.
+///   - No flag: fixtures and beamed documents get the mock; Confluence
+///     pages get the real `AtlassianEmojiFetcher` (first saved account's
+///     site) when Settings → Reader → "Load Custom Emoji from Atlassian"
+///     (`adf.emoji.atlassian.enabled`, default off) is on and an account
+///     is saved, else no resolver.
+///   - `-emojiDelay <ms>` (default 400, clamped to 0…3_600_000): how long
+///     each mock fetch takes (a `Task.sleep`, so a cancelled fetch ends at
+///     once).
+///   About This Build names the reader's source (`build-emoji-source`).
+///   The fixture made for it is `-fixture emoji-custom`; `list-dense` has
+///   80 custom emoji.
 ///
 /// Also part of the harness: posting the Darwin notification
 /// `com.connie.adfreader.rotate` (see `RotationHook`) toggles

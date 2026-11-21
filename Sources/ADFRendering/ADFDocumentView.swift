@@ -14,8 +14,7 @@ public struct ADFDocumentView: View {
     private let textRenderer: ADFTextRenderer
     private let identifiesRenderer: Bool
     private let resolvesSmartLinks: Bool
-    /// Stored for the custom-emoji coordinator (ADR §23); not read yet.
-    private let emojiResolver: (any ADFEmojiResolver)?
+    private let resolvesEmoji: Bool
 
     /// One registry per document (per view identity), so a table's shared
     /// horizontal offset never leaks into another document and is released
@@ -67,8 +66,16 @@ public struct ADFDocumentView: View {
     ///     coordinator, so changing it invalidates no row, and it can change
     ///     at any time.
     ///   - emojiResolver: Looks up the images of custom emoji (emoji with
-    ///     no unicode text; see `ADFEmojiResolver`). Not used yet: custom
-    ///     emoji show their short name whether or not one is passed.
+    ///     no unicode text; see `ADFEmojiResolver`) as they come on screen.
+    ///     While one is installed a custom emoji takes a square of the
+    ///     font's ascent, on the baseline, blank until its image lands in
+    ///     it; a failed lookup shows the short name. `nil`: every custom
+    ///     emoji shows its short name and no lookup work is done. Handed to
+    ///     the model's per-document coordinator here, which is not
+    ///     observable, so passing it invalidates nothing; it may be
+    ///     installed before or after `load`.
+    ///     Installing or removing one rebuilds the text leaves with custom
+    ///     emoji once.
     ///   - identifiesRenderer: Makes the renderer identify itself: every
     ///     text leaf marks itself with the engine that actually drew it
     ///     (`ADFTextEngine`): a fill in the engine's colour behind its text,
@@ -97,7 +104,8 @@ public struct ADFDocumentView: View {
         model.smartLinks.resolver = smartLinkResolver
         model.smartLinks.resolution = smartLinkResolution
         self.resolvesSmartLinks = smartLinkResolver != nil
-        self.emojiResolver = emojiResolver
+        model.emoji.resolver = emojiResolver
+        self.resolvesEmoji = emojiResolver != nil
         self.identifiesRenderer = identifiesRenderer
         // Not observable: the report follows from a task.
         model.rendererIdentity.isIdentifying = identifiesRenderer
@@ -129,10 +137,11 @@ public struct ADFDocumentView: View {
             }
             .scrollPosition(id: anchorBinding, anchor: .top)
             // The scroll phase, for smart-link resolution modes that wait
-            // for the document to come to rest (design §8.2). Writes the
-            // non-observable coordinator only: a phase change invalidates
+            // for the document to come to rest (design §8.2) and for the
+            // landing hold of smart links and custom emoji. Writes the
+            // non-observable coordinators only: a phase change invalidates
             // no row and not this view.
-            .modifier(SmartLinkScrollPhaseFeed(coordinator: model.smartLinks))
+            .modifier(ScrollPhaseFeed(smartLinks: model.smartLinks, emoji: model.emoji))
             // The *sole* re-anchor authority: re-assert the reader's row by
             // identity whenever the content column changes width (rotation, iPad
             // Split View drag). `scrollPosition(id:)` above is tracking-only (its
@@ -197,6 +206,7 @@ public struct ADFDocumentView: View {
         .environment(\.adfMentionContent, mentionContent)
         .environment(\.adfDocumentSearch, model.search)
         .environment(\.adfSmartLinks, resolvesSmartLinks ? model.smartLinks : nil)
+        .environment(\.adfEmoji, resolvesEmoji ? model.emoji : nil)
         .environment(\.adfRendererIdentity, identifiesRenderer ? model.rendererIdentity : nil)
         .overlay { statusOverlay }
     }
@@ -555,23 +565,26 @@ extension TextKit2WidthBound {
     }
 }
 
-/// Feeds the document scroll view's phase to the smart-link coordinator
-/// (`SmartLinkCoordinator.scrollPhaseChanged`): scrolling is any phase but
+/// Feeds the document scroll view's phase to the smart-link and custom-emoji
+/// coordinators (`SmartLinkCoordinator.scrollPhaseChanged`,
+/// `EmojiCoordinator.scrollPhaseChanged`): scrolling is any phase but
 /// idle — a drag, a fling's deceleration, an animated jump. The
 /// `#available` branch erases one view, the document's scroll view, never a
 /// lazy row (see `ADFDocumentView.rows`). Installed in every mode and with
 /// or without a resolver, so the view's structure never depends on either;
 /// the callback is a stored Bool and offset on a non-observable object and
 /// returns at once without a resolver. Before iOS 18 / macOS 15 there is no
-/// phase: the coordinator stays at rest and every mode behaves as
+/// phase: the coordinators stay at rest and every mode behaves as
 /// `.whileScrolling`.
-private struct SmartLinkScrollPhaseFeed: ViewModifier {
-    let coordinator: SmartLinkCoordinator
+private struct ScrollPhaseFeed: ViewModifier {
+    let smartLinks: SmartLinkCoordinator
+    let emoji: EmojiCoordinator
 
     func body(content: Content) -> some View {
         if #available(iOS 18.0, macOS 15.0, *) {
-            content.onScrollPhaseChange { [coordinator] _, phase, context in
-                coordinator.scrollPhaseChanged(scrolling: phase != .idle, offset: context.geometry.contentOffset.y)
+            content.onScrollPhaseChange { [smartLinks, emoji] _, phase, context in
+                smartLinks.scrollPhaseChanged(scrolling: phase != .idle, offset: context.geometry.contentOffset.y)
+                emoji.scrollPhaseChanged(scrolling: phase != .idle)
             }
         } else {
             content

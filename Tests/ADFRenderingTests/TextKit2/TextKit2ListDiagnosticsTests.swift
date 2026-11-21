@@ -44,7 +44,7 @@ struct TextKit2ListCoverageTests {
         return try Data(contentsOf: url.appendingPathComponent("Fixtures/\(name).json"))
     }
 
-    @Test("lists-parity: 8 root text blocks, 46 leaders; 6 atom leaders fall back, 3 linked")
+    @Test("lists-parity: 8 root text blocks, 46 leaders; 5 atom leaders fall back, 3 linked")
     func listsParity() async throws {
         let blocks = try await Self.blocks("lists-parity")
         // 21 roots: 7 section headings + the closing paragraph (8 root
@@ -61,7 +61,9 @@ struct TextKit2ListCoverageTests {
         // + 11 in 0.8 (0.8.0–0.8.10) = 46 non-empty (the empty task 0.5.5
         // and 0.8.11 have none); no row in those lists holds a trailing
         // paragraph without a code block or a list beside it. Atoms
-        // (fallback): 0.5.3, 0.6.1, 0.8.7–0.8.10. Links (TextKit 1-backed):
+        // (fallback): 0.5.3, 0.6.1, 0.8.7–0.8.9; the custom emoji leader
+        // 0.8.10 is text (one U+FFFC, `EmojiDisplay`), so it is eligible
+        // (it fell back as an atom before custom emoji were text runs). Links (TextKit 1-backed):
         // 0.5.4, 0.6.2, 0.8.2. The text inside the table, expand and layout
         // columns is out of scope. Container text (steps 3 and 4): none.
         // The panel 0.14 holds a list, so its whole body stays on SwiftUI
@@ -73,14 +75,14 @@ struct TextKit2ListCoverageTests {
         // its list is not counted).
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 8, fallbackRoots: 13, textFallbackRoots: 0, linkRoots: 0,
-            eligibleTextLeaves: 48, linkedTextLeaves: 3, fallbackTextLeaves: 6,
+            eligibleTextLeaves: 49, linkedTextLeaves: 3, fallbackTextLeaves: 5,
             listLeaderLeaves: 46, listTrailingLeaves: 0,
             eligibleContainerLeaves: 5, linkedContainerLeaves: 0, fallbackContainerLeaves: 0, containerListLeaves: 5,
             unpreparedExpands: 1
         ), rootLeaves: (8, 0)))
     }
 
-    @Test("list-dense: 3,382 leaders and 550 list paragraphs and headings; 395 atom leaves fall back, 586 linked")
+    @Test("list-dense: 3,382 leaders and 550 list paragraphs and headings; 315 atom leaves fall back, 586 linked")
     func listDense() async throws {
         let blocks = try await Self.blocks("list-dense")
         // 600 root lists and nothing else. The generator's tally: leaders
@@ -96,11 +98,16 @@ struct TextKit2ListCoverageTests {
         // (342 atom, 515 linked) and 311 extra paragraphs (38 atom, 40
         // linked) + 168 continuation paragraphs (15 atom, 31 linked) + 71
         // lone headings = 550 list paragraphs and headings: 395 atom leaves,
-        // 586 linked, 3,537 eligible.
+        // 586 linked, 3,537 eligible, as the generator counts atoms. Its 80
+        // custom emoji (`:ld-custom-N:`, no unicode text) are each the only
+        // atom of their own leaf (counted from the JSON: 80 leaves hold an
+        // emoji, none of them a mention, status or date), and a custom emoji
+        // is text now (one U+FFFC, `EmojiDisplay`), so those 80 leaves are
+        // eligible: 315 atom leaves, 3,617 eligible.
         #expect(blocks.count == 600)
         #expect(ADFTextRenderer.textKit2Coverage(of: blocks) == Self.pinned(ADFTextKit2Coverage(
             eligibleRoots: 0, fallbackRoots: 600, textFallbackRoots: 0, linkRoots: 0,
-            eligibleTextLeaves: 3_537, linkedTextLeaves: 586, fallbackTextLeaves: 395,
+            eligibleTextLeaves: 3_617, linkedTextLeaves: 586, fallbackTextLeaves: 315,
             listLeaderLeaves: 3_382, listTrailingLeaves: 550
         ), rootLeaves: (0, 0)))
     }
@@ -137,17 +144,17 @@ struct TextKit2ListCoverageTests {
 
     /// The iOS 26 gate is one verdict (`TextKit2Eligibility.verdict`,
     /// owner `.list`): before iOS 26 exactly the list leaves eligible on
-    /// iOS 26 fall back as `.osGatedList` (lists-parity 45, kitchen-sink 8,
-    /// list-dense 3,537), never a root; from iOS 26 none does. List text
-    /// below a container takes the same gate first: from step 6
-    /// lists-parity's 40 top-level leaves gain the five leaders of its
-    /// quote 0.15 and section 0.18. A top-level
+    /// iOS 26 fall back as `.osGatedList` (lists-parity 46, kitchen-sink 8,
+    /// list-dense 3,617, custom emoji leaders included), never a root; from
+    /// iOS 26 none does. List text below a container takes the same gate
+    /// first: from step 6 lists-parity's 41 top-level leaves gain the five
+    /// leaders of its quote 0.15 and section 0.18. A top-level
     /// code block (kitchen-sink's 0.12) is not list text: it is judged by
     /// the code rules and never takes the gate, so it counts with the roots
     /// here.
     @Test("before iOS 26 list text that is otherwise eligible falls back as osGatedList; roots never do")
     func osGatedLists() async throws {
-        for (name, listEligible) in [("lists-parity", 45), ("kitchen-sink", 8), ("list-dense", 3_537)] {
+        for (name, listEligible) in [("lists-parity", 46), ("kitchen-sink", 8), ("list-dense", 3_617)] {
             let blocks = try await Self.blocks(name)
             var gated = 0
             var gatedRoots = 0
@@ -225,10 +232,13 @@ struct TextKit2ListDiagnosticsTests {
         }
         // Before iOS 26 no list text is eligible (`TextKit2Eligibility.listsMatchText`,
         // `.osGatedList`): list text draws on SwiftUI, roots as in PR 1.
-        // From step 6 the 40 top-level list leaves gain the five leaders of
-        // the lists in the quote 0.15 and the layout section 0.18.
+        // 41 top-level list leaves: the custom emoji leader 0.8.10 is text
+        // (one U+FFFC, `EmojiDisplay`) and draws as a row with the other 40.
+        // From step 6 they gain the five leaders of the lists in the quote
+        // 0.15 and the layout section 0.18.
         let lists = TextKit2Eligibility.listsMatchText
-        #expect(eligibleRoots.count == 8 && eligibleList.count == (lists ? 45 : 0))
+        #expect(eligibleRoots.count == 8 && eligibleList.count == (lists ? 46 : 0))
+        #expect(!lists || eligibleList.contains("0.8.10"))
 
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 9_000))
         let host = UIHostingController(rootView: ADFDocumentView(model: model, mediaProvider: TextKit2DiagnosticsTests.NoMedia(), textRenderer: .textKit2))
@@ -266,7 +276,7 @@ struct TextKit2ListDiagnosticsTests {
         // exactly the list rows.
         let listLive = diagnostics.liveListRowCount
         rows.removeAll()
-        #expect(listLive - diagnostics.liveListRowCount == (lists ? 45 : 0))
+        #expect(listLive - diagnostics.liveListRowCount == (lists ? 46 : 0))
     }
 }
 #endif

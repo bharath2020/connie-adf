@@ -210,4 +210,43 @@ struct SearchIndexerTests {
         #expect(unit.expandAncestorIDs.first == blocks[0].id)
         #expect(unit.topLevelBlockID == blocks[0].id)
     }
+
+    @Test("a custom emoji is indexed by its short name; a match on it paints its one character, text around it maps exactly")
+    func customEmojiIndexedByShortName() async throws {
+        let blocks = try await prepared("""
+        {"version":1,"type":"doc","content":[{"type":"paragraph","content":[
+          {"type":"text","text":"Hi "},
+          {"type":"emoji","attrs":{"shortName":":party-time:","id":"p-1"}},
+          {"type":"emoji","attrs":{"shortName":":party-time:","id":"p-1"}},
+          {"type":"text","text":" there"}
+        ]}]}
+        """)
+        let unit = try #require(indexer.units(for: blocks).first)
+        // The prepared segment is "Hi \u{FFFC}\u{FFFC} there"; search sees
+        // the short names.
+        #expect(unit.plainText == "Hi :party-time::party-time: there")
+        #expect(unit.parts == [
+            .init(source: .textSegment(index: 0), range: 0..<3),
+            .init(source: .textSegment(index: 0), range: 3..<15, segmentOffset: 3, segmentLength: 1),
+            .init(source: .textSegment(index: 0), range: 15..<27, segmentOffset: 4, segmentLength: 1),
+            .init(source: .textSegment(index: 0), range: 27..<33, segmentOffset: 5),
+        ])
+
+        func spans(_ query: String) -> [[SearchHighlightSpan]] {
+            SearchMatcher.matchRanges(in: unit.plainText, query: query).map {
+                SearchMatcher.spans(for: $0, in: unit).textSpans
+            }
+        }
+        // Inside the first name: that emoji's character.
+        #expect(spans("party")[0] == [SearchHighlightSpan(segmentIndex: 0, range: 3..<4)])
+        #expect(spans("party").count == 2)
+        #expect(spans("party")[1] == [SearchHighlightSpan(segmentIndex: 0, range: 4..<5)])
+        // Across text and emoji.
+        #expect(spans("hi :p") == [[
+            SearchHighlightSpan(segmentIndex: 0, range: 0..<3),
+            SearchHighlightSpan(segmentIndex: 0, range: 3..<4),
+        ]])
+        // Text after the emoji maps to its place in the segment.
+        #expect(spans("there") == [[SearchHighlightSpan(segmentIndex: 0, range: 6..<11)]])
+    }
 }

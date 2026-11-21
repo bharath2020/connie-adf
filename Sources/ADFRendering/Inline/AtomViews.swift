@@ -15,9 +15,6 @@ struct AtomView: View {
             AtomCapsule(text: text.uppercased(), tint: color.tint)
         case .date(let timestampMS):
             AtomCapsule(text: AtomFormatting.dateText(timestampMS), tint: .gray)
-        case .emoji(let shortName):
-            Text(":\(shortName):")
-                .foregroundStyle(.secondary)
         case .inlineCard(let url):
             InlineCardChip(url: url)
         case .mediaInline(let attrs):
@@ -152,8 +149,6 @@ extension InlineAtom {
             return text
         case .date(let timestampMS):
             return AtomFormatting.dateText(timestampMS)
-        case .emoji(let shortName):
-            return ":\(shortName):"
         case .inlineCard(let url):
             return url ?? "link"
         case .mediaInline(let attrs):

@@ -26,6 +26,8 @@ targets:
         product: ADFAtlassianAuth
       - package: ADFKit
         product: ADFResolvers
+      - package: ADFKit
+        product: ADFAtlassianMedia
     info:
       path: ADFReader/Info.plist
       properties:

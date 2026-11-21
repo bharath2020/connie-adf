@@ -244,7 +244,7 @@ public struct ADFSmartLinkStats: Sendable, Hashable {
 /// reached by leaves through `adfSmartLinks` (design §4, §8).
 ///
 /// - Text leaves whose owner has smart links attach on appear and detach on
-///   disappear, with their keys (`SmartLinkTextLeaf.smartLinkAttachment`),
+///   disappear, with their keys (`textLeafAttachment`),
 ///   and each reports its own viewport visibility (`setLeafVisible`, from
 ///   the leaf's 0.01-threshold `onScrollVisibilityChange`). Visibility is
 ///   per leaf, not per row: a tall list row resolves only the items on

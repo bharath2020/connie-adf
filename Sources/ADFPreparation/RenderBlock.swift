@@ -22,16 +22,26 @@ public struct RenderBlock: Identifiable, Hashable, Sendable {
     /// own) and for nearly every paragraph, so a text leaf's smart-link gate
     /// is one `isEmpty` check. Package-internal (`SmartLinkKey`).
     package let smartLinkKeys: [SmartLinkKey]
+    /// The custom emoji in this block's own inline text (a paragraph's or a
+    /// heading's), de-duplicated in document order: empty for every other
+    /// kind and for nearly every paragraph, so a text leaf's emoji gate is
+    /// one `isEmpty` check (as `smartLinkKeys`). Package-internal
+    /// (`EmojiKey`).
+    package let emojiKeys: [EmojiKey]
 
     public init(id: String, kind: Kind, breakout: BlockBreakout? = nil) {
         self.init(id: id, kind: kind, breakout: breakout, smartLinkKeys: [])
     }
 
-    package init(id: String, kind: Kind, breakout: BlockBreakout? = nil, smartLinkKeys: [SmartLinkKey]) {
+    package init(
+        id: String, kind: Kind, breakout: BlockBreakout? = nil, smartLinkKeys: [SmartLinkKey],
+        emojiKeys: [EmojiKey] = []
+    ) {
         self.id = id
         self.kind = kind
         self.breakout = breakout
         self.smartLinkKeys = smartLinkKeys
+        self.emojiKeys = emojiKeys
     }
 
     public indirect enum Kind: Hashable, Sendable {
@@ -107,6 +117,9 @@ public struct PreparedListRow: Sendable, Hashable {
     /// The smart links in the row's leader (`segments`), de-duplicated in
     /// document order (see `RenderBlock.smartLinkKeys`).
     package let smartLinkKeys: [SmartLinkKey]
+    /// The custom emoji in the row's leader (`segments`), de-duplicated in
+    /// document order (see `RenderBlock.emojiKeys`).
+    package let emojiKeys: [EmojiKey]
 
     public init(id: String, depth: Int, marker: ListMarker, segments: [InlineSegment], trailingBlocks: [RenderBlock]) {
         self.init(id: id, depth: depth, marker: marker, segments: segments, trailingBlocks: trailingBlocks, smartLinkKeys: [])
@@ -114,7 +127,7 @@ public struct PreparedListRow: Sendable, Hashable {
 
     package init(
         id: String, depth: Int, marker: ListMarker, segments: [InlineSegment], trailingBlocks: [RenderBlock],
-        smartLinkKeys: [SmartLinkKey]
+        smartLinkKeys: [SmartLinkKey], emojiKeys: [EmojiKey] = []
     ) {
         self.id = id
         self.depth = depth
@@ -122,6 +135,7 @@ public struct PreparedListRow: Sendable, Hashable {
         self.segments = segments
         self.trailingBlocks = trailingBlocks
         self.smartLinkKeys = smartLinkKeys
+        self.emojiKeys = emojiKeys
     }
 }
 

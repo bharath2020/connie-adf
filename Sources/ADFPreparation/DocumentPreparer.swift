@@ -104,7 +104,8 @@ struct BlockPreparer: Sendable {
                     style: textStyle(font: theme.body, isHeading: false, level: nil, marks: marks)
                 ),
                 breakout: blockBreakout(of: marks),
-                smartLinkKeys: composed.smartLinkKeys
+                smartLinkKeys: composed.smartLinkKeys,
+                emojiKeys: composed.emojiKeys
             )]
 
         case .heading(let level, let content, let marks):
@@ -117,7 +118,8 @@ struct BlockPreparer: Sendable {
                     style: textStyle(font: font, isHeading: true, level: level, marks: marks)
                 ),
                 breakout: blockBreakout(of: marks),
-                smartLinkKeys: composed.smartLinkKeys
+                smartLinkKeys: composed.smartLinkKeys,
+                emojiKeys: composed.emojiKeys
             )]
 
         case .blockquote(let children):
@@ -246,7 +248,8 @@ struct BlockPreparer: Sendable {
         return [RenderBlock(
             id: node.id,
             kind: .richText(segments: composed.segments, style: bodyStyle),
-            smartLinkKeys: composed.smartLinkKeys
+            smartLinkKeys: composed.smartLinkKeys,
+            emojiKeys: composed.emojiKeys
         )]
     }
 

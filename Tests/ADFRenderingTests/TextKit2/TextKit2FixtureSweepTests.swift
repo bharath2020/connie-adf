@@ -80,11 +80,18 @@ struct TextKit2FixtureSweepTests {
     /// a container: lists-parity's 40 top-level leaves gain the five
     /// leaders of the quote 0.15 (two) and the layout section 0.18 (three);
     /// the other documents hold no list in a container the scope reaches.
-    nonisolated static let expectedEligibleListLeaves = ["kitchen-sink": 8, "stress-5k": 7_543, "lists-parity": 45, "list-dense": 3_537]
+    /// Leaves with a custom emoji are text (one U+FFFC, `EmojiDisplay`) and
+    /// count: lists-parity's 0.8.10 and list-dense's 80
+    /// (`TextKit2ListCoverageTests`).
+    nonisolated static let expectedEligibleListLeaves = ["kitchen-sink": 8, "stress-5k": 7_543, "lists-parity": 46, "list-dense": 3_617]
 
-    /// The leader as `ListRowView` hosts it, on one arm.
+    /// The leader as `ListRowView` hosts it, on one arm: through
+    /// `SmartLinkTextLeaf`, which hands the TextKit 2 row the displayed text
+    /// (a custom emoji as its short name, as `SegmentedTextView` shows it).
     static func leaderHeight(_ segments: [InlineSegment], arm: ADFTextRenderer, size: DynamicTypeSize, width: CGFloat) -> CGFloat {
-        let leader = TextEngineLeaf(segments: segments, style: ListRowView.leaderStyle(theme: TK2Parity.theme), ownerID: nil) {
+        let leader = SmartLinkTextLeaf(
+            segments: segments, smartLinkKeys: [], style: ListRowView.leaderStyle(theme: TK2Parity.theme), ownerID: nil
+        ) {
             SegmentedTextView(segments: segments).textSelection(.enabled)
         }
         let host = UIHostingController(rootView: leader

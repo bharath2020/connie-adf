@@ -10,7 +10,10 @@ struct BlockView: View {
     var body: some View {
         switch block.kind {
         case .richText(let segments, let style):
-            RichTextBlockView(segments: segments, style: style, ownerID: block.id, smartLinkKeys: block.smartLinkKeys)
+            RichTextBlockView(
+                segments: segments, style: style, ownerID: block.id,
+                smartLinkKeys: block.smartLinkKeys, emojiKeys: block.emojiKeys
+            )
         case .codeBlock(let language, let code):
             CodeBlockView(language: language, code: code, ownerID: block.id)
         case .panel(let palette, let blocks):

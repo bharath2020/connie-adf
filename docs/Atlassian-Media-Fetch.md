@@ -141,23 +141,21 @@ let fetch: @Sendable (MediaAttrs) async throws -> Data = fetcher.mediaFetch
 - Keep one fetcher per account for the reader session: it caches the cloud ID
   and each page's attachment list, and coalesces concurrent requests (one
   list chain per page, one `tenant_info` call).
-- Not wired into the Demo yet. The resolver Step 0 contracts are on main
-  (`ADFEmojiReference`/`ADFEmojiResolver` in `ADFRendering`, `CacheFirstLoader`
-  in `ADFResolvers`, `emojiResolver = nil` in `ReaderView`), but the code that
-  consumes a fetch closure (the cache-first emoji resolver and media provider
-  with their mock fetches and `-emoji`/`-media` launch settings) belongs to
-  Lanes A and B and has not landed. When it does, the live closures go where
-  the mock ones are passed, behind the same settings, with the mock kept for
-  tests and fixtures. The Demo also needs
-  `AccountStore.credential(for: site) -> AtlassianCredential?`, a thin wrapper
-  around `store.load(site:)` (today it only exposes summaries), to build the
-  fetchers.
+- Emoji is wired into the Demo (Lane A): `EmojiResolvers` passes
+  `AtlassianEmojiFetcher.emojiFetch` to `CacheFirstEmojiResolver` for
+  Confluence pages behind its own setting, using
+  `AccountStore.credential(for:)`; the rule and the `-emoji` launch flag are
+  in `docs/Architecture-Decisions.md` §23. Media is not wired yet: the
+  cache-first media provider with its mock fetch and `-media` launch setting
+  belongs to Lane B. When it lands, the live closure goes where the mock one
+  is passed, behind the same setting, with the mock kept for tests and
+  fixtures.
 
 ## 6. Custom emoji
 
 ADF `emoji` nodes carry `attrs.{id, shortName, text}` but no image
-(`ADFModel` keeps only `shortName` and `text`; the ID is read from raw JSON
-where needed). Custom panel icons carry the same ID in `panel.attrs.panelIconId`.
+(`ADFModel` keeps `shortName`, `id` and `text`; an `id` that is not hex code
+points marks a custom emoji). Custom panel icons carry the same ID in `panel.attrs.panelIconId`.
 
 **No official route.** The OAuth/scoped-token scopes list has no emoji or
 media scope
@@ -180,8 +178,8 @@ returns 401 "scope does not match".
   **default off** until a real site emoji on the user's site is verified
   (see the probe results: not yet). The setting lives in the app, not in
   this module.
-- Whenever the setting is off or the fetcher throws, render the
-  `:shortName:` / `attrs.text` fallback.
+- Whenever the setting is off or the fetcher throws, render the short name
+  as authored (`attrs.text` is ignored for a custom emoji).
 
 ### Flow (`AtlassianEmojiFetcher`)
 

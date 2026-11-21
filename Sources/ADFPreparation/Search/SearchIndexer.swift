@@ -177,6 +177,10 @@ public struct SearchIndexer: Sendable {
             let source: SearchTextUnit.Part.Source
             switch segment {
             case .text(let text):
+                if Self.holdsEmoji(text) {
+                    appendEmojiParts(text, segmentIndex: index, plain: &plain, offset: &offset, parts: &parts)
+                    continue
+                }
                 contribution = String(text.characters)
                 source = .textSegment(index: index)
             case .atom(let atom, let id):
@@ -197,5 +201,54 @@ public struct SearchIndexer: Sendable {
             plainText: plain,
             parts: parts
         ))
+    }
+
+    private typealias EmojiAttribute = AttributeScopes.ADFAttributes.EmojiAttribute
+
+    /// Whether a text segment holds a custom emoji (one U+FFFC carrying
+    /// `adfEmoji`).
+    private static func holdsEmoji(_ text: AttributedString) -> Bool {
+        text.runs[EmojiAttribute.self].contains { $0.0 != nil }
+    }
+
+    /// A text segment with custom emoji: each emoji is spelled by its short
+    /// name in the plain text (so it is found by name, as before it was a
+    /// text run) with a part standing for its one segment character; the
+    /// text around it maps Character for Character from its place in the
+    /// segment.
+    private func appendEmojiParts(
+        _ text: AttributedString, segmentIndex: Int,
+        plain: inout String, offset: inout Int, parts: inout [SearchTextUnit.Part]
+    ) {
+        var segmentOffset = 0
+        for (key, range) in text.runs[EmojiAttribute.self] {
+            let characters = text[range].characters
+            guard let key else {
+                let contribution = String(characters)
+                let length = contribution.count
+                guard length > 0 else { continue }
+                parts.append(.init(
+                    source: .textSegment(index: segmentIndex), range: offset..<(offset + length),
+                    segmentOffset: segmentOffset
+                ))
+                plain += contribution
+                offset += length
+                segmentOffset += length
+                continue
+            }
+            // Adjacent emoji with the same key share one run.
+            for _ in characters {
+                let length = key.shortName.count
+                if length > 0 {
+                    parts.append(.init(
+                        source: .textSegment(index: segmentIndex), range: offset..<(offset + length),
+                        segmentOffset: segmentOffset, segmentLength: 1
+                    ))
+                    plain += key.shortName
+                    offset += length
+                }
+                segmentOffset += 1
+            }
+        }
     }
 }

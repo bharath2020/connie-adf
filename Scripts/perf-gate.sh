@@ -166,7 +166,9 @@
 #   set the appearance, start the memory sampler (own process, own clock),
 #   then `perf_trial.py launch` takes t0 and spawns
 #   `xcrun simctl launch --console-pty <udid> <bundle> -fixture <f>
-#   -autoscroll [extra] [arm flags]`, stamping every output line with its
+#   -autoscroll -emoji off [extra] [arm flags]` (`-emoji off`: no custom-emoji
+#   lookups, so every arm draws short names as the frame baselines did),
+#   stamping every output line with its
 #   arrival time. The driver only polls for deadlines (READY, trial); it
 #   never timestamps anything. `perf_trial.py parse` derives the CSV row.
 #
@@ -599,7 +601,7 @@ run_trial() {
     deadline=$(timeout_for "$fixture")
 
     # shellcheck disable=SC2206,SC2207  # intentional word splitting of flag strings
-    local -a argv=(-fixture "$fixture" -autoscroll $EXTRA_ARGS $(arm_flags "$arm"))
+    local -a argv=(-fixture "$fixture" -autoscroll -emoji off $EXTRA_ARGS $(arm_flags "$arm"))
 
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '%-28s order=%s timeout=%ss  simctl launch --console-pty %s %s %s\n' \

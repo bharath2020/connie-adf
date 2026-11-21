@@ -504,7 +504,9 @@ extension ADFTextRenderer {
 enum TextKit2Eligibility {
     /// Why a paragraph or heading stays on SwiftUI.
     enum Fallback: Sendable, Hashable {
-        /// An inline atom (mention, status, …): PR 6.
+        /// An inline atom (mention, status, …): PR 6. A custom emoji is not
+        /// an atom: it is one U+FFFC in the text run (`EmojiDisplay`), so
+        /// its paragraph stays eligible.
         case atom
         /// Empty text: SwiftUI sizes an empty `Text` from a fixed 12 pt
         /// system font (measured: 14 pt tall at every Dynamic Type size), a

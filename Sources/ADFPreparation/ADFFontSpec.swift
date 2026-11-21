@@ -122,6 +122,18 @@ extension AttributeScopes {
             package typealias Value = SmartLinkRun
             package static let name = "adf.smartLink"
         }
+
+        /// The custom emoji a character shows (see `EmojiKey`): set by the
+        /// composer on the one U+FFFC character it emits for an emoji with
+        /// no unicode text. Package-internal: the renderer replaces exactly
+        /// these characters with the emoji's displayed stage
+        /// (`EmojiDisplay`); a host neither reads nor writes it.
+        package let adfEmoji: EmojiAttribute
+
+        package enum EmojiAttribute: AttributedStringKey, Sendable {
+            package typealias Value = EmojiKey
+            package static let name = "adf.emoji"
+        }
     }
 
     public var adf: ADFAttributes.Type { ADFAttributes.self }

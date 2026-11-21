@@ -99,7 +99,7 @@ The full schema has **84 definitions**, but many are constraint variants of the 
 | `text` | Run in `AttributedString`, marks applied |
 | `hardBreak` | `\n` inside the attributed string |
 | `mention` | Rounded "@Name" pill — inline via custom attribute + tap routing |
-| `emoji` | Unicode text run when `text` repr exists; otherwise custom image attachment via media provider |
+| `emoji` | Unicode text run when the `id` is hex code points; otherwise a custom image attachment via `ADFEmojiResolver` (`Architecture-Decisions.md` §23) |
 | `date` | Localized formatted date pill (attr `timestamp` is a *string* of epoch milliseconds — decode as String, then parse) |
 | `status` | Colored capsule (`color` attr: neutral/purple/blue/red/yellow/green) — rendered as inline attachment |
 | `inlineCard` | Smart link chip: icon + resolved title (async resolve, URL fallback) |

@@ -254,12 +254,11 @@ struct ADFNodeBuilder {
                 shortName = ""
                 issues.append(ADFParseIssue(path: path, message: "Emoji missing 'shortName'"))
             }
+            let id = attrs?["id"]?.stringValue
             kind = .emoji(
                 shortName: shortName,
-                text: Self.normalizedEmojiText(
-                    text: attrs?["text"]?.stringValue,
-                    id: attrs?["id"]?.stringValue
-                )
+                id: id,
+                text: Self.normalizedEmojiText(text: attrs?["text"]?.stringValue, id: id)
             )
 
         case "date":
@@ -399,14 +398,19 @@ struct ADFNodeBuilder {
     /// Confluence Cloud's atlas_doc_format delivers emoji `text` as literal
     /// `\uXXXX` escape text (the backslash survives JSON decoding), with the
     /// character's hex codepoints in `id` (dash-separated for ZWJ sequences).
+    /// An id that is not hex code points names a custom emoji, which has no
+    /// unicode form even when `text` is set (Confluence writes its short
+    /// name there).
     private static func normalizedEmojiText(text: String?, id: String?) -> String? {
+        var fromId: String?
+        if let id, id.isEmpty == false {
+            guard let decoded = emojiString(hexCodepoints: id) else { return nil }
+            fromId = decoded
+        }
         if let text, text.isEmpty == false {
             return decodingUnicodeEscapes(text)
         }
-        if let id, let fromId = emojiString(hexCodepoints: id) {
-            return fromId
-        }
-        return nil
+        return fromId
     }
 
     /// Decodes literal `\uXXXX` sequences, pairing UTF-16 surrogates.
@@ -438,7 +442,7 @@ struct ADFNodeBuilder {
     }
 
     /// "1f5d3" or "1f468-200d-1f4bb" → the character; nil for non-hex ids
-    /// (custom workspace emojis), which fall back to the `:shortName:` atom.
+    /// (custom workspace emojis), which keep `text == nil` and their `id`.
     private static func emojiString(hexCodepoints id: String) -> String? {
         let parts = id.split(separator: "-")
         let scalars = parts.compactMap { UInt32($0, radix: 16).flatMap(Unicode.Scalar.init) }

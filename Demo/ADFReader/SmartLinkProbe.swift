@@ -11,7 +11,8 @@ import SwiftUI
 ///     scrollEnds=<n> scrollCalls=<n> deferred=<n> waiting=<n>
 ///     pfBatches=<n> pfCalls=<n> pfInFlight=<n> pfCancelled=<n> pfHits=<n>
 ///     pfMaxBatch=<n> pfPeak=<n> pfFar=<n> B=<n> D=<n> held=<n> holds=<n>
-///     dims=<n>
+///     dims=<n> emCalls=<n> emCancelled=<n> emInFlight=<n> emResolved=<n>
+///     emFailed=<n> emHeld=<n> emRefreshes=<n>
 ///
 /// under the accessibility identifier `smartlink-probe`: the document's
 /// smart-link counters (`ADFDocumentModel.smartLinkStats`, refreshed owners),
@@ -21,7 +22,9 @@ import SwiftUI
 /// mode (`res=`, the `ADFSmartLinkResolution` raw value) and its scroll and
 /// nearby counters, with the nearby limits (`B=` keys per batch, `D=`
 /// positions), then design §10's: titles held now (`held=`, zero at rest),
-/// titles held since launch (`holds=`) and loading looks shown (`dims=`).
+/// titles held since launch (`holds=`) and loading looks shown (`dims=`),
+/// then the document's custom-emoji counters (`ADFDocumentModel.emojiStats`,
+/// `em…`) for `EmojiUITests`.
 /// One element read in one
 /// query, so a test gets a consistent snapshot in well under a second
 /// without opening About This Build (whose rows are read one at a time). It
@@ -72,7 +75,13 @@ struct SmartLinkProbe: View {
             ("B", model.smartLinkNearbyLimits.batch), ("D", model.smartLinkNearbyLimits.distance),
             ("held", stats.titlesHeldNow), ("holds", stats.titlesHeld), ("dims", stats.resolvingShown),
         ]
+        let emoji = model.emojiStats
+        let emojiFields: [(String, Int)] = [
+            ("emCalls", emoji.resolverCalls), ("emCancelled", emoji.cancellations), ("emInFlight", emoji.inFlight),
+            ("emResolved", emoji.resolved), ("emFailed", emoji.failed), ("emHeld", emoji.held),
+            ("emRefreshes", emoji.leafRefreshes),
+        ]
         return (fields.map { "\($0.0)=\($0.1)" } + ["res=\(stats.resolution.rawValue)"]
-            + modeFields.map { "\($0.0)=\($0.1)" }).joined(separator: " ")
+            + modeFields.map { "\($0.0)=\($0.1)" } + emojiFields.map { "\($0.0)=\($0.1)" }).joined(separator: " ")
     }
 }

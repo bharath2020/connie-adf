@@ -105,6 +105,11 @@ enum TextKit2TextBuilder {
     /// prepared foreground; a resolved link's icon character becomes an
     /// `NSTextAttachment` (`smartLinkIcon`), and its runs carry the title
     /// for the row's link action (`adfLinkTitle`).
+    ///
+    /// Displayed custom emoji (`EmojiDisplay`): a short name is an ordinary
+    /// run (its secondary colour is its prepared foreground); a box or an
+    /// image (one U+FFFC each) becomes an `NSTextAttachment` with square
+    /// bounds of the run font's ascent, on the baseline (`emojiAttachment`).
     static func attributedString(for inputs: TextKit2RenderInputs, linkColor: UIColor) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let scale = baselineScale(for: inputs.sizeCategory)
@@ -149,6 +154,17 @@ enum TextKit2TextBuilder {
             if case .resolved(_, let title)? = run[SmartLinkShownAttribute.self]?.kind {
                 attributes[.adfLinkTitle] = title
             }
+            if let emoji = run[EmojiShownAttribute.self], let font = attributes[.font] as? UIFont,
+               let attachment = emojiAttachment(emoji.kind, font: font) {
+                // One attachment per character: each box or image is one
+                // U+FFFC.
+                for _ in inputs.text[run.range].characters {
+                    let piece = NSMutableAttributedString(attachment: attachment)
+                    piece.addAttributes(attributes, range: NSRange(location: 0, length: piece.length))
+                    result.append(piece)
+                }
+                continue
+            }
             if let icon = run[SmartLinkIconAttribute.self], let font = attributes[.font] as? UIFont,
                let image = smartLinkIcon(icon, font: font, color: attributes[.foregroundColor] as? UIColor ?? linkColor) {
                 let attachment = NSMutableAttributedString(attachment: image)
@@ -191,6 +207,29 @@ enum TextKit2TextBuilder {
         let attachment = NSTextAttachment(image: image)
         let baseline = image.baselineOffsetFromBottom ?? 0
         attachment.bounds = CGRect(x: 0, y: -baseline, width: image.size.width, height: image.size.height)
+        return attachment
+    }
+
+    /// A displayed custom emoji's box or image (`EmojiShown.Kind`) as an
+    /// attachment: the square bitmap (a transparent pixel for the box)
+    /// drawn in square bounds of the font's ascent, on the baseline
+    /// (`EmojiDisplay.Box`), where SwiftUI's `Text` draws it, so the line
+    /// keeps its height and the image lands in exactly the box's place.
+    /// `nil` for a short name, which is drawn as text.
+    static func emojiAttachment(_ kind: EmojiShown.Kind, font: UIFont) -> NSTextAttachment? {
+        guard let bitmap = EmojiDisplay.bitmap(kind) else { return nil }
+        let box = EmojiDisplay.box(for: font)
+        let scale: CGFloat
+        if case .image(let image) = kind { scale = image.resolved.scale } else { scale = 1 }
+        // A plain attachment, not `NSTextAttachment(image:)`: that one is a
+        // private subclass whose `bounds` reads back as zero.
+        let attachment = NSTextAttachment()
+        attachment.image = UIImage(cgImage: bitmap, scale: scale, orientation: .up)
+        attachment.bounds = CGRect(x: 0, y: 0, width: box.side, height: box.side)
+        // A row without a link draws natively (TextKit 2): the layout
+        // fragment draws the image itself only when the attachment asks
+        // for no view (the row hosts no attachment views).
+        attachment.allowsTextAttachmentView = false
         return attachment
     }
 
