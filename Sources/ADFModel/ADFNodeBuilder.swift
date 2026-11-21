@@ -398,14 +398,19 @@ struct ADFNodeBuilder {
     /// Confluence Cloud's atlas_doc_format delivers emoji `text` as literal
     /// `\uXXXX` escape text (the backslash survives JSON decoding), with the
     /// character's hex codepoints in `id` (dash-separated for ZWJ sequences).
+    /// An id that is not hex code points names a custom emoji, which has no
+    /// unicode form even when `text` is set (Confluence writes its short
+    /// name there).
     private static func normalizedEmojiText(text: String?, id: String?) -> String? {
+        var fromId: String?
+        if let id, id.isEmpty == false {
+            guard let decoded = emojiString(hexCodepoints: id) else { return nil }
+            fromId = decoded
+        }
         if let text, text.isEmpty == false {
             return decodingUnicodeEscapes(text)
         }
-        if let id, let fromId = emojiString(hexCodepoints: id) {
-            return fromId
-        }
-        return nil
+        return fromId
     }
 
     /// Decodes literal `\uXXXX` sequences, pairing UTF-16 surrogates.

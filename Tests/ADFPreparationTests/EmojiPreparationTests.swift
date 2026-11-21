@@ -92,7 +92,7 @@ struct EmojiPreparationTests {
         #expect(emojiCharacters(text).isEmpty)
     }
 
-    @Test("prepared owners carry their emoji keys: paragraph, heading, list leader, caption")
+    @Test("prepared owners carry their emoji keys: paragraph, heading, list leader")
     func ownersCarryKeys() async throws {
         let emoji = #"{"type":"emoji","attrs":{"shortName":":ld-custom-6:"}}"#
         let doc = try await parseDoc(#"""
@@ -114,8 +114,7 @@ struct EmojiPreparationTests {
         #expect(blocks[1].emojiKeys == [key])
         guard case .listRows(let rows) = blocks[2].kind else { throw TestFailure("no list") }
         #expect(rows.first?.emojiKeys == [key])
-        guard case .media(let media) = blocks[3].kind else { throw TestFailure("no media") }
-        #expect(media.captionEmojiKeys == [key])
+        guard case .media = blocks[3].kind else { throw TestFailure("no media") }
         #expect(blocks[4].emojiKeys.isEmpty)
     }
 

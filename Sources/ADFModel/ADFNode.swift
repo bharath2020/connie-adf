@@ -53,7 +53,8 @@ public struct ADFNode: Sendable, Hashable, Identifiable {
         /// `id` is the Atlassian emoji id as authored (hex code points such
         /// as `"1f604"` for a standard emoji, or a custom emoji's id such as
         /// `"atlassian-logo"`); `text` is the unicode form, `nil` for a
-        /// custom emoji, which the renderer cannot draw by itself.
+        /// custom emoji (any id that is not hex code points, whatever its
+        /// authored `text`), which the renderer cannot draw by itself.
         case emoji(shortName: String, id: String?, text: String?)
         /// Parsed from the schema's STRING attr of epoch milliseconds.
         case date(timestampMS: Double)

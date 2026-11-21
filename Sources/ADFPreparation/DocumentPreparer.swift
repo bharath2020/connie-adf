@@ -285,7 +285,6 @@ struct BlockPreparer: Sendable {
         var mediaNode: ADFNode?
         var caption: [InlineSegment]?
         var captionSmartLinkKeys: [SmartLinkKey] = []
-        var captionEmojiKeys: [EmojiKey] = []
         for child in children {
             switch child.kind {
             case .media where mediaNode == nil:
@@ -294,7 +293,6 @@ struct BlockPreparer: Sendable {
                 let composed = composer.composeOwner(inline)
                 caption = composed.segments
                 captionSmartLinkKeys = composed.smartLinkKeys
-                captionEmojiKeys = composed.emojiKeys
             default:
                 break
             }
@@ -323,8 +321,7 @@ struct BlockPreparer: Sendable {
             caption: caption,
             borderHex: borderHex(of: marks),
             linkHref: linkHref(of: marks),
-            captionSmartLinkKeys: captionSmartLinkKeys,
-            captionEmojiKeys: captionEmojiKeys
+            captionSmartLinkKeys: captionSmartLinkKeys
         )
         return [RenderBlock(id: node.id, kind: .media(prepared))]
     }

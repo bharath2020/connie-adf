@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import Testing
 import ADFPreparation
+import ADFModel
 @_spi(ADFDiagnostics) @testable import ADFRendering
 
 /// An emoji resolver the test answers by hand: each call waits until
@@ -284,6 +285,31 @@ struct EmojiCoordinatorTests {
         // What a leaf draws for it: the short name.
         let stages = coordinator.displayStages(for: [Self.e1], owner: "p2")
         #expect(EmojiDisplay.shownKind(for: Self.e1, stages: stages) == .shortName)
+    }
+
+    @Test("a Confluence custom emoji (non-hex id, text = short name) is prepared as custom and resolves")
+    func confluenceShapeResolves() async throws {
+        let doc = try await ADFParser().parse(Data(#"""
+        {"version":1,"type":"doc","content":[{"type":"paragraph","content":[
+          {"type":"text","text":"go "},
+          {"type":"emoji","attrs":{"shortName":":partyparrot:","id":"7b4d0c1e-party-parrot","text":":partyparrot:"}},
+          {"type":"emoji","attrs":{"shortName":":grinning:","id":"1f600","text":"😀"}}
+        ]}]}
+        """#.utf8))
+        let block = try #require(DocumentPreparer(theme: .default).prepare(doc).first)
+        let key = EmojiKey(id: "7b4d0c1e-party-parrot", shortName: ":partyparrot:")
+        #expect(block.emojiKeys == [key])
+
+        let resolver = ScriptedEmojiResolver()
+        let coordinator = Self.coordinator(resolver)
+        Self.show(coordinator, "p1", block.emojiKeys)
+        try await smartLinkEventually("the call") { resolver.waitingNames == [":partyparrot:"] }
+        resolver.answer(":partyparrot:", .success(Self.image()))
+        try await smartLinkEventually("resolved") {
+            if case .resolved = coordinator.stage(for: key) { return true }
+            return false
+        }
+        #expect(resolver.calls == [":partyparrot:"])
     }
 
     @Test("reset: late results from before it are dropped, keys still in demand start over")

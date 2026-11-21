@@ -144,12 +144,6 @@ extension View {
             self
         }
     }
-
-    /// `textLeafAttachment` for a leaf that feeds smart links only (a media
-    /// caption, until its view hands over its `captionEmojiKeys`).
-    func smartLinkAttachment(ownerID: String?, keys: [SmartLinkKey]) -> some View {
-        textLeafAttachment(ownerID: ownerID, smartLinkKeys: keys, emojiKeys: [])
-    }
 }
 
 /// The one visibility feed of a text leaf, serving the smart-link and the

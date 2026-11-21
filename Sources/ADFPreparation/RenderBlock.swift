@@ -220,9 +220,6 @@ public struct PreparedMedia: Sendable, Hashable {
     /// The smart links in `caption`, de-duplicated in document order (see
     /// `RenderBlock.smartLinkKeys`).
     package let captionSmartLinkKeys: [SmartLinkKey]
-    /// The custom emoji in `caption`, de-duplicated in document order (see
-    /// `RenderBlock.emojiKeys`).
-    package let captionEmojiKeys: [EmojiKey]
 
     public init(
         id: String,
@@ -249,8 +246,7 @@ public struct PreparedMedia: Sendable, Hashable {
         caption: [InlineSegment]?,
         borderHex: String?,
         linkHref: String?,
-        captionSmartLinkKeys: [SmartLinkKey],
-        captionEmojiKeys: [EmojiKey] = []
+        captionSmartLinkKeys: [SmartLinkKey]
     ) {
         self.id = id
         self.attrs = attrs
@@ -261,7 +257,6 @@ public struct PreparedMedia: Sendable, Hashable {
         self.borderHex = borderHex
         self.linkHref = linkHref
         self.captionSmartLinkKeys = captionSmartLinkKeys
-        self.captionEmojiKeys = captionEmojiKeys
     }
 }
 
