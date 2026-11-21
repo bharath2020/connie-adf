@@ -70,23 +70,24 @@ scratch root (`<root>/lock`); a second run waits for it. Rules
   Its rows are at most `CHANGED` and its ratio at most WARN, never FAIL.
 - **Instructions and mallocs**: WARN at +2-5 %, FAIL at ≥ +5 % vs the
   same-session base. A line whose calibrated cross-process noise is higher
-  gets max(2 %, noise) / max(5 %, 2 × noise); today only code-SwiftUI
-  (2.3 %) and containers-TK2 (2.1 %) are raised. An instruction rise
-  counts only when the cheapest rep rose too: on a loaded host some reps
-  do extra main-thread work on both sides (code slice: two of five reps
-  at +45 %), which can lift a median but not the minimum. Such a line
-  shows the smaller `min Δ` next to its verdict. Rep CV over 1 % is
+  gets max(2 %, noise) / max(5 %, 2 × noise); today only containers-SwiftUI
+  (3.2 %), containers-TK2 (2.1 %) and parse youtube (10.3 %) are raised.
+  An instruction rise counts only when the cheapest rep rose too: on a
+  loaded host some reps do extra main-thread work on both sides (code
+  slice: two of five reps at +45 %), which can lift a median but not the
+  minimum. Such a line shows the smaller `min Δ` next to its verdict. Rep CV over 1 % is
   flagged `NOISY` (informational; the containers slice usually is).
 - **TK2 ÷ SwiftUI instruction ratio** per fixture (the ratio of the
   minimum reps of both arms, so disturbed reps in either arm on a busy
   host do not move it), against budgets
   calibrated from 10 main passes (max × 1.02; `--calibrate 10 main
-  --write-budgets`, about 8 min). Current budgets: list-dense 1.216,
-  stress-1k 1.291, kitchen-sink 1.128, code 1.188, giant-table 1.027,
-  containers 1.026. A candidate over its budget fails when the base is
-  within it, or when the candidate ratio is more than 2 %
-  (`ratio_rise_fail_pct`) above the base ratio. When the base is over the
-  budget too (a runtime or Xcode update, or a change already on main), it
+  --write-budgets`, about 8 min). Current budgets (2026-11-20, main
+  bdd029f, iPhone 17 Pro on iOS 26.3, min-rep TK2 ÷ SwiftUI instruction
+  ratio): list-dense 1.232, stress-1k 1.296, kitchen-sink 1.194, code
+  1.195, giant-table 1.032, containers 1.231. A candidate over its budget
+  fails when the base is within it, or when the candidate ratio is more
+  than 2 % (`ratio_rise_fail_pct`) above the base ratio. When the base is
+  over the budget too (a runtime or Xcode update, or a change already on main), it
   is a WARN that asks for recalibration. Recalibrate when main's renderer
   work changes on purpose (for example when issue 10 is fixed, list-dense
   drops).
