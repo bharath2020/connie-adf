@@ -42,3 +42,5 @@ dfe7a40ac7662590c4fdd056bf39a91d4f6d71d83df71d4b1faab5d5d692f3ef  captions-parit
 # listed when PR 4 merged main 33d549f; `swift Tools/make-fixtures.swift
 # --check` regenerates it byte for byte.
 66a1514bf3ca9eec58bc2dceb7e3dd585b26d9bc639a0c430c1f42888a5ef904  smart-links.json
+# emoji-custom (hand-authored, Lane A custom emoji; Architecture-Decisions.md §23)
+7881ca23217a0610e491790240b817fc0200f1ead390c5168df902f83dc5638b  emoji-custom.json
