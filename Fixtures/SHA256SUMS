@@ -44,3 +44,6 @@ dfe7a40ac7662590c4fdd056bf39a91d4f6d71d83df71d4b1faab5d5d692f3ef  captions-parit
 66a1514bf3ca9eec58bc2dceb7e3dd585b26d9bc639a0c430c1f42888a5ef904  smart-links.json
 # emoji-custom (hand-authored, Lane A custom emoji; Architecture-Decisions.md §23)
 7881ca23217a0610e491790240b817fc0200f1ead390c5168df902f83dc5638b  emoji-custom.json
+# perf-mixed (main 5261aa4, the Instruments profile check's fixture;
+# `python3 -I Tools/make-perf-mixed.py` rewrites the same bytes)
+68e7864b04dcbaf62a76b68f5fc8fbbc0f7a2b675e012923d17295b99f4c032e  perf-mixed.json
