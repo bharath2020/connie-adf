@@ -12,9 +12,12 @@ import SwiftUI
 /// would be served every image the last one loaded, with no fetch and so no
 /// authorization check. `use(_:)` with a different account (or none) empties
 /// the memory and disk caches, and every later request waits for that purge
-/// before it looks in them. Loads started before the change never reach the
-/// caches or a later request: their bytes are dropped and their requests end
-/// with `CancellationError`.
+/// before it looks in them. Loads started before the change still answer
+/// the requests that made them, but never reach a later request: each
+/// account gets its own memory cache and in-flight loads, and their
+/// downloads are written to disk only while their account is current,
+/// checked on the disk cache's actor with the write itself, so no write can
+/// land after the purge.
 public final class AccountMediaProvider<Account: Equatable & Sendable>: ADFMediaProvider, Sendable {
     private struct State: Sendable {
         var account: Account?
@@ -25,8 +28,8 @@ public final class AccountMediaProvider<Account: Equatable & Sendable>: ADFMedia
     private let disk: DiskCache?
     private let scale: CGFloat
     private let fetch: @Sendable (MediaAttrs) async throws -> Data
-    /// Bumped by every account change; a fetch made under an older value
-    /// has its bytes dropped.
+    /// Bumped by every account change, before its purge starts; a download
+    /// made under an older value is not written to disk.
     private let generation = OSAllocatedUnfairLock(initialState: UInt64(0))
     private let state: OSAllocatedUnfairLock<State>
 
@@ -77,19 +80,15 @@ public final class AccountMediaProvider<Account: Equatable & Sendable>: ADFMedia
     }
 
     /// A provider with fresh memory and in-flight loads over the shared disk
-    /// cache, whose fetched bytes are dropped once `current` moves past
-    /// `generation`.
+    /// cache, which writes to disk only while `current` is `generation`.
     private static func makeBase(generation: UInt64,
                                  current: OSAllocatedUnfairLock<UInt64>,
                                  disk: DiskCache?,
                                  scale: CGFloat,
                                  fetch: @escaping @Sendable (MediaAttrs) async throws -> Data) -> CacheFirstMediaProvider {
-        CacheFirstMediaProvider(disk: disk, scale: scale, fetch: { attrs in
-            let data = try await fetch(attrs)
-            guard current.withLock({ $0 }) == generation else {
-                throw CancellationError()
-            }
-            return data
-        })
+        CacheFirstMediaProvider(disk: disk,
+                                storesToDisk: { current.withLock { $0 } == generation },
+                                scale: scale,
+                                fetch: fetch)
     }
 }

@@ -60,6 +60,20 @@ public actor DiskCache: ResolverCache {
     }
 
     public func store(_ value: Data, for key: String) async {
+        write(value, for: key)
+    }
+
+    /// Stores `value` for `key` only if `shouldStore` returns true. It is
+    /// asked on this actor, right before the write, so the answer cannot go
+    /// stale between the check and the write: a `removeAll()` either runs
+    /// first and the check sees what changed, or runs after and deletes
+    /// the file.
+    public func store(_ value: Data, for key: String, if shouldStore: @Sendable () -> Bool) {
+        guard shouldStore() else { return }
+        write(value, for: key)
+    }
+
+    private func write(_ value: Data, for key: String) {
         let name = Self.fileName(for: key)
         _ = loadIndex()
         // Replacing drops the old value first, so a failed or refused write

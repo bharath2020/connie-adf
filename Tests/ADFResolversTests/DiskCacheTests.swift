@@ -33,6 +33,20 @@ struct DiskCacheTests {
         }
     }
 
+    @Test("a conditional store writes only when its check passes")
+    func conditionalStore() async {
+        await withTemporaryDirectory { directory in
+            let cache = DiskCache(directory: directory, byteLimit: 1_000)
+
+            await cache.store(bytes(10, 1), for: "a", if: { false })
+            await cache.store(bytes(20, 2), for: "b", if: { true })
+
+            #expect(await cache.value(for: "a") == nil)
+            #expect(await cache.value(for: "b") == bytes(20, 2))
+            #expect(await cache.totalBytes == 20)
+        }
+    }
+
     @Test("a new cache on the same directory finds the stored bytes")
     func survivesRelaunch() async {
         await withTemporaryDirectory { directory in

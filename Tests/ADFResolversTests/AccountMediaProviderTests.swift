@@ -139,7 +139,7 @@ struct AccountMediaProviderTests {
         }
     }
 
-    @Test("bytes the previous account was still loading are dropped")
+    @Test("a download the previous account was still loading is never written to disk")
     func inFlightLoadDropped() async throws {
         try await withTemporaryDirectory { directory in
             let bytesB = try pngData(width: 400, height: 300)
@@ -156,11 +156,13 @@ struct AccountMediaProviderTests {
             }
             await network.signIn("b")
             provider.use("b")
-            _ = try await provider.image(for: attrs, targetSize: size)
 
-            await #expect(throws: CancellationError.self) {
-                _ = try await loadA.value
-            }
+            // A's download lands after the purge: it answers its own request
+            // but is not stored.
+            _ = try await loadA.value
+            #expect(await storedBytes(in: directory) == nil)
+
+            _ = try await provider.image(for: attrs, targetSize: size)
             #expect(await network.calls == ["a", "b"])
             #expect(await storedBytes(in: directory) == bytesB)
         }

@@ -59,9 +59,20 @@ public struct CacheFirstMediaProvider: ADFMediaProvider {
                 disk: DiskCache? = nil,
                 scale: CGFloat = 2,
                 fetch: @escaping @Sendable (MediaAttrs) async throws -> Data) {
+        self.init(memory: memory, disk: disk, storesToDisk: { true }, scale: scale, fetch: fetch)
+    }
+
+    /// - Parameter storesToDisk: Asked on the disk cache's actor before
+    ///   each fetched download is written there; false drops it.
+    init(memory: MemoryCache<MediaImageKey, ADFResolvedImage>
+             = MemoryCache(totalCostLimit: 64 << 20, cost: { CacheFirstMediaProvider.decodedCost($0) }),
+         disk: DiskCache?,
+         storesToDisk: @escaping @Sendable () -> Bool,
+         scale: CGFloat,
+         fetch: @escaping @Sendable (MediaAttrs) async throws -> Data) {
         self.scale = scale
         let bytesCache: any ResolverCache<BytesRequest, Data> = if let disk {
-            KeyMappedCache(base: disk, map: { $0.diskKey })
+            KeyMappedCache(base: GatedDiskCache(disk: disk, shouldStore: storesToDisk), map: { $0.diskKey })
         } else {
             NoCache()
         }
@@ -166,6 +177,21 @@ private struct KeyMappedCache<Key: Hashable & Sendable, Base: ResolverCache>: Re
 
     func store(_ value: Base.Value, for key: Key) async {
         await base.store(value, for: map(key))
+    }
+}
+
+/// A disk cache whose writes `shouldStore` can refuse, checked on the
+/// disk cache's actor together with the write.
+private struct GatedDiskCache: ResolverCache {
+    let disk: DiskCache
+    let shouldStore: @Sendable () -> Bool
+
+    func value(for key: String) async -> Data? {
+        await disk.value(for: key)
+    }
+
+    func store(_ value: Data, for key: String) async {
+        await disk.store(value, for: key, if: shouldStore)
     }
 }
 
