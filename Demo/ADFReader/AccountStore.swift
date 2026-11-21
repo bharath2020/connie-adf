@@ -37,13 +37,23 @@ final class AccountStore {
         }
     }
 
+    /// Bumped by every `connect` and `remove`, so a cache built from
+    /// `credential(for:)` (`DemoMedia`'s live fetchers) knows to load again.
+    @ObservationIgnored private(set) var changeCount = 0
+
+    /// Called after every `connect` and `remove` with the site, the email
+    /// stored for it before, and the email stored now (nil when none), so
+    /// caches of what an account loaded (`DemoMedia`) can be purged at once.
+    @ObservationIgnored var didChange: (@MainActor (_ site: AtlassianSite, _ previousEmail: String?, _ email: String?) -> Void)?
+
     func summary(for site: AtlassianSite) -> AtlassianAccountSummary? {
         summaries.first { $0.site == site }
     }
 
-    /// The stored credential for `site` (reads the secret), for the
-    /// fetchers that need one (`EmojiResolvers`). Callers keep it only as
-    /// long as the fetcher they build with it.
+    /// The stored credential for `site` (reads the token from the store),
+    /// for the fetchers that need one (`EmojiResolvers`, `DemoMedia`'s live
+    /// media fetch); never shown or logged. Callers keep it only as long as
+    /// the fetcher they build with it.
     func credential(for site: AtlassianSite) throws -> AtlassianCredential? {
         try store.load(site: site)
     }
@@ -70,14 +80,26 @@ final class AccountStore {
         var checked = credential
         checked.cloudId = result.cloudId
         try checked.validate()
+        let previousEmail = storedEmail(for: checked.site)
         try store.save(checked)
+        changeCount += 1
         reload()
+        didChange?(checked.site, previousEmail, checked.email)
         return checked.summary
     }
 
     func remove(site: AtlassianSite) throws {
+        let previousEmail = storedEmail(for: site)
         try store.remove(site: site)
+        changeCount += 1
         reload()
+        didChange?(site, previousEmail, nil)
+    }
+
+    /// The email stored for `site`, read from the store's non-secret
+    /// attributes rather than `summaries`, which may not be loaded yet.
+    private func storedEmail(for site: AtlassianSite) -> String? {
+        (try? store.summaries())?.first { $0.site == site }?.email
     }
 
     /// A user-facing sentence for any error the account flows can throw.

@@ -90,6 +90,51 @@ enum SmartLinkResolutionPreference {
     }
 }
 
+/// The persisted "Images" setting (`DemoMedia.Mode`: Off, Mock, Atlassian),
+/// shared by the reader menu's and Settings' `@AppStorage` pickers and the
+/// `-media off|mock|live` launch argument. A missing or unknown value means
+/// `.live`: real images for a remote page whose site has a saved account,
+/// mock images otherwise.
+///
+/// It follows `RendererPreference` exactly: the flag writes its value to the
+/// persistent domain with an automation mark, so it rules that launch; the
+/// next launch without the flag removes a value automation wrote; a pick
+/// clears the mark and persists; `-rendererReset` removes the value. The
+/// flag is not spelled like the key, so `NSArgumentDomain` never shadows it.
+/// A pick applies to the next document opened (`DemoMedia.resolve`).
+enum MediaModePreference {
+    static let key = "adf.media.mode"
+    static let automationKey = "adf.media.mode.setByAutomation"
+
+    /// Runs from `ADFReaderApp.init`, before any view reads the key.
+    static func apply(_ options: LaunchOptions, to defaults: UserDefaults = .standard) {
+        let requested = options.mediaMode.flatMap { DemoMedia.Mode(rawValue: $0.lowercased()) }
+        if options.rendererReset || (requested == nil && defaults.bool(forKey: automationKey)) {
+            defaults.removeObject(forKey: key)
+            defaults.removeObject(forKey: automationKey)
+        }
+        if let requested {
+            defaults.set(requested.rawValue, forKey: key)
+            defaults.set(true, forKey: automationKey)
+        }
+    }
+
+    /// The setting now: what the next document opened gets.
+    static func current(_ defaults: UserDefaults = .standard) -> DemoMedia.Mode {
+        defaults.string(forKey: key).flatMap(DemoMedia.Mode.init(rawValue:)) ?? .live
+    }
+
+    /// Whether the value was written by `-media` this launch.
+    static func setByAutomation(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: automationKey)
+    }
+
+    /// A pick: the choice is the user's and persists.
+    static func userChose(_ defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: automationKey)
+    }
+}
+
 /// The persisted "Identify Renderer" switch
 /// (`ADFDocumentView(identifiesRenderer:)`), shared by `ReaderView`'s
 /// `@AppStorage` menu toggle and the `-identifyRenderer` launch argument.

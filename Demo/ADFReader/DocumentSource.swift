@@ -1,4 +1,5 @@
 import Foundation
+import ADFAtlassianAuth
 import ADFConfluence
 
 enum DocumentSource: Hashable {
@@ -17,6 +18,16 @@ enum DocumentSource: Hashable {
         switch self {
         case .fixture(let fixture): return "fixture:\(fixture.name)"
         case .remotePage(let id, _): return "page:\(id)"
+        }
+    }
+
+    /// The Atlassian site the document's media belongs to: the bundle's
+    /// site for a remote page, none for a bundled fixture (its file IDs
+    /// resolve nowhere). `DemoMedia` loads real images only with a site.
+    var atlassianSite: AtlassianSite? {
+        switch self {
+        case .fixture: return nil
+        case .remotePage: return AppConfig.confluenceSite
         }
     }
 

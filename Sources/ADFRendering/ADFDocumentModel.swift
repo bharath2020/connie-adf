@@ -59,6 +59,18 @@ public final class ADFDocumentModel {
     /// not observable); the report is published from it.
     let rendererIdentity = RendererIdentityRegistry()
 
+    /// Media loading for this document: which media views are on screen,
+    /// their provider calls and their per-key images (`MediaCoordinator`).
+    /// Not observable itself; reset by `load` (block IDs repeat across
+    /// documents). The provider comes from `ADFDocumentView`.
+    let media = MediaCoordinator()
+
+    /// The media counters of this model (provider calls started, landed,
+    /// cancelled, failed, images released, the most at once, running now).
+    /// Diagnostics only.
+    @_spi(ADFDiagnostics)
+    public var mediaCounters: MediaCounters { media.counters }
+
     /// What the renderer reports drawing while `ADFDocumentView` identifies
     /// it (`identifiesRenderer: true`): the engine that drew each text leaf
     /// on screen, and how many each drew. Observable on its own; nothing in
@@ -193,6 +205,7 @@ public final class ADFDocumentModel {
         blockOwnerByID = [:]
         sections = []
         headings = []
+        media.reset()
         documentRevision = 0
         scrollTarget = nil
         scrollTargetPlacement = .top
