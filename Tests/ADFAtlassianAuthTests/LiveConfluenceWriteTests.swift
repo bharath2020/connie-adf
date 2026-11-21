@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 import ADFAtlassianAuth
 
@@ -35,11 +36,15 @@ struct LiveConfluenceWriteTests {
         // 1. Find the anchor page's space (read-only).
         let probe: PageProbeResult
         do {
-            probe = try await AtlassianGraphQLClient(credential: credential).probePages(pageIds: [anchor], cloudId: cloudId)
+            // The saved adf-auth credential reads; with ADF_LIVE_TOKEN_SERVICE
+            // the write token may lack read scopes such as read:space.
+            let reader = LiveWriteEnvironment.savedCredential ?? credential
+            probe = try await AtlassianGraphQLClient(credential: reader).probePages(pageIds: [anchor], cloudId: cloudId)
         } catch {
             Self.report("probe anchor", error)
             throw error
         }
+        for message in probe.errorMessages { print("live: probe anchor gateway error: \(message)") }
         let anchorPage = try #require(probe.pages.first { $0.pageId == anchor }, "anchor page \(anchor) not found")
         let spaceId = try #require(anchorPage.spaceId, "anchor page has no space ID")
         let spaceKey = try #require(anchorPage.spaceKey, "anchor page has no space key")
@@ -168,8 +173,39 @@ struct LiveWriteEnvironment: Sendable {
     }()
 
     /// `nil` (suite skipped) unless opted in and a credential is saved.
+    ///
+    /// With `ADF_LIVE_TOKEN_SERVICE` set, the token comes from that login
+    /// Keychain generic password instead (account = the saved account's
+    /// email), keeping the saved account's site, email and cloud ID. Its
+    /// scopes are taken to be ``AtlassianTokenScopes/required``: the gateway
+    /// is the judge. Lets a separately stored test token be tried without
+    /// replacing the adf-auth item.
     static let credential: AtlassianCredential? = {
+        guard let saved = savedCredential else { return nil }
+        let environment = ProcessInfo.processInfo.environment
+        guard let service = environment["ADF_LIVE_TOKEN_SERVICE"], !service.isEmpty else { return saved }
+        guard let token = genericPassword(service: service, account: saved.email) else { return nil }
+        return AtlassianCredential(site: saved.site, email: saved.email, token: token, cloudId: saved.cloudId, createdAt: Date(), expiresAt: nil)
+    }()
+
+    /// The adf-auth Keychain credential for `ADF_LIVE_SITE`, when opted in.
+    static let savedCredential: AtlassianCredential? = {
         guard current.enabled, let raw = current.site, let site = try? AtlassianSite(parsing: raw) else { return nil }
         return (try? KeychainCredentialStore().load(site: site)) ?? nil
     }()
+
+    /// The secret of a login Keychain generic password, or nil. Never printed.
+    static func genericPassword(service: String, account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        let token = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
 }

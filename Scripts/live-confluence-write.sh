@@ -26,6 +26,10 @@
 #   ADF_LIVE_SITE       site name or host; default mycompany
 #   ADF_LIVE_PAGE       anchor page ID in your personal space; default 229377
 #   ADF_LIVE_SPACE_KEY  optional: the anchor page's space key must equal this
+#   ADF_LIVE_TOKEN_SERVICE  optional: take the token from this login Keychain
+#                       generic password (account = the saved account's email)
+#                       instead of the adf-auth item; site, email and cloud ID
+#                       still come from the adf-auth item
 #
 # The test reads the credential itself through KeychainCredentialStore at run
 # time (macOS may ask to allow keychain access). This script only checks that
