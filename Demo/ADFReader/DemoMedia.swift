@@ -9,10 +9,11 @@ import ADFResolvers
 
 // MARK: - The demo's media providers
 
-/// The demo's media setup for this launch: one `CacheFirstMediaProvider`
-/// per fetch — the mock, and one per Atlassian account — each with its own
-/// memory cache, disk cache and in-flight fetches, shared by every reader
-/// this launch, so About This Build's counts cover the whole launch.
+/// The demo's media setup for this launch: one provider per fetch — a
+/// `CacheFirstMediaProvider` over the mock, and an `AccountMediaProvider`
+/// per Atlassian site — each with its own memory cache, disk cache and
+/// in-flight fetches, shared by every reader this launch, so About This
+/// Build's counts cover the whole launch.
 ///
 /// `resolve(for:)` picks a document's provider when it opens, from the
 /// persisted Images setting (`MediaModePreference`; `-media` sets it for a

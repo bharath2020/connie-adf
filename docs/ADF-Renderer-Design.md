@@ -303,6 +303,8 @@ The hardest element. Design:
 
 ### 6.5 Media pipeline (lazy loading of assets)
 
+> As built (2026-11), loads run through a per-document `MediaCoordinator` and the caches live in `CacheFirstMediaProvider` (ADFResolvers), not in per-view `.task(id:)` fetches: see `Architecture-Decisions.md` §9 and §24.
+
 Confluence media requires authenticated URL resolution, so media loading is a **protocol the host injects**:
 
 ```swift
