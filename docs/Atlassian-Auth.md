@@ -297,7 +297,7 @@ Only `probe-graphql` runs `AdfProbePages` today; the app does not look up titles
 `ConfluenceWriteClient` (`GraphQL/ConfluenceWriteClient.swift`, documents in
 `GraphQL/ConfluenceWriteDocuments.swift`) writes through the same gateway, same
 auth, GraphQL only. Every write is a named mutation under
-`confluence(cloudId:)` and carries `X-ExperimentalApi: confluence-agg-beta`:
+`confluence` (no `cloudId` argument on the tenant gateway) and carries `X-ExperimentalApi: confluence-agg-beta`:
 all these fields are beta, and without the header the gateway answers HTTP 200
 with `errors[].extensions.classification` `BetaHeaderOptInException`
 (reported as `mutationFailed`). Field names, inputs and scopes come from schema
@@ -389,6 +389,20 @@ adf-auth probe-graphql --page <id>  # items 3-5 (--site <site> if several; --raw
 | 9 | `updateCurrentPage` makes version N+1 and the pre-read catches a stale version | Same run: the new version is N+1; the stale attempt throws `versionConflict` and the version is unchanged. |
 | 10 | `createBlogPost` with `write:blogpost:confluence` | Same run: the blog post is created and linked. |
 | 11 | Exact error shapes for write failures (`errorType` values, conflict wording) | Unverified: the mapping in section 6 is from the schema and the read-side gateway behaviour. |
+
+**Rows 6–10 verified live on 2026-11-21** with a scoped API token carrying
+the 10 scopes, against the tenant gateway in the personal space: page
+created (version 1), footer comment and reply created, body edited to
+version 2, a stale edit (expected 1, current 2) refused by the pre-read with
+the version unchanged, blog post created. Plain IDs sent as ARIs were
+accepted; the space ID is the space ARI the probe returns. The tenant
+gateway rejects `confluence(cloudId:)` ("Unknown field argument 'cloudId'"),
+so the mutations use bare `confluence`. An earlier scoped token without
+`write:page:confluence` (and `read:space`, `read:comment`,
+`read:content.metadata`) got "This request does not contain the right
+authorisation scopes to access this field" (statusCode 403) on
+`createPage`, which maps to `missingScope`. Row 11 stays open for the
+other failure kinds.
 
 ## 8. Export compliance
 

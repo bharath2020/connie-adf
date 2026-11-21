@@ -123,7 +123,7 @@ public struct ConfluencePageVersion: Sendable, Equatable {
 }
 
 /// Writes to Confluence through the tenant GraphQL gateway's
-/// `confluence(cloudId:)` mutations. GraphQL only; no REST fallback.
+/// `confluence` mutations. GraphQL only; no REST fallback.
 ///
 /// Every write first checks that the stored credential was created with the
 /// write scope it needs, and fails with ``ConfluenceWriteError/readOnlyToken(host:missingScopes:)``

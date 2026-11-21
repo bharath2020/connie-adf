@@ -1,7 +1,11 @@
 import Foundation
 
 /// The GraphQL documents ADFReader sends to write to Confluence. All are
-/// named and live under the `confluence(cloudId:)` mutation namespace.
+/// named and live under the `confluence` mutation namespace. The tenant
+/// gateway (`https://<site>/gateway/api/graphql`) rejects the `cloudId`
+/// argument the public `api.atlassian.com` schema shows on it ("Unknown
+/// field argument 'cloudId'", live 2026-11-21); the IDs are ARIs, which
+/// carry the cloud ID.
 ///
 /// Field names, input types and scopes were read from the public gateway
 /// schema by introspection (2026-11-20). Every write field there is a beta
@@ -19,8 +23,8 @@ public enum ConfluenceWriteDocuments {
 
     public static let createFooterCommentOperationName = "AdfCreateFooterComment"
     public static let createFooterComment = """
-        mutation AdfCreateFooterComment($cloudId: ID!, $input: ConfluenceCreateFooterCommentOnPageInput!) {
-          confluence(cloudId: $cloudId) {
+        mutation AdfCreateFooterComment($input: ConfluenceCreateFooterCommentOnPageInput!) {
+          confluence {
             createFooterCommentOnPage(input: $input) { success \(mutationErrors) \(commentFields) }
           }
         }
@@ -28,8 +32,8 @@ public enum ConfluenceWriteDocuments {
 
     public static let replyToCommentOperationName = "AdfReplyToComment"
     public static let replyToComment = """
-        mutation AdfReplyToComment($cloudId: ID!, $input: ConfluenceReplyToCommentInput!) {
-          confluence(cloudId: $cloudId) {
+        mutation AdfReplyToComment($input: ConfluenceReplyToCommentInput!) {
+          confluence {
             replyToComment(input: $input) { success \(mutationErrors) \(commentFields) }
           }
         }
@@ -37,8 +41,8 @@ public enum ConfluenceWriteDocuments {
 
     public static let updatePageOperationName = "AdfUpdatePage"
     public static let updatePage = """
-        mutation AdfUpdatePage($cloudId: ID!, $input: ConfluenceUpdateCurrentPageInput!) {
-          confluence(cloudId: $cloudId) {
+        mutation AdfUpdatePage($input: ConfluenceUpdateCurrentPageInput!) {
+          confluence {
             updateCurrentPage(input: $input) { success \(mutationErrors) \(pageFields) }
           }
         }
@@ -46,8 +50,8 @@ public enum ConfluenceWriteDocuments {
 
     public static let createPageOperationName = "AdfCreatePage"
     public static let createPage = """
-        mutation AdfCreatePage($cloudId: ID!, $input: ConfluenceCreatePageInput!) {
-          confluence(cloudId: $cloudId) {
+        mutation AdfCreatePage($input: ConfluenceCreatePageInput!) {
+          confluence {
             createPage(input: $input) { success \(mutationErrors) \(pageFields) }
           }
         }
@@ -55,8 +59,8 @@ public enum ConfluenceWriteDocuments {
 
     public static let createBlogPostOperationName = "AdfCreateBlogPost"
     public static let createBlogPost = """
-        mutation AdfCreateBlogPost($cloudId: ID!, $input: ConfluenceCreateBlogPostInput!) {
-          confluence(cloudId: $cloudId) {
+        mutation AdfCreateBlogPost($input: ConfluenceCreateBlogPostInput!) {
+          confluence {
             createBlogPost(input: $input) { success \(mutationErrors) blogPost { id blogPostId title latestVersion { number } links { base webUi } } }
           }
         }
@@ -84,7 +88,7 @@ extension GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.createFooterCommentOperationName,
             query: ConfluenceWriteDocuments.createFooterComment,
-            jsonVariables: ["cloudId": cloudId, "input": ["pageId": pageARI, "body": adfBody(adf)]],
+            jsonVariables: ["input": ["pageId": pageARI, "body": adfBody(adf)]],
             field: "confluence.createFooterCommentOnPage"
         )
     }
@@ -93,7 +97,7 @@ extension GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.replyToCommentOperationName,
             query: ConfluenceWriteDocuments.replyToComment,
-            jsonVariables: ["cloudId": cloudId, "input": ["parentCommentId": parentCommentARI, "body": adfBody(adf)]],
+            jsonVariables: ["input": ["parentCommentId": parentCommentARI, "body": adfBody(adf)]],
             field: "confluence.replyToComment"
         )
     }
@@ -102,7 +106,7 @@ extension GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.updatePageOperationName,
             query: ConfluenceWriteDocuments.updatePage,
-            jsonVariables: ["cloudId": cloudId, "input": ["id": pageARI, "title": title, "body": adfBody(adf)]],
+            jsonVariables: ["input": ["id": pageARI, "title": title, "body": adfBody(adf)]],
             field: "confluence.updateCurrentPage"
         )
     }
@@ -111,7 +115,7 @@ extension GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.createPageOperationName,
             query: ConfluenceWriteDocuments.createPage,
-            jsonVariables: ["cloudId": cloudId, "input": ["spaceId": spaceId, "title": title, "status": "CURRENT", "body": adfBody(adf)]],
+            jsonVariables: ["input": ["spaceId": spaceId, "title": title, "status": "CURRENT", "body": adfBody(adf)]],
             field: "confluence.createPage"
         )
     }
@@ -120,7 +124,7 @@ extension GraphQLOperation {
         GraphQLOperation(
             operationName: ConfluenceWriteDocuments.createBlogPostOperationName,
             query: ConfluenceWriteDocuments.createBlogPost,
-            jsonVariables: ["cloudId": cloudId, "input": ["spaceId": spaceId, "title": title, "status": "CURRENT", "body": adfBody(adf)]],
+            jsonVariables: ["input": ["spaceId": spaceId, "title": title, "status": "CURRENT", "body": adfBody(adf)]],
             field: "confluence.createBlogPost"
         )
     }
