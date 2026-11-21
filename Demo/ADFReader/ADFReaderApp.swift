@@ -34,6 +34,19 @@ import UIKit
 ///   document at ~1,200 pt/s while frame metrics run, prints one
 ///   `SCROLL_METRICS …` line (main's fields, then `startRow= endRow=
 ///   scrollMs= completed=`), then exits after 2s.
+/// - `-autoscrollSpeed <pt/s>` sets the `-autoscroll` speed (default 1,200,
+///   the frame gate's; above it, short blocks merge into longer legs). The
+///   T1 scroll-counter tier (`Scripts/perf-scroll-counters.sh`) scrolls
+///   much faster because it counts work, not frames.
+/// - `-scrollCounters` (with `-autoscroll`) measures the scroll's work and,
+///   after an idle window of `-idleSeconds <s>` (default 5) with the frame
+///   metrics stopped, prints one `SCROLL_COUNTERS …` line: rows that
+///   entered/left the lazy render region, live and off-window TextKit 2
+///   rows, CPU instructions retired during the scroll and during the idle
+///   window, and idle row churn / TextKit 2 layouts (a livelock spins).
+///   Without it the scroll behaves exactly as before. These three are
+///   parsed by `ScrollCounters` itself, not `LaunchOptions`; the line's
+///   format is documented there.
 /// - `-searchQuery <text>` runs a settled find-in-page query after loading.
 /// - `-searchUpdates <n>` measures `n` replacements while that query is active.
 /// - `-fontSizeStep <n>` opens the reader with the text-size control at

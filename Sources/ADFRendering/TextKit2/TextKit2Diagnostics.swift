@@ -80,6 +80,17 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
     /// the first layout pass (`-rendererStats` at READY) can include every
     /// row.
     public var liveOffWindowRowCount: Int
+    /// SwiftUI sizing queries TextKit 2 rows answered
+    /// (`TextKit2RowRepresentable.sizeThatFits`) since launch: the work
+    /// probe's measure of how often layout asks a row for its size.
+    public var sizeThatFitsCount: Int
+    /// Of `sizeThatFitsCount`: queries proposing an infinite width (a
+    /// container's maximum-size probe).
+    public var infiniteWidthProposalCount: Int
+    /// `TextKit2RowView.apply` calls since launch (every representable
+    /// update and sizing query applies its inputs; most are a no-op
+    /// compare).
+    public var applyCount: Int
 
     public init(
         liveRowCount: Int, layoutCount: Int, drawCount: Int, nativeDrawCount: Int = 0,
@@ -87,8 +98,12 @@ public struct ADFTextKit2Stats: Sendable, Hashable {
         liveListRowCount: Int = 0, conversionCount: Int = 0,
         liveCodeRowCount: Int = 0, codeNativeDrawCount: Int = 0,
         liveContainerRowCount: Int = 0, containerNativeDrawCount: Int = 0, containerTextKit1DrawCount: Int = 0,
-        liveCaptionRowCount: Int = 0, captionNativeDrawCount: Int = 0, liveOffWindowRowCount: Int = 0
+        liveCaptionRowCount: Int = 0, captionNativeDrawCount: Int = 0, liveOffWindowRowCount: Int = 0,
+        sizeThatFitsCount: Int = 0, infiniteWidthProposalCount: Int = 0, applyCount: Int = 0
     ) {
+        self.sizeThatFitsCount = sizeThatFitsCount
+        self.infiniteWidthProposalCount = infiniteWidthProposalCount
+        self.applyCount = applyCount
         self.liveRowCount = liveRowCount
         self.layoutCount = layoutCount
         self.drawCount = drawCount
@@ -765,6 +780,9 @@ final class TextKit2Diagnostics {
     private(set) var liveCaptionRowCount = 0
     private(set) var captionNativeDrawCount = 0
     private(set) var liveOffWindowRowCount = 0
+    private(set) var sizeThatFitsCount = 0
+    private(set) var infiniteWidthProposalCount = 0
+    private(set) var applyCount = 0
     /// One owner's live rows in one per-owner proof (`codeRows`,
     /// `containerRows`, `captionRows`).
     private struct OwnerRowProof {
@@ -800,7 +818,9 @@ final class TextKit2Diagnostics {
             liveContainerRowCount: liveContainerRowCount, containerNativeDrawCount: containerNativeDrawCount,
             containerTextKit1DrawCount: containerTextKit1DrawCount,
             liveCaptionRowCount: liveCaptionRowCount, captionNativeDrawCount: captionNativeDrawCount,
-            liveOffWindowRowCount: liveOffWindowRowCount
+            liveOffWindowRowCount: liveOffWindowRowCount,
+            sizeThatFitsCount: sizeThatFitsCount, infiniteWidthProposalCount: infiniteWidthProposalCount,
+            applyCount: applyCount
         )
     }
 
@@ -936,6 +956,18 @@ final class TextKit2Diagnostics {
 
     func didLayout() {
         layoutCount += 1
+    }
+
+    /// A row answered a sizing query for `proposedWidth` (`nil`: no width
+    /// proposed).
+    func didSizeThatFits(proposedWidth: CGFloat?) {
+        sizeThatFitsCount += 1
+        if proposedWidth == .infinity { infiniteWidthProposalCount += 1 }
+    }
+
+    /// A row was handed its inputs (`TextKit2RowView.apply`).
+    func didApply() {
+        applyCount += 1
     }
 
     /// A draw pass; `native`: TextKit 2 drew at least one layout fragment;

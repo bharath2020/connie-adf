@@ -7,8 +7,10 @@ import ADFRendering
 /// after the document is ready (launch settling — nav transitions, initial
 /// prefetch — must not bleed into the scroll measurement), then drives the
 /// reader's scroll target through the whole block list in long linear legs
-/// at ~1,200 pt/s while `FrameMetrics` counts frames. Prints exactly one
-/// `SCROLL_METRICS …` line, then exits 2s later.
+/// at ~1,200 pt/s (or `-autoscrollSpeed`) while `FrameMetrics` counts
+/// frames. Prints exactly one `SCROLL_METRICS …` line, then exits 2s later.
+/// With `-scrollCounters` it first waits out an idle window and prints one
+/// `SCROLL_COUNTERS …` line (`ScrollCounters`).
 ///
 /// The line keeps main's fields first (`fixture= frames= dropped=
 /// hitchRatioMsPerS=`) and appends the scroll's extent so a perf run can
@@ -26,14 +28,19 @@ import ADFRendering
 /// 800-point table slices.
 @MainActor
 enum AutoScroller {
-    private static let pointsPerSecond: Double = 1_200
+    /// 1,200 pt/s unless `-autoscrollSpeed` says otherwise (`ScrollCounters`).
+    private static var pointsPerSecond: Double { ScrollCounters.pointsPerSecond }
 
     /// One linear animation leg per block: the next block is always inside
     /// the lazy container's materialized region, so `scrollTo` resolves its
     /// offset without synchronous materialization. (Far targets — multi-
     /// thousand-point legs — measure as 200–300 ms resolution stalls, and
     /// springy per-leg animations add velocity bursts; short linear legs
-    /// approximate a user's constant-velocity fling.)
+    /// approximate a user's constant-velocity fling.) At a raised
+    /// `-autoscrollSpeed` short blocks merge into legs of at least
+    /// `ScrollCounters.minimumLegSeconds`, each at most
+    /// `ScrollCounters.maximumLegPoints` long (still inside the materialized
+    /// region); at the default speed the minimum is zero, one leg per block.
 
     static func run(
         model: ADFDocumentModel,
@@ -56,13 +63,23 @@ enum AutoScroller {
             total += BlockHeightEstimator.estimatedHeight(of: block)
         }
 
+        let speed = pointsPerSecond
+        let minimumLegSeconds = ScrollCounters.minimumLegSeconds
+        var legs = 0
+        ScrollCounters.scrollWillBegin()
         let scrollStart = ContinuousClock.now
         let startRow = 0
         var index = startRow
         while index < blocks.count - 1 {
-            let next = index + 1
+            var next = index + 1
+            while next < blocks.count - 1,
+                  (offsets[next] - offsets[index]) / speed < minimumLegSeconds,
+                  offsets[next + 1] - offsets[index] <= ScrollCounters.maximumLegPoints {
+                next += 1
+            }
+            legs += 1
             let distance = max(offsets[next] - offsets[index], 1)
-            let duration = distance / pointsPerSecond
+            let duration = distance / speed
             model.scrollTargetAnimation = .linear(duration: duration)
             model.scrollTarget = blocks[next].id
             try? await Task.sleep(for: .seconds(duration))
@@ -76,6 +93,7 @@ enum AutoScroller {
         let completed = !blocks.isEmpty && index == blocks.count - 1
         // Let the final leg's animation settle before sampling.
         try? await Task.sleep(for: .milliseconds(500))
+        ScrollCounters.scrollDidEnd(legs: legs)
 
         let snapshot = metrics.snapshot()
         let hitchRatio = snapshot.elapsedSeconds > 0
@@ -94,6 +112,10 @@ enum AutoScroller {
         fflush(stdout)
         if rendererStats {
             RendererStats.print(blocks: blocks)
+        }
+        if ScrollCounters.isEnabled {
+            metrics.stop()
+            await ScrollCounters.measureIdleAndPrint(fixtureName: fixtureName)
         }
         try? await Task.sleep(for: .seconds(2))
         exit(0)

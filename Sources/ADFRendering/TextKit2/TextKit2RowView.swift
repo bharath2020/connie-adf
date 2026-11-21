@@ -272,6 +272,7 @@ final class TextKit2RowView: UIView, UIGestureRecognizerDelegate {
     /// before that compare: a change repaints the row without rebuilding
     /// or laying out its text (`applyColorScheme`).
     func apply(_ newInputs: TextKit2RenderInputs, colorScheme: ColorScheme = .light, ownerID newOwnerID: String? = nil) {
+        TextKit2Diagnostics.shared.didApply()
         if newOwnerID != ownerID {
             TextKit2Diagnostics.shared.row(ownerID: newOwnerID, was: ownerID, ownerKind: ownerKind, context: containerContext)
             ownerID = newOwnerID

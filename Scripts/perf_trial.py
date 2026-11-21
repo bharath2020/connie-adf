@@ -66,6 +66,19 @@ LOG LINES CONSUMED (contract with Demo/ADFReader)
         prints no code keys) leaves its column empty, never 0.
         The log key of every counter column lives in STATS_FIELDS (and
         READY_STATS_FIELDS) only: a renamed key is a one-line change there.
+    SCROLL_COUNTERS fixture=<name> speed=<pt/s> legs=<n> rowAppears=<n>
+        rowDisappears=<n> rowsInRegion=<n> tk2Live=<n> tk2InWindow=<n>
+        tk2OffWindow=<n> scrollInstructions=<n> scrollCpuMs=<x> idleMs=<x>
+        idleInstructions=<n> idleCpuMs=<x> idleRowAppears=<n>
+        idleRowDisappears=<n> idleTk2Layouts=<n> [scrollTk2SizeThatFits=<n>
+        scrollTk2InfiniteWidth=<n> idleTk2SizeThatFits=<n>]
+        (only under `-scrollCounters`, once, after the idle window that
+        follows SCROLL_METRICS; Demo/ADFReader/ScrollCounters.swift; the T1
+        tier, Scripts/perf-scroll-counters.sh). Its keys fill the
+        COUNTER_FIELDS columns, appended after the original columns; a `-`
+        value or a missing line leaves them empty. With the driver's
+        --meta requires_counters=1 a trial without the line is status
+        `no_counters`. RENDERER_STATS is unchanged by it.
 """
 
 from __future__ import annotations
@@ -104,6 +117,13 @@ CSV_COLUMNS = DRIVER_COLUMN_LIST + [
     "rss_interval_ms_median", "rss_interval_ms_max",
     "footprint_interval_ms_median", "footprint_interval_ms_max",
     "trial_wall_ms", "log", "samples",
+    # T1 scroll counters (SCROLL_COUNTERS, COUNTER_FIELDS): appended last so
+    # the original columns keep their order.
+    "requires_counters", "counters_speed", "scroll_legs", "row_appears", "row_disappears",
+    "rows_in_region", "counters_tk2_live", "tk2_in_window", "tk2_off_window",
+    "scroll_instructions", "scroll_cpu_ms", "idle_ms", "idle_instructions", "idle_cpu_ms",
+    "idle_row_appears", "idle_row_disappears", "idle_tk2_layouts",
+    "scroll_tk2_size_that_fits", "scroll_tk2_infinite_width", "idle_tk2_size_that_fits",
 ]
 # RENDERER_STATS keys read from the FINAL line: CSV column -> log key. The
 # summarizer's renderer proof reads the columns, never the log keys, so a key
@@ -150,7 +170,30 @@ READY_STATS_FIELDS = {
     "tk2_list_live_ready": "tk2_list_live",
     "tk2_code_live_ready": "tk2_code_live",
 }
-DRIVER_COLUMNS = set(DRIVER_COLUMN_LIST) | {"log", "samples"}
+# SCROLL_COUNTERS keys (Demo/ADFReader/ScrollCounters.swift): CSV column ->
+# log key.
+COUNTER_FIELDS = {
+    "counters_speed": "speed",
+    "scroll_legs": "legs",
+    "row_appears": "rowAppears",
+    "row_disappears": "rowDisappears",
+    "rows_in_region": "rowsInRegion",
+    "counters_tk2_live": "tk2Live",
+    "tk2_in_window": "tk2InWindow",
+    "tk2_off_window": "tk2OffWindow",
+    "scroll_instructions": "scrollInstructions",
+    "scroll_cpu_ms": "scrollCpuMs",
+    "idle_ms": "idleMs",
+    "idle_instructions": "idleInstructions",
+    "idle_cpu_ms": "idleCpuMs",
+    "idle_row_appears": "idleRowAppears",
+    "idle_row_disappears": "idleRowDisappears",
+    "idle_tk2_layouts": "idleTk2Layouts",
+    "scroll_tk2_size_that_fits": "scrollTk2SizeThatFits",
+    "scroll_tk2_infinite_width": "scrollTk2InfiniteWidth",
+    "idle_tk2_size_that_fits": "idleTk2SizeThatFits",
+}
+DRIVER_COLUMNS = set(DRIVER_COLUMN_LIST) | {"log", "samples", "requires_counters"}
 
 # ------------------------------------------------------------------ launch
 
@@ -356,7 +399,7 @@ def truthy(value: str | None) -> bool:
 
 def read_log(path: str) -> dict:
     info: dict = {"t0": None, "exit": None, "exit_ns": None, "ready": None, "ready_ns": None,
-                  "scroll": None, "stats": []}
+                  "scroll": None, "stats": [], "counters": None}
     try:
         handle = open(path, encoding="utf-8", errors="replace")
     except OSError:
@@ -383,6 +426,8 @@ def read_log(path: str) -> dict:
                 info["scroll"] = parse_kv(text)
             elif text.startswith("RENDERER_STATS "):
                 info["stats"].append(parse_kv(text))
+            elif text.startswith("SCROLL_COUNTERS "):
+                info["counters"] = parse_kv(text)
     return info
 
 
@@ -484,6 +529,11 @@ def derive(log_path: str, samples_path: str, meta: dict[str, str]) -> dict[str, 
             row[column] = num(first.get(STATS_FIELDS[final_column]))
         row["renderer_stats_extra"] = ";".join(f"{k}={v}" for k, v in last.items() if k not in known)
 
+    counters = info["counters"]
+    if counters is not None:
+        for column, key in COUNTER_FIELDS.items():
+            row[column] = num(counters.get(key))
+
     rss, fp = samples["rss"], samples["fp"]
     row["memory_samples"] = str(len(rss))
     row["footprint_samples"] = str(len(fp))
@@ -520,6 +570,8 @@ def derive(log_path: str, samples_path: str, meta: dict[str, str]) -> dict[str, 
         status = "no_metrics"
     elif truthy(meta.get("requires_completion")) and row["completed"] != "1":
         status = "incomplete"
+    elif truthy(meta.get("requires_counters")) and counters is None:
+        status = "no_counters"
     else:
         status = "ok"
     row["status"] = status
@@ -548,7 +600,10 @@ def cmd_parse(args: argparse.Namespace) -> int:
           f"tk2Layouts={row['tk2_layouts'] or '-'} tk2CodeLive={row['tk2_code_live_ready'] or '-'}/"
           f"{row['tk2_code_live'] or '-'} rss_ready={row['rss_ready_kb']}kB "
           f"rss_peak(sampled)={row['rss_peak_kb']}kB fp_peak={row['footprint_peak_kb']}kB "
-          f"samples={row['memory_samples']}/{row['footprint_samples']}")
+          f"samples={row['memory_samples']}/{row['footprint_samples']}"
+          + (f" rowAppears={row['row_appears'] or '-'} tk2OffWindow={row['tk2_off_window'] or '-'} "
+             f"scrollInstr={row['scroll_instructions'] or '-'} idleInstr={row['idle_instructions'] or '-'}"
+             if row["counters_speed"] or truthy(meta.get("requires_counters")) else ""))
     return 0
 
 
