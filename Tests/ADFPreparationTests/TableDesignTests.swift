@@ -384,6 +384,10 @@ struct TableDesignTests {
         #expect(abs(boldText.width(of: body) - regular.width(of: header)) < 0.001)
         #expect(abs(boldText.width(of: header) - regular.width(of: strong)) < 0.001)
         #expect(boldText.width(of: strong) > regular.width(of: strong))
+
+        let headline = PreparedTableColumnSample(text: "Ship by Friday", isSemibold: true, textStyle: .headline)
+        #expect(abs(boldText.width(of: headline) - boldText.width(of: strong)) < 0.001)
+        #expect(boldText.width(of: headline) > regular.width(of: strong))
     }
 
     @Test("re-measuring at a larger type size scales list insets with it")

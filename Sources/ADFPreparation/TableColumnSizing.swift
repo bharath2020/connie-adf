@@ -412,6 +412,7 @@ package struct TableTextMeasurer {
 
     /// Regular, semibold and bold, each one step heavier under Bold Text.
     private let weights: [PlatformFont.Weight]
+    private let boldText: Bool
     /// Indexed by weight (`weights`), proportional then monospaced.
     private let fonts: [PlatformFont]
     private let pointSize: CGFloat
@@ -423,7 +424,7 @@ package struct TableTextMeasurer {
     /// `dynamicTypeSize` that size, for styles other than body.
     /// `boldText` (the Bold Text setting, `legibilityWeight == .bold`)
     /// measures every line one weight step heavier, as the preferred
-    /// fonts draw it.
+    /// fonts draw it (a headline line heavy, as the headline style draws).
     package init(
         pointSize: CGFloat,
         insetScale: Double = 1,
@@ -432,6 +433,7 @@ package struct TableTextMeasurer {
     ) {
         let weights: [PlatformFont.Weight] = boldText ? [.semibold, .bold, .heavy] : [.regular, .semibold, .bold]
         self.weights = weights
+        self.boldText = boldText
         fonts = weights.map { PlatformFont.monospacedDigitSystemFont(ofSize: pointSize, weight: $0) }
             + weights.map { PlatformFont.monospacedSystemFont(ofSize: pointSize, weight: $0) }
         self.pointSize = pointSize
@@ -453,7 +455,8 @@ package struct TableTextMeasurer {
     }
 
     package func width(of line: PreparedTableColumnSample) -> Double {
-        let weightIndex = line.isBold ? 2 : (line.isSemibold ? 1 : 0)
+        let drawsHeavy = line.isBold || (boldText && line.textStyle == .headline)
+        let weightIndex = drawsHeavy ? 2 : (line.isSemibold ? 1 : 0)
         var font = fonts[(line.isMonospaced ? 3 : 0) + weightIndex]
         let size = CGFloat(pointSize(of: line.textStyle))
         if size != pointSize {
