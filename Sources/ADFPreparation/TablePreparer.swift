@@ -229,21 +229,26 @@ extension BlockPreparer {
         var lines: [PreparedTableColumnSample] = []
         var text = ""
         var isBold = false
+        var isSemibold = false
         var isMonospaced = false
+        var sizeFactor = 0.0
         var atomInset = 0.0
 
         func endLine() {
             lines.append(PreparedTableColumnSample(
                 text: text,
-                isSemibold: false,
+                isSemibold: isSemibold,
                 isBold: isBold,
                 isMonospaced: isMonospaced,
+                sizeFactor: sizeFactor > 0 ? sizeFactor : 1,
                 scaledInset: scaledInset + atomInset,
                 fixedInset: fixedInset
             ))
             text = ""
             isBold = false
+            isSemibold = false
             isMonospaced = false
+            sizeFactor = 0
             atomInset = 0
         }
 
@@ -258,11 +263,15 @@ extension BlockPreparer {
                         if index > 0 { endLine() }
                         text += piece
                         guard piece.contains(where: { !$0.isWhitespace }) else { continue }
+                        let style = spec?.textStyle ?? .body
                         if spec?.bold == true { isBold = true }
+                        if style == .headline { isSemibold = true }
                         if spec?.monospaced == true { isMonospaced = true }
+                        sizeFactor = max(sizeFactor, style.defaultPointSize / ADFFontSpec.TextStyle.body.defaultPointSize)
                     }
                 }
             case .atom(let atom, _):
+                sizeFactor = max(sizeFactor, 1)
                 switch atom {
                 case .status(let label, _):
                     text += label.uppercased()

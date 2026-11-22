@@ -338,6 +338,20 @@ struct TableDesignTests {
         #expect(widths[3] >= widths[0] + TableColumnSizing.atomPadding)
     }
 
+    @Test("a heading in a cell measures at its heading size")
+    func headingsMeasureAtTheirSize() async throws {
+        let label = "Quarterly revenue"
+        let widths = try await naturalWidths(ofCellContents: [
+            paragraph(text(label)),
+            "{\"type\":\"heading\",\"attrs\":{\"level\":1},\"content\":[\(text(label))]}",
+            "{\"type\":\"heading\",\"attrs\":{\"level\":2},\"content\":[\(text(label))]}",
+        ])
+        let padding = TableColumnSizing.cellHorizontalPadding * 2
+        let body = widths[0] - padding
+        #expect(widths[1] - padding >= body * 28 / 17)
+        #expect(widths[2] - padding >= body * 22 / 17)
+    }
+
     @Test("re-measuring at a larger type size scales list insets with it")
     func measurerScalesInsets() {
         let line = PreparedTableColumnSample(text: "Ship", isSemibold: false, scaledInset: 28, fixedInset: 8)

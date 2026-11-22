@@ -220,10 +220,12 @@ package struct TableColumnAnalysis: Sendable, Hashable {
                     isSemibold: cell.isHeader || line.isSemibold,
                     isBold: line.isBold,
                     isMonospaced: line.isMonospaced,
+                    sizeFactor: line.sizeFactor,
                     scaledInset: line.scaledInset,
                     fixedInset: line.fixedInset
                 )
-                let bound = Double(text.count) * maxAdvancePerCharacter + line.scaledInset + line.fixedInset
+                let bound = Double(text.count) * maxAdvancePerCharacter * max(line.sizeFactor, 1)
+                    + line.scaledInset + line.fixedInset
                 candidates[cell.column].append(Candidate(sample: sample, bound: bound))
             }
             if !cell.isHeader, !nonEmpty.isEmpty {
@@ -383,9 +385,10 @@ package enum TableColumnSizing {
     }
 }
 
-/// Single-line widths of cell lines in the system font at one point size
-/// via CoreText: regular, semibold or bold, proportional or monospaced
-/// (inline code), plus each line's insets (`scaledInset × insetScale +
+/// Single-line widths of cell lines in the system font at one body point
+/// size (× each line's `sizeFactor`, for headings) via CoreText: regular,
+/// semibold or bold, proportional or monospaced (inline code), plus each
+/// line's insets (`scaledInset × insetScale +
 /// fixedInset`). Thread-safe: preparation measures off-main (one per
 /// table), and a slice at a non-default type size re-measures a layout's
 /// few samples (cached by the rendering layer).
@@ -406,6 +409,7 @@ package struct TableTextMeasurer {
     /// Indexed by weight (regular, semibold, bold), proportional then
     /// monospaced.
     private let fonts: [PlatformFont]
+    private let pointSize: CGFloat
     private let insetScale: Double
 
     /// `insetScale` scales the lines' `scaledInset`: the Dynamic Type
@@ -414,12 +418,20 @@ package struct TableTextMeasurer {
         let weights: [PlatformFont.Weight] = [.regular, .semibold, .bold]
         fonts = weights.map { PlatformFont.monospacedDigitSystemFont(ofSize: pointSize, weight: $0) }
             + weights.map { PlatformFont.monospacedSystemFont(ofSize: pointSize, weight: $0) }
+        self.pointSize = pointSize
         self.insetScale = insetScale
     }
 
     package func width(of line: PreparedTableColumnSample) -> Double {
-        let weight = line.isBold ? 2 : (line.isSemibold ? 1 : 0)
-        let font = fonts[(line.isMonospaced ? 3 : 0) + weight]
+        let weightIndex = line.isBold ? 2 : (line.isSemibold ? 1 : 0)
+        var font = fonts[(line.isMonospaced ? 3 : 0) + weightIndex]
+        if line.sizeFactor != 1 {
+            let weight: [PlatformFont.Weight] = [.regular, .semibold, .bold]
+            let size = pointSize * CGFloat(line.sizeFactor)
+            font = line.isMonospaced
+                ? PlatformFont.monospacedSystemFont(ofSize: size, weight: weight[weightIndex])
+                : PlatformFont.monospacedDigitSystemFont(ofSize: size, weight: weight[weightIndex])
+        }
         let string = NSAttributedString(string: line.text, attributes: [.font: font])
         let ctLine = CTLineCreateWithAttributedString(string)
         let text = Double(CTLineGetTypographicBounds(ctLine, nil, nil, nil))
