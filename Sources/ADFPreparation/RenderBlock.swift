@@ -262,7 +262,7 @@ public struct PreparedTableRow: Sendable, Hashable {
 /// width, with what it draws beside its characters.
 public struct PreparedTableColumnSample: Sendable, Hashable {
     public let text: String
-    /// Measured semibold (a header cell).
+    /// Measured semibold (a header cell, or a `.headline` run such as H4).
     public let isSemibold: Bool
     /// Has a bold run: measured bold.
     public let isBold: Bool

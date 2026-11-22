@@ -394,9 +394,10 @@ enum TableBodyPointSize {
     }
 }
 
-/// Re-measured natural widths for a non-default type size or Bold Text, cached by table
-/// content (its width samples) and point size, so the slices of a table
-/// measure once per size between them — not per slice, never per scroll.
+/// Re-measured natural widths for a non-default type size or Bold Text,
+/// cached by table content (its width samples), point size and weight, so
+/// the slices of a table measure once per size and weight between them —
+/// not per slice, never per scroll.
 @MainActor
 enum TableNaturalWidthCache {
     private struct Key: Hashable {
