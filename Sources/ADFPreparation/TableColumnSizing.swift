@@ -68,12 +68,14 @@ package struct TableGridPlacement: Sendable, Hashable {
         result.continuations.reserveCapacity(rows.count)
         var active: [ActiveSpan] = []
 
-        for (rowIndex, row) in rows.enumerated() {
-            active.removeAll { $0.lastRow < rowIndex }
-            let covering = active.sorted { $0.column < $1.column }
+        // Index loops, and no sorting or set while no rowspan is active
+        // (most rows of most tables): this runs once per row.
+        for rowIndex in 0..<rows.count {
+            let row = rows[rowIndex]
+            if !active.isEmpty { active.removeAll { $0.lastRow < rowIndex } }
+            let covering = active.count > 1 ? active.sorted { $0.column < $1.column } : active
             var occupied = Set<Int>()
             var continuations: [Continuation] = []
-            continuations.reserveCapacity(covering.count)
             for span in covering {
                 for column in span.column..<(span.column + span.colspan) {
                     occupied.insert(column)
@@ -93,8 +95,9 @@ package struct TableGridPlacement: Sendable, Hashable {
             columns.reserveCapacity(row.count)
             rowspans.reserveCapacity(row.count)
             var column = 0
-            for (cellIndex, cell) in row.enumerated() {
-                while occupied.contains(column) { column += 1 }
+            for cellIndex in 0..<row.count {
+                let cell = row[cellIndex]
+                while !occupied.isEmpty, occupied.contains(column) { column += 1 }
                 let rowspan = min(cell.rowspan, rows.count - rowIndex)
                 columns.append(column)
                 rowspans.append(rowspan)
@@ -186,12 +189,15 @@ package struct TableColumnAnalysis: Sendable, Hashable {
     /// when it has at least one non-empty single-column non-header cell
     /// and every such cell is a single line that `isNumeric` accepts.
     ///
-    /// Bounded work: per column, lines are measured longest first and the
-    /// scan stops once no remaining line could beat the widest so far
-    /// (`length × maxAdvancePerCharacter × styleScale(style)` plus its
-    /// insets) or the widest already reaches
-    /// `widthCap` (columns clamp there anyway) — a big table measures a
-    /// handful of lines per column, not every cell.
+    /// Bounded work: cells are read in order and a line is measured only
+    /// when it could beat its column's widest so far (`length ×
+    /// maxAdvancePerCharacter × styleScale(style)` plus its insets). Once a
+    /// column's widest reaches `widthCap` (columns clamp there anyway) and
+    /// the column is known not to be numeric, its remaining cells are not
+    /// read at all: `lines(index)` (the lines of `cells[index]`, default
+    /// `cells[index].lines`) is called only for cells that can still change
+    /// the result, so a big table reads and measures a handful of rows per
+    /// column, not every cell.
     package static func analyze(
         cells: [Cell],
         columnCount: Int,
@@ -199,25 +205,34 @@ package struct TableColumnAnalysis: Sendable, Hashable {
         maxAdvancePerCharacter: Double,
         styleScale: (ADFFontSpec.TextStyle) -> Double = { _ in 1 },
         widthCap: Double = TableColumnSizing.maxColumnWidth,
+        lines: ((Int) -> [PreparedTableColumnSample])? = nil,
         measure: (PreparedTableColumnSample) -> Double
     ) -> TableColumnAnalysis {
-        struct Candidate {
-            let sample: PreparedTableColumnSample
-            let bound: Double
-        }
-
         let count = max(columnCount, 0)
-        var candidates = [[Candidate]](repeating: [], count: count)
+        var natural = [Double](repeating: 0, count: count)
+        var capped = [Bool](repeating: false, count: count)
+        var seen = [Set<PreparedTableColumnSample>](repeating: [], count: count)
+        var measured = [[(width: Double, sample: PreparedTableColumnSample)]](repeating: [], count: count)
         var sawNumber = [Bool](repeating: false, count: count)
         var sawOther = [Bool](repeating: false, count: count)
 
-        for cell in cells where cell.colspan == 1 && cell.column >= 0 && cell.column < count {
+        for index in 0..<cells.count {
+            let cell = cells[index]
+            let column = cell.column
+            guard cell.colspan == 1, column >= 0, column < count else { continue }
+            // Nothing left to learn: the width is settled and so is the
+            // numeric check (header cells never take part in it).
+            if capped[column], cell.isHeader || sawOther[column] { continue }
             var nonEmpty: [String] = []
-            for line in cell.lines {
+            for line in lines?(index) ?? cell.lines {
                 let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
                 nonEmpty.append(trimmed)
+                guard !capped[column] else { continue }
                 let text = String(trimmed.prefix(maxMeasuredCharacters))
+                let bound = Double(text.count) * maxAdvancePerCharacter * styleScale(line.textStyle)
+                    + line.scaledInset + line.fixedInset
+                if bound + padding <= natural[column] { continue }
                 let sample = PreparedTableColumnSample(
                     text: text,
                     isSemibold: cell.isHeader || line.isSemibold,
@@ -227,42 +242,27 @@ package struct TableColumnAnalysis: Sendable, Hashable {
                     scaledInset: line.scaledInset,
                     fixedInset: line.fixedInset
                 )
-                let bound = Double(text.count) * maxAdvancePerCharacter * styleScale(line.textStyle)
-                    + line.scaledInset + line.fixedInset
-                candidates[cell.column].append(Candidate(sample: sample, bound: bound))
+                guard seen[column].insert(sample).inserted else { continue }
+                let width = measure(sample).rounded(.up)
+                measured[column].append((width, sample))
+                natural[column] = max(natural[column], width + padding)
+                if natural[column] >= widthCap { capped[column] = true }
             }
             if !cell.isHeader, !nonEmpty.isEmpty {
                 if nonEmpty.count == 1, isNumeric(nonEmpty[0]) {
-                    sawNumber[cell.column] = true
+                    sawNumber[column] = true
                 } else {
-                    sawOther[cell.column] = true
+                    sawOther[column] = true
                 }
             }
         }
 
-        var natural = [Double](repeating: 0, count: count)
-        var samples = [[PreparedTableColumnSample]](repeating: [], count: count)
-        for column in 0..<count {
-            let sorted = candidates[column].sorted { $0.bound > $1.bound }
-            var widest = 0.0
-            var seen = Set<PreparedTableColumnSample>()
-            var measured: [(width: Double, sample: PreparedTableColumnSample)] = []
-            for candidate in sorted {
-                if candidate.bound + padding <= widest { break }
-                let sample = candidate.sample
-                guard seen.insert(sample).inserted else { continue }
-                let width = measure(sample).rounded(.up)
-                measured.append((width, sample))
-                widest = max(widest, width + padding)
-                if widest >= widthCap { break }
-            }
-            natural[column] = widest
-            samples[column] = measured
+        let samples = measured.map { column in
+            column
                 .sorted { $0.width > $1.width }
                 .prefix(samplesPerColumn)
                 .map { $0.sample }
         }
-
         let numeric = (0..<count).map { sawNumber[$0] && !sawOther[$0] }
         return TableColumnAnalysis(naturalWidths: natural, samples: samples, numericColumns: numeric)
     }
@@ -413,11 +413,41 @@ package struct TableTextMeasurer {
     /// Regular, semibold and bold, each one step heavier under Bold Text.
     private let weights: [PlatformFont.Weight]
     private let boldText: Bool
-    /// Indexed by weight (`weights`), proportional then monospaced.
-    private let fonts: [PlatformFont]
     private let pointSize: CGFloat
     private let insetScale: Double
     private let dynamicTypeSize: DynamicTypeSize
+
+    /// Fonts by size, weight and kind, shared by every measurer: building
+    /// a system font costs about as much as measuring a short line, and
+    /// every table of a document (and every re-measure) wants the same few.
+    private final class FontCache: @unchecked Sendable {
+        enum Kind: Hashable { case proportional, monospacedDigit, monospaced }
+        struct Key: Hashable {
+            let size: CGFloat
+            let weight: CGFloat
+            let kind: Kind
+        }
+
+        private let lock = NSLock()
+        private var fonts: [Key: PlatformFont] = [:]
+
+        func font(size: CGFloat, weight: PlatformFont.Weight, kind: Kind) -> PlatformFont {
+            let key = Key(size: size, weight: weight.rawValue, kind: kind)
+            lock.lock()
+            defer { lock.unlock() }
+            if let font = fonts[key] { return font }
+            let font: PlatformFont
+            switch kind {
+            case .proportional: font = PlatformFont.systemFont(ofSize: size, weight: weight)
+            case .monospacedDigit: font = PlatformFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+            case .monospaced: font = PlatformFont.monospacedSystemFont(ofSize: size, weight: weight)
+            }
+            fonts[key] = font
+            return font
+        }
+    }
+
+    private static let fontCache = FontCache()
 
     /// `insetScale` scales the lines' `scaledInset`: the Dynamic Type
     /// scale the text is measured at (1 at the default size), and
@@ -431,11 +461,8 @@ package struct TableTextMeasurer {
         dynamicTypeSize: DynamicTypeSize = .large,
         boldText: Bool = false
     ) {
-        let weights: [PlatformFont.Weight] = boldText ? [.semibold, .bold, .heavy] : [.regular, .semibold, .bold]
-        self.weights = weights
+        weights = boldText ? [.semibold, .bold, .heavy] : [.regular, .semibold, .bold]
         self.boldText = boldText
-        fonts = weights.map { PlatformFont.monospacedDigitSystemFont(ofSize: pointSize, weight: $0) }
-            + weights.map { PlatformFont.monospacedSystemFont(ofSize: pointSize, weight: $0) }
         self.pointSize = pointSize
         self.insetScale = insetScale
         self.dynamicTypeSize = dynamicTypeSize
@@ -457,16 +484,28 @@ package struct TableTextMeasurer {
     package func width(of line: PreparedTableColumnSample) -> Double {
         let drawsHeavy = line.isBold || (boldText && line.textStyle == .headline)
         let weightIndex = drawsHeavy ? 2 : (line.isSemibold ? 1 : 0)
-        var font = fonts[(line.isMonospaced ? 3 : 0) + weightIndex]
-        let size = CGFloat(pointSize(of: line.textStyle))
-        if size != pointSize {
-            font = line.isMonospaced
-                ? PlatformFont.monospacedSystemFont(ofSize: size, weight: weights[weightIndex])
-                : PlatformFont.monospacedDigitSystemFont(ofSize: size, weight: weights[weightIndex])
-        }
+        let kind: FontCache.Kind = line.isMonospaced
+            ? .monospaced
+            : (Self.isDigitFreeASCII(line.text) ? .proportional : .monospacedDigit)
+        let font = Self.fontCache.font(
+            size: CGFloat(pointSize(of: line.textStyle)), weight: weights[weightIndex], kind: kind
+        )
         let string = NSAttributedString(string: line.text, attributes: [.font: font])
         let ctLine = CTLineCreateWithAttributedString(string)
         let text = Double(CTLineGetTypographicBounds(ctLine, nil, nil, nil))
         return text + line.scaledInset * insetScale + line.fixedInset
+    }
+
+    /// ASCII without digits: the monospaced-digit font only changes digits,
+    /// so such text measures the same in the plain system font, which
+    /// CoreText lays out in about half the work.
+    private static func isDigitFreeASCII(_ text: String) -> Bool {
+        var text = text
+        return text.withUTF8 { bytes in
+            for byte in bytes where byte >= 0x80 || (byte >= 0x30 && byte <= 0x39) {
+                return false
+            }
+            return true
+        }
     }
 }

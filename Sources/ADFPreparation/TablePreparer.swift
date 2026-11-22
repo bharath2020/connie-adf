@@ -61,50 +61,77 @@ extension BlockPreparer {
         let cells: [SourceCell]
     }
 
+    // Plain index loops throughout: this runs over every cell of a table
+    // (thousands in a big one), and closure-based `map`/`enumerated`
+    // chains cost several times more per cell in unoptimized builds.
     private func preparedTable(attrs: TableAttrs, rows: [ADFNode]) -> (PreparedTableLayout, [PreparedTableRow]) {
-        let sourceRows: [SourceRow] = rows.compactMap { row in
-            guard case .tableRow(let cells) = row.kind else { return nil }
-            return SourceRow(id: row.id, cells: cells.compactMap { cell in
-                guard case .tableCell(let cellAttrs, let content, let isHeader) = cell.kind else { return nil }
-                return SourceCell(id: cell.id, attrs: cellAttrs, content: content, isHeader: isHeader)
-            })
+        var sourceRows: [SourceRow] = []
+        var spans: [[TableCellSpan]] = []
+        var isHeader: [[Bool]] = []
+        sourceRows.reserveCapacity(rows.count)
+        spans.reserveCapacity(rows.count)
+        isHeader.reserveCapacity(rows.count)
+        for row in rows {
+            guard case .tableRow(let cells) = row.kind else { continue }
+            var sourceCells: [SourceCell] = []
+            var rowSpans: [TableCellSpan] = []
+            var rowHeaders: [Bool] = []
+            sourceCells.reserveCapacity(cells.count)
+            rowSpans.reserveCapacity(cells.count)
+            rowHeaders.reserveCapacity(cells.count)
+            for cell in cells {
+                guard case .tableCell(let cellAttrs, let content, let cellIsHeader) = cell.kind else { continue }
+                sourceCells.append(SourceCell(id: cell.id, attrs: cellAttrs, content: content, isHeader: cellIsHeader))
+                rowSpans.append(TableCellSpan(colspan: cellAttrs.colspan, rowspan: cellAttrs.rowspan))
+                rowHeaders.append(cellIsHeader)
+            }
+            sourceRows.append(SourceRow(id: row.id, cells: sourceCells))
+            spans.append(rowSpans)
+            isHeader.append(rowHeaders)
         }
 
-        let spans = sourceRows.map { row in
-            row.cells.map { TableCellSpan(colspan: $0.attrs.colspan, rowspan: $0.attrs.rowspan) }
-        }
-        let isHeader = sourceRows.map { row in row.cells.map(\.isHeader) }
         let placement = TableGridPlacement.place(spans)
         let columnCount = placement.columnCount
 
-        let hasHeaderRow = sourceRows.first.map { !$0.cells.isEmpty && $0.cells.allSatisfy(\.isHeader) } ?? false
+        let hasHeaderRow = isHeader.first.map { !$0.isEmpty && !$0.contains(false) } ?? false
         let hasHeaderColumn = placement.hasHeaderColumn(
             spans: spans, isHeader: isHeader, firstBodyRow: hasHeaderRow ? 1 : 0
         )
 
         // Prepared cell content (the expensive part), then the per-column
-        // analysis over its plain text.
-        var cellBlocks: [[[RenderBlock]]] = sourceRows.map { row in
-            row.cells.map { $0.content.flatMap(blocks(for:)) }
-        }
+        // analysis over its plain text. A cell's lines are read only when
+        // the analysis asks for them (columns it has settled skip the rest
+        // of their cells).
+        var cellBlocks: [[[RenderBlock]]] = []
         var analysisCells: [TableColumnAnalysis.Cell] = []
-        for (rowIndex, row) in sourceRows.enumerated() {
-            for (cellIndex, cell) in row.cells.enumerated() {
+        var analysisBlocks: [[RenderBlock]] = []
+        cellBlocks.reserveCapacity(sourceRows.count)
+        for rowIndex in 0..<sourceRows.count {
+            let cells = sourceRows[rowIndex].cells
+            var rowBlocks: [[RenderBlock]] = []
+            rowBlocks.reserveCapacity(cells.count)
+            for cellIndex in 0..<cells.count {
+                let content = cells[cellIndex].content.flatMap(blocks(for:))
+                rowBlocks.append(content)
                 analysisCells.append(TableColumnAnalysis.Cell(
                     column: placement.cellColumns[rowIndex][cellIndex],
                     colspan: spans[rowIndex][cellIndex].colspan,
-                    isHeader: cell.isHeader,
-                    lines: Self.measuredLines(of: cellBlocks[rowIndex][cellIndex], spacing: Double(theme.spacing))
+                    isHeader: cells[cellIndex].isHeader,
+                    lines: [PreparedTableColumnSample]()
                 ))
+                analysisBlocks.append(content)
             }
+            cellBlocks.append(rowBlocks)
         }
         let measurer = TableTextMeasurer(pointSize: theme.bodyPointSize)
+        let spacing = Double(theme.spacing)
         let analysis = TableColumnAnalysis.analyze(
             cells: analysisCells,
             columnCount: columnCount,
             padding: TableColumnSizing.cellHorizontalPadding * 2,
             maxAdvancePerCharacter: Double(theme.bodyPointSize) * 1.5,
             styleScale: { max(measurer.pointSize(of: $0) / Double(theme.bodyPointSize), 1) },
+            lines: { Self.measuredLines(of: analysisBlocks[$0], spacing: spacing) },
             measure: measurer.width(of:)
         )
 
@@ -122,9 +149,15 @@ extension BlockPreparer {
             }
         }
 
-        let preparedRows: [PreparedTableRow] = sourceRows.enumerated().map { rowIndex, row in
-            let cells = row.cells.enumerated().map { cellIndex, cell in
-                PreparedTableCell(
+        var preparedRows: [PreparedTableRow] = []
+        preparedRows.reserveCapacity(sourceRows.count)
+        for rowIndex in 0..<sourceRows.count {
+            let row = sourceRows[rowIndex]
+            var cells: [PreparedTableCell] = []
+            cells.reserveCapacity(row.cells.count)
+            for cellIndex in 0..<row.cells.count {
+                let cell = row.cells[cellIndex]
+                cells.append(PreparedTableCell(
                     id: cell.id,
                     colspan: spans[rowIndex][cellIndex].colspan,
                     rowspan: placement.rowspans[rowIndex][cellIndex],
@@ -132,26 +165,27 @@ extension BlockPreparer {
                     valign: cell.attrs.valign,
                     isHeader: cell.isHeader,
                     blocks: cellBlocks[rowIndex][cellIndex]
-                )
+                ))
             }
-            let continuations = placement.continuations[rowIndex].map { continuation in
+            var continuations: [PreparedTableContinuation] = []
+            for continuation in placement.continuations[rowIndex] {
                 let origin = sourceRows[continuation.originRow].cells[continuation.originCell]
-                return PreparedTableContinuation(
+                continuations.append(PreparedTableContinuation(
                     originRow: continuation.originRow,
                     column: continuation.column,
                     colspan: continuation.colspan,
                     backgroundHex: origin.attrs.backgroundHex,
                     isHeader: origin.isHeader,
                     continuesBelow: continuation.continuesBelow
-                )
+                ))
             }
-            return PreparedTableRow(
+            preparedRows.append(PreparedTableRow(
                 id: row.id,
                 cells: cells,
                 index: rowIndex,
                 cellColumns: placement.cellColumns[rowIndex],
                 continuations: continuations
-            )
+            ))
         }
 
         let layout = PreparedTableLayout(
@@ -173,13 +207,15 @@ extension BlockPreparer {
     private static func authoredColumnWidths(_ rows: [SourceRow], placement: TableGridPlacement) -> [Double]? {
         let columnCount = placement.columnCount
         var widths = [Double](repeating: 0, count: columnCount)
-        for (rowIndex, row) in rows.enumerated() {
-            for (cellIndex, cell) in row.cells.enumerated() {
-                guard let colwidth = cell.attrs.colwidth else { continue }
+        for rowIndex in 0..<rows.count {
+            let cells = rows[rowIndex].cells
+            for cellIndex in 0..<cells.count {
+                guard let colwidth = cells[cellIndex].attrs.colwidth else { continue }
                 let column = placement.cellColumns[rowIndex][cellIndex]
-                let span = max(cell.attrs.colspan, 1)
-                for (offset, width) in colwidth.prefix(span).enumerated() {
+                let span = max(cells[cellIndex].attrs.colspan, 1)
+                for offset in 0..<min(span, colwidth.count) {
                     let index = column + offset
+                    let width = colwidth[offset]
                     if index < columnCount, widths[index] == 0, width > 0 {
                         widths[index] = width
                     }
@@ -255,23 +291,39 @@ extension BlockPreparer {
             atomInset = 0
         }
 
+        func append(_ piece: Substring, spec: ADFFontSpec?) {
+            text += piece
+            guard Self.hasVisibleText(piece) else { return }
+            let style = spec?.textStyle ?? .body
+            if spec?.bold == true { isBold = true }
+            if style == .headline { isSemibold = true }
+            if spec?.monospaced == true { isMonospaced = true }
+            if !hasStyle || style.defaultPointSize > textStyle.defaultPointSize { textStyle = style }
+            hasStyle = true
+        }
+
         for segment in segments {
             switch segment {
             case .text(let run):
-                let spelled = InlineComposer.replacingEmoji(in: run)
-                for (spec, range) in spelled.runs[AttributeScopes.ADFAttributes.FontSpecAttribute.self] {
-                    let pieces = String(spelled[range].characters)
-                        .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-                    for (index, piece) in pieces.enumerated() {
+                // One pass over the runs: each custom emoji character is
+                // spelled as its short name (`InlineComposer.replacingEmoji`)
+                // and hard breaks end the line.
+                for piece in run.runs {
+                    let spec = piece[AttributeScopes.ADFAttributes.FontSpecAttribute.self]
+                    let chunk: String
+                    if let emoji = piece[AttributeScopes.ADFAttributes.EmojiAttribute.self] {
+                        chunk = String(repeating: emoji.shortName, count: run[piece.range].characters.count)
+                    } else {
+                        chunk = String(run[piece.range].characters)
+                    }
+                    guard Self.mayContainNewline(chunk) else {
+                        append(chunk[...], spec: spec)
+                        continue
+                    }
+                    let lines = chunk.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                    for (index, line) in lines.enumerated() {
                         if index > 0 { endLine() }
-                        text += piece
-                        guard piece.contains(where: { !$0.isWhitespace }) else { continue }
-                        let style = spec?.textStyle ?? .body
-                        if spec?.bold == true { isBold = true }
-                        if style == .headline { isSemibold = true }
-                        if spec?.monospaced == true { isMonospaced = true }
-                        if !hasStyle || style.defaultPointSize > textStyle.defaultPointSize { textStyle = style }
-                        hasStyle = true
+                        append(line, spec: spec)
                     }
                 }
             case .atom(let atom, _):
@@ -294,6 +346,33 @@ extension BlockPreparer {
         }
         endLine()
         return lines
+    }
+
+    /// False only when `text` has none of the newline characters
+    /// (`Character.isNewline`): no U+000A–U+000D, and no U+0085 (UTF-8
+    /// C2 85) or U+2028/U+2029 (E2 80 A8/A9) lead byte.
+    private static func mayContainNewline(_ text: String) -> Bool {
+        var text = text
+        return text.withUTF8 { bytes in
+            for byte in bytes where (byte >= 0x0A && byte <= 0x0D) || byte == 0xC2 || byte == 0xE2 {
+                return true
+            }
+            return false
+        }
+    }
+
+    /// Whether `piece` has a non-whitespace character; an ASCII byte other
+    /// than a space or a tab/newline control answers without the
+    /// character walk.
+    private static func hasVisibleText(_ piece: Substring) -> Bool {
+        var piece = piece
+        let asciiVisible = piece.withUTF8 { bytes in
+            for byte in bytes where byte < 0x80 && byte != 0x20 && !(byte >= 0x09 && byte <= 0x0D) {
+                return true
+            }
+            return false
+        }
+        return asciiVisible || piece.contains(where: { !$0.isWhitespace })
     }
 
     /// A paragraph re-styled to trailing alignment (numeric columns), unless

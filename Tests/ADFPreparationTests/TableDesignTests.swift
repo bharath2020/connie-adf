@@ -217,6 +217,34 @@ struct TableDesignTests {
         #expect(measured < 10)
     }
 
+    @Test("a column at the width cap that is not numeric reads no more of its cells")
+    func settledColumnsSkipLineReads() {
+        // Column 0 reaches the cap on row 1 and is text; column 1 is numeric
+        // all the way down, so every one of its cells is still read.
+        let rows = 400
+        var cells: [TableColumnAnalysis.Cell] = []
+        var texts: [String] = []
+        for row in 0..<rows {
+            cells.append(.init(column: 0, colspan: 1, isHeader: false, lines: [String]()))
+            texts.append(row == 1 ? String(repeating: "w", count: 30) : "row \(row)")
+            cells.append(.init(column: 1, colspan: 1, isHeader: false, lines: [String]()))
+            texts.append("\(row)")
+        }
+        var read: [Int] = []
+        let analysis = TableColumnAnalysis.analyze(
+            cells: cells, columnCount: 2, padding: 20, maxAdvancePerCharacter: 10, widthCap: 240,
+            lines: { index in
+                read.append(index)
+                return [PreparedTableColumnSample(text: texts[index], isSemibold: false)]
+            },
+            measure: { Double($0.text.count) * 10 }
+        )
+        #expect(analysis.naturalWidths == [320, 50])
+        #expect(analysis.numericColumns == [false, true])
+        #expect(read.filter { $0 % 2 == 0 } == [0, 2])
+        #expect(read.filter { $0 % 2 == 1 }.count == rows)
+    }
+
     @Test("columns clamp to 72–240 pt, scaled with the body text size")
     func widthClampsAndDynamicType() {
         let base = TableColumnSizing.columnWidths(
@@ -339,6 +367,21 @@ struct TableDesignTests {
         #expect(widths[1] > widths[0])
         #expect(widths[2] > widths[0])
         #expect(widths[3] >= widths[0] + TableColumnSizing.atomPadding)
+    }
+
+    @Test("a hard break splits a cell's lines and a custom emoji measures as its short name")
+    func hardBreaksAndCustomEmoji() async throws {
+        let label = "Quarterly revenue total"
+        let widths = try await naturalWidths(ofCellContents: [
+            paragraph(text(label)),
+            paragraph([text(label), "{\"type\":\"hardBreak\"}", text("Q3")].joined(separator: ",")),
+            paragraph(text(label + "Q3")),
+            paragraph(text(":party-parrot:")),
+            paragraph("{\"type\":\"emoji\",\"attrs\":{\"shortName\":\":party-parrot:\",\"id\":\"atlassian-party-parrot\"}}"),
+        ])
+        #expect(widths[1] == widths[0])
+        #expect(widths[2] > widths[0])
+        #expect(widths[4] == widths[3])
     }
 
     @Test("a heading in a cell measures at its heading size")
