@@ -106,6 +106,9 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
     /// that size / 17, and a non-default size re-measures the layout's
     /// width samples at it.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// Bold Text draws every weight one step heavier: the width samples
+    /// are re-measured that way.
+    @Environment(\.legibilityWeight) private var legibilityWeight
     @ScaledMetric(relativeTo: .footnote) private var numberColumnWidth: CGFloat = TableMetrics.numberColumnWidth
     @Environment(\.adfTheme) private var theme
     @Environment(\.pixelLength) private var pixelLength
@@ -153,7 +156,8 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
     /// the table's shared layout, the container width and the type size
     /// (`TableColumnSizing`), so every slice of a table resolves the same
     /// values. The only measurement — re-measuring a few width samples at a
-    /// non-default type size — is cached per table content and size.
+    /// non-default type size or under Bold Text — is cached per table
+    /// content, size and weight.
     private var sliceMetrics: TableSliceMetrics {
         let gutter = layout.hasNumberColumn ? numberColumnWidth : 0
         let bodyPointSize = TableBodyPointSize.pointSize(for: dynamicTypeSize)
@@ -162,14 +166,15 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
         let natural: [Double]
         if let authored = layout.columnWidths, authored.count == columnCount {
             natural = []
-        } else if abs(scale - 1) < 0.01 {
+        } else if abs(scale - 1) < 0.01, legibilityWeight != .bold {
             natural = layout.naturalColumnWidths
         } else {
             natural = TableNaturalWidthCache.naturalWidths(
                 for: layout,
                 pointSize: Double(theme.bodyPointSize) * scale,
                 insetScale: scale,
-                dynamicTypeSize: dynamicTypeSize
+                dynamicTypeSize: dynamicTypeSize,
+                boldText: legibilityWeight == .bold
             )
         }
         let widths = TableColumnSizing.columnWidths(
@@ -389,7 +394,7 @@ enum TableBodyPointSize {
     }
 }
 
-/// Re-measured natural widths for a non-default type size, cached by table
+/// Re-measured natural widths for a non-default type size or Bold Text, cached by table
 /// content (its width samples) and point size, so the slices of a table
 /// measure once per size between them — not per slice, never per scroll.
 @MainActor
@@ -399,6 +404,7 @@ enum TableNaturalWidthCache {
         let pointSize: Double
         let insetScale: Double
         let dynamicTypeSize: DynamicTypeSize
+        let boldText: Bool
     }
 
     private static var entries: [Key: [Double]] = [:]
@@ -408,20 +414,23 @@ enum TableNaturalWidthCache {
         for layout: PreparedTableLayout,
         pointSize: Double,
         insetScale: Double,
-        dynamicTypeSize: DynamicTypeSize
+        dynamicTypeSize: DynamicTypeSize,
+        boldText: Bool
     ) -> [Double] {
         guard !layout.columnSamples.isEmpty else { return layout.naturalColumnWidths }
         let key = Key(
             samples: layout.columnSamples,
             pointSize: (pointSize * 4).rounded() / 4,
             insetScale: insetScale,
-            dynamicTypeSize: dynamicTypeSize
+            dynamicTypeSize: dynamicTypeSize,
+            boldText: boldText
         )
         if let cached = entries[key] { return cached }
         let measurer = TableTextMeasurer(
             pointSize: CGFloat(key.pointSize),
             insetScale: key.insetScale,
-            dynamicTypeSize: key.dynamicTypeSize
+            dynamicTypeSize: key.dynamicTypeSize,
+            boldText: key.boldText
         )
         let widths = TableColumnAnalysis.naturalWidths(
             samples: layout.columnSamples,

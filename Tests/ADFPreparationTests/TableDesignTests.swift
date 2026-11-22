@@ -374,6 +374,18 @@ struct TableDesignTests {
     }
     #endif
 
+    @Test("under Bold Text every line measures one weight step heavier")
+    func boldTextMeasuresHeavier() {
+        let regular = TableTextMeasurer(pointSize: 17)
+        let boldText = TableTextMeasurer(pointSize: 17, boldText: true)
+        let body = PreparedTableColumnSample(text: "Ship by Friday", isSemibold: false)
+        let header = PreparedTableColumnSample(text: "Ship by Friday", isSemibold: true)
+        let strong = PreparedTableColumnSample(text: "Ship by Friday", isSemibold: false, isBold: true)
+        #expect(abs(boldText.width(of: body) - regular.width(of: header)) < 0.001)
+        #expect(abs(boldText.width(of: header) - regular.width(of: strong)) < 0.001)
+        #expect(boldText.width(of: strong) > regular.width(of: strong))
+    }
+
     @Test("re-measuring at a larger type size scales list insets with it")
     func measurerScalesInsets() {
         let line = PreparedTableColumnSample(text: "Ship", isSemibold: false, scaledInset: 28, fixedInset: 8)

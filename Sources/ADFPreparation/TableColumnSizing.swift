@@ -410,8 +410,9 @@ package struct TableTextMeasurer {
     private typealias PlatformFont = NSFont
     #endif
 
-    /// Indexed by weight (regular, semibold, bold), proportional then
-    /// monospaced.
+    /// Regular, semibold and bold, each one step heavier under Bold Text.
+    private let weights: [PlatformFont.Weight]
+    /// Indexed by weight (`weights`), proportional then monospaced.
     private let fonts: [PlatformFont]
     private let pointSize: CGFloat
     private let insetScale: Double
@@ -420,8 +421,17 @@ package struct TableTextMeasurer {
     /// `insetScale` scales the lines' `scaledInset`: the Dynamic Type
     /// scale the text is measured at (1 at the default size), and
     /// `dynamicTypeSize` that size, for styles other than body.
-    package init(pointSize: CGFloat, insetScale: Double = 1, dynamicTypeSize: DynamicTypeSize = .large) {
-        let weights: [PlatformFont.Weight] = [.regular, .semibold, .bold]
+    /// `boldText` (the Bold Text setting, `legibilityWeight == .bold`)
+    /// measures every line one weight step heavier, as the preferred
+    /// fonts draw it.
+    package init(
+        pointSize: CGFloat,
+        insetScale: Double = 1,
+        dynamicTypeSize: DynamicTypeSize = .large,
+        boldText: Bool = false
+    ) {
+        let weights: [PlatformFont.Weight] = boldText ? [.semibold, .bold, .heavy] : [.regular, .semibold, .bold]
+        self.weights = weights
         fonts = weights.map { PlatformFont.monospacedDigitSystemFont(ofSize: pointSize, weight: $0) }
             + weights.map { PlatformFont.monospacedSystemFont(ofSize: pointSize, weight: $0) }
         self.pointSize = pointSize
@@ -447,10 +457,9 @@ package struct TableTextMeasurer {
         var font = fonts[(line.isMonospaced ? 3 : 0) + weightIndex]
         let size = CGFloat(pointSize(of: line.textStyle))
         if size != pointSize {
-            let weight: [PlatformFont.Weight] = [.regular, .semibold, .bold]
             font = line.isMonospaced
-                ? PlatformFont.monospacedSystemFont(ofSize: size, weight: weight[weightIndex])
-                : PlatformFont.monospacedDigitSystemFont(ofSize: size, weight: weight[weightIndex])
+                ? PlatformFont.monospacedSystemFont(ofSize: size, weight: weights[weightIndex])
+                : PlatformFont.monospacedDigitSystemFont(ofSize: size, weight: weights[weightIndex])
         }
         let string = NSAttributedString(string: line.text, attributes: [.font: font])
         let ctLine = CTLineCreateWithAttributedString(string)
