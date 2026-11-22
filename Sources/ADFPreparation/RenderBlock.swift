@@ -268,9 +268,9 @@ public struct PreparedTableColumnSample: Sendable, Hashable {
     public let isBold: Bool
     /// Has an inline-code run: measured monospaced.
     public let isMonospaced: Bool
-    /// The line's largest text style relative to body text (a heading's
-    /// title sizes): measured at the body size × this factor.
-    public let sizeFactor: Double
+    /// The line's largest text style (a heading's title style): measured
+    /// at that style's size.
+    public let textStyle: ADFFontSpec.TextStyle
     /// Width beside the text that scales with Dynamic Type, in points at
     /// the default size: list marker columns and inline chip padding.
     public let scaledInset: Double
@@ -282,7 +282,7 @@ public struct PreparedTableColumnSample: Sendable, Hashable {
         isSemibold: Bool,
         isBold: Bool = false,
         isMonospaced: Bool = false,
-        sizeFactor: Double = 1,
+        textStyle: ADFFontSpec.TextStyle = .body,
         scaledInset: Double = 0,
         fixedInset: Double = 0
     ) {
@@ -290,7 +290,7 @@ public struct PreparedTableColumnSample: Sendable, Hashable {
         self.isSemibold = isSemibold
         self.isBold = isBold
         self.isMonospaced = isMonospaced
-        self.sizeFactor = sizeFactor
+        self.textStyle = textStyle
         self.scaledInset = scaledInset
         self.fixedInset = fixedInset
     }

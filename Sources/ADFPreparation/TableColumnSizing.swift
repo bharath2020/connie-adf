@@ -1,5 +1,6 @@
 import Foundation
 import CoreText
+import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -187,7 +188,8 @@ package struct TableColumnAnalysis: Sendable, Hashable {
     ///
     /// Bounded work: per column, lines are measured longest first and the
     /// scan stops once no remaining line could beat the widest so far
-    /// (`length × maxAdvancePerCharacter` plus its insets) or the widest already reaches
+    /// (`length × maxAdvancePerCharacter × styleScale(style)` plus its
+    /// insets) or the widest already reaches
     /// `widthCap` (columns clamp there anyway) — a big table measures a
     /// handful of lines per column, not every cell.
     package static func analyze(
@@ -195,6 +197,7 @@ package struct TableColumnAnalysis: Sendable, Hashable {
         columnCount: Int,
         padding: Double,
         maxAdvancePerCharacter: Double,
+        styleScale: (ADFFontSpec.TextStyle) -> Double = { _ in 1 },
         widthCap: Double = TableColumnSizing.maxColumnWidth,
         measure: (PreparedTableColumnSample) -> Double
     ) -> TableColumnAnalysis {
@@ -220,11 +223,11 @@ package struct TableColumnAnalysis: Sendable, Hashable {
                     isSemibold: cell.isHeader || line.isSemibold,
                     isBold: line.isBold,
                     isMonospaced: line.isMonospaced,
-                    sizeFactor: line.sizeFactor,
+                    textStyle: line.textStyle,
                     scaledInset: line.scaledInset,
                     fixedInset: line.fixedInset
                 )
-                let bound = Double(text.count) * maxAdvancePerCharacter * max(line.sizeFactor, 1)
+                let bound = Double(text.count) * maxAdvancePerCharacter * styleScale(line.textStyle)
                     + line.scaledInset + line.fixedInset
                 candidates[cell.column].append(Candidate(sample: sample, bound: bound))
             }
@@ -386,7 +389,8 @@ package enum TableColumnSizing {
 }
 
 /// Single-line widths of cell lines in the system font at one body point
-/// size (× each line's `sizeFactor`, for headings) via CoreText: regular,
+/// size (each line's own text style at its Dynamic Type size, for
+/// headings) via CoreText: regular,
 /// semibold or bold, proportional or monospaced (inline code), plus each
 /// line's insets (`scaledInset × insetScale +
 /// fixedInset`). Thread-safe: preparation measures off-main (one per
@@ -411,23 +415,39 @@ package struct TableTextMeasurer {
     private let fonts: [PlatformFont]
     private let pointSize: CGFloat
     private let insetScale: Double
+    private let dynamicTypeSize: DynamicTypeSize
 
     /// `insetScale` scales the lines' `scaledInset`: the Dynamic Type
-    /// scale the text is measured at (1 at the default size).
-    package init(pointSize: CGFloat, insetScale: Double = 1) {
+    /// scale the text is measured at (1 at the default size), and
+    /// `dynamicTypeSize` that size, for styles other than body.
+    package init(pointSize: CGFloat, insetScale: Double = 1, dynamicTypeSize: DynamicTypeSize = .large) {
         let weights: [PlatformFont.Weight] = [.regular, .semibold, .bold]
         fonts = weights.map { PlatformFont.monospacedDigitSystemFont(ofSize: pointSize, weight: $0) }
             + weights.map { PlatformFont.monospacedSystemFont(ofSize: pointSize, weight: $0) }
         self.pointSize = pointSize
         self.insetScale = insetScale
+        self.dynamicTypeSize = dynamicTypeSize
+    }
+
+    /// The point size a line of `style` draws at: body text at
+    /// `pointSize`, any other style at its own size for `dynamicTypeSize`
+    /// (titles do not scale in step with body).
+    package func pointSize(of style: ADFFontSpec.TextStyle) -> Double {
+        guard style != .body else { return Double(pointSize) }
+        #if canImport(UIKit)
+        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(dynamicTypeSize))
+        return Double(UIFont.preferredFont(forTextStyle: style.uiFontTextStyle, compatibleWith: traits).pointSize)
+        #else
+        return style.defaultPointSize * Double(pointSize) / ADFFontSpec.TextStyle.body.defaultPointSize
+        #endif
     }
 
     package func width(of line: PreparedTableColumnSample) -> Double {
         let weightIndex = line.isBold ? 2 : (line.isSemibold ? 1 : 0)
         var font = fonts[(line.isMonospaced ? 3 : 0) + weightIndex]
-        if line.sizeFactor != 1 {
+        let size = CGFloat(pointSize(of: line.textStyle))
+        if size != pointSize {
             let weight: [PlatformFont.Weight] = [.regular, .semibold, .bold]
-            let size = pointSize * CGFloat(line.sizeFactor)
             font = line.isMonospaced
                 ? PlatformFont.monospacedSystemFont(ofSize: size, weight: weight[weightIndex])
                 : PlatformFont.monospacedDigitSystemFont(ofSize: size, weight: weight[weightIndex])

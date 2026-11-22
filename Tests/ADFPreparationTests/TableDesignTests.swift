@@ -2,6 +2,9 @@ import Foundation
 import Testing
 import ADFModel
 import ADFPreparation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// The Direction A table look's pure geometry (ADF-TBL1 B1a): rowspan
 /// placement, numeric columns, content-aware widths and the header-column
@@ -351,6 +354,25 @@ struct TableDesignTests {
         #expect(widths[1] - padding >= body * 28 / 17)
         #expect(widths[2] - padding >= body * 22 / 17)
     }
+
+    #if canImport(UIKit)
+    @Test("at xSmall a heading measures at its own Dynamic Type size, not a body ratio")
+    func headingsMeasureAtTheirDynamicTypeSize() {
+        let traits = UITraitCollection(preferredContentSizeCategory: .extraSmall)
+        let body = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize
+        let title = UIFont.preferredFont(forTextStyle: .title1, compatibleWith: traits).pointSize
+        let measurer = TableTextMeasurer(pointSize: body, insetScale: Double(body) / 17, dynamicTypeSize: .xSmall)
+        #expect(measurer.pointSize(of: .title) == Double(title))
+        #expect(measurer.pointSize(of: .title) > Double(body) * 28 / 17)
+
+        let heading = PreparedTableColumnSample(text: "Q3 sales", isSemibold: false, isBold: true, textStyle: .title)
+        let drawn = NSAttributedString(
+            string: heading.text,
+            attributes: [.font: UIFont.monospacedDigitSystemFont(ofSize: title, weight: .bold)]
+        ).size().width
+        #expect(abs(measurer.width(of: heading) - Double(drawn)) < 0.5)
+    }
+    #endif
 
     @Test("re-measuring at a larger type size scales list insets with it")
     func measurerScalesInsets() {

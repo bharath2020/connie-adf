@@ -104,6 +104,7 @@ extension BlockPreparer {
             columnCount: columnCount,
             padding: TableColumnSizing.cellHorizontalPadding * 2,
             maxAdvancePerCharacter: Double(theme.bodyPointSize) * 1.5,
+            styleScale: { max(measurer.pointSize(of: $0) / Double(theme.bodyPointSize), 1) },
             measure: measurer.width(of:)
         )
 
@@ -231,7 +232,8 @@ extension BlockPreparer {
         var isBold = false
         var isSemibold = false
         var isMonospaced = false
-        var sizeFactor = 0.0
+        var textStyle = ADFFontSpec.TextStyle.body
+        var hasStyle = false
         var atomInset = 0.0
 
         func endLine() {
@@ -240,7 +242,7 @@ extension BlockPreparer {
                 isSemibold: isSemibold,
                 isBold: isBold,
                 isMonospaced: isMonospaced,
-                sizeFactor: sizeFactor > 0 ? sizeFactor : 1,
+                textStyle: textStyle,
                 scaledInset: scaledInset + atomInset,
                 fixedInset: fixedInset
             ))
@@ -248,7 +250,8 @@ extension BlockPreparer {
             isBold = false
             isSemibold = false
             isMonospaced = false
-            sizeFactor = 0
+            textStyle = .body
+            hasStyle = false
             atomInset = 0
         }
 
@@ -267,11 +270,15 @@ extension BlockPreparer {
                         if spec?.bold == true { isBold = true }
                         if style == .headline { isSemibold = true }
                         if spec?.monospaced == true { isMonospaced = true }
-                        sizeFactor = max(sizeFactor, style.defaultPointSize / ADFFontSpec.TextStyle.body.defaultPointSize)
+                        if !hasStyle || style.defaultPointSize > textStyle.defaultPointSize { textStyle = style }
+                        hasStyle = true
                     }
                 }
             case .atom(let atom, _):
-                sizeFactor = max(sizeFactor, 1)
+                if !hasStyle || textStyle.defaultPointSize < ADFFontSpec.TextStyle.body.defaultPointSize {
+                    textStyle = .body
+                }
+                hasStyle = true
                 switch atom {
                 case .status(let label, _):
                     text += label.uppercased()

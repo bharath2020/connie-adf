@@ -166,7 +166,10 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
             natural = layout.naturalColumnWidths
         } else {
             natural = TableNaturalWidthCache.naturalWidths(
-                for: layout, pointSize: Double(theme.bodyPointSize) * scale, insetScale: scale
+                for: layout,
+                pointSize: Double(theme.bodyPointSize) * scale,
+                insetScale: scale,
+                dynamicTypeSize: dynamicTypeSize
             )
         }
         let widths = TableColumnSizing.columnWidths(
@@ -395,20 +398,31 @@ enum TableNaturalWidthCache {
         let samples: [[PreparedTableColumnSample]]
         let pointSize: Double
         let insetScale: Double
+        let dynamicTypeSize: DynamicTypeSize
     }
 
     private static var entries: [Key: [Double]] = [:]
     private static let capacity = 64
 
-    static func naturalWidths(for layout: PreparedTableLayout, pointSize: Double, insetScale: Double) -> [Double] {
+    static func naturalWidths(
+        for layout: PreparedTableLayout,
+        pointSize: Double,
+        insetScale: Double,
+        dynamicTypeSize: DynamicTypeSize
+    ) -> [Double] {
         guard !layout.columnSamples.isEmpty else { return layout.naturalColumnWidths }
         let key = Key(
             samples: layout.columnSamples,
             pointSize: (pointSize * 4).rounded() / 4,
-            insetScale: insetScale
+            insetScale: insetScale,
+            dynamicTypeSize: dynamicTypeSize
         )
         if let cached = entries[key] { return cached }
-        let measurer = TableTextMeasurer(pointSize: CGFloat(key.pointSize), insetScale: key.insetScale)
+        let measurer = TableTextMeasurer(
+            pointSize: CGFloat(key.pointSize),
+            insetScale: key.insetScale,
+            dynamicTypeSize: key.dynamicTypeSize
+        )
         let widths = TableColumnAnalysis.naturalWidths(
             samples: layout.columnSamples,
             padding: TableColumnSizing.cellHorizontalPadding * 2,
