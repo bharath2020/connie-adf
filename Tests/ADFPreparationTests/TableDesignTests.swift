@@ -144,7 +144,7 @@ struct TableDesignTests {
             .init(column: 1, colspan: 1, isHeader: false, lines: ["n/a"]),
             // Column 2: only empty and header cells — not numeric.
             .init(column: 2, colspan: 1, isHeader: true, lines: ["42"]),
-            .init(column: 2, colspan: 1, isHeader: false, lines: []),
+            .init(column: 2, colspan: 1, isHeader: false, lines: [String]()),
             // Column 3: a number spanning columns 3–4 is ignored; col 3 has
             // a real number, col 4 nothing.
             .init(column: 3, colspan: 2, isHeader: false, lines: ["text"]),
@@ -154,7 +154,7 @@ struct TableDesignTests {
         ]
         let analysis = TableColumnAnalysis.analyze(
             cells: cells, columnCount: 6, padding: 20, maxAdvancePerCharacter: 100,
-            measure: { text, _ in Double(text.count) * 10 }
+            measure: { Double($0.text.count) * 10 }
         )
         #expect(analysis.numericColumns == [true, false, false, true, false, false])
     }
@@ -191,7 +191,7 @@ struct TableDesignTests {
         ]
         let analysis = TableColumnAnalysis.analyze(
             cells: cells, columnCount: 3, padding: 20, maxAdvancePerCharacter: 12,
-            measure: { text, semibold in Double(text.count) * (semibold ? 12 : 10) }
+            measure: { Double($0.text.count) * ($0.isSemibold ? 12 : 10) }
         )
         // "Name" semibold 48 > "abc" 30; "a longer line" 130; column 2 empty.
         #expect(analysis.naturalWidths == [68, 150, 0])
@@ -208,7 +208,7 @@ struct TableDesignTests {
         }
         let analysis = TableColumnAnalysis.analyze(
             cells: cells, columnCount: 1, padding: 20, maxAdvancePerCharacter: 10,
-            measure: { text, _ in measured += 1; return Double(text.count) * 10 }
+            measure: { measured += 1; return Double($0.text.count) * 10 }
         )
         #expect(analysis.naturalWidths == [130])
         #expect(measured < 10)
@@ -290,6 +290,62 @@ struct TableDesignTests {
         #expect(narrow >= 20)
         #expect(wide > narrow + 100)
         #expect(layout.columnSamples[1].first?.isSemibold == true)
+    }
+
+    /// Natural widths of a one-row table whose cells hold the given ADF
+    /// block content JSON.
+    private func naturalWidths(ofCellContents contents: [String]) async throws -> [Double] {
+        let cells = contents.map { "{\"type\":\"tableCell\",\"content\":[\($0)]}" }
+        let doc = try await tableDoc([row(cells)])
+        return try #require(slices(doc).first).layout.naturalColumnWidths
+    }
+
+    private func paragraph(_ inline: String) -> String {
+        "{\"type\":\"paragraph\",\"content\":[\(inline)]}"
+    }
+
+    private func text(_ value: String, marks: String? = nil) -> String {
+        let marksJSON = marks.map { ",\"marks\":[\($0)]" } ?? ""
+        return "{\"type\":\"text\",\"text\":\"\(value)\"\(marksJSON)}"
+    }
+
+    @Test("a list row's natural width includes its marker columns")
+    func listRowsIncludeMarkerColumns() async throws {
+        let item = "{\"type\":\"listItem\",\"content\":[\(paragraph(text("Ship by Friday")))]}"
+        let nestedItem = "{\"type\":\"listItem\",\"content\":[\(paragraph(text("x"))),"
+            + "{\"type\":\"bulletList\",\"content\":[\(item)]}]}"
+        let widths = try await naturalWidths(ofCellContents: [
+            paragraph(text("Ship by Friday")),
+            "{\"type\":\"bulletList\",\"content\":[\(item)]}",
+            "{\"type\":\"bulletList\",\"content\":[\(nestedItem)]}",
+        ])
+        let marker = TableColumnSizing.listMarkerWidth + Double(ADFTheme.default.spacing)
+        #expect(widths[1] >= widths[0] + marker)
+        #expect(widths[2] >= widths[0] + 2 * marker)
+    }
+
+    @Test("bold, code and chip runs measure as wide as they render")
+    func styledRunsMeasureWider() async throws {
+        let label = "Quarterly revenue total"
+        let widths = try await naturalWidths(ofCellContents: [
+            paragraph(text(label)),
+            paragraph(text(label, marks: "{\"type\":\"strong\"}")),
+            paragraph(text(label, marks: "{\"type\":\"code\"}")),
+            paragraph("{\"type\":\"status\",\"attrs\":{\"text\":\"\(label)\",\"color\":\"green\"}}"),
+        ])
+        #expect(widths[1] > widths[0])
+        #expect(widths[2] > widths[0])
+        #expect(widths[3] >= widths[0] + TableColumnSizing.atomPadding)
+    }
+
+    @Test("re-measuring at a larger type size scales list insets with it")
+    func measurerScalesInsets() {
+        let line = PreparedTableColumnSample(text: "Ship", isSemibold: false, scaledInset: 28, fixedInset: 8)
+        let plain = PreparedTableColumnSample(text: "Ship", isSemibold: false)
+        let base = TableTextMeasurer(pointSize: 17)
+        let large = TableTextMeasurer(pointSize: 34, insetScale: 2)
+        #expect(abs(base.width(of: line) - (base.width(of: plain) + 28 + 8)) < 0.001)
+        #expect(abs(large.width(of: line) - (large.width(of: plain) + 56 + 8)) < 0.001)
     }
 
     // MARK: - Header column pinning

@@ -166,7 +166,7 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
             natural = layout.naturalColumnWidths
         } else {
             natural = TableNaturalWidthCache.naturalWidths(
-                for: layout, pointSize: Double(theme.bodyPointSize) * scale
+                for: layout, pointSize: Double(theme.bodyPointSize) * scale, insetScale: scale
             )
         }
         let widths = TableColumnSizing.columnWidths(
@@ -394,20 +394,25 @@ enum TableNaturalWidthCache {
     private struct Key: Hashable {
         let samples: [[PreparedTableColumnSample]]
         let pointSize: Double
+        let insetScale: Double
     }
 
     private static var entries: [Key: [Double]] = [:]
     private static let capacity = 64
 
-    static func naturalWidths(for layout: PreparedTableLayout, pointSize: Double) -> [Double] {
+    static func naturalWidths(for layout: PreparedTableLayout, pointSize: Double, insetScale: Double) -> [Double] {
         guard !layout.columnSamples.isEmpty else { return layout.naturalColumnWidths }
-        let key = Key(samples: layout.columnSamples, pointSize: (pointSize * 4).rounded() / 4)
+        let key = Key(
+            samples: layout.columnSamples,
+            pointSize: (pointSize * 4).rounded() / 4,
+            insetScale: insetScale
+        )
         if let cached = entries[key] { return cached }
-        let measurer = TableTextMeasurer(pointSize: CGFloat(key.pointSize))
+        let measurer = TableTextMeasurer(pointSize: CGFloat(key.pointSize), insetScale: key.insetScale)
         let widths = TableColumnAnalysis.naturalWidths(
             samples: layout.columnSamples,
             padding: TableColumnSizing.cellHorizontalPadding * 2,
-            measure: { measurer.width(of: $0, semibold: $1) }
+            measure: measurer.width(of:)
         )
         if entries.count >= capacity { entries.removeAll(keepingCapacity: true) }
         entries[key] = widths

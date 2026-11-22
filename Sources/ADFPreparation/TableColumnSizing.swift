@@ -146,15 +146,24 @@ package struct TableColumnAnalysis: Sendable, Hashable {
         package let column: Int
         package let colspan: Int
         package let isHeader: Bool
-        /// The cell's plain text, one entry per line (paragraph, hard
-        /// break, list row).
-        package let lines: [String]
+        /// The cell's text, one entry per line (paragraph, hard break,
+        /// list row), with its styling and insets.
+        package let lines: [PreparedTableColumnSample]
 
-        package init(column: Int, colspan: Int, isHeader: Bool, lines: [String]) {
+        package init(column: Int, colspan: Int, isHeader: Bool, lines: [PreparedTableColumnSample]) {
             self.column = column
             self.colspan = colspan
             self.isHeader = isHeader
             self.lines = lines
+        }
+
+        package init(column: Int, colspan: Int, isHeader: Bool, lines: [String]) {
+            self.init(
+                column: column,
+                colspan: colspan,
+                isHeader: isHeader,
+                lines: lines.map { PreparedTableColumnSample(text: $0, isSemibold: false) }
+            )
         }
     }
 
@@ -170,7 +179,7 @@ package struct TableColumnAnalysis: Sendable, Hashable {
     package var numericColumns: [Bool]
 
     /// Natural widths are each column's widest single-column cell line
-    /// (`measure(text, semibold)` rounded up to a whole point, header cells
+    /// (`measure(line)` rounded up to a whole point, header cells
     /// semibold) plus `padding`; multi-column cells are ignored. `samples`
     /// keeps the widest measured lines per column. A column is numeric
     /// when it has at least one non-empty single-column non-header cell
@@ -178,7 +187,7 @@ package struct TableColumnAnalysis: Sendable, Hashable {
     ///
     /// Bounded work: per column, lines are measured longest first and the
     /// scan stops once no remaining line could beat the widest so far
-    /// (`length × maxAdvancePerCharacter`) or the widest already reaches
+    /// (`length × maxAdvancePerCharacter` plus its insets) or the widest already reaches
     /// `widthCap` (columns clamp there anyway) — a big table measures a
     /// handful of lines per column, not every cell.
     package static func analyze(
@@ -187,12 +196,11 @@ package struct TableColumnAnalysis: Sendable, Hashable {
         padding: Double,
         maxAdvancePerCharacter: Double,
         widthCap: Double = TableColumnSizing.maxColumnWidth,
-        measure: (String, Bool) -> Double
+        measure: (PreparedTableColumnSample) -> Double
     ) -> TableColumnAnalysis {
         struct Candidate {
-            let text: String
-            let length: Int
-            let semibold: Bool
+            let sample: PreparedTableColumnSample
+            let bound: Double
         }
 
         let count = max(columnCount, 0)
@@ -203,12 +211,20 @@ package struct TableColumnAnalysis: Sendable, Hashable {
         for cell in cells where cell.colspan == 1 && cell.column >= 0 && cell.column < count {
             var nonEmpty: [String] = []
             for line in cell.lines {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { nonEmpty.append(trimmed) }
-            }
-            for line in nonEmpty {
-                let text = String(line.prefix(maxMeasuredCharacters))
-                candidates[cell.column].append(Candidate(text: text, length: text.count, semibold: cell.isHeader))
+                let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                nonEmpty.append(trimmed)
+                let text = String(trimmed.prefix(maxMeasuredCharacters))
+                let sample = PreparedTableColumnSample(
+                    text: text,
+                    isSemibold: cell.isHeader || line.isSemibold,
+                    isBold: line.isBold,
+                    isMonospaced: line.isMonospaced,
+                    scaledInset: line.scaledInset,
+                    fixedInset: line.fixedInset
+                )
+                let bound = Double(text.count) * maxAdvancePerCharacter + line.scaledInset + line.fixedInset
+                candidates[cell.column].append(Candidate(sample: sample, bound: bound))
             }
             if !cell.isHeader, !nonEmpty.isEmpty {
                 if nonEmpty.count == 1, isNumeric(nonEmpty[0]) {
@@ -222,15 +238,15 @@ package struct TableColumnAnalysis: Sendable, Hashable {
         var natural = [Double](repeating: 0, count: count)
         var samples = [[PreparedTableColumnSample]](repeating: [], count: count)
         for column in 0..<count {
-            let sorted = candidates[column].sorted { $0.length > $1.length }
+            let sorted = candidates[column].sorted { $0.bound > $1.bound }
             var widest = 0.0
             var seen = Set<PreparedTableColumnSample>()
             var measured: [(width: Double, sample: PreparedTableColumnSample)] = []
             for candidate in sorted {
-                if Double(candidate.length) * maxAdvancePerCharacter + padding <= widest { break }
-                let sample = PreparedTableColumnSample(text: candidate.text, isSemibold: candidate.semibold)
+                if candidate.bound + padding <= widest { break }
+                let sample = candidate.sample
                 guard seen.insert(sample).inserted else { continue }
-                let width = measure(candidate.text, candidate.semibold).rounded(.up)
+                let width = measure(sample).rounded(.up)
                 measured.append((width, sample))
                 widest = max(widest, width + padding)
                 if widest >= widthCap { break }
@@ -252,11 +268,11 @@ package struct TableColumnAnalysis: Sendable, Hashable {
     package static func naturalWidths(
         samples: [[PreparedTableColumnSample]],
         padding: Double,
-        measure: (String, Bool) -> Double
+        measure: (PreparedTableColumnSample) -> Double
     ) -> [Double] {
         samples.map { column in
             column.reduce(0.0) { widest, sample in
-                max(widest, measure(sample.text, sample.isSemibold).rounded(.up) + padding)
+                max(widest, measure(sample).rounded(.up) + padding)
             }
         }
     }
@@ -296,6 +312,15 @@ package enum TableColumnSizing {
     package static let cellVerticalPadding: Double = 8
     /// The pinned header column may take at most this share of the width.
     package static let pinnedColumnMaxFraction: Double = 0.4
+    /// List marker column width at the default text size
+    /// (`ListBlockView`'s scaled `markerWidth`).
+    package static let listMarkerWidth: Double = 28
+    /// Horizontal padding of an inline atom's capsule or chip at the
+    /// default text size (8 pt each side).
+    package static let atomPadding: Double = 16
+    /// An icon chip's (inline card, attachment, extension) icon and the
+    /// gap after it at the default text size.
+    package static let atomIconWidth: Double = 20
 
     /// Resolved column widths for one table.
     ///
@@ -358,39 +383,46 @@ package enum TableColumnSizing {
     }
 }
 
-/// Single-line text widths in the system font at one point size, regular
-/// or semibold, via CoreText. Thread-safe: preparation measures off-main
-/// (one per table), and a slice at a non-default type size re-measures a
-/// layout's few samples (cached by the rendering layer).
+/// Single-line widths of cell lines in the system font at one point size
+/// via CoreText: regular, semibold or bold, proportional or monospaced
+/// (inline code), plus each line's insets (`scaledInset × insetScale +
+/// fixedInset`). Thread-safe: preparation measures off-main (one per
+/// table), and a slice at a non-default type size re-measures a layout's
+/// few samples (cached by the rendering layer).
 ///
 /// Digits are measured monospaced (tabular): numeric columns render with
 /// `.monospacedDigit()`, whose digits are wider than the proportional ones
 /// ("361,060" is 66.3 pt against 62.6 pt at 17 pt), so a proportional
 /// measurement wraps the widest number. Other text with digits measures a
-/// little wide, never narrow.
+/// little wide, never narrow. A line with any bold or code run measures
+/// all of it that way: a little wide, never narrow.
 package struct TableTextMeasurer {
     #if canImport(UIKit)
-    private let regular: UIFont
-    private let semibold: UIFont
+    private typealias PlatformFont = UIFont
     #elseif canImport(AppKit)
-    private let regular: NSFont
-    private let semibold: NSFont
+    private typealias PlatformFont = NSFont
     #endif
 
-    package init(pointSize: CGFloat) {
-        #if canImport(UIKit)
-        regular = UIFont.monospacedDigitSystemFont(ofSize: pointSize, weight: .regular)
-        semibold = UIFont.monospacedDigitSystemFont(ofSize: pointSize, weight: .semibold)
-        #elseif canImport(AppKit)
-        regular = NSFont.monospacedDigitSystemFont(ofSize: pointSize, weight: .regular)
-        semibold = NSFont.monospacedDigitSystemFont(ofSize: pointSize, weight: .semibold)
-        #endif
+    /// Indexed by weight (regular, semibold, bold), proportional then
+    /// monospaced.
+    private let fonts: [PlatformFont]
+    private let insetScale: Double
+
+    /// `insetScale` scales the lines' `scaledInset`: the Dynamic Type
+    /// scale the text is measured at (1 at the default size).
+    package init(pointSize: CGFloat, insetScale: Double = 1) {
+        let weights: [PlatformFont.Weight] = [.regular, .semibold, .bold]
+        fonts = weights.map { PlatformFont.monospacedDigitSystemFont(ofSize: pointSize, weight: $0) }
+            + weights.map { PlatformFont.monospacedSystemFont(ofSize: pointSize, weight: $0) }
+        self.insetScale = insetScale
     }
 
-    package func width(of text: String, semibold isSemibold: Bool) -> Double {
-        let font = isSemibold ? semibold : regular
-        let string = NSAttributedString(string: text, attributes: [.font: font])
-        let line = CTLineCreateWithAttributedString(string)
-        return Double(CTLineGetTypographicBounds(line, nil, nil, nil))
+    package func width(of line: PreparedTableColumnSample) -> Double {
+        let weight = line.isBold ? 2 : (line.isSemibold ? 1 : 0)
+        let font = fonts[(line.isMonospaced ? 3 : 0) + weight]
+        let string = NSAttributedString(string: line.text, attributes: [.font: font])
+        let ctLine = CTLineCreateWithAttributedString(string)
+        let text = Double(CTLineGetTypographicBounds(ctLine, nil, nil, nil))
+        return text + line.scaledInset * insetScale + line.fixedInset
     }
 }

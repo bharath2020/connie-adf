@@ -259,15 +259,35 @@ public struct PreparedTableRow: Sendable, Hashable {
 }
 
 /// One line of cell text that sets (or nearly sets) a column's natural
-/// width.
+/// width, with what it draws beside its characters.
 public struct PreparedTableColumnSample: Sendable, Hashable {
     public let text: String
     /// Measured semibold (a header cell).
     public let isSemibold: Bool
+    /// Has a bold run: measured bold.
+    public let isBold: Bool
+    /// Has an inline-code run: measured monospaced.
+    public let isMonospaced: Bool
+    /// Width beside the text that scales with Dynamic Type, in points at
+    /// the default size: list marker columns and inline chip padding.
+    public let scaledInset: Double
+    /// Width beside the text that does not scale: list spacing.
+    public let fixedInset: Double
 
-    public init(text: String, isSemibold: Bool) {
+    public init(
+        text: String,
+        isSemibold: Bool,
+        isBold: Bool = false,
+        isMonospaced: Bool = false,
+        scaledInset: Double = 0,
+        fixedInset: Double = 0
+    ) {
         self.text = text
         self.isSemibold = isSemibold
+        self.isBold = isBold
+        self.isMonospaced = isMonospaced
+        self.scaledInset = scaledInset
+        self.fixedInset = fixedInset
     }
 }
 

@@ -94,7 +94,7 @@ extension BlockPreparer {
                     column: placement.cellColumns[rowIndex][cellIndex],
                     colspan: spans[rowIndex][cellIndex].colspan,
                     isHeader: cell.isHeader,
-                    lines: Self.plainLines(of: cellBlocks[rowIndex][cellIndex])
+                    lines: Self.measuredLines(of: cellBlocks[rowIndex][cellIndex], spacing: Double(theme.spacing))
                 ))
             }
         }
@@ -104,7 +104,7 @@ extension BlockPreparer {
             columnCount: columnCount,
             padding: TableColumnSizing.cellHorizontalPadding * 2,
             maxAdvancePerCharacter: Double(theme.bodyPointSize) * 1.5,
-            measure: { measurer.width(of: $0, semibold: $1) }
+            measure: measurer.width(of:)
         )
 
         // Numeric columns read trailing-aligned: their single-column cells'
@@ -188,26 +188,32 @@ extension BlockPreparer {
         return (!widths.isEmpty && widths.allSatisfy { $0 > 0 }) ? widths : nil
     }
 
-    // MARK: - Plain text for column analysis
+    // MARK: - Lines for column analysis
 
-    /// A cell's plain text, one entry per rendered line: paragraphs and
-    /// headings split at hard breaks, list rows (indented by depth to
-    /// stand in for the marker column), and the same inside panels and
-    /// quotes. Other content (media, code, nested tables) adds no line, so
-    /// a column of it sits at the minimum width.
-    static func plainLines(of blocks: [RenderBlock]) -> [String] {
-        var lines: [String] = []
+    /// A cell's lines as rendered, for column analysis: paragraphs and
+    /// headings split at hard breaks, list rows (inset by their marker
+    /// columns: `(depth + 1) × (marker + spacing)`, a decision's padding
+    /// too), and the same inside panels and quotes. Each line records its
+    /// bold and code runs and its inline chips' padding. Other content
+    /// (media, code, nested tables) adds no line, so a column of it sits
+    /// at the minimum width.
+    static func measuredLines(of blocks: [RenderBlock], spacing: Double) -> [PreparedTableColumnSample] {
+        var lines: [PreparedTableColumnSample] = []
         for block in blocks {
             switch block.kind {
             case .richText(let segments, _):
-                lines.append(contentsOf: plainText(of: segments).split(whereSeparator: \.isNewline).map(String.init))
+                lines.append(contentsOf: measuredLines(of: segments, scaledInset: 0, fixedInset: 0))
             case .listRows(let rows):
                 for row in rows {
-                    let indent = String(repeating: "    ", count: row.depth + 1)
-                    lines.append(indent + plainText(of: row.segments))
+                    let columns = Double(row.depth + 1)
+                    var fixedInset = columns * spacing
+                    if case .decision = row.marker { fixedInset += 2 * spacing }
+                    lines.append(contentsOf: measuredLines(
+                        of: row.segments, scaledInset: columns * TableColumnSizing.listMarkerWidth, fixedInset: fixedInset
+                    ))
                 }
             case .panel(_, let children), .quote(let children):
-                lines.append(contentsOf: plainLines(of: children))
+                lines.append(contentsOf: measuredLines(of: children, spacing: spacing))
             default:
                 break
             }
@@ -215,17 +221,63 @@ extension BlockPreparer {
         return lines
     }
 
-    private static func plainText(of segments: [InlineSegment]) -> String {
+    private static func measuredLines(
+        of segments: [InlineSegment],
+        scaledInset: Double,
+        fixedInset: Double
+    ) -> [PreparedTableColumnSample] {
+        var lines: [PreparedTableColumnSample] = []
         var text = ""
+        var isBold = false
+        var isMonospaced = false
+        var atomInset = 0.0
+
+        func endLine() {
+            lines.append(PreparedTableColumnSample(
+                text: text,
+                isSemibold: false,
+                isBold: isBold,
+                isMonospaced: isMonospaced,
+                scaledInset: scaledInset + atomInset,
+                fixedInset: fixedInset
+            ))
+            text = ""
+            isBold = false
+            isMonospaced = false
+            atomInset = 0
+        }
+
         for segment in segments {
             switch segment {
             case .text(let run):
-                text += InlineComposer.plainText(of: run)
+                let spelled = InlineComposer.replacingEmoji(in: run)
+                for (spec, range) in spelled.runs[AttributeScopes.ADFAttributes.FontSpecAttribute.self] {
+                    let pieces = String(spelled[range].characters)
+                        .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+                    for (index, piece) in pieces.enumerated() {
+                        if index > 0 { endLine() }
+                        text += piece
+                        guard piece.contains(where: { !$0.isWhitespace }) else { continue }
+                        if spec?.bold == true { isBold = true }
+                        if spec?.monospaced == true { isMonospaced = true }
+                    }
+                }
             case .atom(let atom, _):
-                text += InlineComposer.fallbackText(atom)
+                switch atom {
+                case .status(let label, _):
+                    text += label.uppercased()
+                    atomInset += TableColumnSizing.atomPadding
+                case .mention, .date:
+                    text += InlineComposer.fallbackText(atom)
+                    atomInset += TableColumnSizing.atomPadding
+                case .inlineCard, .mediaInline, .inlineExtension:
+                    text += InlineComposer.fallbackText(atom)
+                    atomInset += TableColumnSizing.atomPadding + TableColumnSizing.atomIconWidth
+                }
             }
         }
-        return text
+        endLine()
+        return lines
     }
 
     /// A paragraph re-styled to trailing alignment (numeric columns), unless
