@@ -2,8 +2,11 @@ import Testing
 @testable import ADFRendering
 
 /// The registry's pure bookkeeping: offset publication, the feedback-guard
-/// dedup, and reference-counted eviction. The scroll-view wiring itself is
-/// covered by the on-simulator sync test.
+/// dedup, the driver's exact resting offset, and reference-counted eviction.
+/// The scroll-view wiring itself has no automated test (a UI test cannot
+/// read frames while a finger is down): it is checked on the simulator with
+/// finger-down screenshots and frame-by-frame video. How a follower splits
+/// the shared offset is `TableScrollGeometryTests`.
 @MainActor
 struct TableScrollSyncTests {
     @Test("a published offset is readable by other slices of the same table")
@@ -37,6 +40,27 @@ struct TableScrollSyncTests {
 
         sync.publish(101, for: "t0")
         #expect(sync.sharedOffset(for: "t0") == 101)
+    }
+
+    @Test("a driver's resting offset is recorded exactly, past the half-point dedup")
+    func settleRecordsExactRestingOffset() {
+        let sync = TableScrollSync()
+        sync.retain("t0")
+        // The bounce's last move back into range is under half a point.
+        sync.publish(-0.4, for: "t0")
+        sync.publish(0, for: "t0")
+        #expect(sync.sharedOffset(for: "t0") == -0.4)
+
+        sync.settle(0, for: "t0")
+        #expect(sync.sharedOffset(for: "t0") == 0)
+    }
+
+    @Test("settling never creates an offset for a table nobody scrolled")
+    func settleWithoutPublishedOffset() {
+        let sync = TableScrollSync()
+        sync.retain("t0")
+        sync.settle(0, for: "t0")
+        #expect(sync.sharedOffset(for: "t0") == nil)
     }
 
     @Test("the offset survives while any slice of the table stays live")

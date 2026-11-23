@@ -34,6 +34,16 @@ final class TableScrollSync {
         offsets[tableID] = offset
     }
 
+    /// Records the offset the driving slice came to rest at, exactly. The
+    /// half-point dedup in `publish` may have dropped its last move, and a
+    /// shared offset left a fraction outside the scroll range would keep
+    /// every follower shifted by that fraction. Only corrects an offset
+    /// already published; an identical value writes nothing.
+    func settle(_ offset: CGFloat, for tableID: String) {
+        guard let current = offsets[tableID], current != offset else { return }
+        offsets[tableID] = offset
+    }
+
     func retain(_ tableID: String) {
         liveSlices[tableID, default: 0] += 1
     }

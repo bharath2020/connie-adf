@@ -25,7 +25,9 @@ import AppKit
 /// pan together (they are separate lazy rows, yet read as one table): on
 /// iOS 18+ they share a horizontal offset through `TableScrollSync`. iOS 17
 /// lacks the `ScrollPosition` content-offset API, so there each slice pans
-/// independently (documented floor).
+/// independently (documented floor). A rubber-band past either edge is
+/// shared too: a follower cannot scroll out of bounds, so it shifts its
+/// content by the remainder (`TableScrollGeometry.followerPlacement`).
 ///
 /// The fade, the pinned column and its shadow follow the slice's OWN scroll
 /// offset through `visualEffect` (render-time geometry, iOS 17+): no
@@ -93,6 +95,13 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
     let layout: PreparedTableLayout
     let rows: [PreparedTableRow]
     let isHeaderSlice: Bool
+    /// The part of the table's shared offset this slice's scroll view
+    /// cannot take (an edge rubber-band it is following): the scroll content
+    /// is drawn shifted left by it. A render-time offset inside the scroll
+    /// view — no layout input changes, and the pinned column and the fade
+    /// read the shifted geometry, so they sit exactly as on the dragged
+    /// slice. 0 at rest, in range, and on the slice being dragged.
+    let contentShift: CGFloat
     let scrollModifiers: Modifiers
 
     /// Starts at the width the last measured slice reported
@@ -117,11 +126,13 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
         layout: PreparedTableLayout,
         rows: [PreparedTableRow],
         isHeaderSlice: Bool,
+        contentShift: CGFloat = 0,
         scrollModifiers: Modifiers = EmptyModifier()
     ) {
         self.layout = layout
         self.rows = rows
         self.isHeaderSlice = isHeaderSlice
+        self.contentShift = contentShift
         self.scrollModifiers = scrollModifiers
     }
 
@@ -140,6 +151,7 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
                     TableOverflowFade()
                 }
             }
+            .offset(x: -contentShift)
         }
         .modifier(scrollModifiers)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
@@ -216,6 +228,13 @@ private struct TableSliceScrollView<Modifiers: ViewModifier>: View {
 /// than half a point — so a value never scrolls its own author back. A slice
 /// re-materializing into an already-panned table adopts the shared offset on
 /// appear, lining up with the pinned header instead of resetting to column 0.
+///
+/// The driver publishes its raw offset, rubber-band included. A follower's
+/// `ScrollPosition` cannot leave the content bounds, so it scrolls to the
+/// nearest offset in range and shifts its content by the remainder
+/// (`contentShift`): the header and every row bounce with the dragged slice.
+/// The remainder is state only while it is non-zero — nothing is written at
+/// rest or while the table scrolls in range.
 @available(iOS 18.0, macOS 15.0, *)
 private struct SynchronizedTableSlice: View {
     let tableID: String
@@ -227,22 +246,47 @@ private struct SynchronizedTableSlice: View {
     @State private var position = ScrollPosition()
     @State private var currentX: CGFloat = 0
     @State private var isDriving = false
+    /// The last offset this slice's scroll view can reach (content width
+    /// minus its own width); nil until its first scroll geometry report.
+    @State private var maxOffset: CGFloat?
+    /// The remainder of the shared offset this follower draws as a content
+    /// shift (see the type's doc). The only state here that `body` reads.
+    @State private var contentShift: CGFloat = 0
 
     var body: some View {
         TableSliceScrollView(
             layout: layout,
             rows: rows,
             isHeaderSlice: isHeaderSlice,
+            contentShift: contentShift,
             scrollModifiers: SyncModifiers(
                 position: $position,
                 onOffsetChange: { x in
                     currentX = x
                     if isDriving { scrollSync.publish(x, for: tableID) }
                 },
+                onMaxOffsetChange: { maxX in
+                    // Reported with every offset; acts only on a new range.
+                    guard maxOffset != maxX else { return }
+                    maxOffset = maxX
+                    // A follower placed before its range was known (or
+                    // whose range changed) is placed again.
+                    follow(scrollSync.sharedOffset(for: tableID))
+                },
                 onPhaseChange: { phase in
                     // A user-driven slice publishes; programmatic follows
                     // (`.animating`) and idle slices must not.
-                    isDriving = phase == .interacting || phase == .decelerating
+                    let drives = phase == .interacting || phase == .decelerating
+                    if drives, !isDriving {
+                        // The driver shows its own scroll view's offset.
+                        setContentShift(0)
+                    } else if !drives, isDriving {
+                        // Its resting offset, exactly: a last sub-half-point
+                        // move is otherwise dropped, and could leave the
+                        // shared offset just out of range.
+                        scrollSync.settle(restingX, for: tableID)
+                    }
+                    isDriving = drives
                 }
             )
         )
@@ -254,25 +298,68 @@ private struct SynchronizedTableSlice: View {
             follow(scrollSync.sharedOffset(for: tableID))
         }
         .onDisappear {
+            if isDriving {
+                // A driver leaving mid-bounce must not strand the others
+                // on an out-of-range offset nobody will correct.
+                scrollSync.settle(restingX, for: tableID)
+            }
             scrollSync.release(tableID)
         }
     }
 
     private func follow(_ target: CGFloat?) {
-        guard !isDriving, let target, abs(target - currentX) > 0.5 else { return }
-        position.scrollTo(x: target)
+        guard !isDriving, let target else {
+            setContentShift(0)
+            return
+        }
+        guard let maxOffset else {
+            // Range not measured yet (first appearance): scroll as far as
+            // the scroll view allows; `onMaxOffsetChange` places it again.
+            if abs(target - currentX) > 0.5 { position.scrollTo(x: target) }
+            return
+        }
+        let placement = TableScrollGeometry.followerPlacement(sharedOffset: target, maxOffset: maxOffset)
+        // Past an edge the follower sits exactly on it (the shift carries
+        // the rest), so the half-point slack applies in range only.
+        let slack: CGFloat = placement.contentShift == 0 ? 0.5 : 0
+        if abs(placement.scrollX - currentX) > slack { position.scrollTo(x: placement.scrollX) }
+        setContentShift(placement.contentShift)
+    }
+
+    /// Where this slice's scroll view rests: its own offset, held in range.
+    /// A driver hands the table over at this offset, never at a rubber-band
+    /// one — once it stops publishing, an out-of-range shared offset would
+    /// leave every follower shifted with nothing to bring it back.
+    private var restingX: CGFloat {
+        TableScrollGeometry.followerPlacement(
+            sharedOffset: currentX,
+            maxOffset: maxOffset ?? .greatestFiniteMagnitude
+        ).scrollX
+    }
+
+    /// Writes the shift only when it changes, so a table at rest or
+    /// scrolling in range (shift 0 throughout) never invalidates `body`.
+    private func setContentShift(_ shift: CGFloat) {
+        if contentShift != shift { contentShift = shift }
     }
 }
 
 /// The offset-sharing modifiers layered onto a slice's scroll view: binds its
-/// `ScrollPosition`, reports its content offset and scroll phase. Isolated in
+/// `ScrollPosition`, reports its content offset, its scroll range (one
+/// geometry observation for both) and its scroll phase. Isolated in
 /// a modifier gated to iOS 18 so `TableSliceScrollView` (and its iOS 17 use)
 /// need not store an iOS-18-only `ScrollPosition`.
 @available(iOS 18.0, macOS 15.0, *)
 private struct SyncModifiers: ViewModifier {
     @Binding var position: ScrollPosition
     let onOffsetChange: (CGFloat) -> Void
+    let onMaxOffsetChange: (CGFloat) -> Void
     let onPhaseChange: (ScrollPhase) -> Void
+
+    private struct Reading: Equatable {
+        var x: CGFloat
+        var maxX: CGFloat
+    }
 
     func body(content: Content) -> some View {
         content
@@ -280,10 +367,11 @@ private struct SyncModifiers: ViewModifier {
             .onScrollPhaseChange { _, phase, _ in
                 onPhaseChange(phase)
             }
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.x
-            } action: { _, x in
-                onOffsetChange(x)
+            .onScrollGeometryChange(for: Reading.self) { geometry in
+                Reading(x: geometry.contentOffset.x, maxX: geometry.contentSize.width - geometry.containerSize.width)
+            } action: { _, new in
+                onOffsetChange(new.x)
+                onMaxOffsetChange(new.maxX)
             }
     }
 }
@@ -988,6 +1076,32 @@ enum TableScrollGeometry {
         guard remaining > 0.5, fadeWidth > 0 else { return 0 }
         return Double(min(remaining / fadeWidth, 1))
     }
+
+    /// Where a follower slice shows the table's shared offset: the offset
+    /// its scroll view takes, and how far its content shifts on top of
+    /// that. `scrollX + contentShift` is always the shared offset.
+    ///
+    /// A follower is positioned through `ScrollPosition`, which cannot leave
+    /// the content bounds, while the driver's own scroll view rubber-bands
+    /// past them. So the follower scrolls to the nearest offset in
+    /// `0...maxOffset` and draws the remainder as a shift: negative for a
+    /// leading bounce (content moves right), positive for a trailing one.
+    /// `maxOffset` is content width minus viewport width, and negative for
+    /// a table narrower than its viewport: no range at all.
+    static func followerPlacement(sharedOffset: CGFloat, maxOffset: CGFloat) -> TableFollowerPlacement {
+        let scrollX = min(max(sharedOffset, 0), max(maxOffset, 0))
+        return TableFollowerPlacement(scrollX: scrollX, contentShift: sharedOffset - scrollX)
+    }
+}
+
+/// A follower slice's share of the table's horizontal offset
+/// (`TableScrollGeometry.followerPlacement`).
+struct TableFollowerPlacement: Equatable {
+    /// The offset the slice's own scroll view scrolls to.
+    var scrollX: CGFloat
+    /// The rest of the shared offset, drawn by shifting the scroll content
+    /// left by this much (right when negative).
+    var contentShift: CGFloat
 }
 
 /// One table cell: nested prepared blocks with background, header emphasis,

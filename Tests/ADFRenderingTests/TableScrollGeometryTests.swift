@@ -37,4 +37,54 @@ struct TableScrollGeometryTests {
         // Outside a scroll view: nothing to fade.
         #expect(TableScrollGeometry.trailingOverflow(visibleMaxX: nil, width: 28) == 0)
     }
+
+    // A follower slice is positioned programmatically, and a programmatic
+    // scroll position cannot leave the content bounds. So a follower scrolls
+    // as far as it can and draws the rest of the shared offset as a content
+    // shift; otherwise only the dragged slice rubber-bands at a table edge.
+
+    @Test("a follower inside the scroll range scrolls to the shared offset with no shift")
+    func followerPlacementInRange() {
+        for shared: CGFloat in [0, 120.5, 291] {
+            let placement = TableScrollGeometry.followerPlacement(sharedOffset: shared, maxOffset: 291)
+            #expect(placement == TableFollowerPlacement(scrollX: shared, contentShift: 0))
+        }
+    }
+
+    @Test("a follower draws a leading overscroll as a content shift, not as a scroll offset")
+    func followerPlacementLeadingOverscroll() {
+        let placement = TableScrollGeometry.followerPlacement(sharedOffset: -44, maxOffset: 291)
+        #expect(placement.scrollX == 0)
+        #expect(placement.contentShift == -44)
+        #expect(placement.scrollX + placement.contentShift == -44)
+    }
+
+    @Test("a follower draws a trailing overscroll as a content shift past its last offset")
+    func followerPlacementTrailingOverscroll() {
+        let placement = TableScrollGeometry.followerPlacement(sharedOffset: 291 + 18, maxOffset: 291)
+        #expect(placement.scrollX == 291)
+        #expect(placement.contentShift == 18)
+        #expect(placement.scrollX + placement.contentShift == 309)
+    }
+
+    @Test("a follower's scroll offset stays in range and the shift carries the remainder", arguments: [
+        (-44.0, 291.0), (-0.25, 291.0), (0.0, 291.0), (145.5, 291.0), (291.0, 291.0), (291.25, 291.0), (309.0, 291.0),
+        (-44.0, 0.0), (0.0, 0.0), (18.0, 0.0), (-44.0, -30.0), (18.0, -30.0),
+    ])
+    func followerPlacementInvariant(shared: Double, maxOffset: Double) {
+        let placement = TableScrollGeometry.followerPlacement(sharedOffset: CGFloat(shared), maxOffset: CGFloat(maxOffset))
+        // A table narrower than its viewport has no scroll range at all.
+        let range: ClosedRange<CGFloat> = 0...CGFloat(max(maxOffset, 0))
+        #expect(range.contains(placement.scrollX))
+        #expect(abs(placement.scrollX + placement.contentShift - CGFloat(shared)) < 0.0001)
+    }
+
+    @Test("a table that fits its viewport never scrolls a follower")
+    func followerPlacementWithoutRange() {
+        #expect(TableScrollGeometry.followerPlacement(sharedOffset: 18, maxOffset: 0)
+            == TableFollowerPlacement(scrollX: 0, contentShift: 18))
+        // Content narrower than the viewport reports a negative range.
+        #expect(TableScrollGeometry.followerPlacement(sharedOffset: -44, maxOffset: -30)
+            == TableFollowerPlacement(scrollX: 0, contentShift: -44))
+    }
 }
