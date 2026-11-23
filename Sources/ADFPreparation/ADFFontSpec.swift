@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// A platform-neutral description of a run's font: a semantic text style
 /// plus the symbolic traits the marks added.
@@ -86,6 +89,42 @@ extension ADFFontSpec.TextStyle {
         case .footnote: return .footnote
         case .caption: return .caption
         case .caption2: return .caption2
+        }
+    }
+
+    #if canImport(UIKit)
+    /// The UIKit text style of the same role.
+    package var uiFontTextStyle: UIFont.TextStyle {
+        switch self {
+        case .largeTitle: return .largeTitle
+        case .title: return .title1
+        case .title2: return .title2
+        case .title3: return .title3
+        case .headline: return .headline
+        case .subheadline: return .subheadline
+        case .body: return .body
+        case .callout: return .callout
+        case .footnote: return .footnote
+        case .caption: return .caption1
+        case .caption2: return .caption2
+        }
+    }
+    #endif
+
+    /// The style's point size at the default Dynamic Type size (body 17).
+    package var defaultPointSize: Double {
+        switch self {
+        case .largeTitle: return 34
+        case .title: return 28
+        case .title2: return 22
+        case .title3: return 20
+        case .headline: return 17
+        case .subheadline: return 15
+        case .body: return 17
+        case .callout: return 16
+        case .footnote: return 13
+        case .caption: return 12
+        case .caption2: return 11
         }
     }
 }

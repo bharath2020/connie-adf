@@ -47,3 +47,7 @@ dfe7a40ac7662590c4fdd056bf39a91d4f6d71d83df71d4b1faab5d5d692f3ef  captions-parit
 # perf-mixed (main 5261aa4, the Instruments profile check's fixture;
 # `python3 -I Tools/make-perf-mixed.py` rewrites the same bytes)
 68e7864b04dcbaf62a76b68f5fc8fbbc0f7a2b675e012923d17295b99f4c032e  perf-mixed.json
+# table-design (hand-authored, ADF-TBL1 Direction A table look: release
+# readiness with rowspan/colspan/empty cells, a 9-column metrics table with a
+# header column; synthetic data)
+1a67f89444b48e950db510ce0d8ac618b193ba73b189198d1ebfb9b4431667f2  table-design.json

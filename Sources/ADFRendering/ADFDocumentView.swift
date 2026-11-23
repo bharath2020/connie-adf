@@ -297,6 +297,18 @@ public struct ADFDocumentView: View {
                     if let item = section.header {
                         DocumentHeader(item: item)
                     }
+                } footer: {
+                    // The 8 pt page gap above the NEXT section's table: a
+                    // pinned header slice can't carry its own top spacing
+                    // (it would pin as a blank band), so the gap scrolls
+                    // away with this section instead. Explicit id so it
+                    // never shares an identity with this section's header.
+                    if section.precedesTableHeader {
+                        Color.clear
+                            .frame(height: TableStyle.pageGap)
+                            .accessibilityHidden(true)
+                            .id(section.id + "#table-gap")
+                    }
                 }
             }
         }
@@ -469,6 +481,9 @@ private struct DocumentHeader: View {
 
     var body: some View {
         BlockView(block: item.block)
+            // Tells the header slice it is pinned, so it leaves its top
+            // page spacing to the previous section's footer.
+            .environment(\.adfTablePinnedHeader, true)
             // Opaque backdrop so pinned headers cover the rows underneath.
             .background(Rectangle().fill(.background))
     }
